@@ -85,20 +85,23 @@ http://your-server-ip:7080
 
 The panel runs on port 7080 by default for security isolation from hosted sites.
 
-### User Structure (Single VPS)
+### User Structure (Single VPS - Single System Account)
 
-NovaPanel is designed for single VPS hosting with a simplified two-tier structure:
+NovaPanel is designed for single VPS hosting where **everything runs under one system account** (the novapanel user):
 
 1. **Panel Users** - People who log into the NovaPanel interface
    - Created via **Panel Users** > **Create Panel User**
    - Have roles: Admin, Account Owner, Developer, Read-Only
    - Can own and manage multiple sites
+   - **These are NOT Linux system users** - they only exist in the panel database
    
 2. **Sites** - Websites/domains owned by panel users
    - Created via **Sites** > **Create Site**
    - Each site belongs to one panel user
    - All sites run under the panel's system user (novapanel)
-   - No separate Linux accounts - everything is managed through the panel
+   - Stored in `/opt/novapanel/sites/{username}/{domain}/`
+   
+**Key Point:** There is only ONE Linux system user (novapanel). All websites, databases, and resources run under this single account. Panel users are for access control and organization within the panel interface only.
 
 ### Creating a Panel User
 
@@ -112,11 +115,11 @@ NovaPanel is designed for single VPS hosting with a simplified two-tier structur
 
 1. Navigate to **Sites** > **Create Site**
 2. Enter domain name (e.g., `example.com`)
-3. Select an account
+3. Select the panel user who will own this site
 4. Choose PHP version
 5. Enable SSL if needed
 6. The system will:
-   - Create document root
+   - Create document root under `/opt/novapanel/sites/{username}/{domain}`
    - Generate Nginx vhost
    - Create PHP-FPM pool
    - Reload services
@@ -125,7 +128,7 @@ NovaPanel is designed for single VPS hosting with a simplified two-tier structur
 
 1. Navigate to **Databases** > **Create Database**
 2. Enter database name
-3. Select account
+3. Select panel user who will own the database
 4. Choose database type (MySQL/PostgreSQL)
 5. Create database user and assign privileges
 
@@ -138,7 +141,7 @@ NovaPanel is designed for single VPS hosting with a simplified two-tier structur
 ### Managing Cron Jobs
 
 1. Navigate to **Cron Jobs**
-2. Select an account
+2. Select a panel user
 3. Add cron schedule and command
 4. Enable/disable jobs as needed
 

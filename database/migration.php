@@ -69,21 +69,6 @@ try {
     ");
     echo "✓ Created role_permissions table\n";
 
-    // Accounts table
-    $db->exec("
-        CREATE TABLE IF NOT EXISTS accounts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            username TEXT UNIQUE NOT NULL,
-            home_directory TEXT NOT NULL,
-            suspended INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        )
-    ");
-    echo "✓ Created accounts table\n";
-
     // Sites table (linked directly to users for single VPS)
     $db->exec("
         CREATE TABLE IF NOT EXISTS sites (
