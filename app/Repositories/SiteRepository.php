@@ -41,10 +41,10 @@ class SiteRepository
         return array_map(fn($row) => $this->hydrate($row), $rows);
     }
 
-    public function findByAccountId(int $accountId): array
+    public function findByUserId(int $userId): array
     {
-        $stmt = $this->db->prepare("SELECT * FROM sites WHERE account_id = ? ORDER BY created_at DESC");
-        $stmt->execute([$accountId]);
+        $stmt = $this->db->prepare("SELECT * FROM sites WHERE user_id = ? ORDER BY created_at DESC");
+        $stmt->execute([$userId]);
         $rows = $stmt->fetchAll();
 
         return array_map(fn($row) => $this->hydrate($row), $rows);
@@ -53,12 +53,12 @@ class SiteRepository
     public function create(Site $site): Site
     {
         $stmt = $this->db->prepare("
-            INSERT INTO sites (account_id, domain, document_root, php_version, ssl_enabled)
+            INSERT INTO sites (user_id, domain, document_root, php_version, ssl_enabled)
             VALUES (?, ?, ?, ?, ?)
         ");
         
         $stmt->execute([
-            $site->accountId,
+            $site->userId,
             $site->domain,
             $site->documentRoot,
             $site->phpVersion,
@@ -96,7 +96,7 @@ class SiteRepository
     {
         return new Site(
             id: (int) $row['id'],
-            accountId: (int) $row['account_id'],
+            userId: (int) $row['user_id'],
             domain: $row['domain'],
             documentRoot: $row['document_root'],
             phpVersion: $row['php_version'],

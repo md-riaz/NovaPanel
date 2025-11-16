@@ -12,11 +12,6 @@
                 </a>
             </li>
             <li class="nav-item">
-                <a class="nav-link" href="/accounts">
-                    <i class="bi bi-people"></i> Accounts
-                </a>
-            </li>
-            <li class="nav-item">
                 <a class="nav-link" href="/sites">
                     <i class="bi bi-globe"></i> Sites
                 </a>

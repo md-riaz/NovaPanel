@@ -84,18 +84,18 @@ try {
     ");
     echo "✓ Created accounts table\n";
 
-    // Sites table
+    // Sites table (linked directly to users for single VPS)
     $db->exec("
         CREATE TABLE IF NOT EXISTS sites (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
             domain TEXT UNIQUE NOT NULL,
             document_root TEXT NOT NULL,
             php_version TEXT NOT NULL DEFAULT '8.2',
             ssl_enabled INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     ");
     echo "✓ Created sites table\n";
@@ -128,43 +128,43 @@ try {
     ");
     echo "✓ Created dns_records table\n";
 
-    // FTP users table
+    // FTP users table (linked directly to users)
     $db->exec("
         CREATE TABLE IF NOT EXISTS ftp_users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
             username TEXT UNIQUE NOT NULL,
             home_directory TEXT NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     ");
     echo "✓ Created ftp_users table\n";
 
-    // Cron jobs table
+    // Cron jobs table (linked directly to users)
     $db->exec("
         CREATE TABLE IF NOT EXISTS cron_jobs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
             schedule TEXT NOT NULL,
             command TEXT NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     ");
     echo "✓ Created cron_jobs table\n";
 
-    // Databases table
+    // Databases table (linked directly to users)
     $db->exec("
         CREATE TABLE IF NOT EXISTS databases (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
             name TEXT UNIQUE NOT NULL,
             type TEXT NOT NULL DEFAULT 'mysql',
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     ");
     echo "✓ Created databases table\n";

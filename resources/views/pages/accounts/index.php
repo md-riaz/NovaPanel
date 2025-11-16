@@ -1,10 +1,14 @@
 <?php ob_start(); ?>
 
 <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pb-2 mb-3 border-bottom">
-    <h1 class="h2">Accounts</h1>
-    <a href="/accounts/create" class="btn btn-primary">
-        <i class="bi bi-plus-circle"></i> Create Account
-    </a>
+    <h1 class="h2">Accounts (Deprecated)</h1>
+</div>
+
+<div class="alert alert-warning" role="alert">
+    <i class="bi bi-exclamation-triangle"></i> 
+    <strong>Note:</strong> The "Accounts" feature is deprecated in this single VPS setup. 
+    Please use <a href="/users" class="alert-link">Panel Users</a> to manage users and 
+    <a href="/sites" class="alert-link">Sites</a> to create websites. All sites now link directly to panel users.
 </div>
 
 <div class="table-responsive">

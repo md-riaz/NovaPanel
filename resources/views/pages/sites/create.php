@@ -14,13 +14,14 @@
             </div>
 
             <div class="mb-3">
-                <label for="account" class="form-label">Account</label>
-                <select class="form-select" id="account" name="account_id" required>
-                    <option value="">Select an account</option>
-                    <?php foreach ($accounts ?? [] as $account): ?>
-                        <option value="<?= $account->id ?>"><?= htmlspecialchars($account->username) ?></option>
+                <label for="user" class="form-label">Site Owner (Panel User)</label>
+                <select class="form-select" id="user" name="user_id" required>
+                    <option value="">Select a panel user</option>
+                    <?php foreach ($users ?? [] as $user): ?>
+                        <option value="<?= $user->id ?>"><?= htmlspecialchars($user->username) ?> (<?= htmlspecialchars($user->email) ?>)</option>
                     <?php endforeach; ?>
                 </select>
+                <div class="form-text">The panel user who will own and manage this site</div>
             </div>
 
             <div class="mb-3">

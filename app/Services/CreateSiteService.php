@@ -5,7 +5,7 @@ namespace App\Services;
 use App\Domain\Entities\Site;
 use App\Domain\Entities\PhpRuntime;
 use App\Repositories\SiteRepository;
-use App\Repositories\AccountRepository;
+use App\Repositories\UserRepository;
 use App\Contracts\WebServerManagerInterface;
 use App\Contracts\PhpRuntimeManagerInterface;
 
@@ -13,13 +13,13 @@ class CreateSiteService
 {
     public function __construct(
         private SiteRepository $siteRepository,
-        private AccountRepository $accountRepository,
+        private UserRepository $userRepository,
         private WebServerManagerInterface $webServerManager,
         private PhpRuntimeManagerInterface $phpRuntimeManager
     ) {}
 
     public function execute(
-        int $accountId,
+        int $userId,
         string $domain,
         string $phpVersion = '8.2',
         bool $sslEnabled = false
@@ -34,33 +34,38 @@ class CreateSiteService
             throw new \RuntimeException("Site with domain '$domain' already exists");
         }
 
-        // Get account
-        $account = $this->accountRepository->find($accountId);
-        if (!$account) {
-            throw new \RuntimeException("Account not found");
+        // Get user
+        $user = $this->userRepository->find($userId);
+        if (!$user) {
+            throw new \RuntimeException("User not found");
         }
 
-        // Set document root
-        $documentRoot = "{$account->homeDirectory}/public_html/{$domain}";
+        // Set document root under panel's directory structure
+        // All sites run under the panel user, organized by owner username
+        $baseDir = "/opt/novapanel/sites/{$user->username}";
+        $documentRoot = "{$baseDir}/{$domain}";
 
         // Create site entity
         $site = new Site(
-            accountId: $accountId,
+            userId: $userId,
             domain: $domain,
             documentRoot: $documentRoot,
             phpVersion: $phpVersion,
             sslEnabled: $sslEnabled,
-            accountUsername: $account->username
+            ownerUsername: $user->username
         );
 
         // Save to database first
         $site = $this->siteRepository->create($site);
 
         try {
+            // Create base directory for user's sites if it doesn't exist
+            if (!is_dir($baseDir)) {
+                mkdir($baseDir, 0755, true);
+            }
+            
             // Create document root directory
             mkdir($documentRoot, 0755, true);
-            chown($documentRoot, $account->username);
-            chgrp($documentRoot, $account->username);
 
             // Create PHP-FPM pool
             $runtime = new PhpRuntime(
@@ -74,9 +79,8 @@ class CreateSiteService
             $this->webServerManager->createSite($site);
 
             // Create default index.php
-            $indexContent = "<?php\nphpinfo();\n";
+            $indexContent = "<?php\necho '<h1>Welcome to {$domain}</h1>';\necho '<p>Site owner: {$user->username}</p>';\nphpinfo();\n";
             file_put_contents("{$documentRoot}/index.php", $indexContent);
-            chown("{$documentRoot}/index.php", $account->username);
 
         } catch (\Exception $e) {
             // Rollback: delete from database if infrastructure setup fails

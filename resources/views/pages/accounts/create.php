@@ -1,7 +1,14 @@
 <?php ob_start(); ?>
 
 <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pb-2 mb-3 border-bottom">
-    <h1 class="h2">Create Account</h1>
+    <h1 class="h2">Create Account (Deprecated)</h1>
+</div>
+
+<div class="alert alert-warning" role="alert">
+    <i class="bi bi-exclamation-triangle"></i> 
+    <strong>This feature is deprecated.</strong> 
+    In this single VPS setup, please use <a href="/users" class="alert-link">Panel Users</a> instead. 
+    Sites are now created directly for panel users without separate system accounts.
 </div>
 
 <div class="row">

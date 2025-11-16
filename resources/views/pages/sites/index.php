@@ -12,7 +12,7 @@
         <thead>
             <tr>
                 <th>Domain</th>
-                <th>Account</th>
+                <th>Owner</th>
                 <th>PHP Version</th>
                 <th>SSL</th>
                 <th>Created</th>
@@ -28,7 +28,13 @@
                 <?php foreach ($sites as $site): ?>
                     <tr>
                         <td><strong><?= htmlspecialchars($site->domain) ?></strong></td>
-                        <td>Account #<?= $site->accountId ?></td>
+                        <td>
+                            <?php if (isset($site->ownerUsername)): ?>
+                                <i class="bi bi-person"></i> <?= htmlspecialchars($site->ownerUsername) ?>
+                            <?php else: ?>
+                                User #<?= $site->userId ?>
+                            <?php endif; ?>
+                        </td>
                         <td><span class="badge bg-info">PHP <?= htmlspecialchars($site->phpVersion) ?></span></td>
                         <td>
                             <?php if ($site->sslEnabled): ?>

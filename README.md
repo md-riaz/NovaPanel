@@ -7,13 +7,15 @@ A lightweight, open-source single VPS control panel built with PHP. NovaPanel pr
 ## Features
 
 - 🚀 **Site Management** - Create and manage multiple websites with ease
+- 👥 **Panel User Management** - Create users with different roles and permissions
 - 🐘 **PHP-FPM** - Multi-version PHP support with isolated pools
 - 🌐 **Nginx** - High-performance web server configuration
 - 📊 **Database Management** - MySQL/PostgreSQL database creation and management
 - 🔐 **FTP Access** - Secure FTP user management
-- ⏰ **Cron Jobs** - Schedule tasks for each account
+- ⏰ **Cron Jobs** - Schedule tasks for each panel user
 - 🔒 **Role-Based Access Control** - Admin, Account Owner, Developer, Read-Only roles
 - 🛡️ **Security First** - Non-root execution, command whitelisting, input validation
+- 🖥️ **Single VPS Design** - All sites run under the panel user, no separate system accounts needed
 
 ## Requirements
 
@@ -83,22 +85,20 @@ http://your-server-ip:7080
 
 The panel runs on port 7080 by default for security isolation from hosted sites.
 
-### User Hierarchy
+### User Structure (Single VPS)
 
-NovaPanel uses a three-tier structure:
+NovaPanel is designed for single VPS hosting with a simplified two-tier structure:
 
 1. **Panel Users** - People who log into the NovaPanel interface
    - Created via **Panel Users** > **Create Panel User**
    - Have roles: Admin, Account Owner, Developer, Read-Only
+   - Can own and manage multiple sites
    
-2. **Accounts** - System-level hosting accounts owned by panel users
-   - Created via **Accounts** > **Create Account**
-   - Each account is a Linux system user with a home directory
-   - Linked to a panel user who manages it
-   
-3. **Sites** - Websites/domains hosted under an account
+2. **Sites** - Websites/domains owned by panel users
    - Created via **Sites** > **Create Site**
-   - Each site belongs to one account
+   - Each site belongs to one panel user
+   - All sites run under the panel's system user (novapanel)
+   - No separate Linux accounts - everything is managed through the panel
 
 ### Creating a Panel User
 
@@ -106,16 +106,7 @@ NovaPanel uses a three-tier structure:
 2. Navigate to **Panel Users** > **Create Panel User**
 3. Enter username, email, and password
 4. Assign roles (Admin, Account Owner, Developer, Read-Only)
-5. The panel user can now log in and manage their assigned resources
-
-### Creating an Account
-
-1. Navigate to **Accounts** > **Create Account**
-2. Enter username (system username) and select a panel user who will own it
-3. The system will create:
-   - Linux system user
-   - Home directory structure
-   - Default permissions
+5. The panel user can now log in and manage their sites
 
 ### Creating a Website
 

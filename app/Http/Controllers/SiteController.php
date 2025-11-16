@@ -15,7 +15,14 @@ class SiteController extends Controller
     public function index(Request $request): Response
     {
         $siteRepo = new SiteRepository();
+        $userRepo = new \App\Repositories\UserRepository();
         $sites = $siteRepo->all();
+        
+        // Load owner information for each site
+        foreach ($sites as $site) {
+            $user = $userRepo->find($site->userId);
+            $site->ownerUsername = $user ? $user->username : 'Unknown';
+        }
         
         return $this->view('pages/sites/index', [
             'title' => 'Sites',
@@ -25,12 +32,12 @@ class SiteController extends Controller
 
     public function create(Request $request): Response
     {
-        $accountRepo = new AccountRepository();
-        $accounts = $accountRepo->all();
+        $userRepo = new \App\Repositories\UserRepository();
+        $users = $userRepo->all();
         
         return $this->view('pages/sites/create', [
             'title' => 'Create Site',
-            'accounts' => $accounts
+            'users' => $users
         ]);
     }
 
@@ -38,18 +45,18 @@ class SiteController extends Controller
     {
         try {
             $domain = $request->post('domain');
-            $accountId = (int) $request->post('account_id');
+            $userId = (int) $request->post('user_id');
             $phpVersion = $request->post('php_version', '8.2');
             $sslEnabled = (bool) $request->post('ssl_enabled');
             
             $service = new CreateSiteService(
                 new SiteRepository(),
-                new AccountRepository(),
+                new \App\Repositories\UserRepository(),
                 WebServer::getInstance(),
                 PhpRuntime::getInstance()
             );
             
-            $site = $service->execute($accountId, $domain, $phpVersion, $sslEnabled);
+            $site = $service->execute($userId, $domain, $phpVersion, $sslEnabled);
             
             return $this->redirect('/sites');
             
