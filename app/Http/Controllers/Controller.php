@@ -31,4 +31,28 @@ abstract class Controller
     {
         return (new Response())->redirect($url);
     }
+
+    /**
+     * Generate success alert HTML for HTMX responses
+     */
+    protected function successAlert(string $message): string
+    {
+        $html = '<div class="alert alert-success alert-dismissible fade show" role="alert">';
+        $html .= '<i class="bi bi-check-circle"></i> ' . htmlspecialchars($message);
+        $html .= '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>';
+        $html .= '</div>';
+        return $html;
+    }
+
+    /**
+     * Generate error alert HTML for HTMX responses
+     */
+    protected function errorAlert(string $message): string
+    {
+        $html = '<div class="alert alert-danger alert-dismissible fade show" role="alert">';
+        $html .= '<i class="bi bi-exclamation-triangle"></i> Error: ' . htmlspecialchars($message);
+        $html .= '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>';
+        $html .= '</div>';
+        return $html;
+    }
 }

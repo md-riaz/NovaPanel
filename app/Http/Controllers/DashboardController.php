@@ -6,6 +6,8 @@ use App\Http\Request;
 use App\Http\Response;
 use App\Repositories\SiteRepository;
 use App\Repositories\UserRepository;
+use App\Repositories\DatabaseRepository;
+use App\Repositories\FtpUserRepository;
 
 class DashboardController extends Controller
 {
@@ -35,6 +37,8 @@ class DashboardController extends Controller
     {
         $userRepo = new UserRepository();
         $siteRepo = new SiteRepository();
+        $databaseRepo = new DatabaseRepository();
+        $ftpUserRepo = new FtpUserRepository();
         
         $users = $userRepo->all();
         $sites = $siteRepo->all();
@@ -42,8 +46,8 @@ class DashboardController extends Controller
         return [
             'accounts' => count($users),
             'sites' => count($sites),
-            'databases' => 0, // TODO: Implement database count
-            'ftp_users' => 0  // TODO: Implement FTP user count
+            'databases' => $databaseRepo->count(),
+            'ftp_users' => $ftpUserRepo->count()
         ];
     }
 }

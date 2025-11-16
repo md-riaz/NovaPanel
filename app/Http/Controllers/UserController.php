@@ -103,11 +103,7 @@ class UserController extends Controller
             
             // Check if this is an HTMX request
             if ($request->isHtmx()) {
-                $html = '<div class="alert alert-success alert-dismissible fade show" role="alert">';
-                $html .= '<i class="bi bi-check-circle"></i> Panel user created successfully! Redirecting...';
-                $html .= '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>';
-                $html .= '</div>';
-                return new Response($html);
+                return new Response($this->successAlert('Panel user created successfully! Redirecting...'));
             }
             
             return $this->redirect('/users');
@@ -115,11 +111,7 @@ class UserController extends Controller
         } catch (\Exception $e) {
             // Check if this is an HTMX request
             if ($request->isHtmx()) {
-                $html = '<div class="alert alert-danger alert-dismissible fade show" role="alert">';
-                $html .= '<i class="bi bi-exclamation-triangle"></i> Error: ' . htmlspecialchars($e->getMessage());
-                $html .= '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>';
-                $html .= '</div>';
-                return new Response($html, 400);
+                return new Response($this->errorAlert($e->getMessage()), 400);
             }
             return $this->json(['error' => $e->getMessage()], 400);
         }
