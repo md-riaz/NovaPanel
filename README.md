@@ -83,13 +83,37 @@ http://your-server-ip:7080
 
 The panel runs on port 7080 by default for security isolation from hosted sites.
 
-### Creating an Account
+### User Hierarchy
+
+NovaPanel uses a three-tier structure:
+
+1. **Panel Users** - People who log into the NovaPanel interface
+   - Created via **Panel Users** > **Create Panel User**
+   - Have roles: Admin, Account Owner, Developer, Read-Only
+   
+2. **Accounts** - System-level hosting accounts owned by panel users
+   - Created via **Accounts** > **Create Account**
+   - Each account is a Linux system user with a home directory
+   - Linked to a panel user who manages it
+   
+3. **Sites** - Websites/domains hosted under an account
+   - Created via **Sites** > **Create Site**
+   - Each site belongs to one account
+
+### Creating a Panel User
 
 1. Log in as admin
-2. Navigate to **Accounts** > **Create Account**
-3. Enter username and select a panel user
-4. The system will create:
-   - System user
+2. Navigate to **Panel Users** > **Create Panel User**
+3. Enter username, email, and password
+4. Assign roles (Admin, Account Owner, Developer, Read-Only)
+5. The panel user can now log in and manage their assigned resources
+
+### Creating an Account
+
+1. Navigate to **Accounts** > **Create Account**
+2. Enter username (system username) and select a panel user who will own it
+3. The system will create:
+   - Linux system user
    - Home directory structure
    - Default permissions
 

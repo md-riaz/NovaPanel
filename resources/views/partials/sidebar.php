@@ -7,6 +7,11 @@
                 </a>
             </li>
             <li class="nav-item">
+                <a class="nav-link" href="/users">
+                    <i class="bi bi-person-badge"></i> Panel Users
+                </a>
+            </li>
+            <li class="nav-item">
                 <a class="nav-link" href="/accounts">
                     <i class="bi bi-people"></i> Accounts
                 </a>

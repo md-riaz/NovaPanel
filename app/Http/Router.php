@@ -64,9 +64,17 @@ class Router
     {
         $handler = $route['handler'];
 
+        // Extract route parameters
+        $params = $this->extractParams($route['path'], $request->path());
+
         if (is_string($handler) && str_contains($handler, '@')) {
             [$controller, $method] = explode('@', $handler);
             $controller = new $controller();
+            
+            // Pass request and any route parameters
+            if (!empty($params)) {
+                return $controller->$method($request, ...$params);
+            }
             return $controller->$method($request);
         }
 
@@ -75,5 +83,20 @@ class Router
         }
 
         return new Response('Handler not found', 500);
+    }
+
+    private function extractParams(string $routePath, string $requestPath): array
+    {
+        $routeParts = explode('/', trim($routePath, '/'));
+        $requestParts = explode('/', trim($requestPath, '/'));
+        $params = [];
+
+        foreach ($routeParts as $index => $part) {
+            if (preg_match('/\{([^}]+)\}/', $part, $matches)) {
+                $params[] = $requestParts[$index] ?? null;
+            }
+        }
+
+        return $params;
     }
 }
