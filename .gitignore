@@ -12,7 +12,9 @@ composer.lock
 
 # Database
 /storage/*.db
+/storage/*.db.*
 /storage/*.sqlite
+/storage/*.sqlite.*
 
 # Environment
 .env

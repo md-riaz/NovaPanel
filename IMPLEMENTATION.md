@@ -79,21 +79,19 @@ This plan is structured into stages and checkpoints so an AI agent can verify ta
 
 ---
 
-## Phase 5 — Accounts Module
+## Phase 5 — Panel User Management
 
-### 5.1 CreateAccountService
-✓ Create system user  
-✓ Create home directory  
-✓ Insert into SQLite  
-✓ Permission checks  
-
-### 5.2 Suspend/Unsuspend
-✓ Disable nginx vhosts  
-✓ Disable cron  
-✓ Block FTP  
+### 5.1 User CRUD Operations
+✓ Create panel users with roles
+✓ Edit panel users  
+✓ Delete panel users  
+✓ Assign/remove roles  
 
 **Checkpoint Validation:**
-- System user created → `/home/account123/`.
+- Panel user can be created with Admin/AccountOwner/Developer/ReadOnly roles
+- Sites can be assigned to panel users
+
+**Note:** Accounts module removed - single VPS model links sites directly to panel users.
 
 ---
 

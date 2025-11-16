@@ -69,33 +69,18 @@ try {
     ");
     echo "✓ Created role_permissions table\n";
 
-    // Accounts table
-    $db->exec("
-        CREATE TABLE IF NOT EXISTS accounts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            username TEXT UNIQUE NOT NULL,
-            home_directory TEXT NOT NULL,
-            suspended INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        )
-    ");
-    echo "✓ Created accounts table\n";
-
-    // Sites table
+    // Sites table (linked directly to users for single VPS)
     $db->exec("
         CREATE TABLE IF NOT EXISTS sites (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
             domain TEXT UNIQUE NOT NULL,
             document_root TEXT NOT NULL,
             php_version TEXT NOT NULL DEFAULT '8.2',
             ssl_enabled INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     ");
     echo "✓ Created sites table\n";
@@ -128,43 +113,43 @@ try {
     ");
     echo "✓ Created dns_records table\n";
 
-    // FTP users table
+    // FTP users table (linked directly to users)
     $db->exec("
         CREATE TABLE IF NOT EXISTS ftp_users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
             username TEXT UNIQUE NOT NULL,
             home_directory TEXT NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     ");
     echo "✓ Created ftp_users table\n";
 
-    // Cron jobs table
+    // Cron jobs table (linked directly to users)
     $db->exec("
         CREATE TABLE IF NOT EXISTS cron_jobs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
             schedule TEXT NOT NULL,
             command TEXT NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     ");
     echo "✓ Created cron_jobs table\n";
 
-    // Databases table
+    // Databases table (linked directly to users)
     $db->exec("
         CREATE TABLE IF NOT EXISTS databases (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
             name TEXT UNIQUE NOT NULL,
             type TEXT NOT NULL DEFAULT 'mysql',
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     ");
     echo "✓ Created databases table\n";
@@ -199,26 +184,39 @@ try {
     // Insert default permissions
     $stmt = $db->prepare("INSERT OR IGNORE INTO permissions (name, description) VALUES (?, ?)");
     $permissions = [
-        ['accounts.view', 'View accounts'],
-        ['accounts.create', 'Create accounts'],
-        ['accounts.edit', 'Edit accounts'],
-        ['accounts.delete', 'Delete accounts'],
+        // User management permissions
+        ['users.view', 'View panel users'],
+        ['users.create', 'Create panel users'],
+        ['users.edit', 'Edit panel users'],
+        ['users.delete', 'Delete panel users'],
+        // Site management permissions
         ['sites.view', 'View sites'],
         ['sites.create', 'Create sites'],
         ['sites.edit', 'Edit sites'],
         ['sites.delete', 'Delete sites'],
+        // Database management permissions
         ['databases.view', 'View databases'],
         ['databases.create', 'Create databases'],
+        ['databases.edit', 'Edit databases'],
         ['databases.delete', 'Delete databases'],
+        // DNS management permissions
         ['dns.view', 'View DNS records'],
         ['dns.edit', 'Edit DNS records'],
+        ['dns.create', 'Create DNS records'],
+        ['dns.delete', 'Delete DNS records'],
+        // FTP management permissions
         ['ftp.view', 'View FTP users'],
         ['ftp.create', 'Create FTP users'],
+        ['ftp.edit', 'Edit FTP users'],
         ['ftp.delete', 'Delete FTP users'],
+        // Cron management permissions
         ['cron.view', 'View cron jobs'],
         ['cron.create', 'Create cron jobs'],
         ['cron.edit', 'Edit cron jobs'],
-        ['cron.delete', 'Delete cron jobs']
+        ['cron.delete', 'Delete cron jobs'],
+        // System permissions
+        ['system.settings', 'Manage system settings'],
+        ['system.logs', 'View system logs']
     ];
     
     foreach ($permissions as $permission) {
@@ -235,6 +233,62 @@ try {
         WHERE r.name = 'Admin'
     ");
     echo "✓ Assigned all permissions to Admin role\n";
+    
+    // Assign permissions to AccountOwner role (manage their own resources)
+    $accountOwnerPermissions = [
+        'sites.view', 'sites.create', 'sites.edit', 'sites.delete',
+        'databases.view', 'databases.create', 'databases.edit', 'databases.delete',
+        'dns.view', 'dns.edit', 'dns.create', 'dns.delete',
+        'ftp.view', 'ftp.create', 'ftp.edit', 'ftp.delete',
+        'cron.view', 'cron.create', 'cron.edit', 'cron.delete'
+    ];
+    
+    foreach ($accountOwnerPermissions as $permName) {
+        $db->exec("
+            INSERT OR IGNORE INTO role_permissions (role_id, permission_id)
+            SELECT r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.name = 'AccountOwner' AND p.name = '$permName'
+        ");
+    }
+    echo "✓ Assigned permissions to AccountOwner role\n";
+    
+    // Assign permissions to Developer role (limited access)
+    $developerPermissions = [
+        'sites.view', 'sites.edit',
+        'databases.view', 'databases.create', 'databases.edit',
+        'ftp.view', 'ftp.create',
+        'cron.view', 'cron.create', 'cron.edit'
+    ];
+    
+    foreach ($developerPermissions as $permName) {
+        $db->exec("
+            INSERT OR IGNORE INTO role_permissions (role_id, permission_id)
+            SELECT r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.name = 'Developer' AND p.name = '$permName'
+        ");
+    }
+    echo "✓ Assigned permissions to Developer role\n";
+    
+    // Assign permissions to ReadOnly role (view only)
+    $readOnlyPermissions = [
+        'sites.view',
+        'databases.view',
+        'dns.view',
+        'ftp.view',
+        'cron.view'
+    ];
+    
+    foreach ($readOnlyPermissions as $permName) {
+        $db->exec("
+            INSERT OR IGNORE INTO role_permissions (role_id, permission_id)
+            SELECT r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.name = 'ReadOnly' AND p.name = '$permName'
+        ");
+    }
+    echo "✓ Assigned permissions to ReadOnly role\n";
 
     echo "\n✅ Migration completed successfully!\n";
     

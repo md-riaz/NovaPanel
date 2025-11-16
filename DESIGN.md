@@ -9,10 +9,15 @@ A lightweight, open-source **single VPS control panel** built with:
 - **PowerDNS** (authoritative DNS)
 - **Pure-FTPd** (FTP)
 - **MySQL/MariaDB/Postgres** (customer databases)
-- **Cron** (per account)
+- **Cron** (per panel user)
 - **Role-based access control**
 
-No SaaS, no multi-node cluster, no email server.
+**Single VPS Design:**
+- No separate system accounts - all sites run under the panel user (novapanel)
+- Panel users own and manage their sites directly
+- All sites stored under `/opt/novapanel/sites/{username}/`
+
+No SaaS, no multi-node cluster, no email server, no separate Linux accounts.
 
 Architected with **facades + adapters** and a strict layered pattern.
 
@@ -39,9 +44,9 @@ Architected with **facades + adapters** and a strict layered pattern.
 
 3. **Domain Layer**
    - Entities:
-     - User, Role, Permission
-     - Account, Site, Domain
-     - FtpUser, CronJob, Database
+     - User, Role, Permission (panel access control)
+     - Site, Domain (websites)
+     - FtpUser, CronJob, Database (resources)
    - Domain rules & validation
 
 4. **Infrastructure Layer**
@@ -60,11 +65,11 @@ Architected with **facades + adapters** and a strict layered pattern.
 
 ### 3.1 Panel DB (SQLite)
 Stores panel metadata:
-- users, roles, permissions
-- accounts, sites, domains
-- ftp_users (optional shadow)
-- cron_jobs (panel-side)
-- database_credentials (for customer DBs)
+- users, roles, permissions (panel users and their access control)
+- sites, domains (websites linked directly to panel users)
+- ftp_users (FTP access linked to panel users)
+- cron_jobs (scheduled tasks linked to panel users)
+- databases (MySQL/PostgreSQL databases linked to panel users)
 
 ### 3.2 Service Databases
 - **MySQL/MariaDB/Postgres**
