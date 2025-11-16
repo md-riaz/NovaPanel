@@ -30,8 +30,14 @@ class TerminalController extends Controller
             ]);
         }
         
-        // For now, we'll use a mock user ID (1)
-        // In production, this should come from session/auth
+        // MOCK CODE - For now, we'll use a mock user ID (1)
+        // PRODUCTION CODE - Uncomment when authentication is fully implemented:
+        // use App\Http\Session;
+        // Session::start();
+        // if (!Session::has('user_id')) {
+        //     return $this->redirect('/login');
+        // }
+        // $userId = Session::get('user_id');
         $userId = 1;
         
         // Get or create terminal session
@@ -62,8 +68,14 @@ class TerminalController extends Controller
     public function start(Request $request): Response
     {
         try {
-            // For now, we'll use a mock user ID (1)
-            // In production, this should come from session/auth
+            // MOCK CODE - For now, we'll use a mock user ID (1)
+            // PRODUCTION CODE - Uncomment when authentication is fully implemented:
+            // use App\Http\Session;
+            // Session::start();
+            // if (!Session::has('user_id')) {
+            //     return $this->json(['error' => 'Not authenticated'], 401);
+            // }
+            // $userId = Session::get('user_id');
             $userId = 1;
             
             if (!$this->terminalAdapter->isTtydInstalled()) {
@@ -93,8 +105,14 @@ class TerminalController extends Controller
     public function stop(Request $request): Response
     {
         try {
-            // For now, we'll use a mock user ID (1)
-            // In production, this should come from session/auth
+            // MOCK CODE - For now, we'll use a mock user ID (1)
+            // PRODUCTION CODE - Uncomment when authentication is fully implemented:
+            // use App\Http\Session;
+            // Session::start();
+            // if (!Session::has('user_id')) {
+            //     return $this->json(['error' => 'Not authenticated'], 401);
+            // }
+            // $userId = Session::get('user_id');
             $userId = 1;
             
             $stopped = $this->terminalAdapter->stopSession($userId);
@@ -117,8 +135,14 @@ class TerminalController extends Controller
     public function status(Request $request): Response
     {
         try {
-            // For now, we'll use a mock user ID (1)
-            // In production, this should come from session/auth
+            // MOCK CODE - For now, we'll use a mock user ID (1)
+            // PRODUCTION CODE - Uncomment when authentication is fully implemented:
+            // use App\Http\Session;
+            // Session::start();
+            // if (!Session::has('user_id')) {
+            //     return $this->json(['error' => 'Not authenticated'], 401);
+            // }
+            // $userId = Session::get('user_id');
             $userId = 1;
             
             $active = $this->terminalAdapter->isSessionActive($userId);
@@ -143,8 +167,14 @@ class TerminalController extends Controller
     public function restart(Request $request): Response
     {
         try {
-            // For now, we'll use a mock user ID (1)
-            // In production, this should come from session/auth
+            // MOCK CODE - For now, we'll use a mock user ID (1)
+            // PRODUCTION CODE - Uncomment when authentication is fully implemented:
+            // use App\Http\Session;
+            // Session::start();
+            // if (!Session::has('user_id')) {
+            //     return $this->json(['error' => 'Not authenticated'], 401);
+            // }
+            // $userId = Session::get('user_id');
             $userId = 1;
             
             // Stop existing session
