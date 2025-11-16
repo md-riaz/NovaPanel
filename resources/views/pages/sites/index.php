@@ -20,9 +20,31 @@
             </tr>
         </thead>
         <tbody>
-            <tr>
-                <td colspan="6" class="text-center text-muted">No sites found</td>
-            </tr>
+            <?php if (empty($sites)): ?>
+                <tr>
+                    <td colspan="6" class="text-center text-muted">No sites found</td>
+                </tr>
+            <?php else: ?>
+                <?php foreach ($sites as $site): ?>
+                    <tr>
+                        <td><strong><?= htmlspecialchars($site->domain) ?></strong></td>
+                        <td>Account #<?= $site->accountId ?></td>
+                        <td><span class="badge bg-info">PHP <?= htmlspecialchars($site->phpVersion) ?></span></td>
+                        <td>
+                            <?php if ($site->sslEnabled): ?>
+                                <span class="badge bg-success"><i class="bi bi-lock-fill"></i> Enabled</span>
+                            <?php else: ?>
+                                <span class="badge bg-secondary"><i class="bi bi-unlock"></i> Disabled</span>
+                            <?php endif; ?>
+                        </td>
+                        <td><?= htmlspecialchars($site->createdAt) ?></td>
+                        <td>
+                            <a href="/sites/<?= $site->id ?>" class="btn btn-sm btn-info">View</a>
+                            <a href="/sites/<?= $site->id ?>/edit" class="btn btn-sm btn-warning">Edit</a>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+            <?php endif; ?>
         </tbody>
     </table>
 </div>

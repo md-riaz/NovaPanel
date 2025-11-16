@@ -17,6 +17,9 @@
                 <label for="account" class="form-label">Account</label>
                 <select class="form-select" id="account" name="account_id" required>
                     <option value="">Select an account</option>
+                    <?php foreach ($accounts ?? [] as $account): ?>
+                        <option value="<?= $account->id ?>"><?= htmlspecialchars($account->username) ?></option>
+                    <?php endforeach; ?>
                 </select>
             </div>
 

@@ -19,9 +19,30 @@
             </tr>
         </thead>
         <tbody>
-            <tr>
-                <td colspan="5" class="text-center text-muted">No accounts found</td>
-            </tr>
+            <?php if (empty($accounts)): ?>
+                <tr>
+                    <td colspan="5" class="text-center text-muted">No accounts found</td>
+                </tr>
+            <?php else: ?>
+                <?php foreach ($accounts as $account): ?>
+                    <tr>
+                        <td><?= htmlspecialchars($account->username) ?></td>
+                        <td><code><?= htmlspecialchars($account->homeDirectory) ?></code></td>
+                        <td>
+                            <?php if ($account->suspended): ?>
+                                <span class="badge bg-danger">Suspended</span>
+                            <?php else: ?>
+                                <span class="badge bg-success">Active</span>
+                            <?php endif; ?>
+                        </td>
+                        <td><?= htmlspecialchars($account->createdAt) ?></td>
+                        <td>
+                            <a href="/accounts/<?= $account->id ?>" class="btn btn-sm btn-info">View</a>
+                            <a href="/accounts/<?= $account->id ?>/edit" class="btn btn-sm btn-warning">Edit</a>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+            <?php endif; ?>
         </tbody>
     </table>
 </div>

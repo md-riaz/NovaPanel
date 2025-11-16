@@ -17,6 +17,9 @@
                 <label for="user_id" class="form-label">Panel User</label>
                 <select class="form-select" id="user_id" name="user_id" required>
                     <option value="">Select a user</option>
+                    <?php foreach ($users ?? [] as $user): ?>
+                        <option value="<?= $user->id ?>"><?= htmlspecialchars($user->username) ?> (<?= htmlspecialchars($user->email) ?>)</option>
+                    <?php endforeach; ?>
                 </select>
             </div>
 
