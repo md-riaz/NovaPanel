@@ -58,6 +58,31 @@ apt-get install -y \
     curl \
     unzip
 
+# Install ttyd for web terminal (optional but recommended)
+echo "Installing ttyd for web terminal..."
+if ! command -v ttyd &> /dev/null; then
+    # Try to install from package manager first
+    if apt-cache show ttyd &> /dev/null; then
+        apt-get install -y ttyd
+        echo "✓ ttyd installed from package"
+    else
+        # Download binary if package not available
+        echo "Downloading ttyd binary..."
+        TTYD_VERSION="1.7.4"
+        wget -q https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.x86_64 -O /tmp/ttyd
+        if [ -f /tmp/ttyd ]; then
+            mv /tmp/ttyd /usr/local/bin/ttyd
+            chmod +x /usr/local/bin/ttyd
+            echo "✓ ttyd binary installed"
+        else
+            echo "⚠ Warning: Could not install ttyd. Web terminal feature will not be available."
+            echo "  You can install it manually later following the instructions in the panel."
+        fi
+    fi
+else
+    echo "✓ ttyd already installed"
+fi
+
 echo "✓ Dependencies installed"
 echo ""
 
@@ -90,7 +115,7 @@ echo ""
 
 # Set up storage directories
 echo "Setting up storage directories..."
-mkdir -p storage/logs storage/cache storage/uploads
+mkdir -p storage/logs storage/cache storage/uploads storage/terminal/pids storage/terminal/logs
 chown -R novapanel:novapanel storage
 chmod -R 750 storage
 echo "✓ Storage directories configured"
@@ -170,6 +195,20 @@ server {
         include fastcgi_params;
     }
 
+    # Proxy for ttyd terminal WebSocket connections (ports 7100-7199)
+    # This allows the terminal to be accessed through the panel's main port
+    location ~ ^/terminal-ws/([0-9]+)$ {
+        set \$terminal_port \$1;
+        proxy_pass http://127.0.0.1:\$terminal_port;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout 86400;
+    }
+
     location ~ /\.ht {
         deny all;
     }
@@ -202,6 +241,19 @@ echo ""
 echo "Access your panel at: http://$SERVER_IP:7080"
 echo "Admin username: $ADMIN_USER"
 echo "Admin email: $ADMIN_EMAIL"
+echo ""
+echo "Features available:"
+echo "  • Site Management"
+echo "  • User Management"
+echo "  • Database Management"
+echo "  • DNS Management"
+echo "  • FTP Management"
+echo "  • Cron Jobs"
+if command -v ttyd &> /dev/null; then
+    echo "  • Web Terminal (ttyd installed)"
+else
+    echo "  • Web Terminal (ttyd not installed - see panel for instructions)"
+fi
 echo ""
 echo "Next steps:"
 echo "1. Review security settings in SECURITY.md"

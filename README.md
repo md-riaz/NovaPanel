@@ -13,6 +13,7 @@ A lightweight, open-source single VPS control panel built with PHP. NovaPanel pr
 - 📊 **Database Management** - MySQL/PostgreSQL database creation and management
 - 🔐 **FTP Access** - Secure FTP user management
 - ⏰ **Cron Jobs** - Schedule tasks for each panel user
+- 💻 **Web Terminal** - Browser-based terminal access using ttyd (similar to cPanel)
 - 🔒 **Role-Based Access Control** - Admin, Account Owner, Developer, Read-Only roles
 - 🛡️ **Security First** - Non-root execution, command whitelisting, input validation
 - 🖥️ **Single VPS Design** - All sites run under the panel user, no separate system accounts needed
@@ -145,6 +146,36 @@ NovaPanel is designed for single VPS hosting where **everything runs under one s
 3. Add cron schedule and command
 4. Enable/disable jobs as needed
 
+### Using the Terminal
+
+NovaPanel includes a web-based terminal feature powered by **ttyd**, similar to cPanel's terminal:
+
+1. Navigate to **Terminal** from the sidebar
+2. If ttyd is not installed, follow the on-screen installation instructions:
+   ```bash
+   # Ubuntu/Debian
+   sudo apt update
+   sudo apt install ttyd
+   ```
+3. Once installed, the terminal will open automatically
+4. All commands run as the `novapanel` system user
+5. You have limited sudo access for approved panel operations
+6. Sessions automatically timeout after inactivity for security
+
+**Terminal Features:**
+- Full-featured terminal with Xterm.js
+- Clipboard support (copy/paste)
+- Command history and auto-completion
+- Secure credential-based authentication
+- Session management (start, stop, restart)
+- Real-time command execution
+
+**Common Tasks:**
+- Check site files: `ls -la /opt/novapanel/sites/`
+- View logs: `tail -f /opt/novapanel/storage/logs/shell.log`
+- Test Nginx config: `sudo nginx -t`
+- Manage services: `sudo systemctl status nginx`
+
 ## Architecture
 
 NovaPanel follows a clean architecture pattern:
@@ -209,6 +240,7 @@ See [SECURITY.md](SECURITY.md) for detailed security documentation.
 
 ## Roadmap
 
+- [x] Web-based terminal (ttyd integration)
 - [ ] Email server integration
 - [ ] Automated backups
 - [ ] REST API

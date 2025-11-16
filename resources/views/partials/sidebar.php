@@ -36,6 +36,11 @@
                     <i class="bi bi-clock"></i> Cron Jobs
                 </a>
             </li>
+            <li class="nav-item">
+                <a class="nav-link" href="/terminal">
+                    <i class="bi bi-terminal"></i> Terminal
+                </a>
+            </li>
         </ul>
     </div>
 </nav>

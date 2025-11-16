@@ -44,11 +44,19 @@ class UserController extends Controller
             $username = $request->post('username');
             $email = $request->post('email');
             $password = $request->post('password');
+            $passwordConfirm = $request->post('password_confirm');
             $roleIds = $request->post('roles', []);
             
             // Validate input
             if (empty($username) || empty($email) || empty($password)) {
                 throw new \Exception('Username, email, and password are required');
+            }
+            
+            // SECURITY: Validate username format to prevent path traversal attacks
+            // Username must start with a letter and contain only lowercase letters, numbers, hyphens, and underscores
+            // This prevents attacks like: ../../tmp or ../../../etc/passwd
+            if (!preg_match('/^[a-z][a-z0-9_-]{2,31}$/i', $username)) {
+                throw new \Exception('Username must start with a letter, be 3-32 characters long, and contain only letters, numbers, hyphens, and underscores');
             }
             
             if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -57,6 +65,12 @@ class UserController extends Controller
             
             if (strlen($password) < 8) {
                 throw new \Exception('Password must be at least 8 characters long');
+            }
+            
+            // SECURITY: Server-side password confirmation validation
+            // This prevents bypassing client-side validation to create users with mismatched passwords
+            if ($password !== $passwordConfirm) {
+                throw new \Exception('Password and password confirmation do not match');
             }
             
             $userRepo = new UserRepository();
@@ -128,11 +142,19 @@ class UserController extends Controller
             $username = $request->post('username');
             $email = $request->post('email');
             $password = $request->post('password');
+            $passwordConfirm = $request->post('password_confirm');
             $roleIds = $request->post('roles', []);
             
             // Validate input
             if (empty($username) || empty($email)) {
                 throw new \Exception('Username and email are required');
+            }
+            
+            // SECURITY: Validate username format to prevent path traversal attacks
+            // Username must start with a letter and contain only lowercase letters, numbers, hyphens, and underscores
+            // This prevents attacks like: ../../tmp or ../../../etc/passwd
+            if (!preg_match('/^[a-z][a-z0-9_-]{2,31}$/i', $username)) {
+                throw new \Exception('Username must start with a letter, be 3-32 characters long, and contain only letters, numbers, hyphens, and underscores');
             }
             
             if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -159,6 +181,13 @@ class UserController extends Controller
                 if (strlen($password) < 8) {
                     throw new \Exception('Password must be at least 8 characters long');
                 }
+                
+                // SECURITY: Server-side password confirmation validation
+                // This prevents bypassing client-side validation to update users with mismatched passwords
+                if ($password !== $passwordConfirm) {
+                    throw new \Exception('Password and password confirmation do not match');
+                }
+                
                 $user->password = password_hash($password, PASSWORD_DEFAULT);
             }
             

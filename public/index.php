@@ -7,6 +7,7 @@ use App\Http\Request;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\SiteController;
 use App\Http\Controllers\UserController;
+use App\Http\Controllers\TerminalController;
 
 $router = new Router();
 
@@ -26,6 +27,13 @@ $router->post('/users/{id}/delete', UserController::class . '@delete');
 $router->get('/sites', SiteController::class . '@index');
 $router->get('/sites/create', SiteController::class . '@create');
 $router->post('/sites', SiteController::class . '@store');
+
+// Terminal routes
+$router->get('/terminal', TerminalController::class . '@index');
+$router->post('/terminal/start', TerminalController::class . '@start');
+$router->post('/terminal/stop', TerminalController::class . '@stop');
+$router->post('/terminal/restart', TerminalController::class . '@restart');
+$router->get('/terminal/status', TerminalController::class . '@status');
 
 // Dispatch request
 $request = new Request();
