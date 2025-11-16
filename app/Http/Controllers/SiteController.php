@@ -58,9 +58,18 @@ class SiteController extends Controller
             
             $site = $service->execute($userId, $domain, $phpVersion, $sslEnabled);
             
+            // Check if this is an HTMX request
+            if ($request->isHtmx()) {
+                return new Response($this->successAlert('Site created successfully! Redirecting...'));
+            }
+            
             return $this->redirect('/sites');
             
         } catch (\Exception $e) {
+            // Check if this is an HTMX request
+            if ($request->isHtmx()) {
+                return new Response($this->errorAlert($e->getMessage()), 400);
+            }
             return $this->json(['error' => $e->getMessage()], 400);
         }
     }

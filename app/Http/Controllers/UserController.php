@@ -101,9 +101,18 @@ class UserController extends Controller
                 }
             }
             
+            // Check if this is an HTMX request
+            if ($request->isHtmx()) {
+                return new Response($this->successAlert('Panel user created successfully! Redirecting...'));
+            }
+            
             return $this->redirect('/users');
             
         } catch (\Exception $e) {
+            // Check if this is an HTMX request
+            if ($request->isHtmx()) {
+                return new Response($this->errorAlert($e->getMessage()), 400);
+            }
             return $this->json(['error' => $e->getMessage()], 400);
         }
     }

@@ -11,7 +11,12 @@
 
 <div class="row">
     <div class="col-md-8">
-        <form method="POST" action="/users">
+        <div id="form-messages"></div>
+        <form method="POST" action="/users"
+              hx-post="/users"
+              hx-target="#form-messages"
+              hx-swap="innerHTML"
+              hx-indicator="#submit-indicator">
             <div class="mb-3">
                 <label for="username" class="form-label">Username</label>
                 <input type="text" class="form-control" id="username" name="username" required>
@@ -51,10 +56,24 @@
             </div>
 
             <div class="mb-3">
-                <button type="submit" class="btn btn-primary">Create Panel User</button>
+                <button type="submit" class="btn btn-primary">
+                    <span class="htmx-indicator spinner-border spinner-border-sm" id="submit-indicator" role="status"></span>
+                    Create Panel User
+                </button>
                 <a href="/users" class="btn btn-secondary">Cancel</a>
             </div>
         </form>
+
+        <script>
+        document.body.addEventListener('htmx:afterRequest', function(evt) {
+            if (evt.detail.successful && evt.detail.target.id === 'form-messages' && evt.detail.pathInfo.requestPath === '/users') {
+                // Redirect to users page on success
+                setTimeout(() => {
+                    window.location.href = '/users';
+                }, 1000);
+            }
+        });
+        </script>
     </div>
     
     <div class="col-md-4">
