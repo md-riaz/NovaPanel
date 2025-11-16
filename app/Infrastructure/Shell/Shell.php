@@ -8,12 +8,11 @@ class Shell implements ShellInterface
 {
     private const LOG_FILE = __DIR__ . '/../../../storage/logs/shell.log';
     
+    // Single VPS Model: All operations run under the 'novapanel' Linux user
+    // No Linux user creation/modification/deletion commands are allowed
     private array $allowedCommands = [
         'nginx',
         'systemctl',
-        'useradd',
-        'usermod',
-        'userdel',
         'mkdir',
         'chown',
         'chmod',
@@ -32,11 +31,10 @@ class Shell implements ShellInterface
         'bash'
     ];
 
+    // Commands that are allowed to run with sudo privileges
+    // Note: No Linux user management commands (useradd/usermod/userdel) are allowed
     private array $sudoCommands = [
         'systemctl',
-        'useradd',
-        'usermod',
-        'userdel',
         'mkdir',
         'chown',
         'chmod',

@@ -6,30 +6,56 @@
 
 <div class="row">
     <div class="col-md-8">
-        <form method="POST" action="/databases">
+        <div id="alert-container"></div>
+        
+        <form method="POST" action="/databases" 
+              hx-post="/databases" 
+              hx-target="#alert-container"
+              hx-on::after-request="if(event.detail.successful) { setTimeout(() => window.location.href='/databases', 1500); }">
+            
             <div class="mb-3">
-                <label for="name" class="form-label">Database Name</label>
-                <input type="text" class="form-control" id="name" name="name" required>
-                <div class="form-text">Alphanumeric and underscores only</div>
+                <label for="db_name" class="form-label">Database Name</label>
+                <input type="text" class="form-control" id="db_name" name="db_name" required>
+                <div class="form-text">Alphanumeric and underscores only, max 64 characters</div>
             </div>
 
             <div class="mb-3">
-                <label for="account" class="form-label">Account</label>
-                <select class="form-select" id="account" name="account_id" required>
-                    <option value="">Select an account</option>
+                <label for="user_id" class="form-label">Panel User (Owner)</label>
+                <select class="form-select" id="user_id" name="user_id" required>
+                    <option value="">Select a panel user</option>
+                    <?php foreach ($users ?? [] as $user): ?>
+                        <option value="<?= $user->id ?>"><?= htmlspecialchars($user->username) ?> (<?= htmlspecialchars($user->email) ?>)</option>
+                    <?php endforeach; ?>
                 </select>
             </div>
 
             <div class="mb-3">
-                <label for="type" class="form-label">Database Type</label>
-                <select class="form-select" id="type" name="type">
+                <label for="db_type" class="form-label">Database Type</label>
+                <select class="form-select" id="db_type" name="db_type">
                     <option value="mysql">MySQL/MariaDB</option>
                     <option value="postgresql">PostgreSQL</option>
                 </select>
             </div>
 
+            <h5 class="mt-4">Database User (Optional)</h5>
+            <p class="text-muted">Create a database user with access to this database</p>
+
             <div class="mb-3">
-                <button type="submit" class="btn btn-primary">Create Database</button>
+                <label for="db_username" class="form-label">Database Username</label>
+                <input type="text" class="form-control" id="db_username" name="db_username">
+                <div class="form-text">Leave empty to skip user creation</div>
+            </div>
+
+            <div class="mb-3">
+                <label for="db_password" class="form-label">Database Password</label>
+                <input type="password" class="form-control" id="db_password" name="db_password">
+            </div>
+
+            <div class="mb-3">
+                <button type="submit" class="btn btn-primary">
+                    <span class="htmx-indicator spinner-border spinner-border-sm" role="status"></span>
+                    Create Database
+                </button>
                 <a href="/databases" class="btn btn-secondary">Cancel</a>
             </div>
         </form>
