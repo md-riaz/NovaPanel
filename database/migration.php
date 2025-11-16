@@ -184,26 +184,39 @@ try {
     // Insert default permissions
     $stmt = $db->prepare("INSERT OR IGNORE INTO permissions (name, description) VALUES (?, ?)");
     $permissions = [
-        ['accounts.view', 'View accounts'],
-        ['accounts.create', 'Create accounts'],
-        ['accounts.edit', 'Edit accounts'],
-        ['accounts.delete', 'Delete accounts'],
+        // User management permissions
+        ['users.view', 'View panel users'],
+        ['users.create', 'Create panel users'],
+        ['users.edit', 'Edit panel users'],
+        ['users.delete', 'Delete panel users'],
+        // Site management permissions
         ['sites.view', 'View sites'],
         ['sites.create', 'Create sites'],
         ['sites.edit', 'Edit sites'],
         ['sites.delete', 'Delete sites'],
+        // Database management permissions
         ['databases.view', 'View databases'],
         ['databases.create', 'Create databases'],
+        ['databases.edit', 'Edit databases'],
         ['databases.delete', 'Delete databases'],
+        // DNS management permissions
         ['dns.view', 'View DNS records'],
         ['dns.edit', 'Edit DNS records'],
+        ['dns.create', 'Create DNS records'],
+        ['dns.delete', 'Delete DNS records'],
+        // FTP management permissions
         ['ftp.view', 'View FTP users'],
         ['ftp.create', 'Create FTP users'],
+        ['ftp.edit', 'Edit FTP users'],
         ['ftp.delete', 'Delete FTP users'],
+        // Cron management permissions
         ['cron.view', 'View cron jobs'],
         ['cron.create', 'Create cron jobs'],
         ['cron.edit', 'Edit cron jobs'],
-        ['cron.delete', 'Delete cron jobs']
+        ['cron.delete', 'Delete cron jobs'],
+        // System permissions
+        ['system.settings', 'Manage system settings'],
+        ['system.logs', 'View system logs']
     ];
     
     foreach ($permissions as $permission) {
@@ -220,6 +233,62 @@ try {
         WHERE r.name = 'Admin'
     ");
     echo "✓ Assigned all permissions to Admin role\n";
+    
+    // Assign permissions to AccountOwner role (manage their own resources)
+    $accountOwnerPermissions = [
+        'sites.view', 'sites.create', 'sites.edit', 'sites.delete',
+        'databases.view', 'databases.create', 'databases.edit', 'databases.delete',
+        'dns.view', 'dns.edit', 'dns.create', 'dns.delete',
+        'ftp.view', 'ftp.create', 'ftp.edit', 'ftp.delete',
+        'cron.view', 'cron.create', 'cron.edit', 'cron.delete'
+    ];
+    
+    foreach ($accountOwnerPermissions as $permName) {
+        $db->exec("
+            INSERT OR IGNORE INTO role_permissions (role_id, permission_id)
+            SELECT r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.name = 'AccountOwner' AND p.name = '$permName'
+        ");
+    }
+    echo "✓ Assigned permissions to AccountOwner role\n";
+    
+    // Assign permissions to Developer role (limited access)
+    $developerPermissions = [
+        'sites.view', 'sites.edit',
+        'databases.view', 'databases.create', 'databases.edit',
+        'ftp.view', 'ftp.create',
+        'cron.view', 'cron.create', 'cron.edit'
+    ];
+    
+    foreach ($developerPermissions as $permName) {
+        $db->exec("
+            INSERT OR IGNORE INTO role_permissions (role_id, permission_id)
+            SELECT r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.name = 'Developer' AND p.name = '$permName'
+        ");
+    }
+    echo "✓ Assigned permissions to Developer role\n";
+    
+    // Assign permissions to ReadOnly role (view only)
+    $readOnlyPermissions = [
+        'sites.view',
+        'databases.view',
+        'dns.view',
+        'ftp.view',
+        'cron.view'
+    ];
+    
+    foreach ($readOnlyPermissions as $permName) {
+        $db->exec("
+            INSERT OR IGNORE INTO role_permissions (role_id, permission_id)
+            SELECT r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.name = 'ReadOnly' AND p.name = '$permName'
+        ");
+    }
+    echo "✓ Assigned permissions to ReadOnly role\n";
 
     echo "\n✅ Migration completed successfully!\n";
     
