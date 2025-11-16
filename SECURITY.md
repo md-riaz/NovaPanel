@@ -89,6 +89,67 @@ This approach ensures:
 - All operations are logged in audit trail
 - Proper file permissions are maintained
 
+## Web Terminal Security
+
+NovaPanel includes a web-based terminal feature powered by **ttyd**. This feature is designed with security in mind:
+
+### Terminal Isolation
+- Each panel user gets an isolated terminal session
+- Sessions run on unique ports (7100 + user_id) to prevent cross-user access
+- All terminal sessions run as the `novapanel` system user (not root)
+- Terminal processes are managed by the TerminalAdapter with strict lifecycle controls
+
+### Authentication & Authorization
+- Terminal sessions require credential-based authentication
+- Random tokens are generated for each session (32 hex characters)
+- Tokens are stored securely and validated on each connection
+- Basic auth format: `novapanel:<random_token>`
+- Sessions are tied to panel user IDs (requires authentication to be implemented)
+
+### Process Management
+- Terminal processes (ttyd) are tracked via PID files
+- Automatic cleanup of stale sessions
+- Process verification before considering a session active
+- Graceful termination with fallback to force kill if needed
+
+### Network Security
+- Terminal WebSocket connections are proxied through Nginx
+- Connections only accepted from localhost by default
+- Can be configured to use SSL/TLS in production
+- Rate limiting can be applied at the Nginx level
+
+### Session Security
+- Sessions automatically timeout after inactivity
+- PID and session information stored in protected directories:
+  - `/opt/novapanel/storage/terminal/pids/` (750, owner: novapanel)
+  - `/opt/novapanel/storage/terminal/logs/` (750, owner: novapanel)
+- Session tokens are regenerated on each new session
+- Old sessions are properly terminated before creating new ones
+
+### Audit Trail
+- All terminal sessions are logged
+- Start/stop events are recorded
+- Failed session attempts are logged
+- Terminal output can be logged for compliance (optional)
+
+### Best Practices
+1. **Enable authentication**: Integrate with the Session class before production use
+2. **Use HTTPS**: Enable SSL/TLS for the panel and terminal connections
+3. **Monitor sessions**: Regularly check active sessions with `getActiveSessions()`
+4. **Set timeouts**: Configure appropriate session timeout values
+5. **Review logs**: Check terminal logs for suspicious activity
+6. **Limit access**: Use RBAC to control who can access the terminal feature
+
+### ttyd Security Configuration
+The terminal adapter configures ttyd with secure defaults:
+```bash
+ttyd -p <port> -c novapanel:<token> -t fontSize=14 -W bash -l
+```
+- `-p`: Specific port for isolation
+- `-c`: Credential authentication required
+- `-W`: Writable terminal (required for command execution)
+- `bash -l`: Login shell with proper environment
+
 ## Directory Permissions
 
 ### Account Home Directories
@@ -227,7 +288,11 @@ Log format:
 - [x] Rate limiting for brute force prevention
 - [x] Audit logging for shell commands
 - [x] Firewall configured (port 7080)
+- [x] Web terminal with credential authentication
+- [x] Terminal session isolation per user
+- [x] Terminal process management and cleanup
 - [ ] HTTPS enabled for panel (recommended for production)
+- [ ] Terminal authentication integrated with Session (requires auth implementation)
 - [ ] Regular security updates scheduled (admin responsibility)
 
 ## Reporting Security Issues
