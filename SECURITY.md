@@ -29,6 +29,8 @@ novapanel ALL=(ALL) NOPASSWD: /bin/chmod
 novapanel ALL=(ALL) NOPASSWD: /usr/bin/crontab
 novapanel ALL=(ALL) NOPASSWD: /bin/ln
 novapanel ALL=(ALL) NOPASSWD: /bin/rm
+novapanel ALL=(ALL) NOPASSWD: /bin/cp
+novapanel ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t
 ```
 
 ## Shell Command Security
@@ -56,9 +58,36 @@ $escapedArgs = array_map(fn($arg) => $this->escapeArg($arg), $args);
 ```
 
 ### Command Validation
-Two-level validation:
-1. Base command must be in the allowed list
-2. Sudo commands must be in the sudo-approved list
+Multi-level validation prevents command injection:
+1. **Command purity check**: Commands containing whitespace or shell metacharacters (`;|&$`<>(){}[]\\`) are rejected
+2. **Whitelist validation**: Only exact command names in the allowed list can be executed
+3. **Sudo restriction**: Additional validation for commands requiring sudo privileges
+4. **Argument separation**: Commands and arguments are kept strictly separate to prevent injection
+
+```php
+// Commands must be pure - no spaces or metacharacters allowed
+$this->execute('nginx', ['-t']); // ✓ Valid
+$this->execute('nginx -t', []); // ✗ Rejected - contains whitespace
+$this->execute('nginx; rm -rf /', []); // ✗ Rejected - contains metacharacters
+```
+
+### Privileged File Writing
+Configuration files under `/etc` require root privileges to write. The Shell wrapper provides a secure `writeFile()` method:
+
+```php
+// Secure file writing using sudo
+$this->shell->writeFile('/etc/nginx/sites-available/example.com.conf', $content);
+// 1. Writes content to temporary file
+// 2. Uses sudo cp to move to destination
+// 3. Sets proper permissions (644)
+// 4. Cleans up temporary file
+```
+
+This approach ensures:
+- Panel runs as unprivileged user
+- No direct file writes to privileged directories
+- All operations are logged in audit trail
+- Proper file permissions are maintained
 
 ## Directory Permissions
 

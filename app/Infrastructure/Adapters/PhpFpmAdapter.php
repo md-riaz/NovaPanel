@@ -46,8 +46,12 @@ class PhpFpmAdapter implements PhpRuntimeManagerInterface
         $poolPath = str_replace('{version}', $runtime->version, self::POOL_PATH);
         $poolFile = "{$poolPath}/{$site->domain}.conf";
         
-        // Write pool configuration
-        file_put_contents($poolFile, $poolContent);
+        // Write pool configuration using sudo
+        $writeResult = $this->shell->writeFile($poolFile, $poolContent);
+        
+        if ($writeResult['exitCode'] !== 0) {
+            throw new \RuntimeException("Failed to write PHP-FPM pool configuration: " . $writeResult['output']);
+        }
         
         // Reload PHP-FPM
         $result = $this->shell->executeSudo('systemctl', ['reload', "php{$runtime->version}-fpm"]);
@@ -72,9 +76,17 @@ class PhpFpmAdapter implements PhpRuntimeManagerInterface
     {
         $poolName = str_replace('.', '_', $site->domain);
         
+        // Use account username instead of domain for user/group
+        $username = $site->accountUsername ?? 'www-data';
+        
+        // Verify the username is set
+        if (!$site->accountUsername) {
+            throw new \RuntimeException("Site must have accountUsername set to create PHP-FPM pool");
+        }
+        
         $config = "[{$poolName}]\n";
-        $config .= "user = {$site->domain}\n";
-        $config .= "group = {$site->domain}\n";
+        $config .= "user = {$username}\n";
+        $config .= "group = {$username}\n";
         $config .= "listen = /var/run/php/php{$runtime->version}-fpm-{$site->domain}.sock\n";
         $config .= "listen.owner = www-data\n";
         $config .= "listen.group = www-data\n";

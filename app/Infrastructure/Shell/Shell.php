@@ -38,7 +38,10 @@ class Shell implements ShellInterface
         'mkdir',
         'chown',
         'chmod',
-        'nginx'
+        'nginx',
+        'cp',
+        'ln',
+        'rm'
     ];
 
     public function execute(string $command, array $args = []): array
@@ -46,7 +49,7 @@ class Shell implements ShellInterface
         $this->validateCommand($command);
         
         $escapedArgs = array_map(fn($arg) => $this->escapeArg($arg), $args);
-        $fullCommand = $command . ' ' . implode(' ', $escapedArgs);
+        $fullCommand = $command . ($escapedArgs ? ' ' . implode(' ', $escapedArgs) : '');
         
         return $this->run($fullCommand);
     }
@@ -57,7 +60,7 @@ class Shell implements ShellInterface
         $this->validateSudoCommand($command);
         
         $escapedArgs = array_map(fn($arg) => $this->escapeArg($arg), $args);
-        $fullCommand = 'sudo ' . $command . ' ' . implode(' ', $escapedArgs);
+        $fullCommand = 'sudo ' . $command . ($escapedArgs ? ' ' . implode(' ', $escapedArgs) : '');
         
         return $this->run($fullCommand);
     }
@@ -66,22 +69,45 @@ class Shell implements ShellInterface
     {
         return escapeshellarg($arg);
     }
+    
+    /**
+     * Write content to a file using sudo privileges
+     */
+    public function writeFile(string $path, string $content): array
+    {
+        $tempFile = tempnam(sys_get_temp_dir(), 'novapanel_');
+        file_put_contents($tempFile, $content);
+        
+        // Use sudo to move temp file to destination with proper permissions
+        $result = $this->executeSudo('cp', [$tempFile, $path]);
+        
+        // Set proper permissions
+        if ($result['exitCode'] === 0) {
+            $this->executeSudo('chmod', ['644', $path]);
+        }
+        
+        // Clean up temp file
+        @unlink($tempFile);
+        
+        return $result;
+    }
 
     private function validateCommand(string $command): void
     {
-        $baseCommand = explode(' ', $command)[0];
+        // Reject commands containing whitespace or shell metacharacters
+        if (preg_match('/[\s;|&$`<>(){}[\]\\\\]/', $command)) {
+            throw new \RuntimeException("Command contains invalid characters. Use the args parameter instead.");
+        }
         
-        if (!in_array($baseCommand, $this->allowedCommands)) {
-            throw new \RuntimeException("Command '$baseCommand' is not allowed for security reasons");
+        if (!in_array($command, $this->allowedCommands)) {
+            throw new \RuntimeException("Command '$command' is not allowed for security reasons");
         }
     }
 
     private function validateSudoCommand(string $command): void
     {
-        $baseCommand = explode(' ', $command)[0];
-        
-        if (!in_array($baseCommand, $this->sudoCommands)) {
-            throw new \RuntimeException("Command '$baseCommand' is not allowed to run with sudo");
+        if (!in_array($command, $this->sudoCommands)) {
+            throw new \RuntimeException("Command '$command' is not allowed to run with sudo");
         }
     }
 

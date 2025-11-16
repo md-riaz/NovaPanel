@@ -49,7 +49,8 @@ class CreateSiteService
             domain: $domain,
             documentRoot: $documentRoot,
             phpVersion: $phpVersion,
-            sslEnabled: $sslEnabled
+            sslEnabled: $sslEnabled,
+            accountUsername: $account->username
         );
 
         // Save to database first

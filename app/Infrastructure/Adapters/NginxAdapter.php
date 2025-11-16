@@ -20,8 +20,12 @@ class NginxAdapter implements WebServerManagerInterface
         $vhostContent = $this->generateVhostConfig($site);
         $vhostFile = self::VHOST_PATH . '/' . $site->domain . '.conf';
         
-        // Write vhost configuration
-        file_put_contents($vhostFile, $vhostContent);
+        // Write vhost configuration using sudo
+        $writeResult = $this->shell->writeFile($vhostFile, $vhostContent);
+        
+        if ($writeResult['exitCode'] !== 0) {
+            throw new \RuntimeException("Failed to write Nginx configuration: " . $writeResult['output']);
+        }
         
         // Enable site by creating symlink
         $this->shell->executeSudo('ln', ['-sf', $vhostFile, self::VHOST_ENABLED . '/' . $site->domain . '.conf']);

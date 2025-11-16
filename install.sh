@@ -138,6 +138,8 @@ novapanel ALL=(ALL) NOPASSWD: /bin/chmod
 novapanel ALL=(ALL) NOPASSWD: /usr/bin/crontab
 novapanel ALL=(ALL) NOPASSWD: /bin/ln
 novapanel ALL=(ALL) NOPASSWD: /bin/rm
+novapanel ALL=(ALL) NOPASSWD: /bin/cp
+novapanel ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t
 EOF
 chmod 440 /etc/sudoers.d/novapanel
 echo "✓ Sudo permissions configured"
