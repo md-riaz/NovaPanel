@@ -5,7 +5,6 @@ namespace App\Http\Controllers;
 use App\Http\Request;
 use App\Http\Response;
 use App\Repositories\SiteRepository;
-use App\Repositories\AccountRepository;
 use App\Services\CreateSiteService;
 use App\Facades\WebServer;
 use App\Facades\PhpRuntime;

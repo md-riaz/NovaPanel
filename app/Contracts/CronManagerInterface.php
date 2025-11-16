@@ -2,43 +2,43 @@
 
 namespace App\Contracts;
 
-use App\Domain\Entities\Account;
+use App\Domain\Entities\User;
 use App\Domain\Entities\CronJob;
 
 interface CronManagerInterface
 {
     /**
-     * Create a new cron job for an account
+     * Create a new cron job for a user
      *
-     * @param Account $account
+     * @param User $user
      * @param CronJob $job
      * @return bool
      */
-    public function createJob(Account $account, CronJob $job): bool;
+    public function createJob(User $user, CronJob $job): bool;
 
     /**
      * Update a cron job
      *
-     * @param Account $account
+     * @param User $user
      * @param CronJob $job
      * @return bool
      */
-    public function updateJob(Account $account, CronJob $job): bool;
+    public function updateJob(User $user, CronJob $job): bool;
 
     /**
      * Delete a cron job
      *
-     * @param Account $account
+     * @param User $user
      * @param CronJob $job
      * @return bool
      */
-    public function deleteJob(Account $account, CronJob $job): bool;
+    public function deleteJob(User $user, CronJob $job): bool;
 
     /**
-     * List all cron jobs for an account
+     * List all cron jobs for a user
      *
-     * @param Account $account
+     * @param User $user
      * @return array
      */
-    public function listJobs(Account $account): array;
+    public function listJobs(User $user): array;
 }

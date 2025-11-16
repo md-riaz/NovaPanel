@@ -27,7 +27,9 @@ class Shell implements ShellInterface
         'mysql',
         'psql',
         'pure-pw',
-        'pdns_control'
+        'pdns_control',
+        'id',
+        'bash'
     ];
 
     private array $sudoCommands = [
@@ -41,7 +43,9 @@ class Shell implements ShellInterface
         'nginx',
         'cp',
         'ln',
-        'rm'
+        'rm',
+        'pure-pw',
+        'bash'
     ];
 
     public function execute(string $command, array $args = []): array

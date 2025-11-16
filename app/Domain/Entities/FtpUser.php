@@ -6,7 +6,7 @@ class FtpUser
 {
     public function __construct(
         public ?int $id = null,
-        public ?int $accountId = null,
+        public ?int $userId = null,
         public ?string $username = null,
         public ?string $homeDirectory = null,
         public ?bool $enabled = true,
