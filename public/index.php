@@ -14,6 +14,7 @@ $router = new Router();
 // Dashboard routes
 $router->get('/', DashboardController::class . '@index');
 $router->get('/dashboard', DashboardController::class . '@index');
+$router->get('/dashboard/stats', DashboardController::class . '@stats');
 
 // User routes
 $router->get('/users', UserController::class . '@index');

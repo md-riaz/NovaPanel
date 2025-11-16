@@ -58,9 +58,26 @@ class SiteController extends Controller
             
             $site = $service->execute($userId, $domain, $phpVersion, $sslEnabled);
             
+            // Check if this is an HTMX request
+            if ($request->header('HX-Request')) {
+                $html = '<div class="alert alert-success alert-dismissible fade show" role="alert">';
+                $html .= '<i class="bi bi-check-circle"></i> Site created successfully! Redirecting...';
+                $html .= '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>';
+                $html .= '</div>';
+                return new Response($html);
+            }
+            
             return $this->redirect('/sites');
             
         } catch (\Exception $e) {
+            // Check if this is an HTMX request
+            if ($request->header('HX-Request')) {
+                $html = '<div class="alert alert-danger alert-dismissible fade show" role="alert">';
+                $html .= '<i class="bi bi-exclamation-triangle"></i> Error: ' . htmlspecialchars($e->getMessage());
+                $html .= '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>';
+                $html .= '</div>';
+                return new Response($html, 400);
+            }
             return $this->json(['error' => $e->getMessage()], 400);
         }
     }

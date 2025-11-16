@@ -64,4 +64,16 @@ class Request
     {
         return $this->method === 'POST';
     }
+
+    public function header(string $key, $default = null)
+    {
+        // Convert header name to HTTP_HEADER_NAME format
+        $key = 'HTTP_' . strtoupper(str_replace('-', '_', $key));
+        return $this->server[$key] ?? $default;
+    }
+
+    public function isHtmx(): bool
+    {
+        return $this->header('HX-Request') === 'true';
+    }
 }

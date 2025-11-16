@@ -6,7 +6,12 @@
 
 <div class="row">
     <div class="col-md-8">
-        <form method="POST" action="/sites">
+        <div id="form-messages"></div>
+        <form method="POST" action="/sites" 
+              hx-post="/sites" 
+              hx-target="#form-messages"
+              hx-swap="innerHTML"
+              hx-indicator="#submit-indicator">
             <div class="mb-3">
                 <label for="domain" class="form-label">Domain Name</label>
                 <input type="text" class="form-control" id="domain" name="domain" required>
@@ -40,12 +45,26 @@
             </div>
 
             <div class="mb-3">
-                <button type="submit" class="btn btn-primary">Create Site</button>
+                <button type="submit" class="btn btn-primary">
+                    <span class="htmx-indicator spinner-border spinner-border-sm" id="submit-indicator" role="status"></span>
+                    Create Site
+                </button>
                 <a href="/sites" class="btn btn-secondary">Cancel</a>
             </div>
         </form>
     </div>
 </div>
+
+<script>
+document.body.addEventListener('htmx:afterRequest', function(evt) {
+    if (evt.detail.successful && evt.detail.target.id === 'form-messages') {
+        // Redirect to sites page on success
+        setTimeout(() => {
+            window.location.href = '/sites';
+        }, 1000);
+    }
+});
+</script>
 
 <?php $content = ob_get_clean(); ?>
 <?php include __DIR__ . '/../../layouts/app.php'; ?>
