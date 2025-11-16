@@ -175,10 +175,39 @@ preg_match('/^[a-z0-9]+([\-\.]{1}[a-z0-9]+)*\.[a-z]{2,}$/', $domain)
 ```
 
 ### Username Validation
+**Critical Security Feature - Prevents Path Traversal Attacks**
+
+Usernames are strictly validated to prevent path traversal vulnerabilities when creating directories:
+
 ```php
-// Must start with letter, 3-32 characters
-preg_match('/^[a-z][a-z0-9_-]{2,31}$/', $username)
+// Must start with letter, 3-32 characters, only letters, numbers, hyphens, and underscores
+// This prevents attacks like: ../../tmp or ../../../etc/passwd
+preg_match('/^[a-z][a-z0-9_-]{2,31}$/i', $username)
 ```
+
+**Why This Matters:**
+- Site directories are created at `/opt/novapanel/sites/{$username}/`
+- Without validation, a username like `../../tmp` could create directories outside the intended path
+- This validation ensures usernames cannot contain path separators or special characters
+- Applied in both user creation and update operations
+
+### Password Validation
+**Critical Security Feature - Server-Side Password Confirmation**
+
+Password changes require server-side confirmation matching to prevent mismatched passwords:
+
+```php
+// Both create and update operations validate password confirmation
+if ($password !== $passwordConfirm) {
+    throw new \Exception('Password and password confirmation do not match');
+}
+```
+
+**Why This Matters:**
+- Client-side validation can be bypassed by attackers
+- Without server-side validation, an attacker could submit mismatched passwords
+- This would create users with passwords different from what the operator expects
+- Applied in both user creation and update operations (when password is being changed)
 
 ## Database Security
 
