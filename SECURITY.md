@@ -118,29 +118,88 @@ $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
 - Isolated temp and session directories
 - Resource limits can be set per pool
 
+## Additional Security Features
+
+### CSRF Protection
+The panel includes Cross-Site Request Forgery (CSRF) protection for all forms:
+
+```php
+use App\Support\CSRF;
+
+// Generate token in forms
+echo CSRF::field();
+
+// Verify token on submission
+if (!CSRF::verify($_POST['_csrf_token'])) {
+    throw new Exception('Invalid CSRF token');
+}
+```
+
+### Session Security
+Sessions are secured with:
+- HTTP-only cookies
+- Secure flag (HTTPS)
+- SameSite=Strict
+- Automatic regeneration every 5 minutes
+- Session fingerprinting (User-Agent + IP)
+- 1-hour timeout
+
+### Rate Limiting
+Brute force protection with rate limiting:
+- Maximum 5 attempts per 15 minutes
+- IP-based tracking
+- Automatic lockout on exceeded attempts
+
+```php
+use App\Support\RateLimiter;
+
+$key = 'login:' . $_SERVER['REMOTE_ADDR'];
+if (RateLimiter::tooManyAttempts($key)) {
+    $seconds = RateLimiter::availableIn($key);
+    throw new Exception("Too many attempts. Try again in $seconds seconds.");
+}
+```
+
+### Audit Logging
+All shell command executions are logged to `/opt/novapanel/storage/logs/shell.log`:
+- Timestamp
+- User executing command
+- Full command with arguments
+- Exit code for failed commands
+
+Log format:
+```
+[2025-11-16 16:00:00] USER=novapanel COMMAND=sudo useradd example
+[2025-11-16 16:00:05] FAILED COMMAND=sudo nginx -t EXIT_CODE=1
+```
+
 ## Best Practices
 
 1. **Regular Updates**: Keep system packages updated
-2. **Firewall**: Use UFW or iptables to restrict access
+2. **Firewall**: Use UFW or iptables to restrict access (port 7080 is auto-configured)
 3. **SSL/TLS**: Enable HTTPS for the panel and customer sites
 4. **Backups**: Regular automated backups of panel database
-5. **Monitoring**: Monitor logs for suspicious activity
-6. **Fail2ban**: Implement rate limiting and ban mechanisms
-7. **Audit Logs**: Log all administrative actions
+5. **Monitoring**: Monitor logs for suspicious activity (`/opt/novapanel/storage/logs/`)
+6. **Fail2ban**: Built-in rate limiting provides basic brute force protection
+7. **Audit Logs**: Review shell.log regularly for unauthorized access attempts
 
 ## Security Checklist
 
-- [ ] Panel runs as non-root user
-- [ ] Sudo whitelist is minimal and specific
-- [ ] All shell commands use `escapeshellarg()`
-- [ ] Command whitelist enforced
-- [ ] Directory permissions properly set
-- [ ] Input validation on all user data
-- [ ] Prepared statements for database queries
-- [ ] Password hashing with strong algorithm
-- [ ] HTTPS enabled for panel
-- [ ] Firewall configured
-- [ ] Regular security updates scheduled
+- [x] Panel runs as non-root user
+- [x] Sudo whitelist is minimal and specific
+- [x] All shell commands use `escapeshellarg()`
+- [x] Command whitelist enforced
+- [x] Directory permissions properly set
+- [x] Input validation on all user data
+- [x] Prepared statements for database queries
+- [x] Password hashing with strong algorithm
+- [x] CSRF protection implemented
+- [x] Session security with regeneration
+- [x] Rate limiting for brute force prevention
+- [x] Audit logging for shell commands
+- [x] Firewall configured (port 7080)
+- [ ] HTTPS enabled for panel (recommended for production)
+- [ ] Regular security updates scheduled (admin responsibility)
 
 ## Reporting Security Issues
 

@@ -78,13 +78,10 @@ sudo visudo -f /etc/sudoers.d/novapanel
 
 After installation, access the panel at:
 ```
-http://your-server-ip
+http://your-server-ip:7080
 ```
 
-Or configure a domain:
-```
-http://panel.yourdomain.com
-```
+The panel runs on port 7080 by default for security isolation from hosted sites.
 
 ### Creating an Account
 

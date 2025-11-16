@@ -145,12 +145,15 @@ echo ""
 
 # Configure Nginx for panel
 echo "Configuring Nginx..."
-read -p "Enter panel domain (e.g., panel.example.com): " PANEL_DOMAIN
+
+# Detect server IP
+SERVER_IP=$(hostname -I | awk '{print $1}')
+echo "✓ Detected server IP: $SERVER_IP"
 
 cat > /etc/nginx/sites-available/novapanel.conf <<EOF
 server {
-    listen 80;
-    server_name $PANEL_DOMAIN;
+    listen 7080;
+    server_name $SERVER_IP _;
     root $PANEL_DIR/public;
     index index.php;
 
@@ -185,6 +188,7 @@ if command -v ufw &> /dev/null; then
     ufw allow 22/tcp
     ufw allow 80/tcp
     ufw allow 443/tcp
+    ufw allow 7080/tcp
     echo "✓ Firewall configured"
     echo ""
 fi
@@ -193,14 +197,14 @@ echo "=========================================="
 echo "✅ NovaPanel Installation Complete!"
 echo "=========================================="
 echo ""
-echo "Access your panel at: http://$PANEL_DOMAIN"
+echo "Access your panel at: http://$SERVER_IP:7080"
 echo "Admin username: $ADMIN_USER"
 echo "Admin email: $ADMIN_EMAIL"
 echo ""
 echo "Next steps:"
-echo "1. Point your domain DNS to this server"
-echo "2. Set up SSL certificate (recommended: certbot)"
-echo "3. Review security settings in SECURITY.md"
+echo "1. Review security settings in SECURITY.md"
+echo "2. Set up SSL certificate for port 7080 (optional)"
+echo "3. Configure firewall rules for production use"
 echo ""
 echo "For support, visit: https://github.com/md-riaz/NovaPanel"
 echo "=========================================="

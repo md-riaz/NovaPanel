@@ -6,6 +6,8 @@ use App\Contracts\ShellInterface;
 
 class Shell implements ShellInterface
 {
+    private const LOG_FILE = __DIR__ . '/../../../storage/logs/shell.log';
+    
     private array $allowedCommands = [
         'nginx',
         'systemctl',
@@ -88,11 +90,46 @@ class Shell implements ShellInterface
         $output = [];
         $exitCode = 0;
         
+        // Log command execution for audit trail
+        $this->logCommand($command);
+        
         exec($command . ' 2>&1', $output, $exitCode);
+        
+        // Log result
+        $this->logResult($command, $exitCode);
         
         return [
             'output' => implode("\n", $output),
             'exitCode' => $exitCode
         ];
+    }
+    
+    private function logCommand(string $command): void
+    {
+        $timestamp = date('Y-m-d H:i:s');
+        $user = posix_getpwuid(posix_geteuid())['name'] ?? 'unknown';
+        $logMessage = sprintf(
+            "[%s] USER=%s COMMAND=%s\n",
+            $timestamp,
+            $user,
+            $command
+        );
+        
+        @file_put_contents(self::LOG_FILE, $logMessage, FILE_APPEND);
+    }
+    
+    private function logResult(string $command, int $exitCode): void
+    {
+        if ($exitCode !== 0) {
+            $timestamp = date('Y-m-d H:i:s');
+            $logMessage = sprintf(
+                "[%s] FAILED COMMAND=%s EXIT_CODE=%d\n",
+                $timestamp,
+                $command,
+                $exitCode
+            );
+            
+            @file_put_contents(self::LOG_FILE, $logMessage, FILE_APPEND);
+        }
     }
 }
