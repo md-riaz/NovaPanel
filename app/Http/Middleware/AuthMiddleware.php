@@ -13,7 +13,14 @@ class AuthMiddleware
      */
     public function handle(Request $request, callable $next): Response
     {
-        Session::start();
+        try {
+            Session::start();
+        } catch (\RuntimeException $e) {
+            // Session validation failed (expired or hijacked)
+            // Destroy the invalid session and redirect to login
+            Session::destroy();
+            return $this->redirectToLogin();
+        }
         
         // Check if user is authenticated
         if (!$this->isAuthenticated()) {
