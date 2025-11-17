@@ -123,6 +123,16 @@ if [ "$CURRENT_DIR" != "$PANEL_DIR" ]; then
     cd $PANEL_DIR
 fi
 
+# Set proper ownership and permissions for panel files
+echo "Setting file ownership and permissions..."
+# Set ownership to novapanel:www-data so PHP-FPM (running as www-data) can read files
+chown -R novapanel:www-data $PANEL_DIR
+# Set secure permissions: directories 755, files 644
+find $PANEL_DIR -type d -exec chmod 755 {} \;
+find $PANEL_DIR -type f -exec chmod 644 {} \;
+echo "✓ File ownership and permissions configured"
+echo ""
+
 # Install Composer dependencies
 echo "Installing PHP dependencies..."
 sudo -u novapanel composer install --no-dev --optimize-autoloader
@@ -132,8 +142,8 @@ echo ""
 # Set up storage directories
 echo "Setting up storage directories..."
 mkdir -p storage/logs storage/cache storage/uploads storage/terminal/pids storage/terminal/logs
-chown -R novapanel:novapanel storage
-chmod -R 750 storage
+chown -R novapanel:www-data storage
+chmod -R 770 storage
 echo "✓ Storage directories configured"
 echo ""
 
@@ -262,10 +272,9 @@ echo ""
 
 # Create admin user
 echo "Creating admin user..."
-read -p "Enter admin username: " ADMIN_USER
-read -p "Enter admin email: " ADMIN_EMAIL
-read -s -p "Enter admin password: " ADMIN_PASS
-echo ""
+ADMIN_USER="admin"
+ADMIN_EMAIL="admin@novapanel.com"
+ADMIN_PASS=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
 
 ADMIN_PASS_HASH=$(php -r "echo password_hash('$ADMIN_PASS', PASSWORD_DEFAULT);")
 
@@ -377,8 +386,14 @@ echo "✅ NovaPanel Installation Complete!"
 echo "=========================================="
 echo ""
 echo "Access your panel at: http://$SERVER_IP:7080"
-echo "Admin username: $ADMIN_USER"
-echo "Admin email: $ADMIN_EMAIL"
+echo ""
+echo "Admin Credentials:"
+echo "  Username: $ADMIN_USER"
+echo "  Email: $ADMIN_EMAIL"
+echo "  Password: $ADMIN_PASS"
+echo ""
+echo "⚠️  IMPORTANT: Save these credentials securely!"
+echo "   Change the password after first login."
 echo ""
 echo "Features available:"
 echo "  • Site Management"
