@@ -57,6 +57,11 @@ class TerminalAdapter
         // Store session info
         $this->saveSessionInfo($userId, $port, $token);
         
+        // Check if ttyd is installed before attempting to start
+        if (!$this->isTtydInstalled()) {
+            throw new \RuntimeException('ttyd is not installed. Please install ttyd first.');
+        }
+        
         // Start ttyd process
         // ttyd options:
         // -p: port to listen on
@@ -77,7 +82,7 @@ class TerminalAdapter
         $pid = trim($output);
         
         if (empty($pid) || !is_numeric($pid)) {
-            throw new \RuntimeException('Failed to start terminal session');
+            throw new \RuntimeException('Failed to start terminal session: could not capture process ID');
         }
         
         // Save PID for later management
@@ -90,7 +95,27 @@ class TerminalAdapter
         
         // Verify the process is running
         if (!$this->isProcessRunning($pid)) {
-            throw new \RuntimeException('Terminal process failed to start. Check if ttyd is installed.');
+            // Process failed to start - read log for details
+            $logFile = $this->logDir . '/' . $userId . '.log';
+            $errorDetails = '';
+            
+            if (file_exists($logFile)) {
+                $logContent = @file_get_contents($logFile);
+                if ($logContent !== false) {
+                    // Get last few lines of log for error details
+                    $lines = array_filter(explode("\n", trim($logContent)));
+                    $errorDetails = implode("\n", array_slice($lines, -5));
+                }
+            }
+            
+            $errorMessage = 'Terminal process failed to start. ';
+            if (!empty($errorDetails)) {
+                $errorMessage .= 'Error from log: ' . $errorDetails;
+            } else {
+                $errorMessage .= 'Check if port ' . $port . ' is already in use or if there are permission issues.';
+            }
+            
+            throw new \RuntimeException($errorMessage);
         }
         
         // Get the base URL from config or construct from request
