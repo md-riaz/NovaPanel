@@ -77,8 +77,8 @@ class CronAdapter implements CronManagerInterface
 
     private function getCurrentCrontab(): string
     {
-        // Single VPS model: read novapanel user's crontab
-        $result = $this->shell->execute('crontab', ['-l']);
+        // Single VPS model: read novapanel user's crontab using sudo
+        $result = $this->shell->executeSudo('crontab', ['-u', 'novapanel', '-l']);
         
         if ($result['exitCode'] === 0) {
             return $result['output'];
@@ -92,8 +92,8 @@ class CronAdapter implements CronManagerInterface
         $tempFile = tempnam(sys_get_temp_dir(), 'crontab');
         file_put_contents($tempFile, $content);
         
-        // Single VPS model: write to novapanel user's crontab
-        $result = $this->shell->execute('crontab', [$tempFile]);
+        // Single VPS model: write to novapanel user's crontab using sudo
+        $result = $this->shell->executeSudo('crontab', ['-u', 'novapanel', $tempFile]);
         
         unlink($tempFile);
         

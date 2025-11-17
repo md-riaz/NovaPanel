@@ -43,7 +43,8 @@ class Shell implements ShellInterface
         'ln',
         'rm',
         'pure-pw',
-        'bash'
+        'bash',
+        'crontab'
     ];
 
     public function execute(string $command, array $args = []): array
