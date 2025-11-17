@@ -341,7 +341,15 @@ novapanel ALL=(ALL) NOPASSWD: /usr/bin/pure-pw
 novapanel ALL=(ALL) NOPASSWD: /bin/bash
 EOF
 chmod 440 /etc/sudoers.d/novapanel
-echo "✓ Sudo permissions configured"
+
+# Validate sudoers file
+if visudo -c -f /etc/sudoers.d/novapanel > /dev/null 2>&1; then
+    echo "✓ Sudo permissions configured and validated"
+else
+    echo "❌ Error: sudoers file validation failed"
+    echo "   Please check /etc/sudoers.d/novapanel for syntax errors"
+    exit 1
+fi
 echo ""
 
 # Configure Nginx for panel

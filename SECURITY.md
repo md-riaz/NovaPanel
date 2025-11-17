@@ -46,6 +46,8 @@ novapanel ALL=(ALL) NOPASSWD: /usr/sbin/usermod
 novapanel ALL=(ALL) NOPASSWD: /usr/sbin/userdel
 novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload nginx
 novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload php*-fpm
+novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload bind9
+novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload named
 novapanel ALL=(ALL) NOPASSWD: /bin/mkdir
 novapanel ALL=(ALL) NOPASSWD: /bin/chown
 novapanel ALL=(ALL) NOPASSWD: /bin/chmod
@@ -53,8 +55,15 @@ novapanel ALL=(ALL) NOPASSWD: /usr/bin/crontab
 novapanel ALL=(ALL) NOPASSWD: /bin/ln
 novapanel ALL=(ALL) NOPASSWD: /bin/rm
 novapanel ALL=(ALL) NOPASSWD: /bin/cp
+novapanel ALL=(ALL) NOPASSWD: /bin/mv
 novapanel ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t
+novapanel ALL=(ALL) NOPASSWD: /usr/sbin/named-checkconf
+novapanel ALL=(ALL) NOPASSWD: /usr/sbin/named-checkzone
+novapanel ALL=(ALL) NOPASSWD: /usr/bin/pure-pw
+novapanel ALL=(ALL) NOPASSWD: /bin/bash
 ```
+
+**Note:** This configuration is automatically created by the `install.sh` script. Only manual configuration is needed if you're performing a manual installation or if you need to update an existing installation.
 
 ## Shell Command Security
 
