@@ -150,6 +150,11 @@ echo ""
 # Run database migration
 echo "Running database migration..."
 sudo -u novapanel php database/migration.php
+# Ensure database file is writable by www-data group
+if [ -f storage/panel.db ]; then
+    chown novapanel:www-data storage/panel.db
+    chmod 660 storage/panel.db
+fi
 echo "✓ Database migration completed"
 echo ""
 
@@ -265,8 +270,8 @@ putenv('APP_ENV=production');
 putenv('APP_DEBUG=false');
 ENVEOF
 
-chown novapanel:novapanel $PANEL_DIR/.env.php
-chmod 600 $PANEL_DIR/.env.php
+chown novapanel:www-data $PANEL_DIR/.env.php
+chmod 640 $PANEL_DIR/.env.php
 echo "✓ Configuration file created"
 echo ""
 

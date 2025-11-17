@@ -106,7 +106,8 @@ sudo -u novapanel composer install
 # Create configuration file
 sudo -u novapanel cp .env.php.example .env.php
 sudo -u novapanel nano .env.php  # Edit and add your credentials
-sudo chmod 600 .env.php
+sudo chmod 640 .env.php
+sudo chown novapanel:www-data .env.php
 
 # Run database migration
 sudo -u novapanel php database/migration.php
@@ -148,9 +149,9 @@ If you need to manually configure after installation:
 # Edit the auto-generated configuration
 nano /opt/novapanel/.env.php
 
-# Ensure secure permissions
-chmod 600 /opt/novapanel/.env.php
-chown novapanel:novapanel /opt/novapanel/.env.php
+# Ensure secure permissions (www-data group can read for PHP-FPM)
+chmod 640 /opt/novapanel/.env.php
+chown novapanel:www-data /opt/novapanel/.env.php
 ```
 
 ### Configuration Options
