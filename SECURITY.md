@@ -70,7 +70,7 @@ All shell commands are validated against a whitelist before execution. See `app/
 - crontab
 - mysql, psql
 - pure-pw
-- pdns_control
+- named-checkzone, named-checkconf (for BIND9 zone validation)
 
 ### Argument Escaping
 All command arguments are automatically escaped using `escapeshellarg()` to prevent shell injection attacks.
@@ -359,6 +359,36 @@ AuditLogger::logUpdated('resource_type', 'resource_name', ['details']);
 AuditLogger::logDeleted('resource_type', 'resource_name', ['details']);
 ```
 
+## DNS Security (BIND9)
+
+### Complete Database Isolation
+NovaPanel uses BIND9 with zone files instead of a database-backed DNS solution. This provides several security advantages:
+
+- **No Database Access**: DNS data is stored in zone files under `/etc/bind/zones/`, completely isolated from customer database access
+- **No SQL Injection**: Zone files eliminate SQL injection attack vectors entirely
+- **Simpler Security Model**: File-based permissions are easier to audit and secure than database-level access controls
+- **Industry Standard**: BIND9 is the most widely deployed DNS server, battle-tested for decades
+
+### Zone File Security
+- Zone files owned by `bind:bind` user
+- File permissions set to 644 (read-only for panel)
+- Panel uses sudo to manage zone files with proper validation
+- All zone files validated with `named-checkzone` before deployment
+- Configuration validated with `named-checkconf` before reload
+
+### DNS Operations Security
+- All zone modifications increment serial number automatically
+- Zone file syntax validated before applying changes
+- Failed validations are logged and changes are rolled back
+- BIND9 service reloaded (not restarted) to minimize downtime
+- Separate zone files per domain prevent cross-contamination
+
+### BIND9 Configuration
+- Recursion disabled (authoritative DNS only)
+- Query logging can be enabled for audit trails
+- Zone transfers configurable per-zone
+- DNSSEC support available for enhanced security
+
 ## Configuration Security
 
 ### Credential Management
@@ -429,7 +459,7 @@ chown novapanel:novapanel /opt/novapanel/.env.php
 - [x] Secure file permissions on configuration (600)
 - [x] Credentials loaded via environment variables
 - [x] Database credentials moved to config
-- [x] PowerDNS credentials moved to config
+- [x] BIND9 configuration paths in config (no database credentials needed)
 
 ### Logging & Monitoring
 - [x] Comprehensive audit logging for admin actions

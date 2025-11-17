@@ -121,7 +121,7 @@ class DnsController extends Controller
             
             $record = $dnsRecordRepo->create($record);
             
-            // Add to PowerDNS
+            // Add to BIND9
             Dns::getInstance()->addRecord($record);
             
             // Log audit event
@@ -155,7 +155,7 @@ class DnsController extends Controller
                 'content' => $record->content
             ]);
             
-            // Delete from PowerDNS
+            // Delete from BIND9
             Dns::getInstance()->deleteRecord($record);
             
             // Delete from panel database

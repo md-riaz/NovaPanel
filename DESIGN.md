@@ -6,7 +6,7 @@ A lightweight, open-source **single VPS control panel** built with:
 - **HTML, CSS, JS** (frontend)
 - **SQLite** (panel DB)
 - **Nginx** + **PHP-FPM** (hosting stack)
-- **PowerDNS** (authoritative DNS)
+- **BIND9** (authoritative DNS with zone files)
 - **Pure-FTPd** (FTP with virtual users)
 - **MySQL/MariaDB/Postgres** (customer databases)
 - **Cron** (per panel user)
@@ -55,7 +55,7 @@ Architected with **facades + adapters** and a strict layered pattern.
 4. **Infrastructure Layer**
    - Shell runner
    - Nginx adapter
-   - PowerDNS adapter
+   - BIND9 adapter
    - Pure-FTPd adapter
    - PHP-FPM adapter
    - MySQL adapter
@@ -77,8 +77,9 @@ Stores panel metadata:
 ### 3.2 Service Databases
 - **MySQL/MariaDB/Postgres**
   - Customer DBs only
-- **PowerDNS MySQL backend**
-  - PDNS-managed zones/records
+- **BIND9 Zone Files**
+  - DNS zones/records stored in `/etc/bind/zones/`
+  - Complete isolation from database access
 - **System-level files**
   - PHP-FPM pool configs (all run as `novapanel` user)
   - Nginx vhosts
@@ -130,11 +131,13 @@ Per-site PHP version
 Directory organization by panel user (all owned by `novapanel:novapanel`)
 
 
-5.2 DNS (PowerDNS)
+5.2 DNS (BIND9)
 
-Create zone
+Create zone (zone files stored in /etc/bind/zones)
 
 Add/edit/delete A, AAAA, CNAME, TXT, MX, SRV records
+
+Complete isolation from database access for enhanced security
 
 
 5.3 FTP (Pure-FTPd)

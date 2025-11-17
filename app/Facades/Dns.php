@@ -3,7 +3,8 @@
 namespace App\Facades;
 
 use App\Contracts\DnsManagerInterface;
-use App\Infrastructure\Adapters\PowerDnsAdapter;
+use App\Infrastructure\Adapters\BindAdapter;
+use App\Infrastructure\Adapters\TerminalAdapter;
 use App\Support\Config;
 
 class Dns
@@ -13,14 +14,16 @@ class Dns
     public static function getInstance(): DnsManagerInterface
     {
         if (self::$instance === null) {
-            // Load PowerDNS credentials from config
+            // Load BIND9 configuration from config
             Config::load('database');
             
-            self::$instance = new PowerDnsAdapter(
-                host: Config::get('database.powerdns.host', 'localhost'),
-                database: Config::get('database.powerdns.database', 'powerdns'),
-                username: Config::get('database.powerdns.username', 'powerdns'),
-                password: Config::get('database.powerdns.password', '')
+            // Initialize BindAdapter with shell interface
+            $shell = new TerminalAdapter();
+            
+            self::$instance = new BindAdapter(
+                shell: $shell,
+                zonesPath: Config::get('database.bind9.zones_path', '/etc/bind/zones'),
+                namedConfPath: Config::get('database.bind9.named_conf_path', '/etc/bind/named.conf.local')
             );
         }
         
