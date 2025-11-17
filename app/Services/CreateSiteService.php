@@ -67,9 +67,9 @@ class CreateSiteService
                 if ($result['exitCode'] !== 0) {
                     throw new \RuntimeException("Failed to create base directory: " . $result['output']);
                 }
-                // Set ownership to novapanel:www-data
+                // Set ownership to novapanel:www-data with group write permissions
                 $this->shell->executeSudo('chown', ['novapanel:www-data', $baseDir]);
-                $this->shell->executeSudo('chmod', ['755', $baseDir]);
+                $this->shell->executeSudo('chmod', ['775', $baseDir]);
             }
             
             // Create document root directory
@@ -77,9 +77,9 @@ class CreateSiteService
             if ($result['exitCode'] !== 0) {
                 throw new \RuntimeException("Failed to create document root: " . $result['output']);
             }
-            // Set ownership to novapanel:www-data
+            // Set ownership to novapanel:www-data with group write permissions
             $this->shell->executeSudo('chown', ['novapanel:www-data', $documentRoot]);
-            $this->shell->executeSudo('chmod', ['755', $documentRoot]);
+            $this->shell->executeSudo('chmod', ['775', $documentRoot]);
 
             // Create PHP-FPM pool
             $runtime = new PhpRuntime(
