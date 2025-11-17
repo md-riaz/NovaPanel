@@ -262,10 +262,9 @@ echo ""
 
 # Create admin user
 echo "Creating admin user..."
-read -p "Enter admin username: " ADMIN_USER
-read -p "Enter admin email: " ADMIN_EMAIL
-read -s -p "Enter admin password: " ADMIN_PASS
-echo ""
+ADMIN_USER="admin"
+ADMIN_EMAIL="admin@novapanel.com"
+ADMIN_PASS=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
 
 ADMIN_PASS_HASH=$(php -r "echo password_hash('$ADMIN_PASS', PASSWORD_DEFAULT);")
 
@@ -377,8 +376,14 @@ echo "✅ NovaPanel Installation Complete!"
 echo "=========================================="
 echo ""
 echo "Access your panel at: http://$SERVER_IP:7080"
-echo "Admin username: $ADMIN_USER"
-echo "Admin email: $ADMIN_EMAIL"
+echo ""
+echo "Admin Credentials:"
+echo "  Username: $ADMIN_USER"
+echo "  Email: $ADMIN_EMAIL"
+echo "  Password: $ADMIN_PASS"
+echo ""
+echo "⚠️  IMPORTANT: Save these credentials securely!"
+echo "   Change the password after first login."
 echo ""
 echo "Features available:"
 echo "  • Site Management"
