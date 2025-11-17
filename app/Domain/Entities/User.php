@@ -4,6 +4,8 @@ namespace App\Domain\Entities;
 
 class User
 {
+    public ?array $roles = null;
+
     public function __construct(
         public ?int $id = null,
         public ?string $username = null,

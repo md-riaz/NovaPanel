@@ -23,12 +23,16 @@ class TerminalAdapter
         $this->pidDir = __DIR__ . '/../../../storage/terminal/pids';
         $this->logDir = __DIR__ . '/../../../storage/terminal/logs';
         
-        // Ensure directories exist
+        // Ensure directories exist with proper permissions
         if (!is_dir($this->pidDir)) {
-            mkdir($this->pidDir, 0755, true);
+            if (!@mkdir($this->pidDir, 0755, true)) {
+                error_log("Warning: Failed to create terminal pids directory: {$this->pidDir}");
+            }
         }
         if (!is_dir($this->logDir)) {
-            mkdir($this->logDir, 0755, true);
+            if (!@mkdir($this->logDir, 0755, true)) {
+                error_log("Warning: Failed to create terminal logs directory: {$this->logDir}");
+            }
         }
     }
     
@@ -77,7 +81,9 @@ class TerminalAdapter
         }
         
         // Save PID for later management
-        file_put_contents($this->pidDir . '/' . $userId . '.pid', $pid);
+        if (@file_put_contents($this->pidDir . '/' . $userId . '.pid', $pid) === false) {
+            error_log("Warning: Failed to save terminal PID file for user {$userId}");
+        }
         
         // Wait a moment for the process to start
         usleep(500000); // 0.5 seconds
@@ -265,10 +271,12 @@ TEXT;
             'created_at' => time()
         ];
         
-        file_put_contents(
+        if (@file_put_contents(
             $this->pidDir . '/' . $userId . '.json',
             json_encode($info, JSON_PRETTY_PRINT)
-        );
+        ) === false) {
+            error_log("Warning: Failed to save terminal session info for user {$userId}");
+        }
     }
     
     /**

@@ -138,6 +138,11 @@ class MysqlDatabaseAdapter implements DatabaseManagerInterface
     {
         if ($this->mysqlRoot === null) {
             try {
+                // Validate credentials are provided
+                if (empty($this->rootUser)) {
+                    throw new \RuntimeException("MySQL root user is not configured. Please set MYSQL_ROOT_USER in .env.php");
+                }
+                
                 $this->mysqlRoot = new PDO(
                     "mysql:host={$this->host}",
                     $this->rootUser,
@@ -145,7 +150,7 @@ class MysqlDatabaseAdapter implements DatabaseManagerInterface
                 );
                 $this->mysqlRoot->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
             } catch (\PDOException $e) {
-                throw new \RuntimeException("Failed to connect to MySQL as root: " . $e->getMessage());
+                throw new \RuntimeException("Failed to connect to MySQL as root: " . $e->getMessage() . ". Please verify MYSQL_ROOT_USER and MYSQL_ROOT_PASSWORD in .env.php are correct.");
             }
         }
         

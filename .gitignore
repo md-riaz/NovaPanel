@@ -6,9 +6,13 @@ composer.lock
 /storage/logs/*
 /storage/cache/*
 /storage/uploads/*
+/storage/terminal/pids/*
+/storage/terminal/logs/*
 !/storage/logs/.gitkeep
 !/storage/cache/.gitkeep
 !/storage/uploads/.gitkeep
+!/storage/terminal/pids/.gitkeep
+!/storage/terminal/logs/.gitkeep
 
 # Database
 /storage/*.db
