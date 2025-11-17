@@ -106,6 +106,15 @@ class AuthController extends Controller
     {
         Session::start();
         
+        // Verify CSRF token
+        $csrfToken = $request->post('_csrf_token');
+        if (!CSRF::verify($csrfToken)) {
+            // Invalid CSRF token - still logout but log the attempt
+            $this->logAudit('security.csrf_failed', "CSRF token verification failed on logout", [
+                'ip' => $request->server('REMOTE_ADDR', 'unknown')
+            ]);
+        }
+        
         $username = Session::get('username', 'unknown');
         
         // Log the logout event

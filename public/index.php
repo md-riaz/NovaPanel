@@ -27,7 +27,6 @@ $router = new Router();
 $router->get('/login', AuthController::class . '@showLogin');
 $router->post('/login', AuthController::class . '@login');
 $router->post('/logout', AuthController::class . '@logout');
-$router->get('/logout', AuthController::class . '@logout');
 
 // Protected routes (require authentication)
 // Dashboard routes
