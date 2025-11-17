@@ -93,10 +93,20 @@ class TerminalAdapter
             throw new \RuntimeException('Terminal process failed to start. Check if ttyd is installed.');
         }
         
+        // Get the base URL from config or construct from request
+        $config = require __DIR__ . '/../../../config/app.php';
+        $baseUrl = $config['url'] ?? 'http://localhost:7080';
+        
+        // Parse base URL to get protocol and host
+        $urlParts = parse_url($baseUrl);
+        $protocol = $urlParts['scheme'] ?? 'http';
+        $host = $urlParts['host'] ?? 'localhost';
+        $panelPort = $urlParts['port'] ?? 7080;
+        
         return [
             'port' => $port,
             'token' => $token,
-            'url' => "http://localhost:{$port}"
+            'url' => "{$protocol}://{$host}:{$panelPort}/terminal-ws/{$port}"
         ];
     }
     

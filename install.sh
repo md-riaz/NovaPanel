@@ -68,6 +68,7 @@ apt-get install -y \
     composer \
     sqlite3 \
     mysql-server \
+    pure-ftpd \
     bind9 \
     bind9utils \
     git \
@@ -100,6 +101,18 @@ else
 fi
 
 echo "✓ Dependencies installed"
+echo ""
+
+# Configure Pure-FTPd
+echo "Configuring Pure-FTPd..."
+# Enable PureDB authentication
+if [ ! -f /etc/pure-ftpd/conf/PureDB ]; then
+    echo "/etc/pure-ftpd/pureftpd.pdb" > /etc/pure-ftpd/conf/PureDB
+fi
+# Ensure Pure-FTPd service is enabled and started
+systemctl enable pure-ftpd 2>/dev/null || true
+systemctl restart pure-ftpd 2>/dev/null || true
+echo "✓ Pure-FTPd configured"
 echo ""
 
 # Create panel user
@@ -268,7 +281,14 @@ putenv('BIND9_NAMED_CONF_PATH=/etc/bind/named.conf.local');
 // Application
 putenv('APP_ENV=production');
 putenv('APP_DEBUG=false');
+
+// Detect server IP during installation
+// This will be updated with the actual server IP below
 ENVEOF
+
+# Detect server IP and add to config
+SERVER_IP=$(hostname -I | awk '{print $1}')
+echo "putenv('APP_URL=http://${SERVER_IP}:7080');" >> $PANEL_DIR/.env.php
 
 chown novapanel:www-data $PANEL_DIR/.env.php
 chmod 640 $PANEL_DIR/.env.php
@@ -317,6 +337,8 @@ novapanel ALL=(ALL) NOPASSWD: /bin/mv
 novapanel ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t
 novapanel ALL=(ALL) NOPASSWD: /usr/sbin/named-checkconf
 novapanel ALL=(ALL) NOPASSWD: /usr/sbin/named-checkzone
+novapanel ALL=(ALL) NOPASSWD: /usr/bin/pure-pw
+novapanel ALL=(ALL) NOPASSWD: /bin/bash
 EOF
 chmod 440 /etc/sudoers.d/novapanel
 echo "✓ Sudo permissions configured"
@@ -324,10 +346,7 @@ echo ""
 
 # Configure Nginx for panel
 echo "Configuring Nginx..."
-
-# Detect server IP
-SERVER_IP=$(hostname -I | awk '{print $1}')
-echo "✓ Detected server IP: $SERVER_IP"
+echo "✓ Using server IP: $SERVER_IP"
 
 cat > /etc/nginx/sites-available/novapanel.conf <<EOF
 server {
