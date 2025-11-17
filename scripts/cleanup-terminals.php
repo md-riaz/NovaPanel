@@ -3,14 +3,22 @@
 /**
  * Terminal Session Cleanup Script
  * 
- * This script cleans up stale terminal sessions that have been idle for too long.
+ * This script cleans up stale terminal sessions. A session is considered stale if:
+ * 1. The ttyd process is not running anymore (orphaned session files), OR
+ * 2. The session has been inactive for longer than the max-idle threshold
+ * 
+ * Active sessions (where ttyd process is still running) are NOT terminated based on 
+ * age alone. The application should call TerminalAdapter::updateSessionActivity() 
+ * periodically to track activity. Without activity updates, sessions will be 
+ * considered idle after max-idle seconds.
+ * 
  * Should be run periodically via cron (e.g., every hour).
  * 
  * Usage:
  *   php scripts/cleanup-terminals.php [--max-idle=3600]
  * 
  * Options:
- *   --max-idle=SECONDS   Maximum idle time in seconds (default: 3600)
+ *   --max-idle=SECONDS   Maximum idle time in seconds (default: 3600 = 1 hour)
  *   --dry-run           Show what would be cleaned up without actually doing it
  *   --verbose           Show detailed output
  * 

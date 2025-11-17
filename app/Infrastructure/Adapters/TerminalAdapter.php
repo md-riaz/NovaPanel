@@ -352,7 +352,8 @@ TEXT;
             'user_id' => $userId,
             'port' => $port,
             'token' => $token,
-            'created_at' => time()
+            'created_at' => time(),
+            'last_activity' => time()
         ];
         
         if (@file_put_contents(
@@ -364,8 +365,47 @@ TEXT;
     }
     
     /**
+     * Update last activity timestamp for a session
+     * This should be called periodically to track active sessions
+     * 
+     * @param int $userId The panel user ID
+     */
+    public function updateSessionActivity(int $userId): void
+    {
+        $sessionFile = $this->pidDir . '/' . $userId . '.json';
+        
+        if (!file_exists($sessionFile)) {
+            return;
+        }
+        
+        $content = @file_get_contents($sessionFile);
+        if ($content === false) {
+            return;
+        }
+        
+        $info = json_decode($content, true);
+        if (!$info) {
+            return;
+        }
+        
+        $info['last_activity'] = time();
+        
+        @file_put_contents(
+            $sessionFile,
+            json_encode($info, JSON_PRETTY_PRINT)
+        );
+    }
+    
+    /**
      * Clean up stale terminal sessions (idle for more than specified time)
      * Should be called periodically by a cron job or maintenance script
+     * 
+     * A session is considered stale if:
+     * 1. The process is not running anymore (PID file exists but process is dead), OR
+     * 2. The session has been inactive (no activity updates) for longer than maxIdleSeconds
+     * 
+     * Active sessions (where process is still running) are NOT terminated based on age alone.
+     * To track activity, the application should call updateSessionActivity() periodically.
      * 
      * @param int $maxIdleSeconds Maximum idle time in seconds (default: 3600 = 1 hour)
      * @return int Number of sessions cleaned up
@@ -387,26 +427,41 @@ TEXT;
                 }
                 
                 $info = json_decode($content, true);
-                if (!$info || !isset($info['user_id']) || !isset($info['created_at'])) {
+                if (!$info || !isset($info['user_id'])) {
                     continue;
                 }
                 
                 $userId = $info['user_id'];
+                $pidFile = $this->pidDir . '/' . $userId . '.pid';
                 
-                // Check if session is stale
-                $age = time() - $info['created_at'];
+                // Check if process is still running
+                $isRunning = false;
+                if (file_exists($pidFile)) {
+                    $pid = trim(file_get_contents($pidFile));
+                    $isRunning = $this->isProcessRunning($pid);
+                }
                 
-                if ($age > $maxIdleSeconds) {
-                    // Check if process is still running
-                    $pidFile = $this->pidDir . '/' . $userId . '.pid';
+                // If process is not running, clean up orphaned session files
+                if (!$isRunning) {
+                    error_log("Cleaning up orphaned terminal session for user {$userId} (process not running)");
+                    @unlink($file);
                     if (file_exists($pidFile)) {
-                        error_log("Cleaning up stale terminal session for user {$userId} (age: {$age}s)");
-                        if ($this->stopSession($userId)) {
-                            $count++;
-                        }
-                    } else {
-                        // PID file doesn't exist but session info does - clean up orphaned file
-                        @unlink($file);
+                        @unlink($pidFile);
+                    }
+                    $count++;
+                    continue;
+                }
+                
+                // If process is running, check last activity to determine if idle
+                // Use last_activity if available, otherwise fall back to created_at
+                $lastActivity = $info['last_activity'] ?? $info['created_at'] ?? time();
+                $idleTime = time() - $lastActivity;
+                
+                // Only terminate running sessions if they've been idle (no activity updates)
+                if ($idleTime > $maxIdleSeconds) {
+                    error_log("Cleaning up idle terminal session for user {$userId} (idle for {$idleTime}s)");
+                    if ($this->stopSession($userId)) {
+                        $count++;
                     }
                 }
             } catch (\Exception $e) {
