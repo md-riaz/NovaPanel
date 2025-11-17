@@ -68,6 +68,8 @@ apt-get install -y \
     composer \
     sqlite3 \
     mysql-server \
+    bind9 \
+    bind9utils \
     git \
     curl \
     unzip
@@ -156,93 +158,59 @@ MYSQL_EOF
 echo "✓ MySQL user '${MYSQL_PANEL_USER}' created with database management privileges"
 echo ""
 
-# Ask if user wants to install PowerDNS for DNS management
-echo "PowerDNS Setup (optional - for DNS management)"
-echo "=============================================="
-read -p "Do you want to install and configure PowerDNS? (y/N): " INSTALL_POWERDNS
+# Configure BIND9 for DNS management
+echo "BIND9 Setup (for DNS management)"
+echo "================================"
 
-POWERDNS_USER=""
-POWERDNS_PASS=""
-POWERDNS_DB="powerdns"
+# Create zones directory
+mkdir -p /etc/bind/zones
+chown bind:bind /etc/bind/zones
+chmod 755 /etc/bind/zones
 
-if [[ "$INSTALL_POWERDNS" =~ ^[Yy]$ ]]; then
-    echo "Installing PowerDNS..."
-    apt-get install -y pdns-server pdns-backend-mysql
-    
-    # Stop the service to configure it properly
-    systemctl stop pdns || true
-    
-    # Create PowerDNS database and user
-    POWERDNS_USER="powerdns"
-    POWERDNS_PASS=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
-    
-    mysql -u root <<PDNS_EOF
-CREATE DATABASE IF NOT EXISTS ${POWERDNS_DB};
-CREATE USER IF NOT EXISTS '${POWERDNS_USER}'@'localhost' IDENTIFIED BY '${POWERDNS_PASS}';
-GRANT ALL PRIVILEGES ON ${POWERDNS_DB}.* TO '${POWERDNS_USER}'@'localhost';
-FLUSH PRIVILEGES;
+# Create named.conf.local if it doesn't exist
+if [ ! -f /etc/bind/named.conf.local ]; then
+    cat > /etc/bind/named.conf.local <<'BIND_CONF'
+// Local zones configuration for NovaPanel
+// Zone files are managed automatically by the panel
 
-USE ${POWERDNS_DB};
-
-CREATE TABLE IF NOT EXISTS domains (
-  id INTEGER PRIMARY KEY AUTO_INCREMENT,
-  name VARCHAR(255) NOT NULL,
-  master VARCHAR(128) DEFAULT NULL,
-  last_check INT DEFAULT NULL,
-  type VARCHAR(6) NOT NULL,
-  notified_serial INT DEFAULT NULL,
-  account VARCHAR(40) DEFAULT NULL,
-  UNIQUE KEY name_index(name)
-) ENGINE=InnoDB;
-
-CREATE TABLE IF NOT EXISTS records (
-  id INTEGER PRIMARY KEY AUTO_INCREMENT,
-  domain_id INT DEFAULT NULL,
-  name VARCHAR(255) DEFAULT NULL,
-  type VARCHAR(10) DEFAULT NULL,
-  content TEXT DEFAULT NULL,
-  ttl INT DEFAULT NULL,
-  prio INT DEFAULT NULL,
-  disabled TINYINT(1) DEFAULT 0,
-  ordername VARCHAR(255) DEFAULT NULL,
-  auth TINYINT(1) DEFAULT 1,
-  KEY domain_id(domain_id),
-  KEY name_index(name),
-  KEY nametype_index(name,type),
-  KEY domain_id_ordername(domain_id, ordername)
-) ENGINE=InnoDB;
-
-CREATE TABLE IF NOT EXISTS supermasters (
-  ip VARCHAR(64) NOT NULL,
-  nameserver VARCHAR(255) NOT NULL,
-  account VARCHAR(40) NOT NULL,
-  PRIMARY KEY(ip, nameserver)
-) ENGINE=InnoDB;
-
-CREATE TABLE IF NOT EXISTS domainmetadata (
-  id INTEGER PRIMARY KEY AUTO_INCREMENT,
-  domain_id INT NOT NULL,
-  kind VARCHAR(32),
-  content TEXT
-) ENGINE=InnoDB;
-PDNS_EOF
-    
-    # Configure PowerDNS to use MySQL backend
-    cat > /etc/powerdns/pdns.d/mysql.conf <<PDNS_CONF
-launch+=gmysql
-gmysql-host=localhost
-gmysql-dbname=${POWERDNS_DB}
-gmysql-user=${POWERDNS_USER}
-gmysql-password=${POWERDNS_PASS}
-PDNS_CONF
-    
-    systemctl restart pdns
-    systemctl enable pdns
-    
-    echo "✓ PowerDNS installed and configured"
-else
-    echo "⊘ Skipping PowerDNS installation"
+BIND_CONF
+    chown root:bind /etc/bind/named.conf.local
+    chmod 644 /etc/bind/named.conf.local
 fi
+
+# Configure BIND9 options
+cat > /etc/bind/named.conf.options <<'BIND_OPTIONS'
+options {
+    directory "/var/cache/bind";
+
+    // Allow queries from any host
+    allow-query { any; };
+
+    // Disable recursion for security (authoritative DNS only)
+    recursion no;
+
+    // Listen on all interfaces
+    listen-on { any; };
+    listen-on-v6 { any; };
+
+    // DNSSEC validation
+    dnssec-validation auto;
+};
+BIND_OPTIONS
+
+# Verify BIND configuration
+if named-checkconf; then
+    echo "✓ BIND9 configuration valid"
+else
+    echo "❌ BIND9 configuration error"
+    exit 1
+fi
+
+# Enable and start BIND9
+systemctl enable bind9
+systemctl restart bind9
+
+echo "✓ BIND9 installed and configured"
 echo ""
 
 # Create configuration file
@@ -265,11 +233,9 @@ putenv('PGSQL_HOST=');
 putenv('PGSQL_ROOT_USER=');
 putenv('PGSQL_ROOT_PASSWORD=');
 
-// PowerDNS Database Credentials (for DNS management)
-putenv('POWERDNS_HOST=localhost');
-putenv('POWERDNS_DATABASE=${POWERDNS_DB}');
-putenv('POWERDNS_USER=${POWERDNS_USER}');
-putenv('POWERDNS_PASSWORD=${POWERDNS_PASS}');
+// BIND9 Configuration (for DNS management)
+putenv('BIND9_ZONES_PATH=/etc/bind/zones');
+putenv('BIND9_NAMED_CONF_PATH=/etc/bind/named.conf.local');
 
 // Application
 putenv('APP_ENV=production');
@@ -311,6 +277,7 @@ novapanel ALL=(ALL) NOPASSWD: /usr/sbin/usermod
 novapanel ALL=(ALL) NOPASSWD: /usr/sbin/userdel
 novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload nginx
 novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload php*-fpm
+novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload bind9
 novapanel ALL=(ALL) NOPASSWD: /bin/mkdir
 novapanel ALL=(ALL) NOPASSWD: /bin/chown
 novapanel ALL=(ALL) NOPASSWD: /bin/chmod
@@ -318,7 +285,10 @@ novapanel ALL=(ALL) NOPASSWD: /usr/bin/crontab
 novapanel ALL=(ALL) NOPASSWD: /bin/ln
 novapanel ALL=(ALL) NOPASSWD: /bin/rm
 novapanel ALL=(ALL) NOPASSWD: /bin/cp
+novapanel ALL=(ALL) NOPASSWD: /bin/mv
 novapanel ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t
+novapanel ALL=(ALL) NOPASSWD: /usr/sbin/named-checkconf
+novapanel ALL=(ALL) NOPASSWD: /usr/sbin/named-checkzone
 EOF
 chmod 440 /etc/sudoers.d/novapanel
 echo "✓ Sudo permissions configured"

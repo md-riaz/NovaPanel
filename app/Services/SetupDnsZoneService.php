@@ -49,9 +49,9 @@ class SetupDnsZoneService
         $domain = $this->domainRepository->create($domain);
 
         try {
-            // Create DNS zone in PowerDNS
+            // Create DNS zone in BIND9
             if (!$this->dnsManager->createZone($domain)) {
-                throw new \RuntimeException("Failed to create DNS zone in PowerDNS");
+                throw new \RuntimeException("Failed to create DNS zone in BIND9");
             }
 
             // Add default A record if server IP provided

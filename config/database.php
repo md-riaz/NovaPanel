@@ -27,12 +27,10 @@ return [
         'root_password' => getenv('PGSQL_ROOT_PASSWORD') ?: '',
     ],
     
-    // PowerDNS database credentials (for DNS management)
-    // PowerDNS uses its own database (typically MySQL) for DNS zone storage
-    'powerdns' => [
-        'host' => getenv('POWERDNS_HOST') ?: 'localhost',
-        'database' => getenv('POWERDNS_DATABASE') ?: 'powerdns',
-        'username' => getenv('POWERDNS_USER') ?: 'powerdns',
-        'password' => getenv('POWERDNS_PASSWORD') ?: '',
+    // BIND9 configuration (for DNS management)
+    // BIND9 uses zone files for complete isolation from databases
+    'bind9' => [
+        'zones_path' => getenv('BIND9_ZONES_PATH') ?: '/etc/bind/zones',
+        'named_conf_path' => getenv('BIND9_NAMED_CONF_PATH') ?: '/etc/bind/named.conf.local',
     ],
 ];
