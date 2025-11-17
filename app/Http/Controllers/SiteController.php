@@ -53,7 +53,8 @@ class SiteController extends Controller
                 new SiteRepository(),
                 new \App\Repositories\UserRepository(),
                 WebServer::getInstance(),
-                PhpRuntime::getInstance()
+                PhpRuntime::getInstance(),
+                new \App\Infrastructure\Shell\Shell()
             );
             
             $site = $service->execute($userId, $domain, $phpVersion, $sslEnabled);

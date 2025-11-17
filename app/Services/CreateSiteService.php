@@ -8,6 +8,7 @@ use App\Repositories\SiteRepository;
 use App\Repositories\UserRepository;
 use App\Contracts\WebServerManagerInterface;
 use App\Contracts\PhpRuntimeManagerInterface;
+use App\Contracts\ShellInterface;
 
 class CreateSiteService
 {
@@ -15,7 +16,8 @@ class CreateSiteService
         private SiteRepository $siteRepository,
         private UserRepository $userRepository,
         private WebServerManagerInterface $webServerManager,
-        private PhpRuntimeManagerInterface $phpRuntimeManager
+        private PhpRuntimeManagerInterface $phpRuntimeManager,
+        private ShellInterface $shell
     ) {}
 
     public function execute(
@@ -61,11 +63,23 @@ class CreateSiteService
         try {
             // Create base directory for user's sites if it doesn't exist
             if (!is_dir($baseDir)) {
-                mkdir($baseDir, 0755, true);
+                $result = $this->shell->executeSudo('mkdir', ['-p', $baseDir]);
+                if ($result['exitCode'] !== 0) {
+                    throw new \RuntimeException("Failed to create base directory: " . $result['output']);
+                }
+                // Set ownership to novapanel:www-data
+                $this->shell->executeSudo('chown', ['novapanel:www-data', $baseDir]);
+                $this->shell->executeSudo('chmod', ['755', $baseDir]);
             }
             
             // Create document root directory
-            mkdir($documentRoot, 0755, true);
+            $result = $this->shell->executeSudo('mkdir', ['-p', $documentRoot]);
+            if ($result['exitCode'] !== 0) {
+                throw new \RuntimeException("Failed to create document root: " . $result['output']);
+            }
+            // Set ownership to novapanel:www-data
+            $this->shell->executeSudo('chown', ['novapanel:www-data', $documentRoot]);
+            $this->shell->executeSudo('chmod', ['755', $documentRoot]);
 
             // Create PHP-FPM pool
             $runtime = new PhpRuntime(
