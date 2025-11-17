@@ -43,12 +43,14 @@ sudo bash install.sh
 ```
 
 The installer will:
-1. Install required dependencies
+1. Install required dependencies (Nginx, PHP, MySQL, etc.)
 2. Create the panel user
 3. Set up the database
-4. Configure Nginx
-5. Create an admin user
-6. Set up security permissions
+4. Create MySQL user for panel database management (auto-generated password)
+5. Optionally install and configure PowerDNS for DNS management
+6. Configure Nginx
+7. Create an admin user
+8. Set up security permissions
 
 ### Manual Installation
 
@@ -98,29 +100,37 @@ NovaPanel uses environment variables for sensitive configuration. The configurat
 
 MySQL and PostgreSQL credentials in the configuration are **ONLY** used when creating databases for panel users' websites - the panel itself does not use MySQL or PostgreSQL for its own operations.
 
-### Creating Configuration File
+### Automated Configuration (Recommended)
+
+When you run `install.sh`, the configuration file is **automatically generated** with:
+- **MySQL user** (`novapanel_db`) created with a secure random password
+- **PowerDNS** (optional) - if installed, user and database are auto-configured
+- **PostgreSQL** - left empty (install separately if needed)
+
+No manual password entry required for MySQL or PowerDNS!
+
+### Manual Configuration (Advanced)
+
+If you need to manually configure after installation:
 
 ```bash
-# Copy the example configuration
-cp .env.php.example .env.php
+# Edit the auto-generated configuration
+nano /opt/novapanel/.env.php
 
-# Edit with your credentials
-nano .env.php
-
-# Set secure permissions
-chmod 600 .env.php
-chown novapanel:novapanel .env.php
+# Ensure secure permissions
+chmod 600 /opt/novapanel/.env.php
+chown novapanel:novapanel /opt/novapanel/.env.php
 ```
 
 ### Configuration Options
 
 - **Panel Database**: SQLite (automatically configured at `storage/panel.db`)
-- **MySQL Credentials**: Root credentials for creating CUSTOMER databases only (not for panel operations)
-- **PostgreSQL Credentials**: Root credentials for creating CUSTOMER databases only (optional)
-- **PowerDNS Credentials**: Used for DNS zone and record management (optional)
+- **MySQL Credentials**: Auto-generated user (`novapanel_db`) for creating CUSTOMER databases (not for panel operations)
+- **PostgreSQL Credentials**: Empty by default (install and configure separately if needed)
+- **PowerDNS Credentials**: Auto-generated if you chose to install PowerDNS during setup
 - **Application Settings**: Environment, debug mode, and panel URL
 
-See `.env.php.example` for detailed configuration options and examples.
+See `.env.php.example` for the configuration file structure.
 
 ## Usage
 
