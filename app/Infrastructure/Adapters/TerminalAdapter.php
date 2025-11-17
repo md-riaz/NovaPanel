@@ -98,18 +98,31 @@ class TerminalAdapter
             // Process failed to start - read log for details
             $logFile = $this->logDir . '/' . $userId . '.log';
             $errorDetails = '';
+            $specificError = '';
             
             if (file_exists($logFile)) {
                 $logContent = @file_get_contents($logFile);
                 if ($logContent !== false) {
-                    // Get last few lines of log for error details
+                    // Check for specific error patterns
+                    if (preg_match('/ERROR on binding.*to port (\d+).*\(-1 98\)/', $logContent, $matches)) {
+                        $specificError = "Port {$matches[1]} is already in use by another process. ";
+                        $specificError .= "Stop the conflicting process or choose a different port.";
+                    } elseif (strpos($logContent, 'ERROR on binding') !== false) {
+                        $specificError = "Failed to bind to port {$port}. The port may be in use or you may lack permissions.";
+                    } elseif (strpos($logContent, 'Permission denied') !== false) {
+                        $specificError = "Permission denied. Check if the user has rights to bind to port {$port}.";
+                    }
+                    
+                    // Get last few lines of log for full context
                     $lines = array_filter(explode("\n", trim($logContent)));
                     $errorDetails = implode("\n", array_slice($lines, -5));
                 }
             }
             
             $errorMessage = 'Terminal process failed to start. ';
-            if (!empty($errorDetails)) {
+            if (!empty($specificError)) {
+                $errorMessage .= $specificError;
+            } elseif (!empty($errorDetails)) {
                 $errorMessage .= 'Error from log: ' . $errorDetails;
             } else {
                 $errorMessage .= 'Check if port ' . $port . ' is already in use or if there are permission issues.';
