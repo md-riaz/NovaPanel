@@ -43,11 +43,11 @@ sudo bash install.sh
 ```
 
 The installer will:
-1. Install required dependencies (Nginx, PHP, MySQL, etc.)
+1. Install required dependencies (Nginx, PHP, MySQL, BIND9, etc.)
 2. Create the panel user
 3. Set up the database
 4. Create MySQL user for panel database management (auto-generated password)
-5. Optionally install and configure PowerDNS for DNS management
+5. Install and configure BIND9 for DNS management (uses zone files for complete isolation)
 6. Configure Nginx
 7. Create an admin user
 8. Set up security permissions
@@ -115,10 +115,10 @@ MySQL and PostgreSQL credentials in the configuration are **ONLY** used when cre
 
 When you run `install.sh`, the configuration file is **automatically generated** with:
 - **MySQL user** (`novapanel_db`) created with a secure random password
-- **PowerDNS** (optional) - if installed, user and database are auto-configured
+- **BIND9** - automatically configured with zone files in `/etc/bind/zones`
 - **PostgreSQL** - left empty (install separately if needed)
 
-No manual password entry required for MySQL or PowerDNS!
+No manual password entry required for MySQL!
 
 ### Manual Configuration (Advanced)
 
@@ -138,7 +138,7 @@ chown novapanel:novapanel /opt/novapanel/.env.php
 - **Panel Database**: SQLite (automatically configured at `storage/panel.db`)
 - **MySQL Credentials**: Auto-generated user (`novapanel_db`) for creating CUSTOMER databases (not for panel operations)
 - **PostgreSQL Credentials**: Empty by default (install and configure separately if needed)
-- **PowerDNS Credentials**: Auto-generated if you chose to install PowerDNS during setup
+- **BIND9 Configuration**: Automatically configured with zone file paths
 - **Application Settings**: Environment, debug mode, and panel URL
 
 See `.env.php.example` for the configuration file structure.

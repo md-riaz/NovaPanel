@@ -108,11 +108,13 @@ FTP is managed via **Pure-FTPd virtual users**:
   0 2 * * * /path/to/backup.sh
   ```
 
-### DNS (PowerDNS)
+### DNS (BIND9)
 
-- DNS is managed via PowerDNS MySQL backend
+- DNS is managed via BIND9 zone files stored in `/etc/bind/zones/`
+- Complete isolation from database access (enhanced security)
 - No Linux user involvement
 - Panel tracks which panel user owns which domain
+- Zone files are owned by `bind:bind` and managed through the panel
 
 ## Security Implications
 
