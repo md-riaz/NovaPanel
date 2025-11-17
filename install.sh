@@ -207,8 +207,21 @@ else
 fi
 
 # Enable and start BIND9
-systemctl enable bind9
-systemctl restart bind9
+# Note: On some systems, bind9 is a symlink/alias to named.service
+# Try to enable it, but don't fail if it's already enabled via another name
+if systemctl is-enabled bind9 >/dev/null 2>&1 || systemctl is-enabled named >/dev/null 2>&1; then
+    echo "✓ BIND9 service already enabled"
+else
+    # Try to enable, but continue even if it fails due to symlink issues
+    if ! systemctl enable bind9 2>/dev/null; then
+        echo "⚠ Note: Could not enable bind9 directly (may be a service alias)"
+        echo "  Attempting to enable via 'named' service name..."
+        systemctl enable named 2>/dev/null || true
+    fi
+fi
+
+# Start/restart BIND9 - this is the critical part
+systemctl restart bind9 || systemctl restart named
 
 echo "✓ BIND9 installed and configured"
 echo ""
@@ -278,6 +291,7 @@ novapanel ALL=(ALL) NOPASSWD: /usr/sbin/userdel
 novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload nginx
 novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload php*-fpm
 novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload bind9
+novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload named
 novapanel ALL=(ALL) NOPASSWD: /bin/mkdir
 novapanel ALL=(ALL) NOPASSWD: /bin/chown
 novapanel ALL=(ALL) NOPASSWD: /bin/chmod
