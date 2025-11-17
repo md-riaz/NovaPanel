@@ -141,10 +141,15 @@ class TerminalAdapter
         $host = $urlParts['host'] ?? 'localhost';
         $panelPort = $urlParts['port'] ?? 7080;
         
+        // Build URL with embedded credentials for automatic authentication
+        // Format: protocol://username:password@host:port/path
+        // This allows seamless terminal access without user login prompts
+        $urlWithAuth = "{$protocol}://novapanel:{$token}@{$host}:{$panelPort}/terminal-ws/{$port}";
+        
         return [
             'port' => $port,
             'token' => $token,
-            'url' => "{$protocol}://{$host}:{$panelPort}/terminal-ws/{$port}"
+            'url' => $urlWithAuth
         ];
     }
     

@@ -77,6 +77,9 @@ location ~ ^/terminal-ws/(\d+)$ {
     # Disable buffering for real-time terminal I/O
     proxy_buffering off;
     
+    # Security: Don't log URLs (they contain authentication tokens)
+    access_log off;
+    
     # Optional: Restrict access to authenticated panel users only
     # This is already handled by the panel's session management,
     # but you can add additional IP restrictions here if needed
@@ -85,16 +88,34 @@ location ~ ^/terminal-ws/(\d+)$ {
 
 ### 4. Authentication Flow
 
-**Important:** The nginx proxy does **NOT** need to handle authentication credentials because:
+**Automatic Authentication (No User Prompts):**
 
-1. **ttyd's built-in auth** handles it automatically
-2. When the iframe loads, the browser sends the request to nginx
-3. Nginx proxies it to `http://127.0.0.1:{port}`
-4. ttyd responds with `401 Unauthorized` and `WWW-Authenticate: Basic` header
-5. **ttyd's web interface** (not the panel) handles the authentication:
-   - ttyd's JavaScript client automatically prompts for credentials
-   - OR ttyd reads credentials from the URL if provided
-6. The browser caches the credentials and includes them in subsequent WebSocket connections
+NovaPanel uses embedded credentials in the URL for seamless terminal access, similar to cPanel. Users never see login prompts.
+
+1. **Session Creation:** TerminalAdapter generates a random 32-character token
+2. **URL Construction:** Credentials embedded in URL format:
+   ```
+   https://novapanel:TOKEN@panel.example.com/terminal-ws/7101
+   ```
+3. **Browser Behavior:** Browser automatically extracts and sends credentials via HTTP Basic Auth
+4. **Nginx Proxy:** Forwards the authentication headers transparently to ttyd
+5. **ttyd Validation:** Validates credentials and establishes WebSocket connection
+6. **User Experience:** Terminal loads instantly without any prompts
+
+**Why this works:**
+
+- **Standard HTTP Basic Auth:** Uses the `username:password@host` URL format (RFC 7617)
+- **Browser handles it:** All modern browsers automatically parse and send these credentials
+- **Secure:** Token is unique per session and never reused
+- **Seamless:** Identical user experience to cPanel terminal
+- **No client-side code:** No JavaScript needed to handle authentication
+
+**Security considerations:**
+
+- Credentials in URL are sent via HTTPS (encrypted in transit)
+- Tokens are random and session-specific (32 characters)
+- URLs are not logged by nginx (when properly configured)
+- Panel authentication required before accessing terminal page
 
 ### 5. Security Considerations
 
@@ -166,6 +187,9 @@ server {
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
         proxy_buffering off;
+        
+        # Security: Don't log URLs with embedded credentials
+        access_log off;
     }
     
     # Static files
