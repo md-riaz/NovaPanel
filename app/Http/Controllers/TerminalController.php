@@ -180,8 +180,21 @@ class TerminalController extends Controller
             // Stop existing session
             $this->terminalAdapter->stopSession($userId);
             
-            // Wait a moment
-            sleep(1);
+            // Poll for session to be fully stopped with timeout
+            $maxAttempts = 10;
+            $attempt = 0;
+            while ($attempt < $maxAttempts) {
+                if (!$this->terminalAdapter->isSessionActive($userId)) {
+                    break;
+                }
+                usleep(500000); // 0.5 seconds
+                $attempt++;
+            }
+            
+            // Verify session is stopped
+            if ($this->terminalAdapter->isSessionActive($userId)) {
+                throw new \RuntimeException('Failed to stop existing session. Please try again in a few seconds.');
+            }
             
             // Start new session
             $sessionInfo = $this->terminalAdapter->startSession($userId);

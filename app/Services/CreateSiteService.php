@@ -42,6 +42,19 @@ class CreateSiteService
             throw new \RuntimeException("User not found");
         }
 
+        // Validate PHP version is available
+        $availableVersions = $this->phpRuntimeManager->listAvailable();
+        $versionExists = false;
+        foreach ($availableVersions as $runtime) {
+            if ($runtime->version === $phpVersion) {
+                $versionExists = true;
+                break;
+            }
+        }
+        if (!$versionExists) {
+            throw new \InvalidArgumentException("PHP version {$phpVersion} is not installed on this system. Please install it first or choose an available version.");
+        }
+
         // Set document root under panel's directory structure
         // All sites run under the panel user, organized by owner username
         $baseDir = "/opt/novapanel/sites/{$user->username}";
@@ -97,8 +110,35 @@ class CreateSiteService
             file_put_contents("{$documentRoot}/index.php", $indexContent);
 
         } catch (\Exception $e) {
-            // Rollback: delete from database if infrastructure setup fails
+            // Rollback: Clean up all created resources
+            error_log("Site creation failed for domain {$domain}: " . $e->getMessage());
+            
+            // Try to remove PHP-FPM pool if it was created
+            try {
+                $this->phpRuntimeManager->deletePool($site);
+            } catch (\Exception $poolError) {
+                error_log("Failed to rollback PHP-FPM pool for {$domain}: " . $poolError->getMessage());
+            }
+            
+            // Try to remove Nginx vhost if it was created
+            try {
+                $this->webServerManager->deleteSite($site);
+            } catch (\Exception $vhostError) {
+                error_log("Failed to rollback Nginx vhost for {$domain}: " . $vhostError->getMessage());
+            }
+            
+            // Try to remove document root directory if it was created
+            try {
+                if (is_dir($documentRoot)) {
+                    $this->shell->executeSudo('rm', ['-rf', $documentRoot]);
+                }
+            } catch (\Exception $dirError) {
+                error_log("Failed to rollback directory {$documentRoot}: " . $dirError->getMessage());
+            }
+            
+            // Delete from database
             $this->siteRepository->delete($site->id);
+            
             throw new \RuntimeException("Failed to create site infrastructure: " . $e->getMessage());
         }
 

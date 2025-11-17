@@ -73,7 +73,8 @@ class NginxAdapter implements WebServerManagerInterface
 
     private function generateVhostConfig(Site $site): string
     {
-        $phpSocket = $this->getPhpFpmSocket($site->phpVersion);
+        // Use site-specific PHP-FPM socket that matches PhpFpmAdapter
+        $phpSocket = $this->getPhpFpmSocket($site->phpVersion, $site->domain);
         
         $config = "server {\n";
         $config .= "    listen 80;\n";
@@ -107,8 +108,9 @@ class NginxAdapter implements WebServerManagerInterface
         return $config;
     }
 
-    private function getPhpFpmSocket(string $version): string
+    private function getPhpFpmSocket(string $version, string $domain): string
     {
-        return "/var/run/php/php{$version}-fpm.sock";
+        // Return site-specific socket path that matches PhpFpmAdapter configuration
+        return "/var/run/php/php{$version}-fpm-{$domain}.sock";
     }
 }
