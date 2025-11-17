@@ -58,8 +58,8 @@
     <div class="col-md-12">
         <h3>Quick Actions</h3>
         <div class="list-group">
-            <a href="/accounts/create" class="list-group-item list-group-item-action">
-                <i class="bi bi-plus-circle"></i> Create New Account
+            <a href="/users/create" class="list-group-item list-group-item-action">
+                <i class="bi bi-plus-circle"></i> Create New User
             </a>
             <a href="/sites/create" class="list-group-item list-group-item-action">
                 <i class="bi bi-plus-circle"></i> Create New Site
