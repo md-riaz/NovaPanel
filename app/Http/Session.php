@@ -96,22 +96,22 @@ class Session
     private static function validate(): void
     {
         // Validate user agent and IP (basic fingerprinting)
-        if (!self::has('_fingerprint')) {
-            self::set('_fingerprint', self::generateFingerprint());
-        } elseif (self::get('_fingerprint') !== self::generateFingerprint()) {
+        if (!isset($_SESSION['_fingerprint'])) {
+            $_SESSION['_fingerprint'] = self::generateFingerprint();
+        } elseif ($_SESSION['_fingerprint'] !== self::generateFingerprint()) {
             // Session hijacking attempt detected
             self::destroy();
             throw new \RuntimeException('Session validation failed');
         }
         
         // Check session timeout
-        $lastActivity = self::get('_last_activity', time());
+        $lastActivity = $_SESSION['_last_activity'] ?? time();
         if (time() - $lastActivity > self::SESSION_LIFETIME) {
             self::destroy();
             throw new \RuntimeException('Session expired');
         }
         
-        self::set('_last_activity', time());
+        $_SESSION['_last_activity'] = time();
     }
     
     private static function generateFingerprint(): string
