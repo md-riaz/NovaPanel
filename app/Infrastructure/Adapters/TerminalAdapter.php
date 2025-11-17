@@ -310,7 +310,7 @@ class TerminalAdapter
     public function isTtydInstalled(): bool
     {
         $result = shell_exec('which ttyd 2>/dev/null');
-        return !empty(trim($result));
+        return !empty(trim($result ?? ''));
     }
     
     /**
