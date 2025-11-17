@@ -72,56 +72,6 @@ The installer will:
 7. Create an admin user
 8. Set up security permissions
 
-### Manual Installation
-
-If you prefer manual installation:
-
-```bash
-# Install dependencies
-sudo apt update
-
-# For Ubuntu only: Add PHP PPA (Debian already has PHP 8.2 in default repos)
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    if [ "$ID" = "ubuntu" ]; then
-        sudo apt install -y software-properties-common ca-certificates lsb-release apt-transport-https
-        sudo add-apt-repository ppa:ondrej/php -y
-        sudo apt update
-    fi
-fi
-
-sudo apt install -y nginx php8.2-fpm php8.2-cli php8.2-sqlite3 \
-    php8.2-mysql composer sqlite3
-
-# Create panel user
-sudo useradd -r -m -d /opt/novapanel -s /bin/bash novapanel
-
-# Copy files
-sudo cp -r . /opt/novapanel/
-cd /opt/novapanel
-
-# Install PHP dependencies
-sudo -u novapanel composer install
-
-# Create configuration file
-sudo -u novapanel cp .env.php.example .env.php
-sudo -u novapanel nano .env.php  # Edit and add your credentials
-sudo chmod 640 .env.php
-sudo chown novapanel:www-data .env.php
-
-# Run database migration
-sudo -u novapanel php database/migration.php
-
-# Create admin user
-sudo -u novapanel sqlite3 storage/panel.db
-# Then run SQL:
-# INSERT INTO users (username, email, password) VALUES ('admin', 'admin@example.com', '<hashed_password>');
-# INSERT INTO user_roles (user_id, role_id) SELECT id, (SELECT id FROM roles WHERE name='Admin') FROM users WHERE username='admin';
-
-# Configure sudoers (see SECURITY.md for details)
-sudo visudo -f /etc/sudoers.d/novapanel
-```
-
 ## Configuration
 
 NovaPanel uses environment variables for sensitive configuration. The configuration file is located at `.env.php` in the panel root directory.

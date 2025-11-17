@@ -16,6 +16,9 @@
             "Tests\\": "tests/"
         }
     },
+    "scripts": {
+        "test": "echo 'No tests defined yet. See composer.json to add test framework.'"
+    },
     "config": {
         "optimize-autoloader": true,
         "preferred-install": "dist",
