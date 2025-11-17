@@ -291,6 +291,9 @@ TEXT;
     
     /**
      * Check if a process is running by PID
+     * 
+     * Uses posix_kill with signal 0 to check process existence.
+     * Note: Returns true if process exists, even if we don't have permission to signal it.
      */
     private function isProcessRunning(string $pid): bool
     {
@@ -299,6 +302,24 @@ TEXT;
         }
         
         // Use posix_kill with signal 0 to check if process exists
-        return posix_kill((int)$pid, 0);
+        $result = posix_kill((int)$pid, 0);
+        
+        if ($result) {
+            // Process exists and we can signal it
+            return true;
+        }
+        
+        // Check the error code to determine if process exists
+        $errorCode = posix_get_last_error();
+        
+        // EPERM (1) means the process exists but we don't have permission to signal it
+        // This can happen with processes started via nohup or running under different permissions
+        // ESRCH (3) means the process doesn't exist
+        if ($errorCode === 1) { // EPERM - Operation not permitted
+            return true; // Process exists, just no permission to signal it
+        }
+        
+        // For any other error (including ESRCH), treat as not running
+        return false;
     }
 }
