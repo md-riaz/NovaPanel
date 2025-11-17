@@ -5,7 +5,7 @@ namespace App\Http;
 class Router
 {
     private array $routes = [];
-    private array $middleware = [];
+    private array $globalMiddleware = [];
 
     public function get(string $path, $handler, array $middleware = []): void
     {
@@ -37,10 +37,17 @@ class Router
         ];
     }
 
+    public function addGlobalMiddleware(string $middleware): void
+    {
+        $this->globalMiddleware[] = $middleware;
+    }
+    
     public function dispatch(Request $request): Response
     {
         foreach ($this->routes as $route) {
             if ($this->matchRoute($route, $request)) {
+                // Merge global middleware with route-specific middleware
+                $route['middleware'] = array_merge($this->globalMiddleware, $route['middleware'] ?? []);
                 return $this->handleRoute($route, $request);
             }
         }
@@ -63,26 +70,42 @@ class Router
     private function handleRoute(array $route, Request $request): Response
     {
         $handler = $route['handler'];
-
-        // Extract route parameters
-        $params = $this->extractParams($route['path'], $request->path());
-
-        if (is_string($handler) && str_contains($handler, '@')) {
-            [$controller, $method] = explode('@', $handler);
-            $controller = new $controller();
+        
+        // Process middleware
+        $middlewares = $route['middleware'] ?? [];
+        
+        // Create the final handler
+        $next = function($request) use ($handler, $route) {
+            // Extract route parameters
+            $params = $this->extractParams($route['path'], $request->path());
             
-            // Pass request and any route parameters
-            if (!empty($params)) {
-                return $controller->$method($request, ...$params);
+            if (is_string($handler) && str_contains($handler, '@')) {
+                [$controller, $method] = explode('@', $handler);
+                $controller = new $controller();
+                
+                // Pass request and any route parameters
+                if (!empty($params)) {
+                    return $controller->$method($request, ...$params);
+                }
+                return $controller->$method($request);
             }
-            return $controller->$method($request);
+            
+            if (is_callable($handler)) {
+                return $handler($request);
+            }
+            
+            return new Response('Handler not found', 500);
+        };
+        
+        // Apply middleware in reverse order
+        foreach (array_reverse($middlewares) as $middleware) {
+            $middlewareInstance = new $middleware();
+            $next = function($request) use ($middlewareInstance, $next) {
+                return $middlewareInstance->handle($request, $next);
+            };
         }
-
-        if (is_callable($handler)) {
-            return $handler($request);
-        }
-
-        return new Response('Handler not found', 500);
+        
+        return $next($request);
     }
 
     private function extractParams(string $routePath, string $requestPath): array

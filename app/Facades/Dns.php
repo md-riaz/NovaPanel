@@ -4,6 +4,7 @@ namespace App\Facades;
 
 use App\Contracts\DnsManagerInterface;
 use App\Infrastructure\Adapters\PowerDnsAdapter;
+use App\Support\Config;
 
 class Dns
 {
@@ -12,12 +13,14 @@ class Dns
     public static function getInstance(): DnsManagerInterface
     {
         if (self::$instance === null) {
-            // TODO: Load PowerDNS credentials from config
+            // Load PowerDNS credentials from config
+            Config::load('database');
+            
             self::$instance = new PowerDnsAdapter(
-                host: 'localhost',
-                database: 'powerdns',
-                username: 'powerdns',
-                password: ''
+                host: Config::get('database.powerdns.host', 'localhost'),
+                database: Config::get('database.powerdns.database', 'powerdns'),
+                username: Config::get('database.powerdns.username', 'powerdns'),
+                password: Config::get('database.powerdns.password', '')
             );
         }
         

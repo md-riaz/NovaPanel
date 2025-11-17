@@ -8,6 +8,7 @@ A lightweight, open-source single VPS control panel built with PHP. NovaPanel pr
 
 - 🚀 **Site Management** - Create and manage multiple websites with ease
 - 👥 **Panel User Management** - Create users with different roles and permissions
+- 🔐 **Authentication & Security** - Session-based authentication with CSRF protection and rate limiting
 - 🐘 **PHP-FPM** - Multi-version PHP support with isolated pools
 - 🌐 **Nginx** - High-performance web server configuration
 - 📊 **Database Management** - MySQL/PostgreSQL database creation and management
@@ -15,7 +16,8 @@ A lightweight, open-source single VPS control panel built with PHP. NovaPanel pr
 - ⏰ **Cron Jobs** - Schedule tasks for each panel user
 - 💻 **Web Terminal** - Browser-based terminal access using ttyd (similar to cPanel)
 - 🔒 **Role-Based Access Control** - Admin, Account Owner, Developer, Read-Only roles
-- 🛡️ **Security First** - Non-root execution, command whitelisting, input validation
+- 📝 **Audit Logging** - Comprehensive logging of all admin actions and resource changes
+- 🛡️ **Security First** - Non-root execution, command whitelisting, input validation, rate limiting
 - 🖥️ **Single VPS Design** - All sites run under the panel user, no separate system accounts needed
 
 ## Requirements
@@ -41,12 +43,14 @@ sudo bash install.sh
 ```
 
 The installer will:
-1. Install required dependencies
+1. Install required dependencies (Nginx, PHP, MySQL, etc.)
 2. Create the panel user
 3. Set up the database
-4. Configure Nginx
-5. Create an admin user
-6. Set up security permissions
+4. Create MySQL user for panel database management (auto-generated password)
+5. Optionally install and configure PowerDNS for DNS management
+6. Configure Nginx
+7. Create an admin user
+8. Set up security permissions
 
 ### Manual Installation
 
@@ -68,12 +72,65 @@ cd /opt/novapanel
 # Install PHP dependencies
 sudo -u novapanel composer install
 
+# Create configuration file
+sudo -u novapanel cp .env.php.example .env.php
+sudo -u novapanel nano .env.php  # Edit and add your credentials
+sudo chmod 600 .env.php
+
 # Run database migration
 sudo -u novapanel php database/migration.php
+
+# Create admin user
+sudo -u novapanel sqlite3 storage/panel.db
+# Then run SQL:
+# INSERT INTO users (username, email, password) VALUES ('admin', 'admin@example.com', '<hashed_password>');
+# INSERT INTO user_roles (user_id, role_id) SELECT id, (SELECT id FROM roles WHERE name='Admin') FROM users WHERE username='admin';
 
 # Configure sudoers (see SECURITY.md for details)
 sudo visudo -f /etc/sudoers.d/novapanel
 ```
+
+## Configuration
+
+NovaPanel uses environment variables for sensitive configuration. The configuration file is located at `.env.php` in the panel root directory.
+
+### Database Architecture
+
+**Important:** NovaPanel uses **SQLite** for all panel operations (users, sites, permissions, etc.). The panel database is stored at `/opt/novapanel/storage/panel.db`.
+
+MySQL and PostgreSQL credentials in the configuration are **ONLY** used when creating databases for panel users' websites - the panel itself does not use MySQL or PostgreSQL for its own operations.
+
+### Automated Configuration (Recommended)
+
+When you run `install.sh`, the configuration file is **automatically generated** with:
+- **MySQL user** (`novapanel_db`) created with a secure random password
+- **PowerDNS** (optional) - if installed, user and database are auto-configured
+- **PostgreSQL** - left empty (install separately if needed)
+
+No manual password entry required for MySQL or PowerDNS!
+
+### Manual Configuration (Advanced)
+
+If you need to manually configure after installation:
+
+```bash
+# Edit the auto-generated configuration
+nano /opt/novapanel/.env.php
+
+# Ensure secure permissions
+chmod 600 /opt/novapanel/.env.php
+chown novapanel:novapanel /opt/novapanel/.env.php
+```
+
+### Configuration Options
+
+- **Panel Database**: SQLite (automatically configured at `storage/panel.db`)
+- **MySQL Credentials**: Auto-generated user (`novapanel_db`) for creating CUSTOMER databases (not for panel operations)
+- **PostgreSQL Credentials**: Empty by default (install and configure separately if needed)
+- **PowerDNS Credentials**: Auto-generated if you chose to install PowerDNS during setup
+- **Application Settings**: Environment, debug mode, and panel URL
+
+See `.env.php.example` for the configuration file structure.
 
 ## Usage
 
@@ -84,7 +141,14 @@ After installation, access the panel at:
 http://your-server-ip:7080
 ```
 
+**Default Login:** Use the admin credentials you created during installation.
+
 The panel runs on port 7080 by default for security isolation from hosted sites.
+
+**Security Note:** The panel initially runs over HTTP. For production use, it's strongly recommended to:
+1. Set up an SSL certificate (e.g., using Let's Encrypt)
+2. Configure Nginx to serve the panel over HTTPS
+3. Once HTTPS is enabled, session cookies will automatically use the secure flag
 
 ### User Structure (Single VPS - Single System Account)
 

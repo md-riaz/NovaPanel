@@ -8,6 +8,7 @@ use App\Repositories\FtpUserRepository;
 use App\Repositories\UserRepository;
 use App\Services\CreateFtpUserService;
 use App\Facades\Ftp;
+use App\Support\AuditLogger;
 
 class FtpController extends Controller
 {
@@ -61,6 +62,12 @@ class FtpController extends Controller
                 homeDirectory: $homeDirectory
             );
             
+            // Log audit event
+            AuditLogger::logCreated('ftp_user', $ftpUsername, [
+                'user_id' => $userId,
+                'home_directory' => $homeDirectory
+            ]);
+            
             // Check if this is an HTMX request
             if ($request->isHtmx()) {
                 return new Response($this->successAlert('FTP user created successfully! Redirecting...'));
@@ -86,6 +93,12 @@ class FtpController extends Controller
             if (!$ftpUser) {
                 throw new \Exception('FTP user not found');
             }
+            
+            // Log audit event before deletion
+            AuditLogger::logDeleted('ftp_user', $ftpUser->username, [
+                'ftp_user_id' => $id,
+                'home_directory' => $ftpUser->homeDirectory
+            ]);
             
             // Delete from infrastructure
             Ftp::getInstance()->deleteUser($ftpUser);

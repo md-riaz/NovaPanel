@@ -127,6 +127,143 @@ sudo -u novapanel php database/migration.php
 echo "✓ Database migration completed"
 echo ""
 
+# Create MySQL user for panel database management
+echo "Creating MySQL user for panel..."
+MYSQL_PANEL_USER="novapanel_db"
+MYSQL_PANEL_PASS=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+
+# Create MySQL user with necessary privileges for database management
+mysql -u root <<MYSQL_EOF
+CREATE USER IF NOT EXISTS '${MYSQL_PANEL_USER}'@'localhost' IDENTIFIED BY '${MYSQL_PANEL_PASS}';
+GRANT ALL PRIVILEGES ON *.* TO '${MYSQL_PANEL_USER}'@'localhost' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+MYSQL_EOF
+
+echo "✓ MySQL user '${MYSQL_PANEL_USER}' created with database management privileges"
+echo ""
+
+# Ask if user wants to install PowerDNS for DNS management
+echo "PowerDNS Setup (optional - for DNS management)"
+echo "=============================================="
+read -p "Do you want to install and configure PowerDNS? (y/N): " INSTALL_POWERDNS
+
+POWERDNS_USER=""
+POWERDNS_PASS=""
+POWERDNS_DB="powerdns"
+
+if [[ "$INSTALL_POWERDNS" =~ ^[Yy]$ ]]; then
+    echo "Installing PowerDNS..."
+    apt-get install -y pdns-server pdns-backend-mysql
+    
+    # Create PowerDNS database and user
+    POWERDNS_USER="powerdns"
+    POWERDNS_PASS=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+    
+    mysql -u root <<PDNS_EOF
+CREATE DATABASE IF NOT EXISTS ${POWERDNS_DB};
+CREATE USER IF NOT EXISTS '${POWERDNS_USER}'@'localhost' IDENTIFIED BY '${POWERDNS_PASS}';
+GRANT ALL PRIVILEGES ON ${POWERDNS_DB}.* TO '${POWERDNS_USER}'@'localhost';
+FLUSH PRIVILEGES;
+
+USE ${POWERDNS_DB};
+
+CREATE TABLE IF NOT EXISTS domains (
+  id INTEGER PRIMARY KEY AUTO_INCREMENT,
+  name VARCHAR(255) NOT NULL,
+  master VARCHAR(128) DEFAULT NULL,
+  last_check INT DEFAULT NULL,
+  type VARCHAR(6) NOT NULL,
+  notified_serial INT DEFAULT NULL,
+  account VARCHAR(40) DEFAULT NULL,
+  UNIQUE KEY name_index(name)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS records (
+  id INTEGER PRIMARY KEY AUTO_INCREMENT,
+  domain_id INT DEFAULT NULL,
+  name VARCHAR(255) DEFAULT NULL,
+  type VARCHAR(10) DEFAULT NULL,
+  content VARCHAR(65535) DEFAULT NULL,
+  ttl INT DEFAULT NULL,
+  prio INT DEFAULT NULL,
+  disabled TINYINT(1) DEFAULT 0,
+  ordername VARCHAR(255) DEFAULT NULL,
+  auth TINYINT(1) DEFAULT 1,
+  KEY domain_id(domain_id),
+  KEY name_index(name),
+  KEY nametype_index(name,type),
+  KEY domain_id_ordername(domain_id, ordername)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS supermasters (
+  ip VARCHAR(64) NOT NULL,
+  nameserver VARCHAR(255) NOT NULL,
+  account VARCHAR(40) NOT NULL,
+  PRIMARY KEY(ip, nameserver)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS domainmetadata (
+  id INTEGER PRIMARY KEY AUTO_INCREMENT,
+  domain_id INT NOT NULL,
+  kind VARCHAR(32),
+  content TEXT
+) ENGINE=InnoDB;
+PDNS_EOF
+    
+    # Configure PowerDNS to use MySQL backend
+    cat > /etc/powerdns/pdns.d/mysql.conf <<PDNS_CONF
+launch+=gmysql
+gmysql-host=localhost
+gmysql-dbname=${POWERDNS_DB}
+gmysql-user=${POWERDNS_USER}
+gmysql-password=${POWERDNS_PASS}
+PDNS_CONF
+    
+    systemctl restart pdns
+    systemctl enable pdns
+    
+    echo "✓ PowerDNS installed and configured"
+else
+    echo "⊘ Skipping PowerDNS installation"
+fi
+echo ""
+
+# Create configuration file
+echo "Creating configuration file..."
+
+cat > $PANEL_DIR/.env.php <<ENVEOF
+<?php
+// NovaPanel Configuration
+// Generated during installation
+
+// MySQL Credentials (for creating user databases)
+// These credentials are used by the panel to create and manage customer databases
+putenv('MYSQL_HOST=localhost');
+putenv('MYSQL_ROOT_USER=${MYSQL_PANEL_USER}');
+putenv('MYSQL_ROOT_PASSWORD=${MYSQL_PANEL_PASS}');
+
+// PostgreSQL Credentials (not installed by default - leave empty)
+// Install PostgreSQL separately if needed and update these values
+putenv('PGSQL_HOST=');
+putenv('PGSQL_ROOT_USER=');
+putenv('PGSQL_ROOT_PASSWORD=');
+
+// PowerDNS Database Credentials (for DNS management)
+putenv('POWERDNS_HOST=localhost');
+putenv('POWERDNS_DATABASE=${POWERDNS_DB}');
+putenv('POWERDNS_USER=${POWERDNS_USER}');
+putenv('POWERDNS_PASSWORD=${POWERDNS_PASS}');
+
+// Application
+putenv('APP_ENV=production');
+putenv('APP_DEBUG=false');
+ENVEOF
+
+chown novapanel:novapanel $PANEL_DIR/.env.php
+chmod 600 $PANEL_DIR/.env.php
+echo "✓ Configuration file created"
+echo ""
+
 # Create admin user
 echo "Creating admin user..."
 read -p "Enter admin username: " ADMIN_USER

@@ -5,12 +5,26 @@ namespace App\Infrastructure;
 use PDO;
 use PDOException;
 
+/**
+ * Database Connection Manager
+ * 
+ * IMPORTANT: NovaPanel uses SQLite for ALL panel operations.
+ * - Panel database (SQLite): stores users, sites, permissions, DNS records, FTP users, cron jobs, etc.
+ * - MySQL/PostgreSQL: ONLY used for creating customer databases for their websites
+ * 
+ * The panel itself does NOT use MySQL or PostgreSQL for its own data.
+ */
 class Database
 {
     private static ?PDO $panelConnection = null;
 
     /**
      * Get the panel database connection (SQLite)
+     * 
+     * This is the ONLY database used for panel operations.
+     * All panel data (users, sites, permissions, etc.) is stored in SQLite.
+     * 
+     * @return PDO SQLite database connection
      */
     public static function panel(): PDO
     {
@@ -31,6 +45,15 @@ class Database
 
     /**
      * Get MySQL connection for customer databases
+     * 
+     * This is ONLY used for creating and managing customer databases.
+     * The panel itself does NOT use MySQL for its operations.
+     * 
+     * @param string $host MySQL server hostname
+     * @param string $database Database name
+     * @param string $username MySQL username
+     * @param string $password MySQL password
+     * @return PDO MySQL database connection
      */
     public static function mysql(string $host, string $database, string $username, string $password): PDO
     {
@@ -46,6 +69,15 @@ class Database
 
     /**
      * Get PostgreSQL connection for customer databases
+     * 
+     * This is ONLY used for creating and managing customer databases.
+     * The panel itself does NOT use PostgreSQL for its operations.
+     * 
+     * @param string $host PostgreSQL server hostname
+     * @param string $database Database name
+     * @param string $username PostgreSQL username
+     * @param string $password PostgreSQL password
+     * @return PDO PostgreSQL database connection
      */
     public static function postgres(string $host, string $database, string $username, string $password): PDO
     {

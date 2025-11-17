@@ -5,6 +5,7 @@ namespace App\Facades;
 use App\Contracts\DatabaseManagerInterface;
 use App\Infrastructure\Adapters\MysqlDatabaseAdapter;
 use App\Infrastructure\Shell\Shell;
+use App\Support\Config;
 
 class DatabaseManager
 {
@@ -13,12 +14,14 @@ class DatabaseManager
     public static function getInstance(): DatabaseManagerInterface
     {
         if (self::$instance === null) {
-            // TODO: Load MySQL root credentials from config
+            // Load MySQL root credentials from config
+            Config::load('database');
+            
             self::$instance = new MysqlDatabaseAdapter(
                 shell: new Shell(),
-                host: 'localhost',
-                rootUser: 'root',
-                rootPassword: ''
+                host: Config::get('database.mysql.host', 'localhost'),
+                rootUser: Config::get('database.mysql.root_user', 'root'),
+                rootPassword: Config::get('database.mysql.root_password', '')
             );
         }
         

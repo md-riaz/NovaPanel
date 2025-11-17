@@ -8,6 +8,7 @@ use App\Repositories\SiteRepository;
 use App\Services\CreateSiteService;
 use App\Facades\WebServer;
 use App\Facades\PhpRuntime;
+use App\Support\AuditLogger;
 
 class SiteController extends Controller
 {
@@ -56,6 +57,13 @@ class SiteController extends Controller
             );
             
             $site = $service->execute($userId, $domain, $phpVersion, $sslEnabled);
+            
+            // Log audit event
+            AuditLogger::logCreated('site', $domain, [
+                'user_id' => $userId,
+                'php_version' => $phpVersion,
+                'ssl_enabled' => $sslEnabled
+            ]);
             
             // Check if this is an HTMX request
             if ($request->isHtmx()) {
