@@ -38,16 +38,19 @@ echo "=========================="
 # Update package lists
 apt-get update -qq
 
-# Install prerequisites for adding PPA
-echo "Installing prerequisites..."
-apt-get install -y software-properties-common ca-certificates lsb-release apt-transport-https
-
-# Add Ondřej Surý PPA for PHP 8.2
-echo "Adding PHP repository..."
-add-apt-repository ppa:ondrej/php -y
-
-# Update package lists again after adding PPA
-apt-get update -qq
+# Add PHP repository for Ubuntu (Debian already has PHP 8.2 in default repos)
+if [ "$OS" = "ubuntu" ]; then
+    # Install prerequisites for adding PPA
+    echo "Installing prerequisites for PPA..."
+    apt-get install -y software-properties-common ca-certificates lsb-release apt-transport-https
+    
+    # Add Ondřej Surý PPA for PHP 8.2
+    echo "Adding PHP repository..."
+    add-apt-repository ppa:ondrej/php -y
+    
+    # Update package lists again after adding PPA
+    apt-get update -qq
+fi
 
 # Install required packages
 apt-get install -y \

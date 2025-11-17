@@ -59,9 +59,17 @@ If you prefer manual installation:
 ```bash
 # Install dependencies
 sudo apt update
-sudo apt install -y software-properties-common ca-certificates lsb-release apt-transport-https
-sudo add-apt-repository ppa:ondrej/php -y
-sudo apt update
+
+# For Ubuntu only: Add PHP PPA (Debian already has PHP 8.2 in default repos)
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    if [ "$ID" = "ubuntu" ]; then
+        sudo apt install -y software-properties-common ca-certificates lsb-release apt-transport-https
+        sudo add-apt-repository ppa:ondrej/php -y
+        sudo apt update
+    fi
+fi
+
 sudo apt install -y nginx php8.2-fpm php8.2-cli php8.2-sqlite3 \
     php8.2-mysql composer sqlite3
 
