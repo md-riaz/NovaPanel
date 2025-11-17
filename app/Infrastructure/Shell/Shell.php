@@ -63,9 +63,19 @@ class Shell implements ShellInterface
         $this->validateSudoCommand($command);
         
         $escapedArgs = array_map(fn($arg) => $this->escapeArg($arg), $args);
-        $fullCommand = 'sudo ' . $command . ($escapedArgs ? ' ' . implode(' ', $escapedArgs) : '');
+        $fullCommand = 'sudo -n ' . $command . ($escapedArgs ? ' ' . implode(' ', $escapedArgs) : '');
         
-        return $this->run($fullCommand);
+        $result = $this->run($fullCommand);
+        
+        // Check if sudo failed due to password requirement
+        if ($result['exitCode'] === 1 && str_contains($result['output'], 'password is required')) {
+            throw new \RuntimeException(
+                "Sudo requires a password. Please configure NOPASSWD in /etc/sudoers.d/novapanel as documented in SECURITY.md. " .
+                "Run: sudo visudo -f /etc/sudoers.d/novapanel and add the required NOPASSWD entries."
+            );
+        }
+        
+        return $result;
     }
 
     public function escapeArg(string $arg): string

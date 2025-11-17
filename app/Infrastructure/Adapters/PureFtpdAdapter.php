@@ -21,6 +21,12 @@ class PureFtpdAdapter implements FtpManagerInterface
     public function createUser(FtpUser $user, string $password): bool
     {
         try {
+            // Check if pure-ftpd is installed
+            $checkResult = $this->shell->execute('bash', ['-c', 'command -v pure-pw']);
+            if ($checkResult['exitCode'] !== 0) {
+                throw new \RuntimeException("Pure-FTPd is not installed. Please install pure-ftpd package first.");
+            }
+
             // pure-pw useradd username -u uid -g gid -d /home/directory -m
             // For NovaPanel, all FTP users should use the panel user's UID/GID
             $panelUser = 'novapanel';
@@ -28,13 +34,13 @@ class PureFtpdAdapter implements FtpManagerInterface
             // Get UID and GID of panel user
             $result = $this->shell->execute('id', ['-u', $panelUser]);
             if ($result['exitCode'] !== 0) {
-                throw new \RuntimeException("Failed to get UID for {$panelUser}");
+                throw new \RuntimeException("Failed to get UID for {$panelUser}. Panel user may not exist.");
             }
             $uid = trim($result['output']);
             
             $result = $this->shell->execute('id', ['-g', $panelUser]);
             if ($result['exitCode'] !== 0) {
-                throw new \RuntimeException("Failed to get GID for {$panelUser}");
+                throw new \RuntimeException("Failed to get GID for {$panelUser}. Panel user may not exist.");
             }
             $gid = trim($result['output']);
             
