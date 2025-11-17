@@ -40,6 +40,7 @@ class Shell implements ShellInterface
         'chmod',
         'nginx',
         'cp',
+        'mv',
         'ln',
         'rm',
         'pure-pw',
