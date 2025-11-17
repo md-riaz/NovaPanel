@@ -62,9 +62,18 @@ class Session
     
     public static function destroy(): void
     {
-        self::start();
+        // Start session without validation if not already started
+        if (session_status() === PHP_SESSION_NONE) {
+            session_name('NOVAPANEL_SESSION');
+            @session_start();
+        }
+        
         $_SESSION = [];
-        session_destroy();
+        
+        // Destroy session if it exists
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_destroy();
+        }
     }
     
     public static function regenerate(): void
