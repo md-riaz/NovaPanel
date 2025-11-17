@@ -7,15 +7,18 @@ A lightweight, open-source **single VPS control panel** built with:
 - **SQLite** (panel DB)
 - **Nginx** + **PHP-FPM** (hosting stack)
 - **PowerDNS** (authoritative DNS)
-- **Pure-FTPd** (FTP)
+- **Pure-FTPd** (FTP with virtual users)
 - **MySQL/MariaDB/Postgres** (customer databases)
 - **Cron** (per panel user)
 - **Role-based access control**
 
-**Single VPS Design:**
-- No separate system accounts - all sites run under the panel user (novapanel)
-- Panel users own and manage their sites directly
-- All sites stored under `/opt/novapanel/sites/{username}/`
+**Single VPS Design - ONE Linux User Model:**
+- **CRITICAL:** Only ONE Linux system user exists: `novapanel`
+- All sites, services, and processes run as `novapanel`
+- Panel users are database records ONLY (NOT Linux users)
+- Panel users own and manage their sites through the web interface
+- All sites stored under `/opt/novapanel/sites/{panel_username}/`
+- No separate Linux system accounts are ever created
 
 No SaaS, no multi-node cluster, no email server, no separate Linux accounts.
 
@@ -34,13 +37,13 @@ Architected with **facades + adapters** and a strict layered pattern.
 2. **Application Layer**
    - Use-cases:
      - CreateSiteService
-     - CreateAccountService
-     - CreateFtpUserService
+     - CreateFtpUserService (virtual FTP users only)
      - SetupDnsZoneService
      - AssignPhpVersionService
      - CreateDatabaseService
      - AddCronJobService
    - Calls services from façade layer
+   - **Note:** No CreateAccountService - panel users are database records
 
 3. **Domain Layer**
    - Entities:
@@ -77,9 +80,9 @@ Stores panel metadata:
 - **PowerDNS MySQL backend**
   - PDNS-managed zones/records
 - **System-level files**
-  - PHP-FPM pool configs
+  - PHP-FPM pool configs (all run as `novapanel` user)
   - Nginx vhosts
-  - Cron jobs (per system user)
+  - Cron jobs (all in `novapanel` user's crontab)
 
 ---
 
@@ -109,7 +112,7 @@ public function assignRuntimeToSite(Site $site, PhpRuntime $runtime): bool;
 
 CronManager
 
-public function createJob(Account $account, CronJob $job): bool;
+public function createJob(User $panelUser, CronJob $job): bool;
 
 
 ---
@@ -118,13 +121,13 @@ public function createJob(Account $account, CronJob $job): bool;
 
 5.1 Hosting
 
-Nginx vhosts
+Nginx vhosts (all served by `novapanel` user)
 
-PHP-FPM multi-version pools
+PHP-FPM multi-version pools (all run as `novapanel` user)
 
 Per-site PHP version
 
-Per-account directory isolation
+Directory organization by panel user (all owned by `novapanel:novapanel`)
 
 
 5.2 DNS (PowerDNS)
@@ -136,8 +139,11 @@ Add/edit/delete A, AAAA, CNAME, TXT, MX, SRV records
 
 5.3 FTP (Pure-FTPd)
 
-Option A: System users
-Create/delete FTP users via Linux users.
+**Virtual Users Only:**
+- Create/delete FTP users via Pure-FTPd virtual users
+- All FTP users map to the `novapanel` Linux user's UID/GID
+- **NEVER create Linux system users for FTP**
+- FTP users are jailed to their designated directories
 
 5.4 Databases
 
@@ -150,9 +156,11 @@ Assign privileges
 
 5.5 Cron
 
-Per-account scheduled tasks
+Per panel user scheduled tasks
 
-Written to system crontab
+All jobs written to `novapanel` user's crontab
+
+Jobs identified by comment tags showing panel user ownership
 
 
 5.6 File Manager (Basic)
@@ -199,15 +207,20 @@ project/
 
 7. Security Model
 
-Panel runs as non-root panel user
+**Single Linux User Architecture:**
+- Panel runs as non-root `novapanel` user
+- **NO Linux user creation/modification/deletion allowed**
+- All operations run as `novapanel`
 
-Controlled sudo access:
+Controlled sudo access (minimal):
+- systemd reload (for nginx, php-fpm)
+- writing config files to system directories
+- pure-pw (for FTP virtual users)
 
-systemd reload
-
-useradd/usermod/userdel
-
-writing config files
+**Explicitly FORBIDDEN:**
+- useradd/usermod/userdel commands
+- Creating additional Linux system users
+- Any operation that would create system accounts
 
 
 
@@ -218,27 +231,20 @@ writing config files
 
 Create Site Flow
 
-Validate account quotas
+1. Validate panel user exists in database
+2. Create directory structure under `/opt/novapanel/sites/{panel_username}/{domain}/`
+3. Set ownership to `novapanel:novapanel`
+4. Assign PHP runtime version
+5. Generate FPM pool (user = novapanel, group = novapanel)
+6. Generate Nginx vhost
+7. Reload Nginx
+8. Create DNS zone (optional)
+9. Create default DNS records (optional)
+10. Create FTP virtual user (optional, maps to novapanel UID)
+11. Create database (optional)
+12. Flush caches
 
-Create directory structure
-
-Assign PHP runtime
-
-Generate FPM pool
-
-Generate Nginx vhost
-
-Reload Nginx
-
-Create DNS zone
-
-Create default records
-
-Optional: create FTP user
-
-Optional: create DB
-
-Flush caches
+**Important:** All files owned by `novapanel`, all processes run as `novapanel`
 
 
 
