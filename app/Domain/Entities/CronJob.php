@@ -6,7 +6,7 @@ class CronJob
 {
     public function __construct(
         public ?int $id = null,
-        public ?int $accountId = null,
+        public ?int $userId = null,
         public ?string $schedule = null,
         public ?string $command = null,
         public ?bool $enabled = true,

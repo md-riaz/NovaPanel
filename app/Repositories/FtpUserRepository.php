@@ -47,6 +47,55 @@ class FtpUserRepository
         return array_map(fn($row) => $this->hydrate($row), $rows);
     }
 
+    public function findByUsername(string $username): ?FtpUser
+    {
+        $stmt = $this->db->prepare("SELECT * FROM ftp_users WHERE username = ?");
+        $stmt->execute([$username]);
+        $row = $stmt->fetch();
+
+        return $row ? $this->hydrate($row) : null;
+    }
+
+    public function create(FtpUser $ftpUser): FtpUser
+    {
+        $stmt = $this->db->prepare("
+            INSERT INTO ftp_users (user_id, username, home_directory, enabled)
+            VALUES (?, ?, ?, ?)
+        ");
+        
+        $stmt->execute([
+            $ftpUser->userId,
+            $ftpUser->username,
+            $ftpUser->homeDirectory,
+            $ftpUser->enabled ? 1 : 0
+        ]);
+
+        $ftpUser->id = (int) $this->db->lastInsertId();
+        return $ftpUser;
+    }
+
+    public function update(FtpUser $ftpUser): bool
+    {
+        $stmt = $this->db->prepare("
+            UPDATE ftp_users
+            SET username = ?, home_directory = ?, enabled = ?
+            WHERE id = ?
+        ");
+
+        return $stmt->execute([
+            $ftpUser->username,
+            $ftpUser->homeDirectory,
+            $ftpUser->enabled ? 1 : 0,
+            $ftpUser->id
+        ]);
+    }
+
+    public function delete(int $id): bool
+    {
+        $stmt = $this->db->prepare("DELETE FROM ftp_users WHERE id = ?");
+        return $stmt->execute([$id]);
+    }
+
     private function hydrate(array $row): FtpUser
     {
         return new FtpUser(

@@ -4,7 +4,7 @@ namespace App\Infrastructure\Adapters;
 
 use App\Contracts\CronManagerInterface;
 use App\Contracts\ShellInterface;
-use App\Domain\Entities\Account;
+use App\Domain\Entities\User;
 use App\Domain\Entities\CronJob;
 
 class CronAdapter implements CronManagerInterface
@@ -13,7 +13,7 @@ class CronAdapter implements CronManagerInterface
         private ShellInterface $shell
     ) {}
 
-    public function createJob(Account $account, CronJob $job): bool
+    public function createJob(User $user, CronJob $job): bool
     {
         if (!$job->enabled) {
             return true;
@@ -21,26 +21,30 @@ class CronAdapter implements CronManagerInterface
 
         $cronLine = $this->formatCronLine($job);
         
-        // Get existing crontab
-        $currentCrontab = $this->getCurrentCrontab($account);
+        // Single VPS model: all cron jobs run under the panel user (novapanel)
+        // We'll prefix the command with a comment to identify which panel user owns it
+        $cronLine = "# NovaPanel user: {$user->username}\n" . $cronLine;
+        
+        // Get existing crontab for the panel user
+        $currentCrontab = $this->getCurrentCrontab();
         
         // Add new job
         $newCrontab = $currentCrontab . "\n" . $cronLine;
         
         // Write back to crontab
-        return $this->writeCrontab($account, $newCrontab);
+        return $this->writeCrontab($newCrontab);
     }
 
-    public function updateJob(Account $account, CronJob $job): bool
+    public function updateJob(User $user, CronJob $job): bool
     {
         // Remove old job and add new one
-        $this->deleteJob($account, $job);
-        return $this->createJob($account, $job);
+        $this->deleteJob($user, $job);
+        return $this->createJob($user, $job);
     }
 
-    public function deleteJob(Account $account, CronJob $job): bool
+    public function deleteJob(User $user, CronJob $job): bool
     {
-        $currentCrontab = $this->getCurrentCrontab($account);
+        $currentCrontab = $this->getCurrentCrontab();
         $lines = explode("\n", $currentCrontab);
         
         // Filter out the job to delete
@@ -50,12 +54,12 @@ class CronAdapter implements CronManagerInterface
         
         $newCrontab = implode("\n", $newLines);
         
-        return $this->writeCrontab($account, $newCrontab);
+        return $this->writeCrontab($newCrontab);
     }
 
-    public function listJobs(Account $account): array
+    public function listJobs(User $user): array
     {
-        $crontab = $this->getCurrentCrontab($account);
+        $crontab = $this->getCurrentCrontab();
         $lines = explode("\n", trim($crontab));
         $jobs = [];
         
@@ -71,9 +75,10 @@ class CronAdapter implements CronManagerInterface
         return $jobs;
     }
 
-    private function getCurrentCrontab(Account $account): string
+    private function getCurrentCrontab(): string
     {
-        $result = $this->shell->executeSudo('crontab', ['-u', $account->username, '-l']);
+        // Single VPS model: read novapanel user's crontab using sudo
+        $result = $this->shell->executeSudo('crontab', ['-u', 'novapanel', '-l']);
         
         if ($result['exitCode'] === 0) {
             return $result['output'];
@@ -82,12 +87,13 @@ class CronAdapter implements CronManagerInterface
         return '';
     }
 
-    private function writeCrontab(Account $account, string $content): bool
+    private function writeCrontab(string $content): bool
     {
         $tempFile = tempnam(sys_get_temp_dir(), 'crontab');
         file_put_contents($tempFile, $content);
         
-        $result = $this->shell->executeSudo('crontab', ['-u', $account->username, $tempFile]);
+        // Single VPS model: write to novapanel user's crontab using sudo
+        $result = $this->shell->executeSudo('crontab', ['-u', 'novapanel', $tempFile]);
         
         unlink($tempFile);
         

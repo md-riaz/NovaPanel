@@ -11,6 +11,7 @@ class DnsRecord
         public ?string $type = null,
         public ?string $content = null,
         public ?int $ttl = 3600,
-        public ?int $priority = null
+        public ?int $priority = null,
+        public ?string $createdAt = null
     ) {}
 }

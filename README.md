@@ -88,21 +88,47 @@ The panel runs on port 7080 by default for security isolation from hosted sites.
 
 ### User Structure (Single VPS - Single System Account)
 
-NovaPanel is designed for single VPS hosting where **everything runs under one system account** (the novapanel user):
+NovaPanel uses a **Single VPS Model** where **everything runs under ONE Linux system account** (`novapanel`):
 
-1. **Panel Users** - People who log into the NovaPanel interface
-   - Created via **Panel Users** > **Create Panel User**
+#### Understanding the Two Types of "Users"
+
+1. **Linux System User (ONLY ONE)**
+   - Username: `novapanel`
+   - Created during installation
+   - Owns ALL files and runs ALL processes
+   - Never create additional Linux users!
+   
+2. **Panel Users (MANY)**
+   - Database records in SQLite (`users` table)
+   - Used for logging into the panel web interface
    - Have roles: Admin, Account Owner, Developer, Read-Only
-   - Can own and manage multiple sites
-   - **These are NOT Linux system users** - they only exist in the panel database
-   
-2. **Sites** - Websites/domains owned by panel users
-   - Created via **Sites** > **Create Site**
-   - Each site belongs to one panel user
-   - All sites run under the panel's system user (novapanel)
-   - Stored in `/opt/novapanel/sites/{username}/{domain}/`
-   
-**Key Point:** There is only ONE Linux system user (novapanel). All websites, databases, and resources run under this single account. Panel users are for access control and organization within the panel interface only.
+   - Own and manage sites, databases, FTP accounts
+   - **NOT Linux users** - just database records
+
+#### How It Works
+
+- **All websites** run as the `novapanel` Linux user
+- **All PHP-FPM pools** run as `novapanel`
+- **All cron jobs** run as `novapanel`
+- **All FTP users** map to the `novapanel` UID (via Pure-FTPd virtual users)
+- **All files** are owned by `novapanel:novapanel`
+
+Panel users are only for organizing and controlling access through the web interface. The actual Linux system only knows about one user: `novapanel`.
+
+#### Directory Structure
+
+```
+/opt/novapanel/sites/
+├── john/                    # Panel user "john"
+│   ├── example.com/         # John's first site
+│   └── shop.com/            # John's second site
+└── mary/                    # Panel user "mary"
+    └── blog.com/            # Mary's site
+```
+
+All directories owned by `novapanel:novapanel`.
+
+**CRITICAL:** There is only ONE Linux system user. Panel users exist only in the database for access control. See [ARCHITECTURE.md](ARCHITECTURE.md) for full details.
 
 ### Creating a Panel User
 

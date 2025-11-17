@@ -47,6 +47,53 @@ class DatabaseRepository
         return array_map(fn($row) => $this->hydrate($row), $rows);
     }
 
+    public function findByName(string $name): ?DatabaseEntity
+    {
+        $stmt = $this->db->prepare("SELECT * FROM databases WHERE name = ?");
+        $stmt->execute([$name]);
+        $row = $stmt->fetch();
+
+        return $row ? $this->hydrate($row) : null;
+    }
+
+    public function create(DatabaseEntity $database): DatabaseEntity
+    {
+        $stmt = $this->db->prepare("
+            INSERT INTO databases (user_id, name, type)
+            VALUES (?, ?, ?)
+        ");
+        
+        $stmt->execute([
+            $database->userId,
+            $database->name,
+            $database->type
+        ]);
+
+        $database->id = (int) $this->db->lastInsertId();
+        return $database;
+    }
+
+    public function update(DatabaseEntity $database): bool
+    {
+        $stmt = $this->db->prepare("
+            UPDATE databases
+            SET name = ?, type = ?
+            WHERE id = ?
+        ");
+
+        return $stmt->execute([
+            $database->name,
+            $database->type,
+            $database->id
+        ]);
+    }
+
+    public function delete(int $id): bool
+    {
+        $stmt = $this->db->prepare("DELETE FROM databases WHERE id = ?");
+        return $stmt->execute([$id]);
+    }
+
     private function hydrate(array $row): DatabaseEntity
     {
         return new DatabaseEntity(

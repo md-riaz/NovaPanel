@@ -76,13 +76,8 @@ class PhpFpmAdapter implements PhpRuntimeManagerInterface
     {
         $poolName = str_replace('.', '_', $site->domain);
         
-        // Use account username instead of domain for user/group
-        $username = $site->accountUsername ?? 'www-data';
-        
-        // Verify the username is set
-        if (!$site->accountUsername) {
-            throw new \RuntimeException("Site must have accountUsername set to create PHP-FPM pool");
-        }
+        // Single VPS model: all sites run under the panel user (novapanel)
+        $username = 'novapanel';
         
         $config = "[{$poolName}]\n";
         $config .= "user = {$username}\n";
