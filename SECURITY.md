@@ -400,9 +400,9 @@ NovaPanel uses BIND9 with zone files instead of a database-backed DNS solution. 
 
 ### Configuration Files
 ```bash
-# Set secure permissions on configuration
-chmod 600 /opt/novapanel/.env.php
-chown novapanel:novapanel /opt/novapanel/.env.php
+# Set secure permissions on configuration (www-data group can read for PHP-FPM)
+chmod 640 /opt/novapanel/.env.php
+chown novapanel:www-data /opt/novapanel/.env.php
 
 # Configuration file structure
 /opt/novapanel/

@@ -265,8 +265,8 @@ putenv('APP_ENV=production');
 putenv('APP_DEBUG=false');
 ENVEOF
 
-chown novapanel:novapanel $PANEL_DIR/.env.php
-chmod 600 $PANEL_DIR/.env.php
+chown novapanel:www-data $PANEL_DIR/.env.php
+chmod 640 $PANEL_DIR/.env.php
 echo "✓ Configuration file created"
 echo ""
 
