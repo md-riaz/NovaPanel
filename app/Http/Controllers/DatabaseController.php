@@ -8,6 +8,7 @@ use App\Repositories\DatabaseRepository;
 use App\Repositories\UserRepository;
 use App\Services\CreateDatabaseService;
 use App\Facades\DatabaseManager;
+use App\Support\AuditLogger;
 
 class DatabaseController extends Controller
 {
@@ -64,6 +65,13 @@ class DatabaseController extends Controller
                 dbPassword: $dbPassword
             );
             
+            // Log audit event
+            AuditLogger::logCreated('database', $dbName, [
+                'user_id' => $userId,
+                'db_type' => $dbType,
+                'db_username' => $dbUsername
+            ]);
+            
             // Check if this is an HTMX request
             if ($request->isHtmx()) {
                 return new Response($this->successAlert('Database created successfully! Redirecting...'));
@@ -89,6 +97,12 @@ class DatabaseController extends Controller
             if (!$database) {
                 throw new \Exception('Database not found');
             }
+            
+            // Log audit event before deletion
+            AuditLogger::logDeleted('database', $database->name, [
+                'database_id' => $id,
+                'db_type' => $database->type
+            ]);
             
             // Delete from infrastructure
             DatabaseManager::getInstance()->deleteDatabase($database);

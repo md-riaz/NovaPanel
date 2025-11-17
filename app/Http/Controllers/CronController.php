@@ -8,6 +8,7 @@ use App\Repositories\CronJobRepository;
 use App\Repositories\UserRepository;
 use App\Services\AddCronJobService;
 use App\Facades\Cron;
+use App\Support\AuditLogger;
 
 class CronController extends Controller
 {
@@ -61,6 +62,13 @@ class CronController extends Controller
                 enabled: $enabled
             );
             
+            // Log audit event
+            AuditLogger::logCreated('cron_job', $command, [
+                'user_id' => $userId,
+                'schedule' => $schedule,
+                'enabled' => $enabled
+            ]);
+            
             // Check if this is an HTMX request
             if ($request->isHtmx()) {
                 return new Response($this->successAlert('Cron job added successfully! Redirecting...'));
@@ -94,6 +102,12 @@ class CronController extends Controller
             if (!$user) {
                 throw new \Exception('User not found');
             }
+            
+            // Log audit event before deletion
+            AuditLogger::logDeleted('cron_job', $cronJob->command, [
+                'cron_job_id' => $id,
+                'schedule' => $cronJob->schedule
+            ]);
             
             // Delete from infrastructure
             Cron::getInstance()->deleteJob($user, $cronJob);

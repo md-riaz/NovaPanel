@@ -10,6 +10,7 @@ use App\Repositories\SiteRepository;
 use App\Services\SetupDnsZoneService;
 use App\Facades\Dns;
 use App\Domain\Entities\DnsRecord;
+use App\Support\AuditLogger;
 
 class DnsController extends Controller
 {
@@ -82,6 +83,12 @@ class DnsController extends Controller
                 serverIp: $serverIp
             );
             
+            // Log audit event
+            AuditLogger::logCreated('dns_zone', $domainName, [
+                'site_id' => $siteId,
+                'server_ip' => $serverIp
+            ]);
+            
             // Check if this is an HTMX request
             if ($request->isHtmx()) {
                 return new Response($this->successAlert('DNS zone created successfully! Redirecting...'));
@@ -117,6 +124,13 @@ class DnsController extends Controller
             // Add to PowerDNS
             Dns::getInstance()->addRecord($record);
             
+            // Log audit event
+            AuditLogger::logCreated('dns_record', "{$record->name} ({$record->type})", [
+                'domain_id' => $domainId,
+                'type' => $record->type,
+                'content' => $record->content
+            ]);
+            
             return $this->redirect("/dns/{$domainId}");
             
         } catch (\Exception $e) {
@@ -133,6 +147,13 @@ class DnsController extends Controller
             if (!$record) {
                 throw new \Exception('DNS record not found');
             }
+            
+            // Log audit event before deletion
+            AuditLogger::logDeleted('dns_record', "{$record->name} ({$record->type})", [
+                'record_id' => $recordId,
+                'domain_id' => $domainId,
+                'content' => $record->content
+            ]);
             
             // Delete from PowerDNS
             Dns::getInstance()->deleteRecord($record);

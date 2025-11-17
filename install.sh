@@ -127,6 +127,37 @@ sudo -u novapanel php database/migration.php
 echo "✓ Database migration completed"
 echo ""
 
+# Create configuration file
+echo "Creating configuration file..."
+read -p "Enter MySQL root password (for creating user databases): " MYSQL_ROOT_PASS
+read -p "Enter PowerDNS database password (if using DNS): " POWERDNS_PASS
+
+cat > $PANEL_DIR/.env.php <<ENVEOF
+<?php
+// NovaPanel Configuration
+// Generated during installation
+
+// MySQL Root Credentials (for creating user databases)
+putenv('MYSQL_HOST=localhost');
+putenv('MYSQL_ROOT_USER=root');
+putenv('MYSQL_ROOT_PASSWORD=$MYSQL_ROOT_PASS');
+
+// PowerDNS Database Credentials (for DNS management)
+putenv('POWERDNS_HOST=localhost');
+putenv('POWERDNS_DATABASE=powerdns');
+putenv('POWERDNS_USER=powerdns');
+putenv('POWERDNS_PASSWORD=$POWERDNS_PASS');
+
+// Application
+putenv('APP_ENV=production');
+putenv('APP_DEBUG=false');
+ENVEOF
+
+chown novapanel:novapanel $PANEL_DIR/.env.php
+chmod 600 $PANEL_DIR/.env.php
+echo "✓ Configuration file created"
+echo ""
+
 # Create admin user
 echo "Creating admin user..."
 read -p "Enter admin username: " ADMIN_USER

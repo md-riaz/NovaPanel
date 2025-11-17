@@ -7,6 +7,7 @@ use App\Http\Response;
 use App\Repositories\UserRepository;
 use App\Repositories\RoleRepository;
 use App\Domain\Entities\User;
+use App\Support\AuditLogger;
 
 class UserController extends Controller
 {
@@ -100,6 +101,12 @@ class UserController extends Controller
                     $roleRepo->assignRoleToUser($user->id, (int) $roleId);
                 }
             }
+            
+            // Log audit event
+            AuditLogger::logCreated('user', $username, [
+                'email' => $email,
+                'roles' => $roleIds
+            ]);
             
             // Check if this is an HTMX request
             if ($request->isHtmx()) {
@@ -214,6 +221,13 @@ class UserController extends Controller
                 }
             }
             
+            // Log audit event
+            AuditLogger::logUpdated('user', $username, [
+                'email' => $email,
+                'roles' => $roleIds,
+                'password_changed' => !empty($password)
+            ]);
+            
             return $this->redirect('/users');
             
         } catch (\Exception $e) {
@@ -230,6 +244,12 @@ class UserController extends Controller
             if (!$user) {
                 throw new \Exception('User not found');
             }
+            
+            // Log audit event before deletion
+            AuditLogger::logDeleted('user', $user->username, [
+                'user_id' => $id,
+                'email' => $user->email
+            ]);
             
             $userRepo->delete($id);
             
