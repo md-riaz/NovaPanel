@@ -166,6 +166,9 @@ if [[ "$INSTALL_POWERDNS" =~ ^[Yy]$ ]]; then
     echo "Installing PowerDNS..."
     apt-get install -y pdns-server pdns-backend-mysql
     
+    # Stop the service to configure it properly
+    systemctl stop pdns || true
+    
     # Create PowerDNS database and user
     POWERDNS_USER="powerdns"
     POWERDNS_PASS=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
