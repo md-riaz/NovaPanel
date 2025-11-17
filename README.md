@@ -19,6 +19,25 @@ A lightweight, open-source single VPS control panel built with PHP. NovaPanel pr
 - 📝 **Audit Logging** - Comprehensive logging of all admin actions and resource changes
 - 🛡️ **Security First** - Non-root execution, command whitelisting, input validation, rate limiting
 - 🖥️ **Single VPS Design** - All sites run under the panel user, no separate system accounts needed
+- 🌍 **DNS Management (BIND9)** - Secure DNS management with complete database isolation
+
+## DNS Management
+
+NovaPanel uses **BIND9** for DNS management, providing superior security compared to database-backed solutions:
+
+### Why BIND9?
+- **Complete Isolation**: DNS data stored in zone files (`/etc/bind/zones/`), not accessible via database clients
+- **No SQL Injection**: Eliminates SQL injection attack vectors entirely
+- **Industry Standard**: BIND9 is the most widely deployed DNS server, battle-tested for decades
+- **Built-in Validation**: All zone files validated before deployment using `named-checkzone`
+- **Automatic Serial Management**: Zone serials automatically incremented on updates
+
+### How It Works
+1. Panel creates zone files in `/etc/bind/zones/db.domain.com`
+2. Zone configuration added to `/etc/bind/named.conf.local`
+3. Zone file validated before application
+4. BIND9 reloaded to apply changes
+5. Customers cannot access zone files through database tools (phpMyAdmin, etc.)
 
 ## Requirements
 
@@ -27,6 +46,7 @@ A lightweight, open-source single VPS control panel built with PHP. NovaPanel pr
 - Nginx
 - MySQL/MariaDB or PostgreSQL
 - SQLite3
+- BIND9 (for DNS management)
 - Composer
 
 ## Quick Start
