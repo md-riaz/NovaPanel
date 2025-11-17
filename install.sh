@@ -143,7 +143,7 @@ echo ""
 echo "Setting up storage directories..."
 mkdir -p storage/logs storage/cache storage/uploads storage/terminal/pids storage/terminal/logs
 chown -R novapanel:www-data storage
-chmod -R 770 storage
+chmod -R 775 storage
 echo "✓ Storage directories configured"
 echo ""
 

@@ -29,4 +29,13 @@ interface ShellInterface
      * @return string
      */
     public function escapeArg(string $arg): string;
+
+    /**
+     * Write content to a file using sudo privileges
+     *
+     * @param string $path
+     * @param string $content
+     * @return array ['output' => string, 'exitCode' => int]
+     */
+    public function writeFile(string $path, string $content): array;
 }
