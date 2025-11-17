@@ -3,6 +3,29 @@
 ## Overview
 NovaPanel is designed with security as a core principle. This document outlines the security model and considerations.
 
+## Authentication & Authorization
+
+### Session-Based Authentication
+NovaPanel uses secure session-based authentication for all panel access:
+
+- **Login Required**: All routes (except `/login`) require authentication
+- **Session Management**: Secure HTTP-only cookies with SameSite protection
+- **Session Timeout**: 1-hour inactivity timeout
+- **Session Regeneration**: Automatic session ID regeneration every 5 minutes
+- **Session Fingerprinting**: User-Agent and IP validation to prevent session hijacking
+
+### Authentication Middleware
+The `AuthMiddleware` protects all routes by:
+1. Checking for valid user session
+2. Redirecting unauthenticated requests to `/login`
+3. Validating session integrity and timeout
+
+### Password Security
+- Passwords are hashed using `password_hash()` with `PASSWORD_DEFAULT` (bcrypt)
+- Server-side password confirmation validation
+- Minimum 8 character password requirement
+- Passwords are never stored in plain text or logged
+
 ## Non-Root Execution Model
 
 ### Panel User
@@ -264,10 +287,12 @@ Sessions are secured with:
 - 1-hour timeout
 
 ### Rate Limiting
-Brute force protection with rate limiting:
-- Maximum 5 attempts per 15 minutes
-- IP-based tracking
+Brute force protection with rate limiting on authentication:
+- Maximum 5 login attempts per 15 minutes per IP address
+- IP-based tracking using file-based cache
 - Automatic lockout on exceeded attempts
+- Clear rate limit on successful login
+- Displays remaining time until rate limit resets
 
 ```php
 use App\Support\RateLimiter;
@@ -279,7 +304,10 @@ if (RateLimiter::tooManyAttempts($key)) {
 }
 ```
 
-### Audit Logging
+### Comprehensive Audit Logging
+NovaPanel maintains comprehensive audit logs for security monitoring and compliance:
+
+#### Shell Command Logging
 All shell command executions are logged to `/opt/novapanel/storage/logs/shell.log`:
 - Timestamp
 - User executing command
@@ -288,22 +316,100 @@ All shell command executions are logged to `/opt/novapanel/storage/logs/shell.lo
 
 Log format:
 ```
-[2025-11-16 16:00:00] USER=novapanel COMMAND=sudo useradd example
-[2025-11-16 16:00:05] FAILED COMMAND=sudo nginx -t EXIT_CODE=1
+[2025-11-17 00:35:00] USER=novapanel COMMAND=sudo useradd example
+[2025-11-17 00:35:05] FAILED COMMAND=sudo nginx -t EXIT_CODE=1
+```
+
+#### Admin Action Logging
+All administrative actions are logged to `/opt/novapanel/storage/logs/audit.log`:
+- Authentication events (login/logout)
+- Resource creation (users, sites, databases, FTP, cron, DNS)
+- Resource updates (user details, roles)
+- Resource deletion (all resources)
+- User who performed the action
+- Timestamp and IP address
+- Detailed context (parameters, IDs, etc.)
+
+Log format:
+```
+[2025-11-17 00:35:13] ACTION=user.login MESSAGE=User 'admin' logged in CONTEXT={"user_id":1,"ip":"::1"}
+[2025-11-17 00:35:20] ACTION=site.created MESSAGE=site 'example.com' was created CONTEXT={"user_id":2,"php_version":"8.2","ssl_enabled":true}
+[2025-11-17 00:35:25] ACTION=database.deleted MESSAGE=database 'mydb' was deleted CONTEXT={"database_id":5,"db_type":"mysql"}
+```
+
+#### Using the AuditLogger
+```php
+use App\Support\AuditLogger;
+
+// Log custom events
+AuditLogger::log('custom.action', 'Description of action', ['key' => 'value']);
+
+// Log resource creation
+AuditLogger::logCreated('resource_type', 'resource_name', ['details']);
+
+// Log resource updates
+AuditLogger::logUpdated('resource_type', 'resource_name', ['details']);
+
+// Log resource deletion
+AuditLogger::logDeleted('resource_type', 'resource_name', ['details']);
+```
+
+## Configuration Security
+
+### Credential Management
+- Sensitive credentials stored in `.env.php` (excluded from version control)
+- File permissions set to 600 (readable only by panel user)
+- Example configuration file provided (`.env.php.example`)
+- Never commit `.env.php` to version control
+- Credentials loaded via environment variables (`putenv()`)
+
+### Configuration Files
+```bash
+# Set secure permissions on configuration
+chmod 600 /opt/novapanel/.env.php
+chown novapanel:novapanel /opt/novapanel/.env.php
+
+# Configuration file structure
+/opt/novapanel/
+├── .env.php              # Actual credentials (git-ignored)
+├── .env.php.example      # Template (version controlled)
+└── config/               # Configuration logic
+    ├── app.php           # Application settings
+    └── database.php      # Database configuration
 ```
 
 ## Best Practices
 
-1. **Regular Updates**: Keep system packages updated
-2. **Firewall**: Use UFW or iptables to restrict access (port 7080 is auto-configured)
-3. **SSL/TLS**: Enable HTTPS for the panel and customer sites
-4. **Backups**: Regular automated backups of panel database
-5. **Monitoring**: Monitor logs for suspicious activity (`/opt/novapanel/storage/logs/`)
-6. **Fail2ban**: Built-in rate limiting provides basic brute force protection
-7. **Audit Logs**: Review shell.log regularly for unauthorized access attempts
+1. **Authentication**: Ensure all users have strong passwords (minimum 8 characters)
+2. **Regular Updates**: Keep system packages updated
+3. **Firewall**: Use UFW or iptables to restrict access (port 7080 is auto-configured)
+4. **SSL/TLS**: Enable HTTPS for the panel and customer sites
+5. **Backups**: Regular automated backups of panel database and audit logs
+6. **Log Monitoring**: Monitor logs for suspicious activity
+   - `/opt/novapanel/storage/logs/audit.log` - Admin actions
+   - `/opt/novapanel/storage/logs/shell.log` - Shell commands
+7. **Rate Limiting**: Built-in protection against brute force attacks (5 attempts per 15 minutes)
+8. **Session Security**: Sessions automatically expire after 1 hour of inactivity
+9. **Audit Review**: Regularly review audit logs for:
+   - Failed login attempts
+   - Unauthorized resource access
+   - Suspicious resource creation/deletion patterns
+   - After-hours administrative actions
 
 ## Security Checklist
 
+### Authentication & Access Control
+- [x] Session-based authentication implemented
+- [x] All routes protected with authentication middleware (except /login)
+- [x] Login/logout functionality working
+- [x] Password hashing with strong algorithm (bcrypt)
+- [x] Session timeout after 1 hour of inactivity
+- [x] Session regeneration every 5 minutes
+- [x] Session fingerprinting (User-Agent + IP)
+- [x] CSRF protection on all forms
+- [x] Rate limiting for brute force prevention (5 attempts per 15 minutes)
+
+### System Security
 - [x] Panel runs as non-root user
 - [x] Sudo whitelist is minimal and specific
 - [x] All shell commands use `escapeshellarg()`
@@ -311,18 +417,35 @@ Log format:
 - [x] Directory permissions properly set
 - [x] Input validation on all user data
 - [x] Prepared statements for database queries
-- [x] Password hashing with strong algorithm
-- [x] CSRF protection implemented
-- [x] Session security with regeneration
-- [x] Rate limiting for brute force prevention
-- [x] Audit logging for shell commands
+
+### Configuration & Credentials
+- [x] Configuration file (.env.php) excluded from version control
+- [x] Example configuration file provided (.env.php.example)
+- [x] Secure file permissions on configuration (600)
+- [x] Credentials loaded via environment variables
+- [x] Database credentials moved to config
+- [x] PowerDNS credentials moved to config
+
+### Logging & Monitoring
+- [x] Comprehensive audit logging for admin actions
+- [x] Audit logging for resource creation/deletion
+- [x] Authentication event logging (login/logout)
+- [x] Shell command logging
+- [x] Failed command logging with exit codes
 - [x] Firewall configured (port 7080)
+
+### Web Terminal
 - [x] Web terminal with credential authentication
 - [x] Terminal session isolation per user
 - [x] Terminal process management and cleanup
+- [x] Terminal authentication integrated with Session
+
+### Production Readiness
 - [ ] HTTPS enabled for panel (recommended for production)
-- [ ] Terminal authentication integrated with Session (requires auth implementation)
+- [ ] SSL certificates installed
 - [ ] Regular security updates scheduled (admin responsibility)
+- [ ] Backup strategy implemented
+- [ ] Log rotation configured
 
 ## Reporting Security Issues
 

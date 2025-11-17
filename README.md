@@ -8,6 +8,7 @@ A lightweight, open-source single VPS control panel built with PHP. NovaPanel pr
 
 - 🚀 **Site Management** - Create and manage multiple websites with ease
 - 👥 **Panel User Management** - Create users with different roles and permissions
+- 🔐 **Authentication & Security** - Session-based authentication with CSRF protection and rate limiting
 - 🐘 **PHP-FPM** - Multi-version PHP support with isolated pools
 - 🌐 **Nginx** - High-performance web server configuration
 - 📊 **Database Management** - MySQL/PostgreSQL database creation and management
@@ -15,7 +16,8 @@ A lightweight, open-source single VPS control panel built with PHP. NovaPanel pr
 - ⏰ **Cron Jobs** - Schedule tasks for each panel user
 - 💻 **Web Terminal** - Browser-based terminal access using ttyd (similar to cPanel)
 - 🔒 **Role-Based Access Control** - Admin, Account Owner, Developer, Read-Only roles
-- 🛡️ **Security First** - Non-root execution, command whitelisting, input validation
+- 📝 **Audit Logging** - Comprehensive logging of all admin actions and resource changes
+- 🛡️ **Security First** - Non-root execution, command whitelisting, input validation, rate limiting
 - 🖥️ **Single VPS Design** - All sites run under the panel user, no separate system accounts needed
 
 ## Requirements
@@ -68,12 +70,57 @@ cd /opt/novapanel
 # Install PHP dependencies
 sudo -u novapanel composer install
 
+# Create configuration file
+sudo -u novapanel cp .env.php.example .env.php
+sudo -u novapanel nano .env.php  # Edit and add your credentials
+sudo chmod 600 .env.php
+
 # Run database migration
 sudo -u novapanel php database/migration.php
+
+# Create admin user
+sudo -u novapanel sqlite3 storage/panel.db
+# Then run SQL:
+# INSERT INTO users (username, email, password) VALUES ('admin', 'admin@example.com', '<hashed_password>');
+# INSERT INTO user_roles (user_id, role_id) SELECT id, (SELECT id FROM roles WHERE name='Admin') FROM users WHERE username='admin';
 
 # Configure sudoers (see SECURITY.md for details)
 sudo visudo -f /etc/sudoers.d/novapanel
 ```
+
+## Configuration
+
+NovaPanel uses environment variables for sensitive configuration. The configuration file is located at `.env.php` in the panel root directory.
+
+### Database Architecture
+
+**Important:** NovaPanel uses **SQLite** for all panel operations (users, sites, permissions, etc.). The panel database is stored at `/opt/novapanel/storage/panel.db`.
+
+MySQL and PostgreSQL credentials in the configuration are **ONLY** used when creating databases for panel users' websites - the panel itself does not use MySQL or PostgreSQL for its own operations.
+
+### Creating Configuration File
+
+```bash
+# Copy the example configuration
+cp .env.php.example .env.php
+
+# Edit with your credentials
+nano .env.php
+
+# Set secure permissions
+chmod 600 .env.php
+chown novapanel:novapanel .env.php
+```
+
+### Configuration Options
+
+- **Panel Database**: SQLite (automatically configured at `storage/panel.db`)
+- **MySQL Credentials**: Root credentials for creating CUSTOMER databases only (not for panel operations)
+- **PostgreSQL Credentials**: Root credentials for creating CUSTOMER databases only (optional)
+- **PowerDNS Credentials**: Used for DNS zone and record management (optional)
+- **Application Settings**: Environment, debug mode, and panel URL
+
+See `.env.php.example` for detailed configuration options and examples.
 
 ## Usage
 
@@ -83,6 +130,8 @@ After installation, access the panel at:
 ```
 http://your-server-ip:7080
 ```
+
+**Default Login:** Use the admin credentials you created during installation.
 
 The panel runs on port 7080 by default for security isolation from hosted sites.
 
