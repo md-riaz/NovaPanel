@@ -123,6 +123,16 @@ if [ "$CURRENT_DIR" != "$PANEL_DIR" ]; then
     cd $PANEL_DIR
 fi
 
+# Set proper ownership and permissions for panel files
+echo "Setting file ownership and permissions..."
+# Set ownership to novapanel:www-data so PHP-FPM (running as www-data) can read files
+chown -R novapanel:www-data $PANEL_DIR
+# Set secure permissions: directories 755, files 644
+find $PANEL_DIR -type d -exec chmod 755 {} \;
+find $PANEL_DIR -type f -exec chmod 644 {} \;
+echo "✓ File ownership and permissions configured"
+echo ""
+
 # Install Composer dependencies
 echo "Installing PHP dependencies..."
 sudo -u novapanel composer install --no-dev --optimize-autoloader
@@ -132,8 +142,8 @@ echo ""
 # Set up storage directories
 echo "Setting up storage directories..."
 mkdir -p storage/logs storage/cache storage/uploads storage/terminal/pids storage/terminal/logs
-chown -R novapanel:novapanel storage
-chmod -R 750 storage
+chown -R novapanel:www-data storage
+chmod -R 770 storage
 echo "✓ Storage directories configured"
 echo ""
 
