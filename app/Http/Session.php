@@ -12,7 +12,14 @@ class Session
         if (session_status() === PHP_SESSION_NONE) {
             // Secure session configuration
             ini_set('session.cookie_httponly', '1');
-            ini_set('session.cookie_secure', '1'); // Enable in production with HTTPS
+            
+            // Only enable secure cookies if using HTTPS
+            // This allows the panel to work over HTTP during development/initial setup
+            $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') 
+                    || (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https')
+                    || (!empty($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443);
+            ini_set('session.cookie_secure', $isHttps ? '1' : '0');
+            
             ini_set('session.cookie_samesite', 'Strict');
             ini_set('session.use_strict_mode', '1');
             ini_set('session.use_only_cookies', '1');

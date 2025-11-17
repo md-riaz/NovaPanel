@@ -145,6 +145,11 @@ http://your-server-ip:7080
 
 The panel runs on port 7080 by default for security isolation from hosted sites.
 
+**Security Note:** The panel initially runs over HTTP. For production use, it's strongly recommended to:
+1. Set up an SSL certificate (e.g., using Let's Encrypt)
+2. Configure Nginx to serve the panel over HTTPS
+3. Once HTTPS is enabled, session cookies will automatically use the secure flag
+
 ### User Structure (Single VPS - Single System Account)
 
 NovaPanel uses a **Single VPS Model** where **everything runs under ONE Linux system account** (`novapanel`):

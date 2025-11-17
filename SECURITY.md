@@ -280,11 +280,16 @@ if (!CSRF::verify($_POST['_csrf_token'])) {
 ### Session Security
 Sessions are secured with:
 - HTTP-only cookies
-- Secure flag (HTTPS)
+- Secure flag (automatically enabled when using HTTPS)
 - SameSite=Strict
 - Automatic regeneration every 5 minutes
 - Session fingerprinting (User-Agent + IP)
 - 1-hour timeout
+
+**Note:** The `session.cookie_secure` flag is automatically set based on the connection type:
+- When accessed over HTTPS, secure cookies are enabled
+- When accessed over HTTP (development/initial setup), secure cookies are disabled
+- For production deployments, always enable HTTPS to ensure secure cookies are used
 
 ### Rate Limiting
 Brute force protection with rate limiting on authentication:
