@@ -207,17 +207,19 @@ All directories owned by `novapanel:novapanel`.
 
 ### Accessing phpMyAdmin
 
-NovaPanel includes **phpMyAdmin** for easy database management:
+NovaPanel includes **phpMyAdmin** with **automatic login (SSO)** for easy database management:
 
 1. Navigate to **Databases** in the sidebar
-2. Click the **phpMyAdmin** button at the top right
-3. Login with your MySQL credentials:
-   - **Server:** localhost
-   - **Username:** Database username (created during database setup)
-   - **Password:** Your database password
+2. Click the **phpMyAdmin** button at the top right or in the sidebar
+3. **Automatic Login:** You'll be instantly logged in with full database access - no credentials needed!
 4. Manage your databases, tables, and data through the phpMyAdmin interface
 
-**Direct Access:** You can also access phpMyAdmin directly at `http://your-server-ip:7080/phpmyadmin`
+**Features:**
+- **Single Sign-On (SSO):** Automatically logs you in using your panel session
+- **No Password Entry:** Seamlessly access all databases without re-entering credentials
+- **Database Pre-selection:** Click "Manage" on any database to open phpMyAdmin with that database selected
+
+**Direct Access:** phpMyAdmin link is available in the sidebar and on the Databases page
 
 ### Setting Up DNS
 

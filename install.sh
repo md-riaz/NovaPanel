@@ -110,17 +110,21 @@ echo "Configuring phpMyAdmin..."
 # We'll configure it manually through Nginx instead
 # Create phpMyAdmin config directory if it doesn't exist
 mkdir -p /etc/phpmyadmin
-# Create a basic config file for phpMyAdmin
+# Create a basic config file for phpMyAdmin with SSO (signon) authentication
 if [ ! -f /etc/phpmyadmin/config.inc.php ]; then
     # Generate a secure blowfish secret
     BLOWFISH_SECRET=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
     cat > /etc/phpmyadmin/config.inc.php <<PMAEOF
 <?php
-/* phpMyAdmin configuration for NovaPanel */
+/* phpMyAdmin configuration for NovaPanel - SSO enabled */
 \$cfg['blowfish_secret'] = '${BLOWFISH_SECRET}';
 \$i = 0;
 \$i++;
-\$cfg['Servers'][\$i]['auth_type'] = 'cookie';
+/* Use signon authentication for automatic login from NovaPanel */
+\$cfg['Servers'][\$i]['auth_type'] = 'signon';
+\$cfg['Servers'][\$i]['SignonSession'] = 'novapanel_pma_signon';
+\$cfg['Servers'][\$i]['SignonURL'] = '/phpmyadmin-signon.php';
+\$cfg['Servers'][\$i]['LogoutURL'] = '/dashboard';
 \$cfg['Servers'][\$i]['host'] = 'localhost';
 \$cfg['Servers'][\$i]['compress'] = false;
 \$cfg['Servers'][\$i]['AllowNoPassword'] = false;

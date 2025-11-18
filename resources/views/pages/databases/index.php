@@ -3,7 +3,7 @@
 <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pb-2 mb-3 border-bottom">
     <h1 class="h2">Databases</h1>
     <div>
-        <a href="/phpmyadmin" class="btn btn-success me-2" target="_blank">
+        <a href="/phpmyadmin-signon.php" class="btn btn-success me-2" target="_blank">
             <i class="bi bi-box-arrow-up-right"></i> phpMyAdmin
         </a>
         <a href="/databases/create" class="btn btn-primary">
@@ -14,8 +14,7 @@
 
 <div class="alert alert-info">
     <i class="bi bi-info-circle"></i>
-    <strong>phpMyAdmin Access:</strong> Click the "phpMyAdmin" button above to access phpMyAdmin, a web-based database management tool. 
-    You can view, edit, and manage your MySQL databases through a user-friendly interface.
+    <strong>phpMyAdmin Access:</strong> Click the "phpMyAdmin" button above to access phpMyAdmin. You will be automatically logged in and can view, edit, and manage your MySQL databases through a user-friendly interface.
 </div>
 
 <div class="table-responsive">
@@ -48,7 +47,7 @@
                         <td><?= htmlspecialchars($db->ownerUsername ?? 'Unknown') ?></td>
                         <td><?= date('Y-m-d H:i', strtotime($db->createdAt)) ?></td>
                         <td>
-                            <a href="/phpmyadmin/index.php?db=<?= urlencode($db->name) ?>" 
+                            <a href="/phpmyadmin-signon.php?db=<?= urlencode($db->name) ?>" 
                                class="btn btn-sm btn-outline-primary" 
                                target="_blank"
                                title="Manage with phpMyAdmin">

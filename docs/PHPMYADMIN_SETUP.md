@@ -44,18 +44,25 @@ Access phpMyAdmin directly at: `http://your-server-ip:7080/phpmyadmin`
 
 1. **Navigate** to Databases page or click phpMyAdmin in the sidebar
 2. **Click** the phpMyAdmin button or a database's "Manage" link
-3. **Login** with your MySQL credentials:
-   - **Server**: localhost
-   - **Username**: Your database username (created when you set up the database)
-   - **Password**: Your database password
+3. **Automatic Login**: You'll be instantly logged in with full database access - no credentials needed!
 4. **Manage** your databases through the phpMyAdmin interface
+
+### Single Sign-On (SSO) Feature
+
+NovaPanel implements automatic login to phpMyAdmin:
+- **No password entry required** - your panel session automatically authenticates you
+- **Direct access** to all databases using the panel's MySQL credentials
+- **Seamless experience** - click and go, no additional login screens
 
 ## Security Considerations
 
-- phpMyAdmin requires authentication with valid MySQL credentials
+- **SSO Authentication**: phpMyAdmin uses single sign-on authentication via the panel session
+- **Panel Authentication Required**: Users must be logged into NovaPanel to access phpMyAdmin
+- **Automatic Credentials**: MySQL credentials are automatically provided from the panel's environment configuration
+- **Session-Based**: Uses NovaPanel's existing session management for security
+- **No Direct Access**: Direct phpMyAdmin access requires panel authentication first
 - Access is served through the same secure Nginx configuration as the panel
 - phpMyAdmin config file is protected with appropriate file permissions (644)
-- Cookie-based authentication is used for session management
 - No anonymous access is allowed
 
 ## Configuration
