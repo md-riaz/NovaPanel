@@ -258,9 +258,21 @@ class TerminalAdapter
         
         $info = json_decode(file_get_contents($sessionFile), true);
         
-        // Add URL for convenience
+        // Add URL for convenience using configured APP_URL
         if ($info) {
-            $info['url'] = "http://localhost:{$info['port']}";
+            // Get the base URL from config or construct from request
+            $config = require __DIR__ . '/../../../config/app.php';
+            $baseUrl = $config['url'] ?? 'http://localhost:7080';
+            
+            // Parse base URL to get protocol and host
+            $urlParts = parse_url($baseUrl);
+            $protocol = $urlParts['scheme'] ?? 'http';
+            $host = $urlParts['host'] ?? 'localhost';
+            $panelPort = $urlParts['port'] ?? 7080;
+            
+            // Build URL with embedded credentials for automatic authentication
+            $urlWithAuth = "{$protocol}://novapanel:{$info['token']}@{$host}:{$panelPort}/terminal-ws/{$info['port']}";
+            $info['url'] = $urlWithAuth;
         }
         
         return $info;
