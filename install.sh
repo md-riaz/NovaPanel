@@ -201,7 +201,7 @@ echo ""
 
 # Run database migration
 echo "Running database migration..."
-sudo -u novapanel php database/migration.php
+sudo -u novapanel php8.2 database/migration.php
 # Ensure database file is writable by www-data group
 if [ -f storage/panel.db ]; then
     chown novapanel:www-data storage/panel.db
@@ -340,7 +340,7 @@ ADMIN_USER="admin"
 ADMIN_EMAIL="admin@novapanel.com"
 ADMIN_PASS=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
 
-ADMIN_PASS_HASH=$(php -r "echo password_hash('$ADMIN_PASS', PASSWORD_DEFAULT);")
+ADMIN_PASS_HASH=$(php8.2 -r "echo password_hash('$ADMIN_PASS', PASSWORD_DEFAULT);")
 
 sudo -u novapanel sqlite3 storage/panel.db <<EOF
 INSERT INTO users (username, email, password) 
