@@ -69,11 +69,26 @@ class Shell implements ShellInterface
         $result = $this->run($fullCommand);
         
         // Check if sudo failed due to password requirement
-        if ($result['exitCode'] === 1 && str_contains($result['output'], 'password is required')) {
-            throw new \RuntimeException(
-                "Sudo requires a password. Please configure NOPASSWD in /etc/sudoers.d/novapanel as documented in SECURITY.md. " .
-                "Run: sudo visudo -f /etc/sudoers.d/novapanel and add the required NOPASSWD entries."
-            );
+        // sudo -n returns exit code 1 and outputs various error messages when password is required
+        if ($result['exitCode'] === 1) {
+            $output = strtolower($result['output']);
+            $passwordErrors = [
+                'password is required',
+                'a password is required',
+                'sudo: a password is required',
+                'sorry, a password is required',
+                'no password',
+                'password:' // Some versions output "password:" prompt even with -n
+            ];
+            
+            foreach ($passwordErrors as $errorPattern) {
+                if (str_contains($output, $errorPattern)) {
+                    throw new \RuntimeException(
+                        "Sudo requires a password. Please configure NOPASSWD in /etc/sudoers.d/novapanel as documented in SECURITY.md. " .
+                        "Run: sudo visudo -f /etc/sudoers.d/novapanel and add the required NOPASSWD entries."
+                    );
+                }
+            }
         }
         
         return $result;
