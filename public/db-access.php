@@ -38,51 +38,25 @@ $mysqlHost = getenv('MYSQL_HOST') ?: 'localhost';
 $mysqlUser = getenv('MYSQL_ROOT_USER') ?: 'root';
 $mysqlPassword = getenv('MYSQL_ROOT_PASSWORD') ?: '';
 
-// Auto-login plugin for Adminer
-// This allows seamless access without requiring users to enter credentials again
-function adminer_object() {
-    // Load Adminer plugin class
-    include_once __DIR__ . '/adminer.php';
-    
-    return new AdminerNovaPanel();
+// Selected database from URL parameter (sanitized)
+$selectedDb = null;
+if (isset($_GET['db']) && !empty($_GET['db'])) {
+    // Sanitize database name - alphanumeric, underscore, and dash only
+    if (preg_match('/^[a-zA-Z0-9_-]+$/', $_GET['db'])) {
+        $selectedDb = $_GET['db'];
+    }
 }
 
-class AdminerNovaPanel extends Adminer {
-    function name() {
-        return 'NovaPanel Database Manager';
-    }
-    
-    function credentials() {
-        // Auto-login with panel's MySQL credentials
-        global $mysqlHost, $mysqlUser, $mysqlPassword;
-        return array($mysqlHost, $mysqlUser, $mysqlPassword);
-    }
-    
-    function login($login, $password) {
-        // Always return true since we're using auto-login with panel credentials
-        return true;
-    }
-    
-    function database() {
-        // If a specific database is requested via URL parameter, select it
-        if (isset($_GET['db']) && !empty($_GET['db'])) {
-            return $_GET['db'];
-        }
-        // Otherwise allow access to all databases
-        return null;
-    }
-    
-    // Customize the appearance
-    function css() {
-        $css = parent::css();
-        return array_merge((array) $css, array('/assets/css/adminer-custom.css'));
-    }
-    
-    function permanentLogin() {
-        // Keep user logged in through Adminer sessions
-        return true;
-    }
-}
+// Auto-login for Adminer using credentials
+// Set server and credentials so Adminer auto-fills them
+$_GET['username'] = $mysqlUser;
+$_POST['auth'] = array(
+    'driver' => 'server',
+    'server' => $mysqlHost,
+    'username' => $mysqlUser,
+    'password' => $mysqlPassword,
+    'db' => $selectedDb
+);
 
 // Include Adminer
 include __DIR__ . '/adminer.php';
