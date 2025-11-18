@@ -20,9 +20,34 @@
             </tr>
         </thead>
         <tbody>
-            <tr>
-                <td colspan="6" class="text-center text-muted">No FTP users found</td>
-            </tr>
+                <?php if (!empty($ftpUsers)) {
+                    foreach ($ftpUsers as $ftpUser) {
+                ?>
+                        <tr>
+                            <td><?= htmlspecialchars($ftpUser->username) ?></td>
+                            <td><?= htmlspecialchars($ftpUser->ownerUsername ?? '') ?></td>
+                            <td><?= htmlspecialchars($ftpUser->homeDirectory) ?></td>
+                            <td>
+                                <?php if ($ftpUser->enabled) { ?>
+                                    <span class="badge bg-success">Enabled</span>
+                                <?php } else { ?>
+                                    <span class="badge bg-danger">Disabled</span>
+                                <?php } ?>
+                            </td>
+                            <td><?= htmlspecialchars($ftpUser->createdAt) ?></td>
+                            <td>
+                                <a href="/ftp/edit?id=<?= urlencode($ftpUser->id) ?>" class="btn btn-sm btn-secondary">Edit</a>
+                                <a href="/ftp/delete?id=<?= urlencode($ftpUser->id) ?>" class="btn btn-sm btn-danger" onclick="return confirm('Delete this FTP user?')">Delete</a>
+                            </td>
+                        </tr>
+                <?php
+                    }
+                } else {
+                ?>
+                    <tr>
+                        <td colspan="6" class="text-center text-muted">No FTP users found</td>
+                    </tr>
+                <?php } ?>
         </tbody>
     </table>
 </div>
