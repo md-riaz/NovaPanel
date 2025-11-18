@@ -7,10 +7,12 @@ namespace App\Support;
  * 
  * Centralized class for loading and accessing environment variables.
  * Ensures .env.php is loaded only once and provides clean access to env values.
+ * No need for getenv()/putenv() - directly manages configuration array.
  */
 class Env
 {
     private static bool $loaded = false;
+    private static array $values = [];
     
     /**
      * Load environment configuration from .env.php
@@ -25,7 +27,13 @@ class Env
         $envFile = self::getEnvFilePath();
         
         if (file_exists($envFile)) {
-            require_once $envFile;
+            $envConfig = require $envFile;
+            
+            // Support both array return and putenv() style for backward compatibility
+            if (is_array($envConfig)) {
+                self::$values = $envConfig;
+            }
+            
             self::$loaded = true;
         }
     }
@@ -42,14 +50,7 @@ class Env
         // Ensure env is loaded
         self::load();
         
-        $value = getenv($key);
-        
-        // getenv returns false if variable doesn't exist
-        if ($value === false) {
-            return $default;
-        }
-        
-        return $value;
+        return self::$values[$key] ?? $default;
     }
     
     /**
@@ -58,15 +59,24 @@ class Env
     public static function has(string $key): bool
     {
         self::load();
-        return getenv($key) !== false;
+        return isset(self::$values[$key]);
     }
     
     /**
      * Set an environment variable (mainly for testing)
      */
-    public static function set(string $key, string $value): void
+    public static function set(string $key, $value): void
     {
-        putenv("$key=$value");
+        self::$values[$key] = $value;
+    }
+    
+    /**
+     * Get all environment values
+     */
+    public static function all(): array
+    {
+        self::load();
+        return self::$values;
     }
     
     /**

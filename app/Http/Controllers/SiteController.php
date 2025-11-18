@@ -4,23 +4,18 @@ namespace App\Http\Controllers;
 
 use App\Http\Request;
 use App\Http\Response;
-use App\Repositories\SiteRepository;
-use App\Services\CreateSiteService;
-use App\Facades\WebServer;
-use App\Facades\PhpRuntime;
+use App\Facades\App;
 use App\Support\AuditLogger;
 
 class SiteController extends Controller
 {
     public function index(Request $request): Response
     {
-        $siteRepo = new SiteRepository();
-        $userRepo = new \App\Repositories\UserRepository();
-        $sites = $siteRepo->all();
+        $sites = App::sites()->all();
         
         // Load owner information for each site
         foreach ($sites as $site) {
-            $user = $userRepo->find($site->userId);
+            $user = App::users()->find($site->userId);
             $site->ownerUsername = $user ? $user->username : 'Unknown';
         }
         
@@ -32,8 +27,7 @@ class SiteController extends Controller
 
     public function create(Request $request): Response
     {
-        $userRepo = new \App\Repositories\UserRepository();
-        $users = $userRepo->all();
+        $users = App::users()->all();
         
         return $this->view('pages/sites/create', [
             'title' => 'Create Site',
@@ -49,13 +43,8 @@ class SiteController extends Controller
             $phpVersion = $request->post('php_version', '8.2');
             $sslEnabled = (bool) $request->post('ssl_enabled');
             
-            $service = new CreateSiteService(
-                new SiteRepository(),
-                new \App\Repositories\UserRepository(),
-                WebServer::getInstance(),
-                PhpRuntime::getInstance(),
-                new \App\Infrastructure\Shell\Shell()
-            );
+            // Use App facade to get service with all dependencies injected
+            $service = App::createSiteService();
             
             $site = $service->execute($userId, $domain, $phpVersion, $sslEnabled);
             

@@ -1,11 +1,13 @@
 <?php
 
+use App\Support\Env;
+
 return [
     'name' => 'NovaPanel',
     'version' => '1.0.0',
-    'env' => getenv('APP_ENV') ?: 'production',
-    'debug' => getenv('APP_DEBUG') === 'true',
-    'url' => getenv('APP_URL') ?: 'http://localhost:7080',
+    'env' => Env::get('APP_ENV', 'production'),
+    'debug' => Env::get('APP_DEBUG', 'false') === 'true',
+    'url' => Env::get('APP_URL', 'http://localhost:7080'),
     'timezone' => 'UTC',
     
     'session' => [
