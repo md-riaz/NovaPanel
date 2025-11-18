@@ -193,6 +193,22 @@ phpMyAdmin PHP files are processed by **PHP-FPM** (FastCGI Process Manager):
 - **Socket**: `/var/run/php/php8.2-fpm.sock`
 - **Config**: `/etc/php/8.2/fpm/pool.d/www.conf`
 
+## Verification
+
+After installation, you can verify the setup using the provided verification script:
+
+```bash
+sudo bash /opt/novapanel/scripts/verify-phpmyadmin.sh
+```
+
+This script checks:
+- ✅ Web server configuration (Nginx only, no Apache)
+- ✅ phpMyAdmin installation
+- ✅ Nginx configuration for phpMyAdmin
+- ✅ PHP-FPM setup
+- ✅ Port configuration
+- ✅ HTTP accessibility
+
 ## Access Methods
 
 Users can access phpMyAdmin through:

@@ -136,6 +136,20 @@ curl -I http://localhost:7080/phpmyadmin/
 
 ## Troubleshooting
 
+### Run the Verification Script
+
+The easiest way to verify your setup is to run the included verification script:
+
+```bash
+sudo bash /opt/novapanel/scripts/verify-phpmyadmin.sh
+```
+
+This will check:
+- Web server configuration (Nginx only)
+- phpMyAdmin installation
+- Nginx and PHP-FPM configuration
+- Port configuration and accessibility
+
 ### If you see Apache references:
 
 ```bash

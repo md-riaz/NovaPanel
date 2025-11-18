@@ -52,6 +52,15 @@ if [ "$OS" = "ubuntu" ]; then
     apt-get update -qq
 fi
 
+# Pre-configure phpMyAdmin to avoid interactive prompts
+# This tells the installer:
+# 1. Don't configure any web server automatically (we'll do it manually with Nginx)
+# 2. Don't configure database with dbconfig-common (we'll do it manually)
+echo "Preparing phpMyAdmin installation (non-interactive)..."
+export DEBIAN_FRONTEND=noninteractive
+debconf-set-selections <<< "phpmyadmin phpmyadmin/reconfigure-webserver multiselect"
+debconf-set-selections <<< "phpmyadmin phpmyadmin/dbconfig-install boolean false"
+
 # Install required packages
 apt-get install -y \
     nginx \
@@ -75,6 +84,9 @@ apt-get install -y \
     git \
     curl \
     unzip
+
+# Reset to normal mode
+unset DEBIAN_FRONTEND
 
 # Install ttyd for web terminal (optional but recommended)
 echo "Installing ttyd for web terminal..."
@@ -509,6 +521,9 @@ echo "Next steps:"
 echo "1. Review security settings in SECURITY.md"
 echo "2. Set up SSL certificate for port 7080 (optional)"
 echo "3. Configure firewall rules for production use"
+echo ""
+echo "To verify phpMyAdmin setup:"
+echo "  sudo bash $PANEL_DIR/scripts/verify-phpmyadmin.sh"
 echo ""
 echo "For support, visit: https://github.com/md-riaz/NovaPanel"
 echo "=========================================="
