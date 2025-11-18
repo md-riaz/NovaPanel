@@ -331,9 +331,14 @@ See [SECURITY.md](SECURITY.md) for detailed security documentation.
 - [SECURITY.md](SECURITY.md) - Security considerations
 
 ### Feature Documentation
-- [phpMyAdmin Nginx Implementation](docs/PHPMYADMIN_NGINX_IMPLEMENTATION.md) - How phpMyAdmin works with Nginx (no Apache)
-- [phpMyAdmin FAQ](docs/FAQ_PHPMYADMIN.md) - Common questions about phpMyAdmin and web servers
-- [phpMyAdmin Setup](docs/PHPMYADMIN_SETUP.md) - Installation and configuration guide
+
+#### phpMyAdmin (Nginx-Only Architecture)
+- **[Quick Start Guide](docs/PHPMYADMIN_QUICKSTART.md)** - ⚡ Fast overview with visual diagrams
+- [Nginx Implementation](docs/PHPMYADMIN_NGINX_IMPLEMENTATION.md) - Complete technical guide
+- [FAQ](docs/FAQ_PHPMYADMIN.md) - Common questions about Apache vs Nginx
+- [Setup Guide](docs/PHPMYADMIN_SETUP.md) - Installation and configuration
+
+#### Other Features
 - [Terminal Setup](docs/TERMINAL_NGINX_SETUP.md) - Web terminal configuration
 
 ## Roadmap
