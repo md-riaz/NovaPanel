@@ -30,8 +30,18 @@ class Database
     {
         if (self::$panelConnection === null) {
             $dbPath = __DIR__ . '/../../storage/panel.db';
+            $storageDir = dirname($dbPath);
+            
+            // Ensure storage directory exists
+            if (!is_dir($storageDir)) {
+                if (!mkdir($storageDir, 0755, true)) {
+                    throw new \RuntimeException("Failed to create storage directory: $storageDir");
+                }
+            }
             
             try {
+                // SQLite automatically creates the database file when connecting if it doesn't exist
+                // This means panel.db is created here on first connection (during migration)
                 self::$panelConnection = new PDO("sqlite:$dbPath");
                 self::$panelConnection->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
                 self::$panelConnection->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
