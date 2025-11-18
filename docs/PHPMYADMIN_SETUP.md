@@ -2,17 +2,20 @@
 
 ## Overview
 
-NovaPanel now includes **phpMyAdmin** integration, providing users with a familiar web-based interface to manage their MySQL databases directly from the panel.
+NovaPanel includes **phpMyAdmin** integration, providing users with a familiar web-based interface to manage their MySQL databases directly from the panel.
+
+**Important:** phpMyAdmin is served through **Nginx only** - no Apache web server is required or installed. This prevents port conflicts and simplifies the architecture.
 
 ## Features
 
+- **Nginx Only**: No Apache required - everything runs through Nginx
 - **Direct Access**: phpMyAdmin is accessible directly from the NovaPanel interface
 - **Convenient Links**: Access phpMyAdmin from:
   - Sidebar navigation
   - Databases page (top-right button)
   - Per-database "Manage" links
 - **Secure Access**: phpMyAdmin is served through the same Nginx server as the panel (port 7080)
-- **Standard Authentication**: Users login with their MySQL database credentials
+- **Single Sign-On (SSO)**: Automatic login with your NovaPanel session - no password entry needed
 
 ## Installation
 
@@ -23,10 +26,13 @@ sudo bash install.sh
 ```
 
 The installer will:
-1. Install phpMyAdmin package via apt-get
-2. Create phpMyAdmin configuration file
-3. Configure Nginx to serve phpMyAdmin at `/phpmyadmin`
-4. Set up proper permissions and security settings
+1. Install phpMyAdmin package via apt-get (PHP files only, no web server)
+2. Create phpMyAdmin configuration file with SSO enabled
+3. Configure Nginx to serve phpMyAdmin at `/phpmyadmin` 
+4. Set up PHP-FPM processing (no Apache mod_php)
+5. Configure proper permissions and security settings
+
+**Note:** During phpMyAdmin package installation, if asked to select a web server, choose **"None"** - NovaPanel configures Nginx manually for better integration.
 
 ## Access Points
 

@@ -106,8 +106,10 @@ echo ""
 
 # Configure phpMyAdmin
 echo "Configuring phpMyAdmin..."
+echo "Note: NovaPanel uses Nginx only (no Apache) for phpMyAdmin"
+echo "      phpMyAdmin will be served through Nginx on port 7080"
 # During phpMyAdmin installation, it asks for web server configuration
-# We'll configure it manually through Nginx instead
+# We'll configure it manually through Nginx instead (no Apache needed)
 # Create phpMyAdmin config directory if it doesn't exist
 mkdir -p /etc/phpmyadmin
 # Create a basic config file for phpMyAdmin with SSO (signon) authentication
@@ -487,6 +489,7 @@ echo "Features available:"
 echo "  • Site Management"
 echo "  • User Management"
 echo "  • Database Management"
+echo "  • phpMyAdmin (accessible at http://$SERVER_IP:7080/phpmyadmin/signon)"
 echo "  • DNS Management"
 echo "  • FTP Management"
 echo "  • Cron Jobs"
@@ -495,6 +498,12 @@ if command -v ttyd &> /dev/null; then
 else
     echo "  • Web Terminal (ttyd not installed - see panel for instructions)"
 fi
+echo ""
+echo "📌 Web Server Architecture:"
+echo "  • Nginx only (no Apache installed)"
+echo "  • phpMyAdmin served through Nginx on port 7080"
+echo "  • All sites use Nginx + PHP-FPM"
+echo "  • No web server port conflicts"
 echo ""
 echo "Next steps:"
 echo "1. Review security settings in SECURITY.md"

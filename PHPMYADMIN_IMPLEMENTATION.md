@@ -9,6 +9,8 @@ Users needed a way to access and manage their MySQL databases through a web inte
 
 Added full phpMyAdmin integration to NovaPanel, providing multiple convenient access points throughout the interface.
 
+**Important:** phpMyAdmin is served through **Nginx only** - no Apache web server is required or installed. See [FAQ_PHPMYADMIN.md](docs/FAQ_PHPMYADMIN.md) and [PHPMYADMIN_NGINX_IMPLEMENTATION.md](docs/PHPMYADMIN_NGINX_IMPLEMENTATION.md) for details.
+
 ## Changes Overview
 
 ### 1. Installation Script (`install.sh`)
@@ -27,9 +29,10 @@ Added full phpMyAdmin integration to NovaPanel, providing multiple convenient ac
 
 **Nginx Configuration**:
 - Added location block for `/phpmyadmin` path
-- Properly configured PHP-FPM processing for phpMyAdmin
-- Serves static assets (CSS, JS, images)
+- Properly configured PHP-FPM processing for phpMyAdmin (no Apache mod_php)
+- Serves static assets (CSS, JS, images) directly through Nginx
 - Integrated into main NovaPanel Nginx config on port 7080
+- **No Apache required** - uses Nginx + PHP-FPM architecture
 
 ### 2. User Interface Updates
 
