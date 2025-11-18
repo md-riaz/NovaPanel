@@ -1,22 +1,22 @@
 # phpMyAdmin SSO Architecture
 
-## Design Decision: Controller-Based Approach
+## Design Decision: Integration with DatabaseController
 
-### Why Use a Controller Instead of Standalone Script?
+### Why Add SSO Method to DatabaseController?
 
-The phpMyAdmin SSO implementation follows NovaPanel's MVC architecture pattern:
+The phpMyAdmin SSO implementation is integrated into the existing `DatabaseController` rather than creating a separate controller:
 
-**Before (Standalone Script):**
-- File: `public/phpmyadmin-signon.php`
-- Accessed directly via web server
-- Bypasses the router and middleware system
-- Inconsistent with rest of the application
+**Evolution:**
+1. **Initial (Standalone Script):** `public/phpmyadmin-signon.php` - Bypassed router, inconsistent
+2. **Interim (Separate Controller):** `PhpMyAdminController` - Better, but unnecessary separation
+3. **Final (Integrated Method):** `DatabaseController::phpMyAdminSignon()` - Best approach
 
-**After (Controller-Based):**
-- Controller: `App\Http\Controllers\PhpMyAdminController`
-- Route: `/phpmyadmin/signon`
-- Proper authentication via `AuthMiddleware`
-- Consistent with NovaPanel's architecture
+**Why Integrate with DatabaseController:**
+- phpMyAdmin is a database management tool - logically part of database operations
+- Avoids controller proliferation for single-purpose endpoints
+- Keeps related functionality together
+- Follows single responsibility at feature level, not method level
+- Consistent with NovaPanel's pragmatic architecture
 
 ### Benefits of Controller Approach:
 
@@ -32,17 +32,22 @@ The phpMyAdmin SSO implementation follows NovaPanel's MVC architecture pattern:
 
 **Route Definition (public/index.php):**
 ```php
-$router->get('/phpmyadmin/signon', PhpMyAdminController::class . '@signon', [AuthMiddleware::class]);
+// Database routes are grouped together
+$router->get('/databases', DatabaseController::class . '@index', [AuthMiddleware::class]);
+$router->get('/databases/create', DatabaseController::class . '@create', [AuthMiddleware::class]);
+$router->post('/databases', DatabaseController::class . '@store', [AuthMiddleware::class]);
+$router->post('/databases/{id}/delete', DatabaseController::class . '@delete', [AuthMiddleware::class]);
+$router->get('/phpmyadmin/signon', DatabaseController::class . '@phpMyAdminSignon', [AuthMiddleware::class]);
 ```
 
-**Controller Method:**
+**Controller Method (in DatabaseController):**
 ```php
-public function signon(Request $request): Response
+public function phpMyAdminSignon(Request $request): Response
 {
     // Load environment configuration
     // Get MySQL credentials
     // Set phpMyAdmin signon session
-    // Redirect to phpMyAdmin
+    // Redirect to phpMyAdmin with optional ?db= parameter
     return $this->redirect($redirectUrl);
 }
 ```
@@ -56,11 +61,19 @@ public function signon(Request $request): Response
 
 ### Files Modified:
 
-1. **Created**: `app/Http/Controllers/PhpMyAdminController.php`
-2. **Updated**: `public/index.php` (added route and import)
+1. **Updated**: `app/Http/Controllers/DatabaseController.php` (added phpMyAdminSignon method)
+2. **Updated**: `public/index.php` (added route using DatabaseController)
 3. **Updated**: `resources/views/pages/databases/index.php` (URL changed)
 4. **Updated**: `resources/views/partials/sidebar.php` (URL changed)
 5. **Updated**: `install.sh` (SignonURL in config)
 6. **Removed**: `public/phpmyadmin-signon.php` (old standalone script)
 
-This change ensures NovaPanel maintains a clean, consistent architecture throughout the application.
+### Benefits of This Approach:
+
+1. **Cohesion**: Database-related functionality stays together
+2. **Simplicity**: Fewer controllers to maintain
+3. **Discoverability**: Developers look in DatabaseController for database features
+4. **Consistency**: Similar to how other controllers handle related sub-features
+5. **Pragmatic**: Right-sized architecture - not over-engineered
+
+This ensures NovaPanel maintains a clean, practical architecture that balances separation of concerns with pragmatic code organization.
