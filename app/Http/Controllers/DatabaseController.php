@@ -4,9 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Request;
 use App\Http\Response;
-use App\Repositories\DatabaseRepository;
-use App\Repositories\UserRepository;
-use App\Services\CreateDatabaseService;
+use App\Facades\App;
 use App\Facades\DatabaseManager;
 use App\Support\AuditLogger;
 
@@ -14,13 +12,11 @@ class DatabaseController extends Controller
 {
     public function index(Request $request): Response
     {
-        $dbRepo = new DatabaseRepository();
-        $userRepo = new UserRepository();
-        $databases = $dbRepo->all();
+        $databases = App::databases()->all();
         
         // Load owner information for each database
         foreach ($databases as $db) {
-            $user = $userRepo->find($db->userId);
+            $user = App::users()->find($db->userId);
             $db->ownerUsername = $user ? $user->username : 'Unknown';
         }
         
@@ -32,8 +28,7 @@ class DatabaseController extends Controller
 
     public function create(Request $request): Response
     {
-        $userRepo = new UserRepository();
-        $users = $userRepo->all();
+        $users = App::users()->all();
         
         return $this->view('pages/databases/create', [
             'title' => 'Create Database',
@@ -50,12 +45,8 @@ class DatabaseController extends Controller
             $dbUsername = $request->post('db_username');
             $dbPassword = $request->post('db_password');
             
-            $service = new CreateDatabaseService(
-                new DatabaseRepository(),
-                new \App\Repositories\DatabaseUserRepository(),
-                new UserRepository(),
-                DatabaseManager::getInstance()
-            );
+            // Use App facade to get service with all dependencies injected
+            $service = App::createDatabaseService();
             
             $database = $service->execute(
                 userId: $userId,
@@ -91,8 +82,7 @@ class DatabaseController extends Controller
     public function delete(Request $request, int $id): Response
     {
         try {
-            $dbRepo = new DatabaseRepository();
-            $database = $dbRepo->find($id);
+            $database = App::databases()->find($id);
             
             if (!$database) {
                 throw new \Exception('Database not found');
@@ -108,7 +98,7 @@ class DatabaseController extends Controller
             DatabaseManager::getInstance()->deleteDatabase($database);
             
             // Delete from panel database
-            $dbRepo->delete($id);
+            App::databases()->delete($id);
             
             return $this->redirect('/databases');
             
@@ -125,16 +115,10 @@ class DatabaseController extends Controller
      */
     public function phpMyAdminSignon(Request $request): Response
     {
-        // Load environment configuration
-        $envFile = __DIR__ . '/../../../.env.php';
-        if (file_exists($envFile)) {
-            require_once $envFile;
-        }
-        
-        // Get MySQL credentials from environment
-        $mysqlHost = getenv('MYSQL_HOST') ?: 'localhost';
-        $mysqlUser = getenv('MYSQL_ROOT_USER') ?: 'root';
-        $mysqlPassword = getenv('MYSQL_ROOT_PASSWORD') ?: '';
+        // Get MySQL credentials from environment using Env facade
+        $mysqlHost = \App\Support\Env::get('MYSQL_HOST', 'localhost');
+        $mysqlUser = \App\Support\Env::get('MYSQL_ROOT_USER', 'root');
+        $mysqlPassword = \App\Support\Env::get('MYSQL_ROOT_PASSWORD', '');
         
         // Set phpMyAdmin signon session with MySQL credentials
         $_SESSION['novapanel_pma_signon'] = [

@@ -4,9 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Request;
 use App\Http\Response;
-use App\Repositories\FtpUserRepository;
-use App\Repositories\UserRepository;
-use App\Services\CreateFtpUserService;
+use App\Facades\App;
 use App\Facades\Ftp;
 use App\Support\AuditLogger;
 
@@ -14,13 +12,11 @@ class FtpController extends Controller
 {
     public function index(Request $request): Response
     {
-        $ftpRepo = new FtpUserRepository();
-        $userRepo = new UserRepository();
-        $ftpUsers = $ftpRepo->all();
+        $ftpUsers = App::ftpUsers()->all();
         
         // Load owner information for each FTP user
         foreach ($ftpUsers as $ftpUser) {
-            $user = $userRepo->find($ftpUser->userId);
+            $user = App::users()->find($ftpUser->userId);
             $ftpUser->ownerUsername = $user ? $user->username : 'Unknown';
         }
         
@@ -32,8 +28,7 @@ class FtpController extends Controller
 
     public function create(Request $request): Response
     {
-        $userRepo = new UserRepository();
-        $users = $userRepo->all();
+        $users = App::users()->all();
         
         return $this->view('pages/ftp/create', [
             'title' => 'Create FTP User',
@@ -49,11 +44,8 @@ class FtpController extends Controller
             $password = $request->post('password');
             $homeDirectory = $request->post('home_directory');
             
-            $service = new CreateFtpUserService(
-                new FtpUserRepository(),
-                new UserRepository(),
-                Ftp::getInstance()
-            );
+            // Use App facade to get service with all dependencies injected
+            $service = App::createFtpUserService();
             
             $ftpUser = $service->execute(
                 userId: $userId,
@@ -87,8 +79,7 @@ class FtpController extends Controller
     public function delete(Request $request, int $id): Response
     {
         try {
-            $ftpRepo = new FtpUserRepository();
-            $ftpUser = $ftpRepo->find($id);
+            $ftpUser = App::ftpUsers()->find($id);
             
             if (!$ftpUser) {
                 throw new \Exception('FTP user not found');
@@ -104,7 +95,7 @@ class FtpController extends Controller
             Ftp::getInstance()->deleteUser($ftpUser);
             
             // Delete from panel database
-            $ftpRepo->delete($id);
+            App::ftpUsers()->delete($id);
             
             return $this->redirect('/ftp');
             

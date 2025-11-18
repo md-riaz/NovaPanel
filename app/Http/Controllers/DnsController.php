@@ -4,10 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Request;
 use App\Http\Response;
-use App\Repositories\DomainRepository;
-use App\Repositories\DnsRecordRepository;
-use App\Repositories\SiteRepository;
-use App\Services\SetupDnsZoneService;
+use App\Facades\App;
 use App\Facades\Dns;
 use App\Domain\Entities\DnsRecord;
 use App\Support\AuditLogger;
@@ -16,13 +13,11 @@ class DnsController extends Controller
 {
     public function index(Request $request): Response
     {
-        $domainRepo = new DomainRepository();
-        $siteRepo = new SiteRepository();
-        $domains = $domainRepo->all();
+        $domains = App::domains()->all();
         
         // Load site information for each domain
         foreach ($domains as $domain) {
-            $site = $siteRepo->find($domain->siteId);
+            $site = App::sites()->find($domain->siteId);
             $domain->siteDomain = $site ? $site->domain : 'Unknown';
         }
         
@@ -34,16 +29,13 @@ class DnsController extends Controller
 
     public function show(Request $request, int $id): Response
     {
-        $domainRepo = new DomainRepository();
-        $dnsRecordRepo = new DnsRecordRepository();
-        
-        $domain = $domainRepo->find($id);
+        $domain = App::domains()->find($id);
         
         if (!$domain) {
             return new Response('Domain not found', 404);
         }
         
-        $records = $dnsRecordRepo->findByDomainId($id);
+        $records = App::dnsRecords()->findByDomainId($id);
         
         return $this->view('pages/dns/show', [
             'title' => 'DNS Records - ' . $domain->name,
@@ -54,8 +46,7 @@ class DnsController extends Controller
 
     public function create(Request $request): Response
     {
-        $siteRepo = new SiteRepository();
-        $sites = $siteRepo->all();
+        $sites = App::sites()->all();
         
         return $this->view('pages/dns/create', [
             'title' => 'Create DNS Zone',
@@ -70,12 +61,8 @@ class DnsController extends Controller
             $domainName = $request->post('domain_name');
             $serverIp = $request->post('server_ip');
             
-            $service = new SetupDnsZoneService(
-                new DomainRepository(),
-                new DnsRecordRepository(),
-                new SiteRepository(),
-                Dns::getInstance()
-            );
+            // Use App facade to get service with all dependencies injected
+            $service = App::setupDnsZoneService();
             
             $domain = $service->execute(
                 siteId: $siteId,
@@ -108,8 +95,6 @@ class DnsController extends Controller
     public function addRecord(Request $request, int $domainId): Response
     {
         try {
-            $dnsRecordRepo = new DnsRecordRepository();
-            
             $record = new DnsRecord(
                 domainId: $domainId,
                 name: $request->post('name'),
@@ -119,7 +104,7 @@ class DnsController extends Controller
                 priority: $request->post('priority') ? (int) $request->post('priority') : null
             );
             
-            $record = $dnsRecordRepo->create($record);
+            $record = App::dnsRecords()->create($record);
             
             // Add to BIND9
             Dns::getInstance()->addRecord($record);
@@ -141,8 +126,7 @@ class DnsController extends Controller
     public function deleteRecord(Request $request, int $domainId, int $recordId): Response
     {
         try {
-            $dnsRecordRepo = new DnsRecordRepository();
-            $record = $dnsRecordRepo->find($recordId);
+            $record = App::dnsRecords()->find($recordId);
             
             if (!$record) {
                 throw new \Exception('DNS record not found');
@@ -159,7 +143,7 @@ class DnsController extends Controller
             Dns::getInstance()->deleteRecord($record);
             
             // Delete from panel database
-            $dnsRecordRepo->delete($recordId);
+            App::dnsRecords()->delete($recordId);
             
             return $this->redirect("/dns/{$domainId}");
             

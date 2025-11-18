@@ -4,7 +4,7 @@ namespace App\Facades;
 
 use App\Contracts\DnsManagerInterface;
 use App\Infrastructure\Adapters\BindAdapter;
-use App\Infrastructure\Adapters\TerminalAdapter;
+use App\Infrastructure\Shell\Shell;
 use App\Support\Config;
 
 class Dns
@@ -18,7 +18,7 @@ class Dns
             Config::load('database');
             
             // Initialize BindAdapter with shell interface
-            $shell = new TerminalAdapter();
+            $shell = new Shell();
             
             self::$instance = new BindAdapter(
                 shell: $shell,

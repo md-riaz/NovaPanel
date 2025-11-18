@@ -4,10 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Request;
 use App\Http\Response;
-use App\Repositories\SiteRepository;
-use App\Repositories\UserRepository;
-use App\Repositories\DatabaseRepository;
-use App\Repositories\FtpUserRepository;
+use App\Facades\App;
 
 class DashboardController extends Controller
 {
@@ -35,19 +32,14 @@ class DashboardController extends Controller
 
     private function getStats(): array
     {
-        $userRepo = new UserRepository();
-        $siteRepo = new SiteRepository();
-        $databaseRepo = new DatabaseRepository();
-        $ftpUserRepo = new FtpUserRepository();
-        
-        $users = $userRepo->all();
-        $sites = $siteRepo->all();
+        $users = App::users()->all();
+        $sites = App::sites()->all();
         
         return [
             'accounts' => count($users),
             'sites' => count($sites),
-            'databases' => $databaseRepo->count(),
-            'ftp_users' => $ftpUserRepo->count()
+            'databases' => App::databases()->count(),
+            'ftp_users' => App::ftpUsers()->count()
         ];
     }
 }

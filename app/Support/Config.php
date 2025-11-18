@@ -11,6 +11,9 @@ class Config
      */
     public static function load(string $name): void
     {
+        // Ensure environment is loaded before loading config files
+        Env::load();
+        
         $path = __DIR__ . '/../../config/' . $name . '.php';
         
         if (!file_exists($path)) {
