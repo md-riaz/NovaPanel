@@ -12,6 +12,12 @@
     </div>
 </div>
 
+<div class="alert alert-info" role="alert">
+    <i class="bi bi-info-circle"></i>
+    <strong>Database Management:</strong> Use the <strong>Database Manager</strong> button above to access phpMyAdmin-like interface for managing your MySQL databases. 
+    You can browse tables, execute queries, import/export data, and more. Or click <strong>Access</strong> next to any database to open it directly.
+</div>
+
 <div class="table-responsive">
     <table class="table table-striped table-hover">
         <thead>
