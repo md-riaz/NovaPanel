@@ -116,6 +116,30 @@ fi
 echo "✓ Dependencies installed"
 echo ""
 
+# Create dedicated PHP-FPM pool for NovaPanel
+PHP_FPM_POOL_CONF="/etc/php/8.2/fpm/pool.d/novapanel.conf"
+if [ ! -f "$PHP_FPM_POOL_CONF" ]; then
+    echo "Creating PHP-FPM pool for NovaPanel..."
+    cat > "$PHP_FPM_POOL_CONF" <<EOF
+[novaPanel]
+user = novapanel
+group = www-data
+listen = /var/run/php/php8.2-fpm-novapanel.sock
+pm = dynamic
+pm.max_children = 10
+pm.start_servers = 2
+pm.min_spare_servers = 1
+pm.max_spare_servers = 3
+chdir = /
+catch_workers_output = yes
+php_admin_value[open_basedir] = /opt/novapanel/:/usr/share/phpmyadmin/:/tmp/:/etc/nginx/:/etc/php/:/var/run/php/:/usr/bin/:/bin/
+EOF
+    systemctl restart php8.2-fpm
+    echo "✓ PHP-FPM pool created and restarted"
+else
+    echo "✓ PHP-FPM pool for NovaPanel already exists"
+fi
+
 # Configure phpMyAdmin
 echo "Configuring phpMyAdmin..."
 echo "Note: NovaPanel uses Nginx only (no Apache) for phpMyAdmin"
