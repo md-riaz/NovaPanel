@@ -41,9 +41,8 @@ Limited sudo access is granted only for essential system operations. The sudoers
 
 ```
 # /etc/sudoers.d/novapanel
-novapanel ALL=(ALL) NOPASSWD: /usr/sbin/useradd
-novapanel ALL=(ALL) NOPASSWD: /usr/sbin/usermod
-novapanel ALL=(ALL) NOPASSWD: /usr/sbin/userdel
+# Single VPS Model: Only ONE Linux user (novapanel) exists
+# No user creation/modification/deletion commands allowed (useradd/usermod/userdel)
 novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload nginx
 novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload php*-fpm
 novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload bind9
@@ -65,6 +64,8 @@ novapanel ALL=(ALL) NOPASSWD: /bin/bash
 
 **Note:** This configuration is automatically created by the `install.sh` script. Only manual configuration is needed if you're performing a manual installation or if you need to update an existing installation.
 
+**Important:** NovaPanel follows a **Single VPS Model** where only ONE Linux system user (`novapanel`) exists. Panel users are database records only, not Linux system accounts. Therefore, user management commands (useradd, usermod, userdel) are intentionally excluded from the sudoers configuration and are never used by the panel.
+
 ## Shell Command Security
 
 ### Command Whitelisting
@@ -73,13 +74,16 @@ All shell commands are validated against a whitelist before execution. See `app/
 **Allowed Commands:**
 - nginx
 - systemctl
-- useradd, usermod, userdel
 - mkdir, chown, chmod
 - ln, rm, cp, mv
 - crontab
 - mysql, psql
-- pure-pw
+- pure-pw (for FTP virtual users)
 - named-checkzone, named-checkconf (for BIND9 zone validation)
+- bash
+
+**Explicitly Disallowed Commands:**
+- useradd, usermod, userdel (not needed in single-user model)
 
 ### Argument Escaping
 All command arguments are automatically escaped using `escapeshellarg()` to prevent shell injection attacks.
