@@ -520,18 +520,13 @@ TEXT;
      */
     private function findAvailablePort(int $userId): int
     {
-        // Try preferred port first (basePort + userId)
-        $preferredPort = $this->basePort + $userId;
+        // Scan through the port range to find an available port
+        // Do NOT use userId in calculation as it can be any number (e.g., 200, 1000)
+        // which would result in invalid or out-of-range ports
         
-        if ($this->isPortAvailable($preferredPort)) {
-            return $preferredPort;
-        }
-        
-        // If preferred port is unavailable, try to find an alternative
-        // Search in a range of 100 ports
+        // Search in a range of 100 ports starting from basePort
         for ($port = $this->basePort; $port < $this->basePort + 100; $port++) {
             if ($this->isPortAvailable($port)) {
-                error_log("User {$userId}: preferred port {$preferredPort} unavailable, using {$port}");
                 return $port;
             }
         }
