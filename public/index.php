@@ -21,6 +21,7 @@ use App\Http\Controllers\SiteController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\TerminalController;
 use App\Http\Controllers\DatabaseController;
+use App\Http\Controllers\PhpMyAdminController;
 use App\Http\Controllers\FtpController;
 use App\Http\Controllers\CronController;
 use App\Http\Controllers\DnsController;
@@ -57,6 +58,9 @@ $router->get('/databases', DatabaseController::class . '@index', [AuthMiddleware
 $router->get('/databases/create', DatabaseController::class . '@create', [AuthMiddleware::class]);
 $router->post('/databases', DatabaseController::class . '@store', [AuthMiddleware::class]);
 $router->post('/databases/{id}/delete', DatabaseController::class . '@delete', [AuthMiddleware::class]);
+
+// phpMyAdmin SSO route
+$router->get('/phpmyadmin/signon', PhpMyAdminController::class . '@signon', [AuthMiddleware::class]);
 
 // FTP routes
 $router->get('/ftp', FtpController::class . '@index', [AuthMiddleware::class]);

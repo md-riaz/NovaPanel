@@ -123,7 +123,7 @@ if [ ! -f /etc/phpmyadmin/config.inc.php ]; then
 /* Use signon authentication for automatic login from NovaPanel */
 \$cfg['Servers'][\$i]['auth_type'] = 'signon';
 \$cfg['Servers'][\$i]['SignonSession'] = 'novapanel_pma_signon';
-\$cfg['Servers'][\$i]['SignonURL'] = '/phpmyadmin-signon.php';
+\$cfg['Servers'][\$i]['SignonURL'] = '/phpmyadmin/signon';
 \$cfg['Servers'][\$i]['LogoutURL'] = '/dashboard';
 \$cfg['Servers'][\$i]['host'] = 'localhost';
 \$cfg['Servers'][\$i]['compress'] = false;

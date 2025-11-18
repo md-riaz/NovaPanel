@@ -32,7 +32,7 @@
                 </a>
             </li>
             <li class="nav-item">
-                <a class="nav-link" href="/phpmyadmin-signon.php" target="_blank">
+                <a class="nav-link" href="/phpmyadmin/signon" target="_blank">
                     <i class="bi bi-server"></i> phpMyAdmin
                 </a>
             </li>
