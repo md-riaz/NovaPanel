@@ -308,6 +308,31 @@ php -S localhost:8000
 
 See [AGENTS.md](AGENTS.md) for the AI agent responsibility map.
 
+## Troubleshooting
+
+### Sudo Password Errors
+
+If you encounter errors like "Sudo requires a password" when creating sites or performing system operations:
+
+**Quick Fix:**
+```bash
+sudo bash /opt/novapanel/scripts/setup-sudoers.sh
+```
+
+This script will automatically configure sudo with NOPASSWD for the novapanel user.
+
+**Alternative:** Run the full installation script if you haven't done so:
+```bash
+sudo bash /opt/novapanel/install.sh
+```
+
+**Manual Configuration:** Edit the sudoers file:
+```bash
+sudo visudo -f /etc/sudoers.d/novapanel
+```
+
+See [SECURITY.md](SECURITY.md) for the required sudoers configuration.
+
 ## Security
 
 NovaPanel takes security seriously:
