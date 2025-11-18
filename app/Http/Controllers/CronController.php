@@ -4,9 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Request;
 use App\Http\Response;
-use App\Repositories\CronJobRepository;
-use App\Repositories\UserRepository;
-use App\Services\AddCronJobService;
+use App\Facades\App;
 use App\Facades\Cron;
 use App\Support\AuditLogger;
 
@@ -14,13 +12,11 @@ class CronController extends Controller
 {
     public function index(Request $request): Response
     {
-        $cronRepo = new CronJobRepository();
-        $userRepo = new UserRepository();
-        $cronJobs = $cronRepo->all();
+        $cronJobs = App::cronJobs()->all();
         
         // Load owner information for each cron job
         foreach ($cronJobs as $cronJob) {
-            $user = $userRepo->find($cronJob->userId);
+            $user = App::users()->find($cronJob->userId);
             $cronJob->ownerUsername = $user ? $user->username : 'Unknown';
         }
         
@@ -32,8 +28,7 @@ class CronController extends Controller
 
     public function create(Request $request): Response
     {
-        $userRepo = new UserRepository();
-        $users = $userRepo->all();
+        $users = App::users()->all();
         
         return $this->view('pages/cron/create', [
             'title' => 'Add Cron Job',
@@ -49,11 +44,8 @@ class CronController extends Controller
             $command = $request->post('command');
             $enabled = (bool) $request->post('enabled', true);
             
-            $service = new AddCronJobService(
-                new CronJobRepository(),
-                new UserRepository(),
-                Cron::getInstance()
-            );
+            // Use App facade to get service with all dependencies injected
+            $service = App::addCronJobService();
             
             $cronJob = $service->execute(
                 userId: $userId,
@@ -88,17 +80,14 @@ class CronController extends Controller
     public function delete(Request $request, int $id): Response
     {
         try {
-            $cronRepo = new CronJobRepository();
-            $userRepo = new UserRepository();
-            
-            $cronJob = $cronRepo->find($id);
+            $cronJob = App::cronJobs()->find($id);
             
             if (!$cronJob) {
                 throw new \Exception('Cron job not found');
             }
             
             // Get user for cron manager
-            $user = $userRepo->find($cronJob->userId);
+            $user = App::users()->find($cronJob->userId);
             if (!$user) {
                 throw new \Exception('User not found');
             }
@@ -113,7 +102,7 @@ class CronController extends Controller
             Cron::getInstance()->deleteJob($user, $cronJob);
             
             // Delete from panel database
-            $cronRepo->delete($id);
+            App::cronJobs()->delete($id);
             
             return $this->redirect('/cron');
             

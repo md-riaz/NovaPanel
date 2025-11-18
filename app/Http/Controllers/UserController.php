@@ -4,8 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Request;
 use App\Http\Response;
-use App\Repositories\UserRepository;
-use App\Repositories\RoleRepository;
+use App\Facades\App;
 use App\Domain\Entities\User;
 use App\Support\AuditLogger;
 
@@ -13,8 +12,8 @@ class UserController extends Controller
 {
     public function index(Request $request): Response
     {
-        $userRepo = new UserRepository();
-        $roleRepo = new RoleRepository();
+        $userRepo = App::users();
+        $roleRepo = App::roles();
         $users = $userRepo->all();
         
         // Get roles for each user
@@ -30,7 +29,7 @@ class UserController extends Controller
 
     public function create(Request $request): Response
     {
-        $roleRepo = new RoleRepository();
+        $roleRepo = App::roles();
         $roles = $roleRepo->all();
         
         return $this->view('pages/users/create', [
@@ -74,8 +73,8 @@ class UserController extends Controller
                 throw new \Exception('Password and password confirmation do not match');
             }
             
-            $userRepo = new UserRepository();
-            $roleRepo = new RoleRepository();
+            $userRepo = App::users();
+            $roleRepo = App::roles();
             
             // Check if username or email already exists
             if ($userRepo->findByUsername($username)) {
@@ -126,8 +125,8 @@ class UserController extends Controller
 
     public function edit(Request $request, int $id): Response
     {
-        $userRepo = new UserRepository();
-        $roleRepo = new RoleRepository();
+        $userRepo = App::users();
+        $roleRepo = App::roles();
         
         $user = $userRepo->find($id);
         if (!$user) {
@@ -147,8 +146,8 @@ class UserController extends Controller
     public function update(Request $request, int $id): Response
     {
         try {
-            $userRepo = new UserRepository();
-            $roleRepo = new RoleRepository();
+            $userRepo = App::users();
+            $roleRepo = App::roles();
             
             $user = $userRepo->find($id);
             if (!$user) {
@@ -238,7 +237,7 @@ class UserController extends Controller
     public function delete(Request $request, int $id): Response
     {
         try {
-            $userRepo = new UserRepository();
+            $userRepo = App::users();
             $user = $userRepo->find($id);
             
             if (!$user) {

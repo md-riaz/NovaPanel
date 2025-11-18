@@ -5,7 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Request;
 use App\Http\Response;
 use App\Http\Session;
-use App\Repositories\UserRepository;
+use App\Facades\App;
 use App\Support\RateLimiter;
 use App\Support\CSRF;
 
@@ -56,8 +56,7 @@ class AuthController extends Controller
             }
             
             // Find user
-            $userRepo = new UserRepository();
-            $user = $userRepo->findByUsername($username);
+            $user = App::users()->findByUsername($username);
             
             if (!$user) {
                 // Increment rate limit counter on failed attempt

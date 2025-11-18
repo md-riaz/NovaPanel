@@ -10,6 +10,7 @@ use App\Repositories\FtpUserRepository;
 use App\Repositories\CronJobRepository;
 use App\Repositories\DomainRepository;
 use App\Repositories\DnsRecordRepository;
+use App\Repositories\RoleRepository;
 use App\Services\CreateSiteService;
 use App\Services\CreateDatabaseService;
 use App\Services\CreateFtpUserService;
@@ -38,6 +39,7 @@ class App
     private static ?CronJobRepository $cronJobRepository = null;
     private static ?DomainRepository $domainRepository = null;
     private static ?DnsRecordRepository $dnsRecordRepository = null;
+    private static ?RoleRepository $roleRepository = null;
     private static ?Shell $shell = null;
 
     /**
@@ -126,6 +128,17 @@ class App
             self::$dnsRecordRepository = new DnsRecordRepository();
         }
         return self::$dnsRecordRepository;
+    }
+
+    /**
+     * Get RoleRepository instance
+     */
+    public static function roles(): RoleRepository
+    {
+        if (self::$roleRepository === null) {
+            self::$roleRepository = new RoleRepository();
+        }
+        return self::$roleRepository;
     }
 
     /**
