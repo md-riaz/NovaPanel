@@ -83,10 +83,23 @@ class Shell implements ShellInterface
             
             foreach ($passwordErrors as $errorPattern) {
                 if (str_contains($output, $errorPattern)) {
-                    throw new \RuntimeException(
-                        "Sudo requires a password. Please configure NOPASSWD in /etc/sudoers.d/novapanel as documented in SECURITY.md. " .
-                        "Run: sudo visudo -f /etc/sudoers.d/novapanel and add the required NOPASSWD entries."
-                    );
+                    // Try to provide a helpful solution
+                    $panelDir = dirname(__DIR__, 3);
+                    $setupScript = "{$panelDir}/scripts/setup-sudoers.sh";
+                    
+                    $message = "Sudo configuration is missing or incomplete. NovaPanel requires NOPASSWD sudo access.\n\n";
+                    
+                    if (file_exists($setupScript)) {
+                        $message .= "🔧 QUICK FIX: Run this command to automatically configure sudo:\n";
+                        $message .= "   sudo bash {$setupScript}\n\n";
+                    }
+                    
+                    $message .= "Or manually configure /etc/sudoers.d/novapanel as documented in SECURITY.md:\n";
+                    $message .= "   sudo visudo -f /etc/sudoers.d/novapanel\n\n";
+                    $message .= "If you haven't installed NovaPanel yet, please run the installation script:\n";
+                    $message .= "   sudo bash {$panelDir}/install.sh";
+                    
+                    throw new \RuntimeException($message);
                 }
             }
         }
