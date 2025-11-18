@@ -68,6 +68,7 @@ apt-get install -y \
     composer \
     sqlite3 \
     mysql-server \
+    phpmyadmin \
     pure-ftpd \
     bind9 \
     bind9utils \
@@ -101,6 +102,44 @@ else
 fi
 
 echo "✓ Dependencies installed"
+echo ""
+
+# Configure phpMyAdmin
+echo "Configuring phpMyAdmin..."
+# During phpMyAdmin installation, it asks for web server configuration
+# We'll configure it manually through Nginx instead
+# Create phpMyAdmin config directory if it doesn't exist
+mkdir -p /etc/phpmyadmin
+# Create a basic config file for phpMyAdmin with SSO (signon) authentication
+if [ ! -f /etc/phpmyadmin/config.inc.php ]; then
+    # Generate a secure blowfish secret
+    BLOWFISH_SECRET=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    cat > /etc/phpmyadmin/config.inc.php <<PMAEOF
+<?php
+/* phpMyAdmin configuration for NovaPanel - SSO enabled */
+\$cfg['blowfish_secret'] = '${BLOWFISH_SECRET}';
+\$i = 0;
+\$i++;
+/* Use signon authentication for automatic login from NovaPanel */
+\$cfg['Servers'][\$i]['auth_type'] = 'signon';
+\$cfg['Servers'][\$i]['SignonSession'] = 'novapanel_pma_signon';
+\$cfg['Servers'][\$i]['SignonURL'] = '/phpmyadmin/signon';
+\$cfg['Servers'][\$i]['LogoutURL'] = '/dashboard';
+\$cfg['Servers'][\$i]['host'] = 'localhost';
+\$cfg['Servers'][\$i]['compress'] = false;
+\$cfg['Servers'][\$i]['AllowNoPassword'] = false;
+\$cfg['UploadDir'] = '';
+\$cfg['SaveDir'] = '';
+PMAEOF
+    chmod 644 /etc/phpmyadmin/config.inc.php
+fi
+# Ensure phpMyAdmin can use the config
+if [ -d /usr/share/phpmyadmin ]; then
+    ln -sf /etc/phpmyadmin/config.inc.php /usr/share/phpmyadmin/config.inc.php 2>/dev/null || true
+    echo "✓ phpMyAdmin configured"
+else
+    echo "⚠ Warning: phpMyAdmin directory not found. It will be installed during apt-get install."
+fi
 echo ""
 
 # Configure Pure-FTPd
@@ -364,6 +403,24 @@ server {
 
     location / {
         try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+
+    # phpMyAdmin location
+    location /phpmyadmin {
+        alias /usr/share/phpmyadmin;
+        index index.php;
+
+        location ~ ^/phpmyadmin/(.+\.php)$ {
+            alias /usr/share/phpmyadmin/\$1;
+            fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
+            fastcgi_index index.php;
+            fastcgi_param SCRIPT_FILENAME \$request_filename;
+            include fastcgi_params;
+        }
+
+        location ~* ^/phpmyadmin/(.+\.(jpg|jpeg|gif|css|png|js|ico|html|xml|txt))$ {
+            alias /usr/share/phpmyadmin/\$1;
+        }
     }
 
     location ~ \.php$ {

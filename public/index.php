@@ -57,6 +57,7 @@ $router->get('/databases', DatabaseController::class . '@index', [AuthMiddleware
 $router->get('/databases/create', DatabaseController::class . '@create', [AuthMiddleware::class]);
 $router->post('/databases', DatabaseController::class . '@store', [AuthMiddleware::class]);
 $router->post('/databases/{id}/delete', DatabaseController::class . '@delete', [AuthMiddleware::class]);
+$router->get('/phpmyadmin/signon', DatabaseController::class . '@phpMyAdminSignon', [AuthMiddleware::class]);
 
 // FTP routes
 $router->get('/ftp', FtpController::class . '@index', [AuthMiddleware::class]);

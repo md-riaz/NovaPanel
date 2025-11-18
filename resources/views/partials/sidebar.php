@@ -32,6 +32,11 @@
                 </a>
             </li>
             <li class="nav-item">
+                <a class="nav-link" href="/phpmyadmin/signon" target="_blank">
+                    <i class="bi bi-server"></i> phpMyAdmin
+                </a>
+            </li>
+            <li class="nav-item">
                 <a class="nav-link" href="/cron">
                     <i class="bi bi-clock"></i> Cron Jobs
                 </a>
