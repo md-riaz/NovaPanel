@@ -319,9 +319,8 @@ echo ""
 # Set up sudoers
 echo "Configuring sudo permissions..."
 cat > /etc/sudoers.d/novapanel <<'EOF'
-novapanel ALL=(ALL) NOPASSWD: /usr/sbin/useradd
-novapanel ALL=(ALL) NOPASSWD: /usr/sbin/usermod
-novapanel ALL=(ALL) NOPASSWD: /usr/sbin/userdel
+# Single VPS Model: Only ONE Linux user (novapanel) exists
+# No user creation/modification/deletion commands allowed (useradd/usermod/userdel)
 novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload nginx
 novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload php*-fpm
 novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload bind9
