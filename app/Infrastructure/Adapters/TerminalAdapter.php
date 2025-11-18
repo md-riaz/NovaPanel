@@ -50,8 +50,8 @@ class TerminalAdapter
             return $this->getSessionInfo($userId);
         }
         
-        // Generate unique port and token for this session
-        $port = $this->basePort + $userId;
+        // Find an available port
+        $port = $this->findAvailablePort($userId);
         $token = bin2hex(random_bytes(16));
         
         // Store session info
@@ -141,10 +141,15 @@ class TerminalAdapter
         $host = $urlParts['host'] ?? 'localhost';
         $panelPort = $urlParts['port'] ?? 7080;
         
+        // Build URL with embedded credentials for automatic authentication
+        // Format: protocol://username:password@host:port/path
+        // This allows seamless terminal access without user login prompts
+        $urlWithAuth = "{$protocol}://novapanel:{$token}@{$host}:{$panelPort}/terminal-ws/{$port}";
+        
         return [
             'port' => $port,
             'token' => $token,
-            'url' => "{$protocol}://{$host}:{$panelPort}/terminal-ws/{$port}"
+            'url' => $urlWithAuth
         ];
     }
     
@@ -165,14 +170,50 @@ class TerminalAdapter
         
         $pid = trim(file_get_contents($pidFile));
         
-        // Kill the process
+        // Kill the process with verification
         if ($this->isProcessRunning($pid)) {
-            posix_kill((int)$pid, SIGTERM);
+            // Try graceful shutdown first
+            @posix_kill((int)$pid, SIGTERM);
             
-            // Wait a moment, then force kill if still running
-            sleep(1);
+            // Wait and verify
+            usleep(500000); // 0.5 seconds
+            
             if ($this->isProcessRunning($pid)) {
-                posix_kill((int)$pid, SIGKILL);
+                // Force kill if still running
+                @posix_kill((int)$pid, SIGKILL);
+                
+                // Wait and verify again
+                usleep(500000); // 0.5 seconds
+                
+                // If STILL running, log error and try shell command
+                if ($this->isProcessRunning($pid)) {
+                    error_log("Failed to kill ttyd process {$pid} for user {$userId}, trying shell command");
+                    try {
+                        $this->shell->execute('kill', ['-9', $pid]);
+                        usleep(200000); // Wait 0.2 seconds
+                    } catch (\Exception $e) {
+                        error_log("Shell kill also failed for PID {$pid}: " . $e->getMessage());
+                    }
+                }
+            }
+        }
+        
+        // Get session info for port cleanup
+        $sessionInfo = $this->getSessionInfo($userId);
+        
+        // Wait for port to be released
+        if ($sessionInfo && isset($sessionInfo['port'])) {
+            $port = $sessionInfo['port'];
+            $maxWait = 5; // seconds
+            $waited = 0;
+            
+            while (!$this->isPortAvailable($port) && $waited < $maxWait) {
+                usleep(500000); // 0.5 seconds
+                $waited += 0.5;
+            }
+            
+            if (!$this->isPortAvailable($port)) {
+                error_log("Warning: Port {$port} still in use after stopping session for user {$userId}");
             }
         }
         
@@ -274,7 +315,7 @@ class TerminalAdapter
     public function isTtydInstalled(): bool
     {
         $result = shell_exec('which ttyd 2>/dev/null');
-        return !empty(trim($result));
+        return !empty(trim($result ?? ''));
     }
     
     /**
@@ -316,7 +357,8 @@ TEXT;
             'user_id' => $userId,
             'port' => $port,
             'token' => $token,
-            'created_at' => time()
+            'created_at' => time(),
+            'last_activity' => time()
         ];
         
         if (@file_put_contents(
@@ -325,6 +367,114 @@ TEXT;
         ) === false) {
             error_log("Warning: Failed to save terminal session info for user {$userId}");
         }
+    }
+    
+    /**
+     * Update last activity timestamp for a session
+     * This should be called periodically to track active sessions
+     * 
+     * @param int $userId The panel user ID
+     */
+    public function updateSessionActivity(int $userId): void
+    {
+        $sessionFile = $this->pidDir . '/' . $userId . '.json';
+        
+        if (!file_exists($sessionFile)) {
+            return;
+        }
+        
+        $content = @file_get_contents($sessionFile);
+        if ($content === false) {
+            return;
+        }
+        
+        $info = json_decode($content, true);
+        if (!$info) {
+            return;
+        }
+        
+        $info['last_activity'] = time();
+        
+        @file_put_contents(
+            $sessionFile,
+            json_encode($info, JSON_PRETTY_PRINT)
+        );
+    }
+    
+    /**
+     * Clean up stale terminal sessions (idle for more than specified time)
+     * Should be called periodically by a cron job or maintenance script
+     * 
+     * A session is considered stale if:
+     * 1. The process is not running anymore (PID file exists but process is dead), OR
+     * 2. The session has been inactive (no activity updates) for longer than maxIdleSeconds
+     * 
+     * Active sessions (where process is still running) are NOT terminated based on age alone.
+     * To track activity, the application should call updateSessionActivity() periodically.
+     * 
+     * @param int $maxIdleSeconds Maximum idle time in seconds (default: 3600 = 1 hour)
+     * @return int Number of sessions cleaned up
+     */
+    public function cleanupStaleSessions(int $maxIdleSeconds = 3600): int
+    {
+        $count = 0;
+        $files = glob($this->pidDir . '/*.json');
+        
+        if (!$files) {
+            return 0;
+        }
+        
+        foreach ($files as $file) {
+            try {
+                $content = @file_get_contents($file);
+                if ($content === false) {
+                    continue;
+                }
+                
+                $info = json_decode($content, true);
+                if (!$info || !isset($info['user_id'])) {
+                    continue;
+                }
+                
+                $userId = $info['user_id'];
+                $pidFile = $this->pidDir . '/' . $userId . '.pid';
+                
+                // Check if process is still running
+                $isRunning = false;
+                if (file_exists($pidFile)) {
+                    $pid = trim(file_get_contents($pidFile));
+                    $isRunning = $this->isProcessRunning($pid);
+                }
+                
+                // If process is not running, clean up orphaned session files
+                if (!$isRunning) {
+                    error_log("Cleaning up orphaned terminal session for user {$userId} (process not running)");
+                    @unlink($file);
+                    if (file_exists($pidFile)) {
+                        @unlink($pidFile);
+                    }
+                    $count++;
+                    continue;
+                }
+                
+                // If process is running, check last activity to determine if idle
+                // Use last_activity if available, otherwise fall back to created_at
+                $lastActivity = $info['last_activity'] ?? $info['created_at'] ?? time();
+                $idleTime = time() - $lastActivity;
+                
+                // Only terminate running sessions if they've been idle (no activity updates)
+                if ($idleTime > $maxIdleSeconds) {
+                    error_log("Cleaning up idle terminal session for user {$userId} (idle for {$idleTime}s)");
+                    if ($this->stopSession($userId)) {
+                        $count++;
+                    }
+                }
+            } catch (\Exception $e) {
+                error_log("Error cleaning up session from file {$file}: " . $e->getMessage());
+            }
+        }
+        
+        return $count;
     }
     
     /**
@@ -359,5 +509,50 @@ TEXT;
         
         // For any other error (including ESRCH), treat as not running
         return false;
+    }
+    
+    /**
+     * Find an available port for a terminal session
+     * 
+     * @param int $userId The panel user ID
+     * @return int Available port number
+     * @throws \RuntimeException If no ports are available
+     */
+    private function findAvailablePort(int $userId): int
+    {
+        // Scan through the port range to find an available port
+        // Do NOT use userId in calculation as it can be any number (e.g., 200, 1000)
+        // which would result in invalid or out-of-range ports
+        
+        // Search in a range of 100 ports starting from basePort
+        for ($port = $this->basePort; $port < $this->basePort + 100; $port++) {
+            if ($this->isPortAvailable($port)) {
+                return $port;
+            }
+        }
+        
+        throw new \RuntimeException('No available ports for terminal session. All ports in range ' . 
+                                   $this->basePort . '-' . ($this->basePort + 99) . ' are in use.');
+    }
+    
+    /**
+     * Check if a port is available for use
+     * 
+     * @param int $port Port number to check
+     * @return bool True if port is available, false if in use
+     */
+    private function isPortAvailable(int $port): bool
+    {
+        // Try to connect to the port
+        $connection = @fsockopen('127.0.0.1', $port, $errno, $errstr, 1);
+        
+        if (is_resource($connection)) {
+            // Port is in use
+            fclose($connection);
+            return false;
+        }
+        
+        // Port is available
+        return true;
     }
 }

@@ -142,7 +142,8 @@ function stopTerminal() {
     });
 }
 
-// Check session status periodically
+// Check session status periodically and keep session alive
+// The status endpoint updates the last_activity timestamp to prevent idle timeout
 setInterval(function() {
     fetch('/terminal/status')
         .then(response => response.json())
@@ -155,7 +156,7 @@ setInterval(function() {
         .catch(error => {
             console.error('Failed to check terminal status:', error);
         });
-}, 30000); // Check every 30 seconds
+}, 30000); // Check every 30 seconds - keeps session alive while page is open
 </script>
 
 <style>
