@@ -205,6 +205,20 @@ All directories owned by `novapanel:novapanel`.
 4. Choose database type (MySQL/PostgreSQL)
 5. Create database user and assign privileges
 
+### Accessing phpMyAdmin
+
+NovaPanel includes **phpMyAdmin** for easy database management:
+
+1. Navigate to **Databases** in the sidebar
+2. Click the **phpMyAdmin** button at the top right
+3. Login with your MySQL credentials:
+   - **Server:** localhost
+   - **Username:** Database username (created during database setup)
+   - **Password:** Your database password
+4. Manage your databases, tables, and data through the phpMyAdmin interface
+
+**Direct Access:** You can also access phpMyAdmin directly at `http://your-server-ip:7080/phpmyadmin`
+
 ### Setting Up DNS
 
 1. Navigate to **DNS**
