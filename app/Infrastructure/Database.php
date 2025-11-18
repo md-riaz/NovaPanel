@@ -30,6 +30,14 @@ class Database
     {
         if (self::$panelConnection === null) {
             $dbPath = __DIR__ . '/../../storage/panel.db';
+            $storageDir = dirname($dbPath);
+            
+            // Ensure storage directory exists
+            if (!is_dir($storageDir)) {
+                if (!mkdir($storageDir, 0755, true)) {
+                    throw new \RuntimeException("Failed to create storage directory: $storageDir");
+                }
+            }
             
             try {
                 self::$panelConnection = new PDO("sqlite:$dbPath");
