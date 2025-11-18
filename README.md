@@ -205,6 +205,22 @@ All directories owned by `novapanel:novapanel`.
 4. Choose database type (MySQL/PostgreSQL)
 5. Create database user and assign privileges
 
+#### Accessing Databases
+
+NovaPanel integrates **Adminer** for web-based database management:
+
+1. Navigate to **Databases**
+2. Click **Database Manager** button to open the database management interface
+3. Or click **Access** next to any specific database to open it directly
+4. Adminer provides:
+   - Browse tables and data
+   - Execute SQL queries
+   - Import/Export databases
+   - Manage database structure
+   - Edit records directly
+
+**Authentication:** You're automatically logged in using NovaPanel's MySQL credentials - no need to enter credentials again.
+
 ### Setting Up DNS
 
 1. Navigate to **DNS**
