@@ -52,6 +52,15 @@ if [ "$OS" = "ubuntu" ]; then
     apt-get update -qq
 fi
 
+# Pre-configure phpMyAdmin to avoid interactive prompts
+# This tells the installer:
+# 1. Don't configure any web server automatically (we'll do it manually with Nginx)
+# 2. Don't configure database with dbconfig-common (we'll do it manually)
+echo "Preparing phpMyAdmin installation (non-interactive)..."
+export DEBIAN_FRONTEND=noninteractive
+debconf-set-selections <<< "phpmyadmin phpmyadmin/reconfigure-webserver multiselect"
+debconf-set-selections <<< "phpmyadmin phpmyadmin/dbconfig-install boolean false"
+
 # Install required packages
 apt-get install -y \
     nginx \
@@ -75,6 +84,9 @@ apt-get install -y \
     git \
     curl \
     unzip
+
+# Reset to normal mode
+unset DEBIAN_FRONTEND
 
 # Install ttyd for web terminal (optional but recommended)
 echo "Installing ttyd for web terminal..."
@@ -106,8 +118,10 @@ echo ""
 
 # Configure phpMyAdmin
 echo "Configuring phpMyAdmin..."
+echo "Note: NovaPanel uses Nginx only (no Apache) for phpMyAdmin"
+echo "      phpMyAdmin will be served through Nginx on port 7080"
 # During phpMyAdmin installation, it asks for web server configuration
-# We'll configure it manually through Nginx instead
+# We'll configure it manually through Nginx instead (no Apache needed)
 # Create phpMyAdmin config directory if it doesn't exist
 mkdir -p /etc/phpmyadmin
 # Create a basic config file for phpMyAdmin with SSO (signon) authentication
@@ -490,6 +504,7 @@ echo "Features available:"
 echo "  • Site Management"
 echo "  • User Management"
 echo "  • Database Management"
+echo "  • phpMyAdmin (accessible at http://$SERVER_IP:7080/phpmyadmin/signon)"
 echo "  • DNS Management"
 echo "  • FTP Management"
 echo "  • Cron Jobs"
@@ -499,10 +514,19 @@ else
     echo "  • Web Terminal (ttyd not installed - see panel for instructions)"
 fi
 echo ""
+echo "📌 Web Server Architecture:"
+echo "  • Nginx only (no Apache installed)"
+echo "  • phpMyAdmin served through Nginx on port 7080"
+echo "  • All sites use Nginx + PHP-FPM"
+echo "  • No web server port conflicts"
+echo ""
 echo "Next steps:"
 echo "1. Review security settings in SECURITY.md"
 echo "2. Set up SSL certificate for port 7080 (optional)"
 echo "3. Configure firewall rules for production use"
+echo ""
+echo "To verify phpMyAdmin setup:"
+echo "  sudo bash $PANEL_DIR/scripts/verify-phpmyadmin.sh"
 echo ""
 echo "For support, visit: https://github.com/md-riaz/NovaPanel"
 echo "=========================================="

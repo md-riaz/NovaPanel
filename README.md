@@ -218,8 +218,11 @@ NovaPanel includes **phpMyAdmin** with **automatic login (SSO)** for easy databa
 - **Single Sign-On (SSO):** Automatically logs you in using your panel session
 - **No Password Entry:** Seamlessly access all databases without re-entering credentials
 - **Database Pre-selection:** Click "Manage" on any database to open phpMyAdmin with that database selected
+- **Nginx Only:** phpMyAdmin is served through Nginx - no Apache required!
 
 **Direct Access:** phpMyAdmin link is available in the sidebar and on the Databases page
+
+**Important:** NovaPanel uses **Nginx only** for serving phpMyAdmin - no Apache web server is installed or required. This prevents port conflicts and simplifies the architecture. See [phpMyAdmin Nginx Implementation](docs/PHPMYADMIN_NGINX_IMPLEMENTATION.md) for detailed information.
 
 ### Setting Up DNS
 
@@ -321,14 +324,27 @@ See [SECURITY.md](SECURITY.md) for detailed security documentation.
 
 ## Documentation
 
+### Core Documentation
 - [DESIGN.md](DESIGN.md) - System design and architecture
 - [IMPLEMENTATION.md](IMPLEMENTATION.md) - Implementation plan
 - [AGENTS.md](AGENTS.md) - AI agent responsibility map
 - [SECURITY.md](SECURITY.md) - Security considerations
 
+### Feature Documentation
+
+#### phpMyAdmin (Nginx-Only Architecture)
+- **[Quick Start Guide](docs/PHPMYADMIN_QUICKSTART.md)** - ⚡ Fast overview with visual diagrams
+- [Nginx Implementation](docs/PHPMYADMIN_NGINX_IMPLEMENTATION.md) - Complete technical guide
+- [FAQ](docs/FAQ_PHPMYADMIN.md) - Common questions about Apache vs Nginx
+- [Setup Guide](docs/PHPMYADMIN_SETUP.md) - Installation and configuration
+
+#### Other Features
+- [Terminal Setup](docs/TERMINAL_NGINX_SETUP.md) - Web terminal configuration
+
 ## Roadmap
 
 - [x] Web-based terminal (ttyd integration)
+- [x] phpMyAdmin integration with SSO (Nginx only, no Apache)
 - [ ] Email server integration
 - [ ] Automated backups
 - [ ] REST API
