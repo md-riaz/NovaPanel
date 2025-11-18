@@ -55,9 +55,7 @@ class CreateFtpUserService
 
         try {
             // Create actual FTP user via Pure-FTPd
-            if (!$this->ftpManager->createUser($ftpUser, $password)) {
-                throw new \RuntimeException("Failed to create FTP user in Pure-FTPd");
-            }
+            $this->ftpManager->createUser($ftpUser, $password);
 
         } catch (\Exception $e) {
             // Rollback: delete from panel database if infrastructure setup fails
