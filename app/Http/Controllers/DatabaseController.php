@@ -125,16 +125,10 @@ class DatabaseController extends Controller
      */
     public function phpMyAdminSignon(Request $request): Response
     {
-        // Load environment configuration
-        $envFile = __DIR__ . '/../../../.env.php';
-        if (file_exists($envFile)) {
-            require_once $envFile;
-        }
-        
-        // Get MySQL credentials from environment
-        $mysqlHost = getenv('MYSQL_HOST') ?: 'localhost';
-        $mysqlUser = getenv('MYSQL_ROOT_USER') ?: 'root';
-        $mysqlPassword = getenv('MYSQL_ROOT_PASSWORD') ?: '';
+        // Get MySQL credentials from environment using Env facade
+        $mysqlHost = \App\Support\Env::get('MYSQL_HOST', 'localhost');
+        $mysqlUser = \App\Support\Env::get('MYSQL_ROOT_USER', 'root');
+        $mysqlPassword = \App\Support\Env::get('MYSQL_ROOT_PASSWORD', '');
         
         // Set phpMyAdmin signon session with MySQL credentials
         $_SESSION['novapanel_pma_signon'] = [

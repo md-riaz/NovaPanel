@@ -1,17 +1,13 @@
 <?php
 
-// Enable error reporting for debugging
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
-error_reporting(E_ALL);
+/**
+ * NovaPanel Entry Point
+ * 
+ * This file handles all HTTP requests to the panel.
+ */
 
-// Load environment configuration
-$envFile = __DIR__ . '/../.env.php';
-if (file_exists($envFile)) {
-    require_once $envFile;
-}
-
-require_once __DIR__ . '/../vendor/autoload.php';
+// Bootstrap the application (loads env, autoloader, sets error reporting)
+require_once __DIR__ . '/../bootstrap/app.php';
 
 use App\Http\Router;
 use App\Http\Request;
