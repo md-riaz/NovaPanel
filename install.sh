@@ -200,6 +200,9 @@ echo "✓ Storage directories configured"
 echo ""
 
 # Run database migration
+# NOTE: The panel.db file is automatically created by SQLite when the migration script
+# connects to the database for the first time. This happens inside Database::panel()
+# when it calls: new PDO("sqlite:$dbPath")
 echo "Running database migration..."
 sudo -u novapanel php8.2 database/migration.php
 # Ensure database file is writable by www-data group

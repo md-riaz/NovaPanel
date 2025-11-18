@@ -40,6 +40,8 @@ class Database
             }
             
             try {
+                // SQLite automatically creates the database file when connecting if it doesn't exist
+                // This means panel.db is created here on first connection (during migration)
                 self::$panelConnection = new PDO("sqlite:$dbPath");
                 self::$panelConnection->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
                 self::$panelConnection->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
