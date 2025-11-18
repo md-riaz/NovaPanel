@@ -21,7 +21,7 @@ ALL_PASSED=true
 
 # Function to print status
 print_status() {
-    if [ $1 -eq 0 ]; then
+    if [ "$1" -eq 0 ]; then
         echo -e "${GREEN}✓${NC} $2"
     else
         echo -e "${RED}✗${NC} $2"
