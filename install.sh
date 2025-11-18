@@ -112,18 +112,20 @@ echo "Configuring phpMyAdmin..."
 mkdir -p /etc/phpmyadmin
 # Create a basic config file for phpMyAdmin
 if [ ! -f /etc/phpmyadmin/config.inc.php ]; then
-    cat > /etc/phpmyadmin/config.inc.php <<'PMAEOF'
+    # Generate a secure blowfish secret
+    BLOWFISH_SECRET=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-32)
+    cat > /etc/phpmyadmin/config.inc.php <<PMAEOF
 <?php
 /* phpMyAdmin configuration for NovaPanel */
-$cfg['blowfish_secret'] = '$(openssl rand -base64 32)';
-$i = 0;
-$i++;
-$cfg['Servers'][$i]['auth_type'] = 'cookie';
-$cfg['Servers'][$i]['host'] = 'localhost';
-$cfg['Servers'][$i]['compress'] = false;
-$cfg['Servers'][$i]['AllowNoPassword'] = false;
-$cfg['UploadDir'] = '';
-$cfg['SaveDir'] = '';
+\$cfg['blowfish_secret'] = '${BLOWFISH_SECRET}';
+\$i = 0;
+\$i++;
+\$cfg['Servers'][\$i]['auth_type'] = 'cookie';
+\$cfg['Servers'][\$i]['host'] = 'localhost';
+\$cfg['Servers'][\$i]['compress'] = false;
+\$cfg['Servers'][\$i]['AllowNoPassword'] = false;
+\$cfg['UploadDir'] = '';
+\$cfg['SaveDir'] = '';
 PMAEOF
     chmod 644 /etc/phpmyadmin/config.inc.php
 fi
