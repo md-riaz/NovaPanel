@@ -471,18 +471,25 @@ server {
         include fastcgi_params;
     }
 
-    # Proxy for ttyd terminal WebSocket connections (ports 7100-7199)
-    # This allows the terminal to be accessed through the panel's main port
-    location ~ ^/terminal-ws/([0-9]+)$ {
-        set \$terminal_port \$1;
-        proxy_pass http://127.0.0.1:\$terminal_port;
+
+    # Secure ttyd terminal proxy with session-based auth
+    location /ttyd/ {
+        auth_request /auth_check;
+        error_page 401 = /login.php;
+        proxy_pass http://127.0.0.1:7681;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header Host $host;
         proxy_read_timeout 86400;
+    }
+
+    # Internal auth check endpoint for Nginx
+    location = /auth_check {
+        include fastcgi_params;
+        fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root/auth_check.php;
+        fastcgi_param HTTP_COOKIE $http_cookie;
     }
 
     location ~ /\.ht {
@@ -506,6 +513,7 @@ if command -v ufw &> /dev/null; then
     ufw allow 80/tcp
     ufw allow 443/tcp
     ufw allow 7080/tcp
+    ufw allow 21/tcp
     echo "✓ Firewall configured"
     echo ""
 fi

@@ -86,6 +86,39 @@ location ~ ^/terminal-ws/(\d+)$ {
 }
 ```
 
+### 3. Nginx Proxy & Auth Integration
+
+Nginx intercepts requests to `/ttyd/` and proxies them to the local ttyd process, but only after checking session authentication via `/auth_check`:
+
+```nginx
+# Terminal WebSocket Proxy with auth_request
+location /ttyd/ {
+    # Ask PHP if user is logged in
+    auth_request /auth_check;
+    error_page 401 = /login.php;
+    proxy_pass http://127.0.0.1:7681;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_read_timeout 86400;
+}
+
+# Auth check endpoint (internal)
+location = /auth_check {
+    include fastcgi_params;
+    fastcgi_pass unix:/run/php/php8.2-fpm.sock;
+    fastcgi_param SCRIPT_FILENAME $document_root/auth_check.php;
+    fastcgi_param HTTP_COOKIE $http_cookie;
+}
+```
+
+**How it works:**
+- Browser requests `/ttyd/` (via iframe in panel)
+- Nginx does internal subrequest to `/auth_check` (handled by NovaPanel)
+- If session is valid, Nginx proxies to ttyd
+- If not, Nginx redirects to `/login.php`
+
 ### 4. Authentication Flow
 
 **Automatic Authentication (No User Prompts):**
@@ -104,17 +137,27 @@ NovaPanel uses embedded credentials in the URL for seamless terminal access, sim
 
 **Why this works:**
 
-- **Standard HTTP Basic Auth:** Uses the `username:password@host` URL format (RFC 7617)
-- **Browser handles it:** All modern browsers automatically parse and send these credentials
-- **Secure:** Token is unique per session and never reused
-- **Seamless:** Identical user experience to cPanel terminal
-- **No client-side code:** No JavaScript needed to handle authentication
 
 **Security considerations:**
 
-- Credentials in URL are sent via HTTPS (encrypted in transit)
-- Tokens are random and session-specific (32 characters)
-- URLs are not logged by nginx (when properly configured)
+
+### 4. Authentication Flow
+
+**Session-Based Authentication (No Extra Password):**
+
+NovaPanel uses PHP session for authentication. Nginx checks session via `/auth_check` before proxying to ttyd. Users never see extra login prompts.
+
+1. **Session Creation:** User logs into NovaPanel (PHP session)
+2. **Access Terminal:** User visits terminal page, iframe loads `/ttyd/`
+3. **Nginx Auth Request:** Nginx calls `/auth_check` to verify session
+4. **Proxy to ttyd:** If valid, Nginx proxies to ttyd; if not, redirects to login
+5. **User Experience:** Terminal loads instantly, no extra password
+
+**Security considerations:**
+- All authentication is cookie-based (PHP session)
+- ttyd only accessible via Nginx proxy
+- No tokens in URL
+- Panel authentication required before accessing terminal page
 - Panel authentication required before accessing terminal page
 
 ### 5. Security Considerations
@@ -139,10 +182,6 @@ NovaPanel uses embedded credentials in the URL for seamless terminal access, sim
 ## Production Nginx Configuration
 
 ### Complete VHost Example
-
-```nginx
-server {
-    listen 80;
     server_name panel.example.com;
     return 301 https://$host$request_uri;
 }
@@ -157,10 +196,6 @@ server {
     # SSL Configuration
     ssl_certificate /etc/ssl/certs/panel.example.com.crt;
     ssl_certificate_key /etc/ssl/private/panel.example.com.key;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-    
-    # Panel Application
     location / {
         try_files $uri $uri/ /index.php?$query_string;
     }

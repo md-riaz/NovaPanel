@@ -75,12 +75,16 @@ $router->get('/dns/{id}', DnsController::class . '@show', [AuthMiddleware::class
 $router->post('/dns/{id}/records', DnsController::class . '@addRecord', [AuthMiddleware::class]);
 $router->post('/dns/{domainId}/records/{recordId}/delete', DnsController::class . '@deleteRecord', [AuthMiddleware::class]);
 
+
 // Terminal routes
 $router->get('/terminal', TerminalController::class . '@index', [AuthMiddleware::class]);
 $router->post('/terminal/start', TerminalController::class . '@start', [AuthMiddleware::class]);
 $router->post('/terminal/stop', TerminalController::class . '@stop', [AuthMiddleware::class]);
 $router->post('/terminal/restart', TerminalController::class . '@restart', [AuthMiddleware::class]);
 $router->get('/terminal/status', TerminalController::class . '@status', [AuthMiddleware::class]);
+
+// Nginx auth_request endpoint (no auth middleware)
+$router->get('/auth_check', AuthController::class . '@authCheck');
 
 // Dispatch request
 $request = new Request();
