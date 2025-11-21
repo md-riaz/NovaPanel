@@ -392,13 +392,28 @@ ADMIN_PASS=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
 ADMIN_PASS_HASH=$(php8.2 -r "echo password_hash('$ADMIN_PASS', PASSWORD_DEFAULT);")
 
 sudo -u novapanel sqlite3 storage/panel.db <<EOF
-INSERT INTO users (username, email, password) 
-VALUES ('$ADMIN_USER', '$ADMIN_EMAIL', '$ADMIN_PASS_HASH');
+WITH existing_user AS (
+    SELECT id FROM users WHERE username = '$ADMIN_USER' OR email = '$ADMIN_EMAIL' LIMIT 1
+), upserted AS (
+    INSERT INTO users (username, email, password)
+    SELECT '$ADMIN_USER', '$ADMIN_EMAIL', '$ADMIN_PASS_HASH'
+    WHERE NOT EXISTS (SELECT 1 FROM existing_user)
+    RETURNING id
+), target_user AS (
+    SELECT id FROM upserted
+    UNION ALL
+    SELECT id FROM existing_user
+    LIMIT 1
+)
+UPDATE users
+SET email = '$ADMIN_EMAIL',
+    password = '$ADMIN_PASS_HASH'
+WHERE id = (SELECT id FROM target_user);
 
-INSERT INTO user_roles (user_id, role_id) 
-SELECT 
-    (SELECT id FROM users WHERE username = '$ADMIN_USER'),
-    (SELECT id FROM roles WHERE name = 'Admin');
+INSERT OR IGNORE INTO user_roles (user_id, role_id)
+SELECT admin_user.id, roles.id
+FROM (SELECT id FROM users WHERE username = '$ADMIN_USER' OR email = '$ADMIN_EMAIL' LIMIT 1) AS admin_user
+JOIN roles ON roles.name = 'Admin';
 EOF
 
 echo "✓ Admin user created"
