@@ -208,9 +208,17 @@ CURRENT_DIR=$(pwd)
 
 echo "Setting up panel..."
 if [ "$CURRENT_DIR" != "$PANEL_DIR" ]; then
-    mkdir -p $PANEL_DIR
-    cp -r . $PANEL_DIR/
-    cd $PANEL_DIR
+    if [ -d "$PANEL_DIR" ]; then
+        echo "Existing panel directory detected at $PANEL_DIR"
+        echo "Removing existing contents in $PANEL_DIR before copying (services left running)..."
+        rm -rf "${PANEL_DIR}/"* "${PANEL_DIR}/".[!.]* "${PANEL_DIR}/"..?* 2>/dev/null || true
+    fi
+
+    mkdir -p "$PANEL_DIR"
+    echo "Copying project files to $PANEL_DIR..."
+    cp -a "$CURRENT_DIR"/. "$PANEL_DIR"/
+    rm -rf "$PANEL_DIR/.git"
+    cd "$PANEL_DIR"
 fi
 
 # Set proper ownership and permissions for panel files
