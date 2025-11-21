@@ -264,9 +264,19 @@ echo "Creating MySQL user for panel..."
 MYSQL_PANEL_USER="novapanel_db"
 MYSQL_PANEL_PASS=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
 
-# Create MySQL user with necessary privileges for database management
+# Check if the MySQL user already exists so we can reset its password
+MYSQL_USER_EXISTS=$(mysql -u root -N -s -e "SELECT EXISTS(SELECT 1 FROM mysql.user WHERE user='${MYSQL_PANEL_USER}' AND host='localhost');")
+
+if [ "$MYSQL_USER_EXISTS" = "1" ]; then
+    echo "✓ MySQL user '${MYSQL_PANEL_USER}' already exists — resetting password"
+else
+    echo "✓ MySQL user '${MYSQL_PANEL_USER}' does not exist — creating user"
+fi
+
+# Create or update the MySQL user with the generated password and ensure permissions are set
 mysql -u root <<MYSQL_EOF
 CREATE USER IF NOT EXISTS '${MYSQL_PANEL_USER}'@'localhost' IDENTIFIED BY '${MYSQL_PANEL_PASS}';
+ALTER USER '${MYSQL_PANEL_USER}'@'localhost' IDENTIFIED BY '${MYSQL_PANEL_PASS}';
 GRANT ALL PRIVILEGES ON *.* TO '${MYSQL_PANEL_USER}'@'localhost' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
 MYSQL_EOF
