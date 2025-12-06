@@ -269,14 +269,15 @@ MYSQL_USER_EXISTS=$(mysql -u root -N -s -e "SELECT EXISTS(SELECT 1 FROM mysql.us
 
 if [ "$MYSQL_USER_EXISTS" = "1" ]; then
     echo "✓ MySQL user '${MYSQL_PANEL_USER}' already exists — resetting password"
+    USER_MANAGEMENT_SQL="ALTER USER '${MYSQL_PANEL_USER}'@'localhost' IDENTIFIED BY '${MYSQL_PANEL_PASS}';"
 else
     echo "✓ MySQL user '${MYSQL_PANEL_USER}' does not exist — creating user"
+    USER_MANAGEMENT_SQL="CREATE USER '${MYSQL_PANEL_USER}'@'localhost' IDENTIFIED BY '${MYSQL_PANEL_PASS}';"
 fi
 
 # Create or update the MySQL user with the generated password and ensure permissions are set
 mysql -u root <<MYSQL_EOF
-CREATE USER IF NOT EXISTS '${MYSQL_PANEL_USER}'@'localhost' IDENTIFIED BY '${MYSQL_PANEL_PASS}';
-ALTER USER '${MYSQL_PANEL_USER}'@'localhost' IDENTIFIED BY '${MYSQL_PANEL_PASS}';
+${USER_MANAGEMENT_SQL}
 GRANT ALL PRIVILEGES ON *.* TO '${MYSQL_PANEL_USER}'@'localhost' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
 MYSQL_EOF
