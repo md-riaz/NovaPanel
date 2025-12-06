@@ -70,36 +70,52 @@ class Shell implements ShellInterface
         
         // Check if sudo failed due to password requirement
         // sudo -n returns exit code 1 and outputs various error messages when password is required
+        // We only check for password errors, not other sudo failures (like command not allowed)
         if ($result['exitCode'] === 1) {
             $output = strtolower($result['output']);
+            
+            // These patterns specifically indicate sudo password requirement or NOPASSWD configuration issue
+            // We check for sudo-specific patterns to avoid false positives from command output
             $passwordErrors = [
-                'password is required',
-                'a password is required',
                 'sudo: a password is required',
+                'sudo: no password was provided',
                 'sorry, a password is required',
-                'no password',
-                'password:' // Some versions output "password:" prompt even with -n
+                'a password is required to run sudo',
+                'password is required',  // Generic fallback
             ];
             
-            foreach ($passwordErrors as $errorPattern) {
-                if (str_contains($output, $errorPattern)) {
-                    // Try to provide a helpful solution
-                    $panelDir = dirname(__DIR__, 3);
-                    $setupScript = "{$panelDir}/scripts/setup-sudoers.sh";
-                    
-                    $message = "Sudo configuration is missing or incomplete. NovaPanel requires NOPASSWD sudo access.\n\n";
-                    
-                    if (file_exists($setupScript)) {
-                        $message .= "🔧 QUICK FIX: Run this command to automatically configure sudo:\n";
-                        $message .= "   sudo bash {$setupScript}\n\n";
+            // Only trigger if the output looks like it came from sudo itself
+            $sudoIndicators = ['sudo:', 'sorry,', 'password'];
+            $hasSudoIndicator = false;
+            foreach ($sudoIndicators as $indicator) {
+                if (str_contains($output, $indicator)) {
+                    $hasSudoIndicator = true;
+                    break;
+                }
+            }
+            
+            if ($hasSudoIndicator) {
+                foreach ($passwordErrors as $errorPattern) {
+                    if (str_contains($output, $errorPattern)) {
+                        // Try to provide a helpful solution
+                        $panelDir = dirname(__DIR__, 3);
+                        $setupScript = "{$panelDir}/scripts/setup-sudoers.sh";
+                        
+                        $message = "Sudo configuration is missing or incomplete. NovaPanel requires NOPASSWD sudo access.\n\n";
+                        $message .= "Detected error: " . trim($result['output']) . "\n\n";
+                        
+                        if (file_exists($setupScript)) {
+                            $message .= "🔧 QUICK FIX: Run this command to automatically configure sudo:\n";
+                            $message .= "   sudo bash {$setupScript}\n\n";
+                        }
+                        
+                        $message .= "Or manually configure /etc/sudoers.d/novapanel as documented in SECURITY.md:\n";
+                        $message .= "   sudo visudo -f /etc/sudoers.d/novapanel\n\n";
+                        $message .= "If you haven't installed NovaPanel yet, please run the installation script:\n";
+                        $message .= "   sudo bash {$panelDir}/install.sh";
+                        
+                        throw new \RuntimeException($message);
                     }
-                    
-                    $message .= "Or manually configure /etc/sudoers.d/novapanel as documented in SECURITY.md:\n";
-                    $message .= "   sudo visudo -f /etc/sudoers.d/novapanel\n\n";
-                    $message .= "If you haven't installed NovaPanel yet, please run the installation script:\n";
-                    $message .= "   sudo bash {$panelDir}/install.sh";
-                    
-                    throw new \RuntimeException($message);
                 }
             }
         }
