@@ -430,39 +430,12 @@ EOF
 echo "✓ Admin user created"
 echo ""
 
-# Set up sudoers
+# Set up sudoers using the setup script
 echo "Configuring sudo permissions..."
-cat > /etc/sudoers.d/novapanel <<'EOF'
-# Single VPS Model: Only ONE Linux user (novapanel) exists
-# No user creation/modification/deletion commands allowed (useradd/usermod/userdel)
-novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload nginx
-novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload php*-fpm
-novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload bind9
-novapanel ALL=(ALL) NOPASSWD: /bin/systemctl reload named
-novapanel ALL=(ALL) NOPASSWD: /bin/mkdir
-novapanel ALL=(ALL) NOPASSWD: /bin/chown
-novapanel ALL=(ALL) NOPASSWD: /bin/chmod
-novapanel ALL=(ALL) NOPASSWD: /usr/bin/crontab
-novapanel ALL=(ALL) NOPASSWD: /bin/ln
-novapanel ALL=(ALL) NOPASSWD: /bin/rm
-novapanel ALL=(ALL) NOPASSWD: /bin/cp
-novapanel ALL=(ALL) NOPASSWD: /bin/mv
-novapanel ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t
-novapanel ALL=(ALL) NOPASSWD: /usr/sbin/named-checkconf
-novapanel ALL=(ALL) NOPASSWD: /usr/sbin/named-checkzone
-novapanel ALL=(ALL) NOPASSWD: /usr/bin/pure-pw
-novapanel ALL=(ALL) NOPASSWD: /bin/bash
-EOF
-chmod 440 /etc/sudoers.d/novapanel
-
-# Validate sudoers file
-if visudo -c -f /etc/sudoers.d/novapanel > /dev/null 2>&1; then
-    echo "✓ Sudo permissions configured and validated"
-else
-    echo "❌ Error: sudoers file validation failed"
-    echo "   Please check /etc/sudoers.d/novapanel for syntax errors"
+bash "$PANEL_DIR/scripts/setup-sudoers.sh" || {
+    echo "❌ Error: Failed to configure sudo permissions"
     exit 1
-fi
+}
 echo ""
 
 # Configure Nginx for panel
