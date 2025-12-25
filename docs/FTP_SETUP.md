@@ -4,6 +4,20 @@
 
 NovaPanel uses **Pure-FTPd** with virtual users for secure FTP access. All FTP users are mapped to the `novapanel` system user for security and simplicity.
 
+## Quick Verification
+
+After installation, verify your FTP configuration is correct:
+
+```bash
+sudo bash /opt/novapanel/scripts/verify-ftp.sh
+```
+
+This script checks:
+- Pure-FTPd installation and service status
+- Configuration files (passive mode, chroot, etc.)
+- Firewall rules
+- FTP user database
+
 ## Server Configuration
 
 ### Passive Mode
