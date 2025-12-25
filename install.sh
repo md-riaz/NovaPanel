@@ -182,14 +182,40 @@ echo ""
 
 # Configure Pure-FTPd
 echo "Configuring Pure-FTPd..."
+
+# Create conf directory if it doesn't exist
+mkdir -p /etc/pure-ftpd/conf
+
 # Enable PureDB authentication
 if [ ! -f /etc/pure-ftpd/conf/PureDB ]; then
     echo "/etc/pure-ftpd/pureftpd.pdb" > /etc/pure-ftpd/conf/PureDB
 fi
+
+# Configure passive mode port range (required for FileZilla and other FTP clients)
+# Using ports 30000-30100 for passive mode data connections
+if [ ! -f /etc/pure-ftpd/conf/PassivePortRange ]; then
+    echo "30000 30100" > /etc/pure-ftpd/conf/PassivePortRange
+fi
+
+# Enable chrooteveryone for security (jail users to their home directory)
+if [ ! -f /etc/pure-ftpd/conf/ChrootEveryone ]; then
+    echo "yes" > /etc/pure-ftpd/conf/ChrootEveryone
+fi
+
+# Disable anonymous FTP for security
+if [ ! -f /etc/pure-ftpd/conf/NoAnonymous ]; then
+    echo "yes" > /etc/pure-ftpd/conf/NoAnonymous
+fi
+
+# Set umask for created files (022 = rw-r--r--)
+if [ ! -f /etc/pure-ftpd/conf/Umask ]; then
+    echo "022:022" > /etc/pure-ftpd/conf/Umask
+fi
+
 # Ensure Pure-FTPd service is enabled and started
 systemctl enable pure-ftpd 2>/dev/null || true
 systemctl restart pure-ftpd 2>/dev/null || true
-echo "✓ Pure-FTPd configured"
+echo "✓ Pure-FTPd configured with passive mode support"
 echo ""
 
 # Create panel user
@@ -521,7 +547,9 @@ if command -v ufw &> /dev/null; then
     ufw allow 443/tcp
     ufw allow 7080/tcp
     ufw allow 21/tcp
-    echo "✓ Firewall configured"
+    # Allow FTP passive mode port range (required for FileZilla and other FTP clients)
+    ufw allow 30000:30100/tcp
+    echo "✓ Firewall configured (including FTP passive mode ports)"
     echo ""
 fi
 
@@ -559,10 +587,18 @@ echo "  • phpMyAdmin served through Nginx on port 7080"
 echo "  • All sites use Nginx + PHP-FPM"
 echo "  • No web server port conflicts"
 echo ""
+echo "📌 FTP Server Configuration:"
+echo "  • Pure-FTPd configured with virtual users"
+echo "  • FTP Port: 21 (control)"
+echo "  • Passive Ports: 30000-30100 (data)"
+echo "  • All FTP users run as 'novapanel' user"
+echo "  • Create FTP users through the panel interface"
+echo ""
 echo "Next steps:"
 echo "1. Review security settings in SECURITY.md"
 echo "2. Set up SSL certificate for port 7080 (optional)"
 echo "3. Configure firewall rules for production use"
+echo "4. Test FTP connection with FileZilla or similar client"
 echo ""
 echo "To verify phpMyAdmin setup:"
 echo "  sudo bash $PANEL_DIR/scripts/verify-phpmyadmin.sh"

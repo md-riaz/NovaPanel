@@ -12,7 +12,7 @@ A lightweight, open-source single VPS control panel built with PHP. NovaPanel pr
 - 🐘 **PHP-FPM** - Multi-version PHP support with isolated pools
 - 🌐 **Nginx** - High-performance web server configuration
 - 📊 **Database Management** - MySQL/PostgreSQL database creation and management
-- 🔐 **FTP Access** - Secure FTP user management
+- 🔐 **FTP Access** - Secure FTP user management with Pure-FTPd (passive mode configured)
 - ⏰ **Cron Jobs** - Schedule tasks for each panel user
 - 💻 **Web Terminal** - Browser-based terminal access using ttyd (similar to cPanel)
 - 🔒 **Role-Based Access Control** - Admin, Account Owner, Developer, Read-Only roles
@@ -362,6 +362,9 @@ See [SECURITY.md](SECURITY.md) for detailed security documentation.
 - [Nginx Implementation](docs/PHPMYADMIN_NGINX_IMPLEMENTATION.md) - Complete technical guide
 - [FAQ](docs/FAQ_PHPMYADMIN.md) - Common questions about Apache vs Nginx
 - [Setup Guide](docs/PHPMYADMIN_SETUP.md) - Installation and configuration
+
+#### FTP Management
+- **[FTP Setup Guide](docs/FTP_SETUP.md)** - Complete FTP configuration and troubleshooting
 
 #### Other Features
 - [Terminal Setup](docs/TERMINAL_NGINX_SETUP.md) - Web terminal configuration
