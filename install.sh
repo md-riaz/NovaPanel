@@ -184,7 +184,11 @@ echo ""
 echo "Configuring Pure-FTPd..."
 
 # Create conf directory if it doesn't exist
-mkdir -p /etc/pure-ftpd/conf
+if ! mkdir -p /etc/pure-ftpd/conf 2>/dev/null; then
+    echo "✗ Error: Failed to create Pure-FTPd configuration directory"
+    echo "  This may be a permissions issue or Pure-FTPd is not installed properly"
+    exit 1
+fi
 
 # Enable PureDB authentication
 if [ ! -f /etc/pure-ftpd/conf/PureDB ]; then

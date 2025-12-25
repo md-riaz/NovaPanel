@@ -107,7 +107,16 @@ echo "5. Checking FTP user database..."
 if [ -f /etc/pure-ftpd/pureftpd.pdb ]; then
     echo "   ✓ PureDB database file exists"
     echo "   FTP Users:"
-    sudo pure-pw list 2>/dev/null || echo "     (No users found or error listing)"
+    USER_LIST=$(sudo pure-pw list 2>&1)
+    if [ $? -eq 0 ]; then
+        if [ -z "$USER_LIST" ]; then
+            echo "     (No FTP users created yet)"
+        else
+            echo "$USER_LIST"
+        fi
+    else
+        echo "     Error listing users: $USER_LIST"
+    fi
 else
     echo "   ⚠ PureDB database file does not exist yet"
     echo "     This is normal if no FTP users have been created"
@@ -116,11 +125,13 @@ echo ""
 
 # Check ports are listening
 echo "6. Checking listening ports..."
-if netstat -tuln 2>/dev/null | grep -q ":21 " || ss -tuln 2>/dev/null | grep -q ":21 "; then
+# Use more robust pattern matching for port 21
+if ss -tuln 2>/dev/null | grep -E ':21\s|:21$' > /dev/null || netstat -tuln 2>/dev/null | grep -E ':21\s|:21$' > /dev/null; then
     echo "   ✓ Port 21 is listening"
 else
     echo "   ✗ Port 21 is NOT listening"
     echo "     Pure-FTPd may not be running properly"
+    echo "     Check with: sudo systemctl status pure-ftpd"
 fi
 echo ""
 
