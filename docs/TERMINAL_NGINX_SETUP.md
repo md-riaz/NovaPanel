@@ -65,76 +65,39 @@ This URL is a **proxied path** that doesn't expose the actual ttyd port to users
 
 ### 3. Nginx Proxy Configuration
 
-Nginx intercepts requests to `/terminal-ws/*` and proxies them to the local ttyd process:
+Nginx intercepts requests to `/terminal-ws/*` and proxies them to the local ttyd process on the dynamically assigned port:
 
 ```nginx
-# Terminal WebSocket Proxy
+# Terminal WebSocket proxy - dynamic port routing (7100-7199)
+# Each user gets a unique ttyd process on a dedicated port
+# Authentication is handled via basic auth credentials in the URL
 location ~ ^/terminal-ws/(\d+)$ {
-    # Extract port number from URL
     set $ttyd_port $1;
-    
-    # Proxy to local ttyd process
     proxy_pass http://127.0.0.1:$ttyd_port;
-    
-    # Required for WebSocket connections
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
-    
-    # Pass client information to ttyd
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    
-    # Increase timeout for long-running terminal sessions
-    proxy_read_timeout 3600s;
-    proxy_send_timeout 3600s;
-    
-    # Disable buffering for real-time terminal I/O
-    proxy_buffering off;
-    
-    # Security: Don't log URLs (they contain authentication tokens)
-    access_log off;
-    
-    # Optional: Restrict access to authenticated panel users only
-    # This is already handled by the panel's session management,
-    # but you can add additional IP restrictions here if needed
-}
-```
-
-### 3. Nginx Proxy & Auth Integration
-
-Nginx intercepts requests to `/ttyd/` and proxies them to the local ttyd process, but only after checking session authentication via `/auth_check`:
-
-```nginx
-# Terminal WebSocket Proxy with auth_request
-location /ttyd/ {
-    # Ask PHP if user is logged in
-    auth_request /auth_check;
-    error_page 401 = /login.php;
-    proxy_pass http://127.0.0.1:7681;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
-    proxy_set_header Host $host;
     proxy_read_timeout 86400;
-}
-
-# Auth check endpoint (internal)
-location = /auth_check {
-    include fastcgi_params;
-    fastcgi_pass unix:/run/php/php8.2-fpm.sock;
-    fastcgi_param SCRIPT_FILENAME $document_root/auth_check.php;
-    fastcgi_param HTTP_COOKIE $http_cookie;
+    proxy_buffering off;
 }
 ```
 
 **How it works:**
-- Browser requests `/ttyd/` (via iframe in panel)
-- Nginx does internal subrequest to `/auth_check` (handled by NovaPanel)
-- If session is valid, Nginx proxies to ttyd
-- If not, Nginx redirects to `/login.php`
+1. Browser requests: `https://panel.example.com/terminal-ws/7100`
+2. Nginx extracts port number `7100` from the URL
+3. Nginx proxies the WebSocket connection to `http://127.0.0.1:7100`
+4. ttyd running on port 7100 handles the connection
+5. ttyd validates the basic auth credentials (username: `novapanel`, password: random token)
+6. If auth succeeds, terminal session starts
+
+**Security:**
+- Each user's ttyd process is isolated on a unique port
+- Basic auth credentials are embedded in the URL (generated per session)
+- ttyd validates credentials before allowing terminal access
+- Port range restricted to 7100-7199 (supports up to 100 concurrent sessions)
 
 ### 4. Authentication Flow
 
@@ -149,32 +112,20 @@ NovaPanel uses embedded credentials in the URL for seamless terminal access, sim
    ```
 3. **Browser Behavior:** Browser automatically extracts and sends credentials via HTTP Basic Auth
 4. **Nginx Proxy:** Forwards the authentication headers transparently to ttyd
-5. **ttyd Validation:** Validates credentials and establishes WebSocket connection
+5. **ttyd Validation:** Validates credentials (username: `novapanel`, password: TOKEN) and establishes WebSocket connection
 6. **User Experience:** Terminal loads instantly without any prompts
 
 **Why this works:**
-
-
-**Security considerations:**
-
-
-### 4. Authentication Flow
-
-**Session-Based Authentication (No Extra Password):**
-
-NovaPanel uses PHP session for authentication. Nginx checks session via `/auth_check` before proxying to ttyd. Users never see extra login prompts.
-
-1. **Session Creation:** User logs into NovaPanel (PHP session)
-2. **Access Terminal:** User visits terminal page, iframe loads `/ttyd/`
-3. **Nginx Auth Request:** Nginx calls `/auth_check` to verify session
-4. **Proxy to ttyd:** If valid, Nginx proxies to ttyd; if not, redirects to login
-5. **User Experience:** Terminal loads instantly, no extra password
+- Modern browsers automatically handle HTTP Basic Auth when credentials are in the URL
+- ttyd is started with `-c novapanel:TOKEN` flag, expecting these exact credentials
+- Nginx transparently forwards the Authorization header to ttyd
+- Users must already be logged into NovaPanel to access the terminal page
 
 **Security considerations:**
-- All authentication is cookie-based (PHP session)
-- ttyd only accessible via Nginx proxy
-- No tokens in URL
-- Panel authentication required before accessing terminal page
+- Random 32-character tokens per session (cryptographically secure)
+- Port isolation: Each user's ttyd process runs on a unique port
+- ttyd processes only listen on 127.0.0.1 (not accessible externally)
+- External access only through Nginx proxy
 - Panel authentication required before accessing terminal page
 
 ### 5. Security Considerations
@@ -199,6 +150,10 @@ NovaPanel uses PHP session for authentication. Nginx checks session via `/auth_c
 ## Production Nginx Configuration
 
 ### Complete VHost Example
+
+```nginx
+server {
+    listen 80;
     server_name panel.example.com;
     return 301 https://$host$request_uri;
 }
@@ -213,6 +168,7 @@ server {
     # SSL Configuration
     ssl_certificate /etc/ssl/certs/panel.example.com.crt;
     ssl_certificate_key /etc/ssl/private/panel.example.com.key;
+    
     location / {
         try_files $uri $uri/ /index.php?$query_string;
     }
@@ -225,7 +181,7 @@ server {
         include fastcgi_params;
     }
     
-    # Terminal WebSocket Proxy
+    # Terminal WebSocket Proxy - dynamic port routing
     location ~ ^/terminal-ws/(\d+)$ {
         set $ttyd_port $1;
         proxy_pass http://127.0.0.1:$ttyd_port;
