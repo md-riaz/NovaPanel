@@ -53,9 +53,6 @@ if [ "$OS" = "ubuntu" ]; then
 fi
 
 # Pre-configure phpMyAdmin to avoid interactive prompts
-# This tells the installer:
-# 1. Don't configure any web server automatically (we'll do it manually with Nginx)
-# 2. Don't configure database with dbconfig-common (we'll do it manually)
 echo "Preparing phpMyAdmin installation (non-interactive)..."
 export DEBIAN_FRONTEND=noninteractive
 debconf-set-selections <<< "phpmyadmin phpmyadmin/reconfigure-webserver multiselect"
@@ -70,7 +67,6 @@ apt-get install -y \
     php8.2-common \
     php8.2-sqlite3 \
     php8.2-mysql \
-    php8.2-pgsql \
     php8.2-curl \
     php8.2-mbstring \
     php8.2-xml \
@@ -142,11 +138,6 @@ fi
 
 # Configure phpMyAdmin
 echo "Configuring phpMyAdmin..."
-echo "Note: NovaPanel uses Nginx only (no Apache) for phpMyAdmin"
-echo "      phpMyAdmin will be served through Nginx on port 7080"
-# During phpMyAdmin installation, it asks for web server configuration
-# We'll configure it manually through Nginx instead (no Apache needed)
-# Create phpMyAdmin config directory if it doesn't exist
 mkdir -p /etc/phpmyadmin
 # Create a basic config file for phpMyAdmin with SSO (signon) authentication
 if [ ! -f /etc/phpmyadmin/config.inc.php ]; then
@@ -171,7 +162,7 @@ if [ ! -f /etc/phpmyadmin/config.inc.php ]; then
 PMAEOF
     chmod 644 /etc/phpmyadmin/config.inc.php
 fi
-# Ensure phpMyAdmin can use the config
+
 if [ -d /usr/share/phpmyadmin ]; then
     ln -sf /etc/phpmyadmin/config.inc.php /usr/share/phpmyadmin/config.inc.php 2>/dev/null || true
     echo "✓ phpMyAdmin configured"
@@ -183,7 +174,6 @@ echo ""
 # Configure Pure-FTPd
 echo "Configuring Pure-FTPd..."
 
-# Create conf directory if it doesn't exist
 if ! mkdir -p /etc/pure-ftpd/conf 2>/dev/null; then
     echo "✗ Error: Failed to create Pure-FTPd configuration directory"
     echo "  This may be a permissions issue or Pure-FTPd is not installed properly"
@@ -196,7 +186,6 @@ if [ ! -f /etc/pure-ftpd/conf/PureDB ]; then
 fi
 
 # Configure passive mode port range (required for FileZilla and other FTP clients)
-# Using ports 30000-30100 for passive mode data connections
 if [ ! -f /etc/pure-ftpd/conf/PassivePortRange ]; then
     echo "30000 30100" > /etc/pure-ftpd/conf/PassivePortRange
 fi
@@ -276,9 +265,6 @@ echo "✓ Storage directories configured"
 echo ""
 
 # Run database migration
-# NOTE: The panel.db file is automatically created by SQLite when the migration script
-# connects to the database for the first time. This happens inside Database::panel()
-# when it calls: new PDO("sqlite:$dbPath")
 echo "Running database migration..."
 sudo -u novapanel php8.2 database/migration.php
 # Ensure database file is writable by www-data group
@@ -294,7 +280,6 @@ echo "Creating MySQL user for panel..."
 MYSQL_PANEL_USER="novapanel_db"
 MYSQL_PANEL_PASS=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
 
-# Check if the MySQL user already exists so we can reset its password
 MYSQL_USER_EXISTS=$(mysql -u root -N -s -e "SELECT EXISTS(SELECT 1 FROM mysql.user WHERE user='${MYSQL_PANEL_USER}' AND host='localhost');")
 
 if [ "$MYSQL_USER_EXISTS" = "1" ]; then
@@ -305,7 +290,6 @@ else
     USER_MANAGEMENT_SQL="CREATE USER '${MYSQL_PANEL_USER}'@'localhost' IDENTIFIED BY '${MYSQL_PANEL_PASS}';"
 fi
 
-# Create or update the MySQL user with the generated password and ensure permissions are set
 mysql -u root <<MYSQL_EOF
 ${USER_MANAGEMENT_SQL}
 GRANT ALL PRIVILEGES ON *.* TO '${MYSQL_PANEL_USER}'@'localhost' WITH GRANT OPTION;
@@ -319,12 +303,10 @@ echo ""
 echo "BIND9 Setup (for DNS management)"
 echo "================================"
 
-# Create zones directory
 mkdir -p /etc/bind/zones
 chown bind:bind /etc/bind/zones
 chmod 755 /etc/bind/zones
 
-# Create named.conf.local if it doesn't exist
 if [ ! -f /etc/bind/named.conf.local ]; then
     cat > /etc/bind/named.conf.local <<'BIND_CONF'
 // Local zones configuration for NovaPanel
@@ -364,12 +346,9 @@ else
 fi
 
 # Enable and start BIND9
-# Note: On some systems, bind9 is a symlink/alias to named.service
-# Try to enable it, but don't fail if it's already enabled via another name
 if systemctl is-enabled bind9 >/dev/null 2>&1 || systemctl is-enabled named >/dev/null 2>&1; then
     echo "✓ BIND9 service already enabled"
 else
-    # Try to enable, but continue even if it fails due to symlink issues
     if ! systemctl enable bind9 2>/dev/null; then
         echo "⚠ Note: Could not enable bind9 directly (may be a service alias)"
         echo "  Attempting to enable via 'named' service name..."
@@ -377,7 +356,6 @@ else
     fi
 fi
 
-# Start/restart BIND9 - this is the critical part
 systemctl restart bind9 || systemctl restart named
 
 echo "✓ BIND9 installed and configured"
@@ -396,12 +374,6 @@ cat > $PANEL_DIR/.env.php <<ENVEOF
 putenv('MYSQL_HOST=localhost');
 putenv('MYSQL_ROOT_USER=${MYSQL_PANEL_USER}');
 putenv('MYSQL_ROOT_PASSWORD=${MYSQL_PANEL_PASS}');
-
-// PostgreSQL Credentials (not installed by default - leave empty)
-// Install PostgreSQL separately if needed and update these values
-putenv('PGSQL_HOST=');
-putenv('PGSQL_ROOT_USER=');
-putenv('PGSQL_ROOT_PASSWORD=');
 
 // BIND9 Configuration (for DNS management)
 putenv('BIND9_ZONES_PATH=/etc/bind/zones');
@@ -508,7 +480,6 @@ server {
         include fastcgi_params;
     }
 
-
     # Secure ttyd terminal proxy with session-based auth
     location /ttyd/ {
         auth_request /auth_check;
@@ -551,7 +522,6 @@ if command -v ufw &> /dev/null; then
     ufw allow 443/tcp
     ufw allow 7080/tcp
     ufw allow 21/tcp
-    # Allow FTP passive mode port range (required for FileZilla and other FTP clients)
     ufw allow 30000:30100/tcp
     echo "✓ Firewall configured (including FTP passive mode ports)"
     echo ""
