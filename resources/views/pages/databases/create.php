@@ -33,8 +33,8 @@
                 <label for="db_type" class="form-label">Database Type</label>
                 <select class="form-select" id="db_type" name="db_type">
                     <option value="mysql">MySQL/MariaDB</option>
-                    <option value="postgresql">PostgreSQL</option>
                 </select>
+                <div class="form-text">Only MySQL is supported in the default installation</div>
             </div>
 
             <h5 class="mt-4">Database User (Optional)</h5>

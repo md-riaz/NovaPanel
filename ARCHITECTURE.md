@@ -93,8 +93,8 @@ FTP is managed via **Pure-FTPd virtual users**:
 
 ### Databases
 
-- MySQL/PostgreSQL databases are created normally
-- Database users are standard MySQL/PostgreSQL users (not related to Linux users)
+- MySQL databases are created normally (PostgreSQL is not installed by default)
+- Database users are standard MySQL users (not related to Linux users)
 - Panel tracks which panel user owns which database
 - No special Linux user mapping
 
