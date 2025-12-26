@@ -480,10 +480,12 @@ server {
         include fastcgi_params;
     }
 
-    # Terminal WebSocket proxy - dynamic port routing (7100-7199)
-    # Each user gets a unique ttyd process on a dedicated port
-    # Authentication is handled via basic auth credentials in the URL
+    # Terminal WebSocket proxy with dynamic port routing and session-based auth
+    # Each user gets a unique ttyd process on a dedicated port (7100-7199)
     location ~ ^/terminal-ws/(\d+)$ {
+        auth_request /auth_check;
+        error_page 401 = /login.php;
+        
         set \$ttyd_port \$1;
         proxy_pass http://127.0.0.1:\$ttyd_port;
         proxy_http_version 1.1;
@@ -494,6 +496,14 @@ server {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_read_timeout 86400;
         proxy_buffering off;
+    }
+
+    # Internal auth check endpoint for Nginx
+    location = /auth_check {
+        include fastcgi_params;
+        fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root/auth_check.php;
+        fastcgi_param HTTP_COOKIE $http_cookie;
     }
 
     location ~ /\.ht {

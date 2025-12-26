@@ -62,17 +62,16 @@ class TerminalAdapter
             throw new \RuntimeException('ttyd is not installed. Please install ttyd first.');
         }
         
-        // Start ttyd process
+        // Start ttyd process without basic auth
         // ttyd options:
         // -p: port to listen on
-        // -c: credential for basic auth (username:password)
         // -t: terminal type
         // -W: enable writable terminal
         // bash -l: login shell for better environment
+        // Note: Authentication is handled by Nginx auth_request, not by ttyd
         $command = sprintf(
-            'nohup ttyd -p %d -c novapanel:%s -t fontSize=14 -W bash -l > %s/%d.log 2>&1 & echo $!',
+            'nohup ttyd -p %d -t fontSize=14 -W bash -l > %s/%d.log 2>&1 & echo $!',
             $port,
-            $token,
             $this->logDir,
             $userId
         );
@@ -141,15 +140,14 @@ class TerminalAdapter
         $host = $urlParts['host'] ?? 'localhost';
         $panelPort = $urlParts['port'] ?? 7080;
         
-        // Build URL with embedded credentials for automatic authentication
-        // Format: protocol://username:password@host:port/path
-        // This allows seamless terminal access without user login prompts
-        $urlWithAuth = "{$protocol}://novapanel:{$token}@{$host}:{$panelPort}/terminal-ws/{$port}";
+        // Build URL without embedded credentials
+        // Authentication is handled by Nginx auth_request checking PHP session
+        $url = "{$protocol}://{$host}:{$panelPort}/terminal-ws/{$port}";
         
         return [
             'port' => $port,
-            'token' => $token,
-            'url' => $urlWithAuth
+            'token' => $token,  // Keep for backward compatibility, though not used for auth
+            'url' => $url
         ];
     }
     
@@ -270,9 +268,10 @@ class TerminalAdapter
             $host = $urlParts['host'] ?? 'localhost';
             $panelPort = $urlParts['port'] ?? 7080;
             
-            // Build URL with embedded credentials for automatic authentication
-            $urlWithAuth = "{$protocol}://novapanel:{$info['token']}@{$host}:{$panelPort}/terminal-ws/{$info['port']}";
-            $info['url'] = $urlWithAuth;
+            // Build URL without embedded credentials
+            // Authentication is handled by Nginx auth_request checking PHP session
+            $url = "{$protocol}://{$host}:{$panelPort}/terminal-ws/{$info['port']}";
+            $info['url'] = $url;
         }
         
         return $info;

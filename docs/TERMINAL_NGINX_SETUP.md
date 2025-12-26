@@ -65,13 +65,15 @@ This URL is a **proxied path** that doesn't expose the actual ttyd port to users
 
 ### 3. Nginx Proxy Configuration
 
-Nginx intercepts requests to `/terminal-ws/*` and proxies them to the local ttyd process on the dynamically assigned port:
+Nginx intercepts requests to `/terminal-ws/*`, validates the user's PHP session, and then proxies to the local ttyd process on the dynamically assigned port:
 
 ```nginx
-# Terminal WebSocket proxy - dynamic port routing (7100-7199)
-# Each user gets a unique ttyd process on a dedicated port
-# Authentication is handled via basic auth credentials in the URL
+# Terminal WebSocket proxy with dynamic port routing and session-based auth
+# Each user gets a unique ttyd process on a dedicated port (7100-7199)
 location ~ ^/terminal-ws/(\d+)$ {
+    auth_request /auth_check;
+    error_page 401 = /login.php;
+    
     set $ttyd_port $1;
     proxy_pass http://127.0.0.1:$ttyd_port;
     proxy_http_version 1.1;
@@ -83,50 +85,61 @@ location ~ ^/terminal-ws/(\d+)$ {
     proxy_read_timeout 86400;
     proxy_buffering off;
 }
+
+# Internal auth check endpoint for Nginx
+location = /auth_check {
+    include fastcgi_params;
+    fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
+    fastcgi_param SCRIPT_FILENAME $document_root/auth_check.php;
+    fastcgi_param HTTP_COOKIE $http_cookie;
+}
 ```
 
 **How it works:**
 1. Browser requests: `https://panel.example.com/terminal-ws/7100`
-2. Nginx extracts port number `7100` from the URL
-3. Nginx proxies the WebSocket connection to `http://127.0.0.1:7100`
-4. ttyd running on port 7100 handles the connection
-5. ttyd validates the basic auth credentials (username: `novapanel`, password: random token)
-6. If auth succeeds, terminal session starts
+2. Nginx performs internal subrequest to `/auth_check` to validate PHP session
+3. If session is valid (user logged into panel), Nginx extracts port number `7100` from URL
+4. Nginx proxies the WebSocket connection to `http://127.0.0.1:7100`
+5. ttyd running on port 7100 handles the connection (no additional auth required)
+6. Terminal session starts immediately
 
 **Security:**
 - Each user's ttyd process is isolated on a unique port
-- Basic auth credentials are embedded in the URL (generated per session)
-- ttyd validates credentials before allowing terminal access
+- PHP session authentication required before accessing any terminal
+- ttyd only accessible via Nginx proxy (bound to localhost)
 - Port range restricted to 7100-7199 (supports up to 100 concurrent sessions)
+- Unauthenticated requests redirected to login page
 
 ### 4. Authentication Flow
 
-**Automatic Authentication (No User Prompts):**
+**Session-Based Authentication:**
 
-NovaPanel uses embedded credentials in the URL for seamless terminal access, similar to cPanel. Users never see login prompts.
+NovaPanel uses PHP session authentication via Nginx's `auth_request` module. Users must be logged into the panel to access terminals - no additional authentication required.
 
-1. **Session Creation:** TerminalAdapter generates a random 32-character token
-2. **URL Construction:** Credentials embedded in URL format:
-   ```
-   https://novapanel:TOKEN@panel.example.com/terminal-ws/7101
-   ```
-3. **Browser Behavior:** Browser automatically extracts and sends credentials via HTTP Basic Auth
-4. **Nginx Proxy:** Forwards the authentication headers transparently to ttyd
-5. **ttyd Validation:** Validates credentials (username: `novapanel`, password: TOKEN) and establishes WebSocket connection
-6. **User Experience:** Terminal loads instantly without any prompts
+1. **Panel Login:** User logs into NovaPanel (PHP session created)
+2. **Terminal Access:** User navigates to terminal page
+3. **Session Start:** TerminalAdapter starts ttyd on unique port (e.g., 7100) without basic auth
+4. **URL Generation:** URL created: `https://panel.example.com/terminal-ws/7100`
+5. **Browser Request:** Browser loads terminal iframe with generated URL
+6. **Nginx Auth Check:** Nginx performs internal subrequest to `/auth_check`
+7. **PHP Validation:** PHP checks if user has valid session (`$_SESSION['user_id']`)
+8. **Proxy Decision:** 
+   - If valid: Nginx proxies to ttyd on port 7100
+   - If invalid: Nginx redirects to login page
+9. **Terminal Connected:** WebSocket connection established, terminal ready
 
-**Why this works:**
-- Modern browsers automatically handle HTTP Basic Auth when credentials are in the URL
-- ttyd is started with `-c novapanel:TOKEN` flag, expecting these exact credentials
-- Nginx transparently forwards the Authorization header to ttyd
-- Users must already be logged into NovaPanel to access the terminal page
+**Why this is secure:**
+- All authentication handled by PHP session (same as rest of panel)
+- No credentials in URLs or terminal connections
+- ttyd processes only accessible through authenticated Nginx proxy
+- Each user's terminal isolated on unique port
+- Automatic redirect to login if session expires
 
-**Security considerations:**
-- Random 32-character tokens per session (cryptographically secure)
-- Port isolation: Each user's ttyd process runs on a unique port
-- ttyd processes only listen on 127.0.0.1 (not accessible externally)
-- External access only through Nginx proxy
-- Panel authentication required before accessing terminal page
+**Session management:**
+- Terminal page polls `/terminal/status` every 30 seconds
+- Keeps session alive while terminal is in use
+- Updates last_activity timestamp
+- Idle sessions cleaned up after 1 hour
 
 ### 5. Security Considerations
 
@@ -181,8 +194,11 @@ server {
         include fastcgi_params;
     }
     
-    # Terminal WebSocket Proxy - dynamic port routing
+    # Terminal WebSocket Proxy with session-based auth and dynamic port routing
     location ~ ^/terminal-ws/(\d+)$ {
+        auth_request /auth_check;
+        error_page 401 = /login.php;
+        
         set $ttyd_port $1;
         proxy_pass http://127.0.0.1:$ttyd_port;
         proxy_http_version 1.1;
@@ -195,9 +211,15 @@ server {
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
         proxy_buffering off;
-        
-        # Security: Don't log URLs with embedded credentials
-        access_log off;
+    }
+    
+    # Internal auth check endpoint for Nginx
+    location = /auth_check {
+        internal;
+        include fastcgi_params;
+        fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root/auth_check.php;
+        fastcgi_param HTTP_COOKIE $http_cookie;
     }
     
     # Static files
