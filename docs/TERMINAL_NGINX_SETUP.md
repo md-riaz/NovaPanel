@@ -18,6 +18,20 @@ ttyd Process (localhost:{port} with basic auth)
 Bash Shell
 ```
 
+## Concurrent Session Support
+
+**Important:** The terminal system is designed to handle concurrent sessions as follows:
+- **Multiple Panel Users**: Each panel user can have their own terminal session simultaneously
+- **One Session Per User**: Each panel user is limited to **one active terminal session** at a time
+- **Port Isolation**: Each session runs on a unique port (7100-7199 range) for security isolation
+- **Session Reuse**: If a user already has an active session, the existing session is returned instead of creating a new one
+- **Automatic Cleanup**: Idle sessions are automatically cleaned up after 1 hour of inactivity
+
+This design ensures:
+- System resources are not exhausted by unlimited sessions per user
+- Each user's terminal is isolated from others
+- Concurrent access by different panel users works correctly
+
 ## How It Works
 
 ### 1. Terminal Session Creation
@@ -25,11 +39,14 @@ Bash Shell
 When a user accesses the terminal page:
 
 1. **TerminalController** calls `TerminalAdapter->startSession($userId)`
-2. **TerminalAdapter** generates:
-   - A unique port number (basePort + userId, with collision detection)
+2. **TerminalAdapter** checks if user already has an active session
+   - If yes: Returns existing session info
+   - If no: Creates a new session
+3. **For new sessions**, TerminalAdapter generates:
+   - A unique port number (searches 7100-7199 range for available port)
    - A random 32-character authentication token
    - Stores session info in JSON file with port and token
-3. **ttyd process** starts with command:
+4. **ttyd process** starts with command:
    ```bash
    ttyd -p {port} -c novapanel:{token} -t fontSize=14 -W bash -l
    ```
