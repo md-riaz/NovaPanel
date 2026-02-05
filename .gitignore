@@ -43,3 +43,7 @@ Thumbs.db
 # Node.js
 node_modules/
 package-lock.json
+
+# Testing
+.phpunit.cache/
+.phpunit.result.cache
