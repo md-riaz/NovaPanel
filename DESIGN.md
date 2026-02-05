@@ -72,11 +72,11 @@ Stores panel metadata:
 - sites, domains (websites linked directly to panel users)
 - ftp_users (FTP access linked to panel users)
 - cron_jobs (scheduled tasks linked to panel users)
-- databases (MySQL/PostgreSQL databases linked to panel users)
+- databases (MySQL databases linked to panel users)
 
 ### 3.2 Service Databases
-- **MySQL/MariaDB/Postgres**
-  - Customer DBs only
+- **MySQL/MariaDB**
+  - Customer DBs only (PostgreSQL not installed by default)
 - **BIND9 Zone Files**
   - DNS zones/records stored in `/etc/bind/zones/`
   - Complete isolation from database access

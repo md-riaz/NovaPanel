@@ -11,7 +11,7 @@ A lightweight, open-source single VPS control panel built with PHP. NovaPanel pr
 - 🔐 **Authentication & Security** - Session-based authentication with CSRF protection and rate limiting
 - 🐘 **PHP-FPM** - Multi-version PHP support with isolated pools
 - 🌐 **Nginx** - High-performance web server configuration
-- 📊 **Database Management** - MySQL/PostgreSQL database creation and management
+- 📊 **Database Management** - MySQL database creation and management
 - 🔐 **FTP Access** - Secure FTP user management with Pure-FTPd (passive mode configured)
 - ⏰ **Cron Jobs** - Schedule tasks for each panel user
 - 💻 **Web Terminal** - Browser-based terminal access using ttyd (similar to cPanel)
@@ -44,7 +44,7 @@ NovaPanel uses **BIND9** for DNS management, providing superior security compare
 - Ubuntu 20.04+ or Debian 11+
 - PHP 8.2 or higher
 - Nginx
-- MySQL/MariaDB or PostgreSQL
+- MySQL/MariaDB
 - SQLite3
 - BIND9 (for DNS management)
 - Composer
@@ -80,14 +80,13 @@ NovaPanel uses environment variables for sensitive configuration. The configurat
 
 **Important:** NovaPanel uses **SQLite** for all panel operations (users, sites, permissions, etc.). The panel database is stored at `/opt/novapanel/storage/panel.db`.
 
-MySQL and PostgreSQL credentials in the configuration are **ONLY** used when creating databases for panel users' websites - the panel itself does not use MySQL or PostgreSQL for its own operations.
+MySQL credentials in the configuration are **ONLY** used when creating databases for panel users' websites - the panel itself does not use MySQL for its own operations.
 
 ### Automated Configuration (Recommended)
 
 When you run `install.sh`, the configuration file is **automatically generated** with:
 - **MySQL user** (`novapanel_db`) created with a secure random password
 - **BIND9** - automatically configured with zone files in `/etc/bind/zones`
-- **PostgreSQL** - left empty (install separately if needed)
 
 No manual password entry required for MySQL!
 
@@ -108,7 +107,6 @@ chown novapanel:www-data /opt/novapanel/.env.php
 
 - **Panel Database**: SQLite (automatically configured at `storage/panel.db`)
 - **MySQL Credentials**: Auto-generated user (`novapanel_db`) for creating CUSTOMER databases (not for panel operations)
-- **PostgreSQL Credentials**: Empty by default (install and configure separately if needed)
 - **BIND9 Configuration**: Automatically configured with zone file paths
 - **Application Settings**: Environment, debug mode, and panel URL
 
@@ -202,7 +200,7 @@ All directories owned by `novapanel:novapanel`.
 1. Navigate to **Databases** > **Create Database**
 2. Enter database name
 3. Select panel user who will own the database
-4. Choose database type (MySQL/PostgreSQL)
+4. Choose database type (MySQL)
 5. Create database user and assign privileges
 
 ### Accessing phpMyAdmin
@@ -261,6 +259,12 @@ NovaPanel includes a web-based terminal feature powered by **ttyd**, similar to 
 - Session management (start, stop, restart)
 - Real-time command execution
 
+**Terminal Sessions:**
+- Each panel user can have **one active terminal session** at a time
+- Multiple panel users can have concurrent terminal sessions simultaneously
+- Each session runs on a unique port for isolation
+- Sessions are automatically cleaned up after 1 hour of inactivity
+
 **Common Tasks:**
 - Check site files: `ls -la /opt/novapanel/sites/`
 - View logs: `tail -f /opt/novapanel/storage/logs/shell.log`
@@ -282,7 +286,7 @@ app/
 └── Services/          # Application services
 ```
 
-See [DESIGN.md](DESIGN.md) for detailed architecture documentation.
+See [DESIGN.md](DESIGN.md) and [ARCHITECTURE.md](ARCHITECTURE.md) for detailed architecture documentation.
 
 ## Development
 
@@ -351,8 +355,7 @@ See [SECURITY.md](SECURITY.md) for detailed security documentation.
 
 ### Core Documentation
 - [DESIGN.md](DESIGN.md) - System design and architecture
-- [IMPLEMENTATION.md](IMPLEMENTATION.md) - Implementation plan
-- [AGENTS.md](AGENTS.md) - AI agent responsibility map
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Architecture details and patterns
 - [SECURITY.md](SECURITY.md) - Security considerations
 
 ### Feature Documentation

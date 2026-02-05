@@ -18,6 +18,20 @@ ttyd Process (localhost:{port} with basic auth)
 Bash Shell
 ```
 
+## Concurrent Session Support
+
+**Important:** The terminal system is designed to handle concurrent sessions as follows:
+- **Multiple Panel Users**: Each panel user can have their own terminal session simultaneously
+- **One Session Per User**: Each panel user is limited to **one active terminal session** at a time
+- **Port Isolation**: Each session runs on a unique port (7100-7199 range) for security isolation
+- **Session Reuse**: If a user already has an active session, the existing session is returned instead of creating a new one
+- **Automatic Cleanup**: Idle sessions are automatically cleaned up after 1 hour of inactivity
+
+This design ensures:
+- System resources are not exhausted by unlimited sessions per user
+- Each user's terminal is isolated from others
+- Concurrent access by different panel users works correctly
+
 ## How It Works
 
 ### 1. Terminal Session Creation
@@ -25,11 +39,14 @@ Bash Shell
 When a user accesses the terminal page:
 
 1. **TerminalController** calls `TerminalAdapter->startSession($userId)`
-2. **TerminalAdapter** generates:
-   - A unique port number (basePort + userId, with collision detection)
+2. **TerminalAdapter** checks if user already has an active session
+   - If yes: Returns existing session info
+   - If no: Creates a new session
+3. **For new sessions**, TerminalAdapter generates:
+   - A unique port number (searches 7100-7199 range for available port)
    - A random 32-character authentication token
    - Stores session info in JSON file with port and token
-3. **ttyd process** starts with command:
+4. **ttyd process** starts with command:
    ```bash
    ttyd -p {port} -c novapanel:{token} -t fontSize=14 -W bash -l
    ```
@@ -48,117 +65,81 @@ This URL is a **proxied path** that doesn't expose the actual ttyd port to users
 
 ### 3. Nginx Proxy Configuration
 
-Nginx intercepts requests to `/terminal-ws/*` and proxies them to the local ttyd process:
+Nginx intercepts requests to `/terminal-ws/*`, validates the user's PHP session, and then proxies to the local ttyd process on the dynamically assigned port:
 
 ```nginx
-# Terminal WebSocket Proxy
+# Terminal WebSocket proxy with dynamic port routing and session-based auth
+# Each user gets a unique ttyd process on a dedicated port (7100-7199)
 location ~ ^/terminal-ws/(\d+)$ {
-    # Extract port number from URL
+    auth_request /auth_check;
+    error_page 401 = /login.php;
+    
     set $ttyd_port $1;
-    
-    # Proxy to local ttyd process
     proxy_pass http://127.0.0.1:$ttyd_port;
-    
-    # Required for WebSocket connections
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
-    
-    # Pass client information to ttyd
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    
-    # Increase timeout for long-running terminal sessions
-    proxy_read_timeout 3600s;
-    proxy_send_timeout 3600s;
-    
-    # Disable buffering for real-time terminal I/O
-    proxy_buffering off;
-    
-    # Security: Don't log URLs (they contain authentication tokens)
-    access_log off;
-    
-    # Optional: Restrict access to authenticated panel users only
-    # This is already handled by the panel's session management,
-    # but you can add additional IP restrictions here if needed
-}
-```
-
-### 3. Nginx Proxy & Auth Integration
-
-Nginx intercepts requests to `/ttyd/` and proxies them to the local ttyd process, but only after checking session authentication via `/auth_check`:
-
-```nginx
-# Terminal WebSocket Proxy with auth_request
-location /ttyd/ {
-    # Ask PHP if user is logged in
-    auth_request /auth_check;
-    error_page 401 = /login.php;
-    proxy_pass http://127.0.0.1:7681;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
-    proxy_set_header Host $host;
     proxy_read_timeout 86400;
+    proxy_buffering off;
 }
 
-# Auth check endpoint (internal)
+# Internal auth check endpoint for Nginx
 location = /auth_check {
     include fastcgi_params;
-    fastcgi_pass unix:/run/php/php8.2-fpm.sock;
+    fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
     fastcgi_param SCRIPT_FILENAME $document_root/auth_check.php;
     fastcgi_param HTTP_COOKIE $http_cookie;
 }
 ```
 
 **How it works:**
-- Browser requests `/ttyd/` (via iframe in panel)
-- Nginx does internal subrequest to `/auth_check` (handled by NovaPanel)
-- If session is valid, Nginx proxies to ttyd
-- If not, Nginx redirects to `/login.php`
+1. Browser requests: `https://panel.example.com/terminal-ws/7100`
+2. Nginx performs internal subrequest to `/auth_check` to validate PHP session
+3. If session is valid (user logged into panel), Nginx extracts port number `7100` from URL
+4. Nginx proxies the WebSocket connection to `http://127.0.0.1:7100`
+5. ttyd running on port 7100 handles the connection (no additional auth required)
+6. Terminal session starts immediately
+
+**Security:**
+- Each user's ttyd process is isolated on a unique port
+- PHP session authentication required before accessing any terminal
+- ttyd only accessible via Nginx proxy (bound to localhost)
+- Port range restricted to 7100-7199 (supports up to 100 concurrent sessions)
+- Unauthenticated requests redirected to login page
 
 ### 4. Authentication Flow
 
-**Automatic Authentication (No User Prompts):**
+**Session-Based Authentication:**
 
-NovaPanel uses embedded credentials in the URL for seamless terminal access, similar to cPanel. Users never see login prompts.
+NovaPanel uses PHP session authentication via Nginx's `auth_request` module. Users must be logged into the panel to access terminals - no additional authentication required.
 
-1. **Session Creation:** TerminalAdapter generates a random 32-character token
-2. **URL Construction:** Credentials embedded in URL format:
-   ```
-   https://novapanel:TOKEN@panel.example.com/terminal-ws/7101
-   ```
-3. **Browser Behavior:** Browser automatically extracts and sends credentials via HTTP Basic Auth
-4. **Nginx Proxy:** Forwards the authentication headers transparently to ttyd
-5. **ttyd Validation:** Validates credentials and establishes WebSocket connection
-6. **User Experience:** Terminal loads instantly without any prompts
+1. **Panel Login:** User logs into NovaPanel (PHP session created)
+2. **Terminal Access:** User navigates to terminal page
+3. **Session Start:** TerminalAdapter starts ttyd on unique port (e.g., 7100) without basic auth
+4. **URL Generation:** URL created: `https://panel.example.com/terminal-ws/7100`
+5. **Browser Request:** Browser loads terminal iframe with generated URL
+6. **Nginx Auth Check:** Nginx performs internal subrequest to `/auth_check`
+7. **PHP Validation:** PHP checks if user has valid session (`$_SESSION['user_id']`)
+8. **Proxy Decision:** 
+   - If valid: Nginx proxies to ttyd on port 7100
+   - If invalid: Nginx redirects to login page
+9. **Terminal Connected:** WebSocket connection established, terminal ready
 
-**Why this works:**
+**Why this is secure:**
+- All authentication handled by PHP session (same as rest of panel)
+- No credentials in URLs or terminal connections
+- ttyd processes only accessible through authenticated Nginx proxy
+- Each user's terminal isolated on unique port
+- Automatic redirect to login if session expires
 
-
-**Security considerations:**
-
-
-### 4. Authentication Flow
-
-**Session-Based Authentication (No Extra Password):**
-
-NovaPanel uses PHP session for authentication. Nginx checks session via `/auth_check` before proxying to ttyd. Users never see extra login prompts.
-
-1. **Session Creation:** User logs into NovaPanel (PHP session)
-2. **Access Terminal:** User visits terminal page, iframe loads `/ttyd/`
-3. **Nginx Auth Request:** Nginx calls `/auth_check` to verify session
-4. **Proxy to ttyd:** If valid, Nginx proxies to ttyd; if not, redirects to login
-5. **User Experience:** Terminal loads instantly, no extra password
-
-**Security considerations:**
-- All authentication is cookie-based (PHP session)
-- ttyd only accessible via Nginx proxy
-- No tokens in URL
-- Panel authentication required before accessing terminal page
-- Panel authentication required before accessing terminal page
+**Session management:**
+- Terminal page polls `/terminal/status` every 30 seconds
+- Keeps session alive while terminal is in use
+- Updates last_activity timestamp
+- Idle sessions cleaned up after 1 hour
 
 ### 5. Security Considerations
 
@@ -182,6 +163,10 @@ NovaPanel uses PHP session for authentication. Nginx checks session via `/auth_c
 ## Production Nginx Configuration
 
 ### Complete VHost Example
+
+```nginx
+server {
+    listen 80;
     server_name panel.example.com;
     return 301 https://$host$request_uri;
 }
@@ -196,6 +181,7 @@ server {
     # SSL Configuration
     ssl_certificate /etc/ssl/certs/panel.example.com.crt;
     ssl_certificate_key /etc/ssl/private/panel.example.com.key;
+    
     location / {
         try_files $uri $uri/ /index.php?$query_string;
     }
@@ -208,8 +194,11 @@ server {
         include fastcgi_params;
     }
     
-    # Terminal WebSocket Proxy
+    # Terminal WebSocket Proxy with session-based auth and dynamic port routing
     location ~ ^/terminal-ws/(\d+)$ {
+        auth_request /auth_check;
+        error_page 401 = /login.php;
+        
         set $ttyd_port $1;
         proxy_pass http://127.0.0.1:$ttyd_port;
         proxy_http_version 1.1;
@@ -222,9 +211,15 @@ server {
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
         proxy_buffering off;
-        
-        # Security: Don't log URLs with embedded credentials
-        access_log off;
+    }
+    
+    # Internal auth check endpoint for Nginx
+    location = /auth_check {
+        internal;
+        include fastcgi_params;
+        fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root/auth_check.php;
+        fastcgi_param HTTP_COOKIE $http_cookie;
     }
     
     # Static files

@@ -9,7 +9,7 @@ NovaPanel implements a comprehensive facade pattern to hide internal complexity 
 ### 1. **Contracts Layer** (`app/Contracts/`)
 Defines interfaces that establish contracts for infrastructure components:
 - `WebServerManagerInterface` - Web server operations (Nginx)
-- `DatabaseManagerInterface` - Database operations (MySQL/PostgreSQL)
+- `DatabaseManagerInterface` - Database operations (MySQL)
 - `DnsManagerInterface` - DNS operations (BIND9)
 - `FtpManagerInterface` - FTP operations (Pure-FTPd)
 - `PhpRuntimeManagerInterface` - PHP version management
@@ -26,7 +26,7 @@ Provides static access to complex subsystems:
 
 #### Infrastructure Facades
 - **WebServer**: Nginx configuration management
-- **DatabaseManager**: MySQL/PostgreSQL database operations
+- **DatabaseManager**: MySQL database operations
 - **Dns**: BIND9 DNS zone management
 - **Ftp**: FTP user management
 - **PhpRuntime**: PHP version management
