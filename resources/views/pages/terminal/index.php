@@ -17,7 +17,7 @@
         <div class="card shadow-sm">
             <div class="card-body p-0">
                 <div id="terminal-container" style="height: 70vh; width: 100%; border: 1px solid #dee2e6;">
-                    <iframe 
+                    <iframe
                         id="terminal-frame"
                         src="<?= htmlspecialchars($sessionInfo['url']) ?>"
                         style="width: 100%; height: 100%; border: none;"
@@ -27,16 +27,22 @@
             </div>
             <div class="card-footer bg-light">
                 <div class="row">
-                    <div class="col-md-6">
+                    <div class="col-md-4">
                         <small class="text-muted">
-                            <i class="bi bi-circle-fill text-success"></i> 
-                            Session Active on Port <?= htmlspecialchars($sessionInfo['port']) ?>
+                            <i class="bi bi-circle-fill text-success"></i>
+                            Session Active &mdash; Role: <strong><?= htmlspecialchars($sessionInfo['role']) ?></strong>
                         </small>
                     </div>
-                    <div class="col-md-6 text-end">
+                    <div class="col-md-4 text-center">
                         <small class="text-muted">
-                            <i class="bi bi-info-circle"></i> 
-                            All commands run as the <code>novapanel</code> user
+                            <i class="bi bi-clock"></i>
+                            Expires: <span id="expires-at"><?= htmlspecialchars($sessionInfo['expires_at']) ?></span>
+                        </small>
+                    </div>
+                    <div class="col-md-4 text-end">
+                        <small class="text-muted">
+                            <i class="bi bi-info-circle"></i>
+                            All commands run as <code>novapanel</code>
                         </small>
                     </div>
                 </div>
@@ -51,9 +57,9 @@
             <h5><i class="bi bi-shield-check"></i> Security Notice</h5>
             <ul class="mb-0">
                 <li>This terminal runs as the <strong>novapanel</strong> system user</li>
-                <li>You have limited sudo access for approved panel operations only</li>
-                <li>All commands are logged for security auditing</li>
-                <li>Terminal sessions automatically timeout after inactivity</li>
+                <li>Sessions expire after <strong><?= (int) ($sessionTtlMinutes ?? 15) ?> minutes</strong> and close automatically after <strong><?= (int) ($idleTimeoutMinutes ?? 5) ?> minutes</strong> of inactivity</li>
+                <li>All terminal access is logged for security auditing</li>
+                <li>Environment variables containing secrets are sanitized</li>
             </ul>
         </div>
     </div>
@@ -80,7 +86,7 @@
                         <h6>Keyboard Shortcuts:</h6>
                         <ul>
                             <li><kbd>Ctrl+C</kbd> - Cancel current command</li>
-                            <li><kbd>Ctrl+D</kbd> - Exit shell (will restart session)</li>
+                            <li><kbd>Ctrl+D</kbd> - Exit shell (will end session)</li>
                             <li><kbd>Ctrl+L</kbd> - Clear screen</li>
                             <li><kbd>Tab</kbd> - Auto-complete commands and paths</li>
                         </ul>
@@ -96,12 +102,10 @@ function restartTerminal() {
     if (!confirm('Are you sure you want to restart the terminal session?')) {
         return;
     }
-    
+
     fetch('/terminal/restart', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        }
+        headers: { 'Content-Type': 'application/json' }
     })
     .then(response => response.json())
     .then(data => {
@@ -112,21 +116,17 @@ function restartTerminal() {
             alert('Error: ' + (data.error || 'Failed to restart terminal'));
         }
     })
-    .catch(error => {
-        alert('Error: ' + error.message);
-    });
+    .catch(error => { alert('Error: ' + error.message); });
 }
 
 function stopTerminal() {
     if (!confirm('Are you sure you want to stop the terminal session?')) {
         return;
     }
-    
+
     fetch('/terminal/stop', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        }
+        headers: { 'Content-Type': 'application/json' }
     })
     .then(response => response.json())
     .then(data => {
@@ -137,13 +137,10 @@ function stopTerminal() {
             alert('Error: ' + (data.error || 'Failed to stop terminal'));
         }
     })
-    .catch(error => {
-        alert('Error: ' + error.message);
-    });
+    .catch(error => { alert('Error: ' + error.message); });
 }
 
-// Check session status periodically and keep session alive
-// The status endpoint updates the last_activity timestamp to prevent idle timeout
+// Poll /terminal/status every 30 seconds to keep the session alive and detect expiry.
 setInterval(function() {
     fetch('/terminal/status')
         .then(response => response.json())
@@ -153,25 +150,14 @@ setInterval(function() {
                 location.reload();
             }
         })
-        .catch(error => {
-            console.error('Failed to check terminal status:', error);
-        });
-}, 30000); // Check every 30 seconds - keeps session alive while page is open
+        .catch(error => { console.error('Failed to check terminal status:', error); });
+}, 30000);
 </script>
 
 <style>
-#terminal-container {
-    background-color: #1e1e1e;
-}
-
-.card {
-    border-radius: 0.5rem;
-}
-
-.card-footer {
-    border-top: 1px solid #dee2e6;
-}
-
+#terminal-container { background-color: #1e1e1e; }
+.card { border-radius: 0.5rem; }
+.card-footer { border-top: 1px solid #dee2e6; }
 kbd {
     background-color: #333;
     color: #fff;
@@ -180,7 +166,6 @@ kbd {
     font-family: monospace;
     font-size: 0.9em;
 }
-
 code {
     background-color: #f8f9fa;
     padding: 2px 6px;

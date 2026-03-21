@@ -12,7 +12,8 @@ use App\Support\CSRF;
 class AuthController extends Controller
 {
     /**
-     * Nginx auth_request endpoint: returns 200 if user is logged in, 401 otherwise
+     * Nginx auth_request endpoint: returns 200 if user has terminal.access permission, 401/403 otherwise.
+     * Used by the web server to gate access to /internal/terminal/* proxy locations.
      */
     public function authCheck(Request $request): Response
     {
@@ -20,21 +21,15 @@ class AuthController extends Controller
         if (!Session::has('user_id')) {
             return new Response('', 401);
         }
-        $userId = Session::get('user_id');
-        $roleRepo = \App::roles();
-        $roles = $roleRepo->getUserRoles($userId);
-        $hasAdmin = false;
-        foreach ($roles as $role) {
-            if (strtolower($role->name) === 'admin') {
-                $hasAdmin = true;
-                break;
-            }
-        }
-        if (!$hasAdmin) {
+        $userId   = (int) Session::get('user_id');
+        $roleRepo = App::roles();
+        if (!$roleRepo->hasPermission($userId, 'terminal.access')) {
             return new Response('', 403);
         }
         return new Response('', 200);
     }
+
+    /**
      * Show login form
      */
     public function showLogin(Request $request): Response

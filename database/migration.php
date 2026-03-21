@@ -181,6 +181,23 @@ try {
     }
     echo "✓ Inserted default roles\n";
 
+    // Terminal sessions table
+    $db->exec("
+        CREATE TABLE IF NOT EXISTS terminal_sessions (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            ttyd_port INTEGER,
+            process_id INTEGER,
+            status TEXT NOT NULL DEFAULT 'pending',
+            expires_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    ");
+    echo "✓ Created terminal_sessions table\n";
+
     // Insert default permissions
     $stmt = $db->prepare("INSERT OR IGNORE INTO permissions (name, description) VALUES (?, ?)");
     $permissions = [
@@ -214,6 +231,8 @@ try {
         ['cron.create', 'Create cron jobs'],
         ['cron.edit', 'Edit cron jobs'],
         ['cron.delete', 'Delete cron jobs'],
+        // Terminal permission
+        ['terminal.access', 'Access the web terminal'],
         // System permissions
         ['system.settings', 'Manage system settings'],
         ['system.logs', 'View system logs']
@@ -240,7 +259,8 @@ try {
         'databases.view', 'databases.create', 'databases.edit', 'databases.delete',
         'dns.view', 'dns.edit', 'dns.create', 'dns.delete',
         'ftp.view', 'ftp.create', 'ftp.edit', 'ftp.delete',
-        'cron.view', 'cron.create', 'cron.edit', 'cron.delete'
+        'cron.view', 'cron.create', 'cron.edit', 'cron.delete',
+        'terminal.access'
     ];
     
     foreach ($accountOwnerPermissions as $permName) {
@@ -258,7 +278,8 @@ try {
         'sites.view', 'sites.edit',
         'databases.view', 'databases.create', 'databases.edit',
         'ftp.view', 'ftp.create',
-        'cron.view', 'cron.create', 'cron.edit'
+        'cron.view', 'cron.create', 'cron.edit',
+        'terminal.access'
     ];
     
     foreach ($developerPermissions as $permName) {
@@ -277,7 +298,8 @@ try {
         'databases.view',
         'dns.view',
         'ftp.view',
-        'cron.view'
+        'cron.view',
+        'terminal.access'
     ];
     
     foreach ($readOnlyPermissions as $permName) {

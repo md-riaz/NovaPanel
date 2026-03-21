@@ -3,336 +3,256 @@
 namespace App\Infrastructure\Adapters;
 
 use App\Infrastructure\Shell\Shell;
+use App\Repositories\TerminalSessionRepository;
+use App\Domain\Entities\TerminalSession;
+use App\Support\AuditLogger;
 
 /**
- * Manages ttyd (web terminal) processes for panel users
- * 
- * ttyd is a simple terminal sharing tool that exposes a terminal session via WebSocket.
- * Each user gets their own ttyd instance on a unique port for security isolation.
+ * Manages ttyd (web terminal) processes for NovaPanel users.
+ *
+ * Architecture:
+ *   - One ttyd process per session (never shared between users)
+ *   - Sessions tracked in the panel SQLite database with UUID identifiers
+ *   - Each session has a TTL (max lifetime) and an idle timeout
+ *   - ttyd is launched via a wrapper script that sanitizes the environment
+ *     and enforces role-based shell behaviour
+ *   - All sessions are proxied through the web server; ttyd ports are never
+ *     exposed externally
  */
 class TerminalAdapter
 {
+    /** Maximum session lifetime in seconds (15 minutes) */
+    public const SESSION_TTL = 900;
+
+    /** Idle timeout in seconds (5 minutes) */
+    public const IDLE_TIMEOUT = 300;
+
+    /** Base port for terminal sessions */
+    private const BASE_PORT = 7100;
+
+    /** Number of ports to scan for an available one */
+    private const PORT_RANGE = 100;
+
+    /** Path to the wrapper shell script */
+    private const WRAPPER_SCRIPT = '/opt/novapanel/bin/terminal-wrapper.sh';
+
     private Shell $shell;
-    private string $pidDir;
+    private TerminalSessionRepository $sessionRepo;
     private string $logDir;
-    private int $basePort = 7100;  // Base port for terminal sessions
-    
-    public function __construct(Shell $shell)
+
+    public function __construct(Shell $shell, ?TerminalSessionRepository $sessionRepo = null)
     {
         $this->shell = $shell;
-        $this->pidDir = __DIR__ . '/../../../storage/terminal/pids';
-        $this->logDir = __DIR__ . '/../../../storage/terminal/logs';
-        
-        // Ensure directories exist with proper permissions
-        if (!is_dir($this->pidDir)) {
-            if (!@mkdir($this->pidDir, 0755, true)) {
-                error_log("Warning: Failed to create terminal pids directory: {$this->pidDir}");
-            }
-        }
+        $this->sessionRepo = $sessionRepo ?? new TerminalSessionRepository();
+
+        $this->logDir = defined('NOVAPANEL_TEST_MODE')
+            ? sys_get_temp_dir() . '/novapanel_terminal_logs'
+            : '/opt/novapanel/storage/terminal/logs';
+
         if (!is_dir($this->logDir)) {
-            if (!@mkdir($this->logDir, 0755, true)) {
-                error_log("Warning: Failed to create terminal logs directory: {$this->logDir}");
-            }
+            @mkdir($this->logDir, 0750, true);
         }
     }
-    
+
+    // -------------------------------------------------------------------------
+    // Public API
+    // -------------------------------------------------------------------------
+
     /**
-     * Start a terminal session for a user
-     * 
-     * @param int $userId The panel user ID
-     * @return array ['port' => int, 'token' => string] Session info
-     * @throws \RuntimeException If ttyd is not installed or session fails to start
+     * Start a new terminal session for the given user / role.
+     *
+     * If the user already has an active, non-expired, non-idle session the
+     * existing session is returned unchanged.
+     *
+     * @param int    $userId Panel user ID
+     * @param string $role   Primary role name (Admin|AccountOwner|Developer|ReadOnly)
+     * @return array Session info including session_id, port and proxy URL
+     * @throws \RuntimeException
      */
-    public function startSession(int $userId): array
+    public function startSession(int $userId, string $role = 'ReadOnly'): array
     {
-        // Check if user already has an active session
-        if ($this->isSessionActive($userId)) {
-            return $this->getSessionInfo($userId);
+        // Reuse an existing valid session when available
+        $existing = $this->sessionRepo->findActiveByUserId($userId);
+        if ($existing && $this->isSessionValid($existing)) {
+            $this->sessionRepo->updateLastSeen($existing->id);
+            return $this->buildSessionInfo($existing);
         }
-        
-        // Find an available port
-        $port = $this->findAvailablePort($userId);
-        $token = bin2hex(random_bytes(16));
-        
-        // Store session info
-        $this->saveSessionInfo($userId, $port, $token);
-        
-        // Check if ttyd is installed before attempting to start
+
+        // Terminate any stale session record for this user before starting a new one
+        if ($existing) {
+            $this->terminateSession($existing);
+        }
+
         if (!$this->isTtydInstalled()) {
             throw new \RuntimeException('ttyd is not installed. Please install ttyd first.');
         }
-        
-        // Start ttyd process without basic auth
-        // ttyd options:
-        // -p: port to listen on
-        // -t: terminal type
-        // -W: enable writable terminal
-        // bash -l: login shell for better environment
-        // Note: Authentication is handled by Nginx auth_request, not by ttyd
-        $command = sprintf(
-            'nohup ttyd -p %d -t fontSize=14 -W bash -l > %s/%d.log 2>&1 & echo $!',
-            $port,
-            $this->logDir,
-            $userId
-        );
-        
-        // Execute command to start ttyd in background
-        $output = shell_exec($command);
-        $pid = trim($output);
-        
-        if (empty($pid) || !is_numeric($pid)) {
-            throw new \RuntimeException('Failed to start terminal session: could not capture process ID');
-        }
-        
-        // Save PID for later management
-        if (@file_put_contents($this->pidDir . '/' . $userId . '.pid', $pid) === false) {
-            error_log("Warning: Failed to save terminal PID file for user {$userId}");
-        }
-        
-        // Wait a moment for the process to start
-        usleep(500000); // 0.5 seconds
-        
-        // Verify the process is running
-        if (!$this->isProcessRunning($pid)) {
-            // Process failed to start - read log for details
-            $logFile = $this->logDir . '/' . $userId . '.log';
-            $errorDetails = '';
-            $specificError = '';
-            
-            if (file_exists($logFile)) {
-                $logContent = @file_get_contents($logFile);
-                if ($logContent !== false) {
-                    // Check for specific error patterns
-                    if (preg_match('/ERROR on binding.*to port (\d+).*\(-1 98\)/', $logContent, $matches)) {
-                        $specificError = "Port {$matches[1]} is already in use by another process. ";
-                        $specificError .= "Stop the conflicting process or choose a different port.";
-                    } elseif (strpos($logContent, 'ERROR on binding') !== false) {
-                        $specificError = "Failed to bind to port {$port}. The port may be in use or you may lack permissions.";
-                    } elseif (strpos($logContent, 'Permission denied') !== false) {
-                        $specificError = "Permission denied. Check if the user has rights to bind to port {$port}.";
-                    }
-                    
-                    // Get last few lines of log for full context
-                    $lines = array_filter(explode("\n", trim($logContent)));
-                    $errorDetails = implode("\n", array_slice($lines, -5));
-                }
-            }
-            
-            $errorMessage = 'Terminal process failed to start. ';
-            if (!empty($specificError)) {
-                $errorMessage .= $specificError;
-            } elseif (!empty($errorDetails)) {
-                $errorMessage .= 'Error from log: ' . $errorDetails;
-            } else {
-                $errorMessage .= 'Check if port ' . $port . ' is already in use or if there are permission issues.';
-            }
-            
-            throw new \RuntimeException($errorMessage);
-        }
-        
-        // Get the base URL from config or construct from request
-        $config = require __DIR__ . '/../../../config/app.php';
-        $baseUrl = $config['url'] ?? 'http://localhost:7080';
-        
-        // Parse base URL to get protocol and host
-        $urlParts = parse_url($baseUrl);
-        $protocol = $urlParts['scheme'] ?? 'http';
-        $host = $urlParts['host'] ?? 'localhost';
-        $panelPort = $urlParts['port'] ?? 7080;
-        
-        // Build URL without embedded credentials
-        // Authentication is handled by Nginx auth_request checking PHP session
-        $url = "{$protocol}://{$host}:{$panelPort}/terminal-ws/{$port}";
-        
-        return [
-            'port' => $port,
-            'token' => $token,  // Keep for backward compatibility, though not used for auth
-            'url' => $url
-        ];
+
+        $port      = $this->findAvailablePort();
+        $sessionId = $this->generateUuid();
+        $now       = time();
+
+        $session           = new TerminalSession();
+        $session->id       = $sessionId;
+        $session->userId   = $userId;
+        $session->role     = $role;
+        $session->status   = 'pending';
+        $session->expiresAt  = date('Y-m-d H:i:s', $now + self::SESSION_TTL);
+        $session->lastSeenAt = date('Y-m-d H:i:s', $now);
+
+        $this->sessionRepo->create($session);
+
+        // Launch ttyd with the wrapper script
+        $pid = $this->launchTtyd($port, $sessionId, $role, $userId);
+
+        $session->ttydPort  = $port;
+        $session->processId = $pid;
+        $session->status    = 'active';
+        $this->sessionRepo->update($session);
+
+        AuditLogger::log('terminal.started', "Terminal session started for user {$userId}", [
+            'session_id' => $sessionId,
+            'role'       => $role,
+            'port'       => $port,
+        ]);
+
+        return $this->buildSessionInfo($session);
     }
-    
+
     /**
-     * Stop a terminal session for a user
-     * 
-     * @param int $userId The panel user ID
-     * @return bool True if session was stopped, false if no session existed
+     * Stop and record the end of a terminal session for a user.
+     *
+     * @param int $userId Panel user ID
+     * @return bool True if a session was found and stopped
      */
     public function stopSession(int $userId): bool
     {
-        $pidFile = $this->pidDir . '/' . $userId . '.pid';
-        $sessionFile = $this->pidDir . '/' . $userId . '.json';
-        
-        if (!file_exists($pidFile)) {
+        $session = $this->sessionRepo->findActiveByUserId($userId);
+        if (!$session) {
             return false;
         }
-        
-        $pid = trim(file_get_contents($pidFile));
-        
-        // Kill the process with verification
-        if ($this->isProcessRunning($pid)) {
-            // Try graceful shutdown first
-            @posix_kill((int)$pid, SIGTERM);
-            
-            // Wait and verify
-            usleep(500000); // 0.5 seconds
-            
-            if ($this->isProcessRunning($pid)) {
-                // Force kill if still running
-                @posix_kill((int)$pid, SIGKILL);
-                
-                // Wait and verify again
-                usleep(500000); // 0.5 seconds
-                
-                // If STILL running, log error and try shell command
-                if ($this->isProcessRunning($pid)) {
-                    error_log("Failed to kill ttyd process {$pid} for user {$userId}, trying shell command");
-                    try {
-                        $this->shell->execute('kill', ['-9', $pid]);
-                        usleep(200000); // Wait 0.2 seconds
-                    } catch (\Exception $e) {
-                        error_log("Shell kill also failed for PID {$pid}: " . $e->getMessage());
-                    }
-                }
-            }
-        }
-        
-        // Get session info for port cleanup
-        $sessionInfo = $this->getSessionInfo($userId);
-        
-        // Wait for port to be released
-        if ($sessionInfo && isset($sessionInfo['port'])) {
-            $port = $sessionInfo['port'];
-            $maxWait = 5; // seconds
-            $waited = 0;
-            
-            while (!$this->isPortAvailable($port) && $waited < $maxWait) {
-                usleep(500000); // 0.5 seconds
-                $waited += 0.5;
-            }
-            
-            if (!$this->isPortAvailable($port)) {
-                error_log("Warning: Port {$port} still in use after stopping session for user {$userId}");
-            }
-        }
-        
-        // Clean up files
-        @unlink($pidFile);
-        @unlink($sessionFile);
-        
+
+        $duration = $session->createdAt
+            ? (time() - strtotime($session->createdAt))
+            : 0;
+
+        $this->terminateSession($session);
+
+        AuditLogger::log('terminal.ended', "Terminal session ended for user {$userId}", [
+            'session_id' => $session->id,
+            'duration'   => $duration,
+        ]);
+
         return true;
     }
-    
+
     /**
-     * Check if a user has an active terminal session
-     * 
-     * @param int $userId The panel user ID
-     * @return bool
+     * Check whether the user currently has a live terminal session.
      */
     public function isSessionActive(int $userId): bool
     {
-        $pidFile = $this->pidDir . '/' . $userId . '.pid';
-        
-        if (!file_exists($pidFile)) {
+        $session = $this->sessionRepo->findActiveByUserId($userId);
+        if (!$session) {
             return false;
         }
-        
-        $pid = trim(file_get_contents($pidFile));
-        return $this->isProcessRunning($pid);
+        return $this->isSessionValid($session);
     }
-    
+
     /**
-     * Get session information for a user
-     * 
-     * @param int $userId The panel user ID
-     * @return array|null Session info or null if no active session
+     * Get session information for a user (returns null when no active session).
      */
     public function getSessionInfo(int $userId): ?array
     {
-        $sessionFile = $this->pidDir . '/' . $userId . '.json';
-        
-        if (!file_exists($sessionFile)) {
+        $session = $this->sessionRepo->findActiveByUserId($userId);
+        if (!$session || !$this->isSessionValid($session)) {
             return null;
         }
-        
-        $info = json_decode(file_get_contents($sessionFile), true);
-        
-        // Add URL for convenience using configured APP_URL
-        if ($info) {
-            // Get the base URL from config or construct from request
-            $config = require __DIR__ . '/../../../config/app.php';
-            $baseUrl = $config['url'] ?? 'http://localhost:7080';
-            
-            // Parse base URL to get protocol and host
-            $urlParts = parse_url($baseUrl);
-            $protocol = $urlParts['scheme'] ?? 'http';
-            $host = $urlParts['host'] ?? 'localhost';
-            $panelPort = $urlParts['port'] ?? 7080;
-            
-            // Build URL without embedded credentials
-            // Authentication is handled by Nginx auth_request checking PHP session
-            $url = "{$protocol}://{$host}:{$panelPort}/terminal-ws/{$info['port']}";
-            $info['url'] = $url;
-        }
-        
-        return $info;
+        return $this->buildSessionInfo($session);
     }
-    
+
     /**
-     * Stop all terminal sessions
-     * Useful for maintenance or shutdown
-     * 
+     * Update the last-seen timestamp, keeping the session alive.
+     * Should be called on every /terminal/status poll.
+     */
+    public function updateSessionActivity(int $userId): void
+    {
+        $session = $this->sessionRepo->findActiveByUserId($userId);
+        if ($session) {
+            $this->sessionRepo->updateLastSeen($session->id);
+        }
+    }
+
+    /**
+     * Stop all active terminal sessions (e.g. during maintenance).
+     *
      * @return int Number of sessions stopped
      */
     public function stopAllSessions(): int
     {
-        $count = 0;
-        $files = glob($this->pidDir . '/*.pid');
-        
-        foreach ($files as $file) {
-            $userId = (int) basename($file, '.pid');
-            if ($this->stopSession($userId)) {
-                $count++;
-            }
+        $count    = 0;
+        $sessions = $this->sessionRepo->findAllActive();
+        foreach ($sessions as $session) {
+            $this->terminateSession($session);
+            $count++;
         }
-        
         return $count;
     }
-    
+
     /**
-     * Get list of all active sessions
-     * 
-     * @return array Array of user IDs with active sessions
+     * Get all active session user IDs.
+     *
+     * @return int[]
      */
     public function getActiveSessions(): array
     {
-        $active = [];
-        $files = glob($this->pidDir . '/*.pid');
-        
-        foreach ($files as $file) {
-            $userId = (int) basename($file, '.pid');
-            if ($this->isSessionActive($userId)) {
-                $active[] = $userId;
-            }
-        }
-        
-        return $active;
+        return array_map(
+            fn(TerminalSession $s) => $s->userId,
+            $this->sessionRepo->findAllActive()
+        );
     }
-    
+
     /**
-     * Check if ttyd is installed on the system
-     * 
-     * @return bool
+     * Clean up sessions that have expired or been idle too long.
+     *
+     * @param int $maxIdleSeconds Idle threshold (defaults to IDLE_TIMEOUT)
+     * @return int Number of sessions cleaned up
+     */
+    public function cleanupStaleSessions(int $maxIdleSeconds = self::IDLE_TIMEOUT): int
+    {
+        $count = 0;
+
+        // Expired sessions
+        foreach ($this->sessionRepo->findExpired() as $session) {
+            $this->terminateSession($session);
+            $count++;
+        }
+
+        // Idle sessions
+        foreach ($this->sessionRepo->findIdleSince($maxIdleSeconds) as $session) {
+            // Skip sessions already caught by expiry check
+            if ($session->status !== 'active') {
+                continue;
+            }
+            $this->terminateSession($session);
+            $count++;
+        }
+
+        // Purge old ended records
+        $this->sessionRepo->deleteEnded();
+
+        return $count;
+    }
+
+    /**
+     * Check whether ttyd is installed on the system.
      */
     public function isTtydInstalled(): bool
     {
         $result = shell_exec('which ttyd 2>/dev/null');
         return !empty(trim($result ?? ''));
     }
-    
+
     /**
-     * Get ttyd installation instructions
-     * 
-     * @return string Installation instructions for ttyd
+     * Return human-readable ttyd installation instructions.
      */
     public function getInstallationInstructions(): string
     {
@@ -358,212 +278,243 @@ Option 3 - Build from source:
 After installation, restart the NovaPanel service.
 TEXT;
     }
-    
+
+    // -------------------------------------------------------------------------
+    // Internal helpers
+    // -------------------------------------------------------------------------
+
     /**
-     * Save session information to file
+     * Build the session-info array returned to callers / views.
      */
-    private function saveSessionInfo(int $userId, int $port, string $token): void
+    private function buildSessionInfo(TerminalSession $session): array
     {
-        $info = [
-            'user_id' => $userId,
-            'port' => $port,
-            'token' => $token,
-            'created_at' => time(),
-            'last_activity' => time()
+        $config   = @file_exists(__DIR__ . '/../../../config/app.php')
+            ? (require __DIR__ . '/../../../config/app.php')
+            : [];
+        $baseUrl  = $config['url'] ?? 'http://localhost:7080';
+        $parts    = parse_url($baseUrl);
+        $protocol = $parts['scheme'] ?? 'http';
+        $host     = $parts['host']   ?? 'localhost';
+        $panelPort = $parts['port']  ?? 7080;
+
+        $url = "{$protocol}://{$host}:{$panelPort}/internal/terminal/{$session->id}";
+
+        return [
+            'session_id'  => $session->id,
+            'user_id'     => $session->userId,
+            'role'        => $session->role,
+            'port'        => $session->ttydPort,
+            'status'      => $session->status,
+            'expires_at'  => $session->expiresAt,
+            'last_seen_at' => $session->lastSeenAt,
+            'url'         => $url,
         ];
-        
-        if (@file_put_contents(
-            $this->pidDir . '/' . $userId . '.json',
-            json_encode($info, JSON_PRETTY_PRINT)
-        ) === false) {
-            error_log("Warning: Failed to save terminal session info for user {$userId}");
-        }
     }
-    
+
     /**
-     * Update last activity timestamp for a session
-     * This should be called periodically to track active sessions
-     * 
-     * @param int $userId The panel user ID
+     * Determine whether a DB session record represents a live, usable session.
      */
-    public function updateSessionActivity(int $userId): void
+    private function isSessionValid(TerminalSession $session): bool
     {
-        $sessionFile = $this->pidDir . '/' . $userId . '.json';
-        
-        if (!file_exists($sessionFile)) {
-            return;
-        }
-        
-        $content = @file_get_contents($sessionFile);
-        if ($content === false) {
-            return;
-        }
-        
-        $info = json_decode($content, true);
-        if (!$info) {
-            return;
-        }
-        
-        $info['last_activity'] = time();
-        
-        @file_put_contents(
-            $sessionFile,
-            json_encode($info, JSON_PRETTY_PRINT)
-        );
-    }
-    
-    /**
-     * Clean up stale terminal sessions (idle for more than specified time)
-     * Should be called periodically by a cron job or maintenance script
-     * 
-     * A session is considered stale if:
-     * 1. The process is not running anymore (PID file exists but process is dead), OR
-     * 2. The session has been inactive (no activity updates) for longer than maxIdleSeconds
-     * 
-     * Active sessions (where process is still running) are NOT terminated based on age alone.
-     * To track activity, the application should call updateSessionActivity() periodically.
-     * 
-     * @param int $maxIdleSeconds Maximum idle time in seconds (default: 3600 = 1 hour)
-     * @return int Number of sessions cleaned up
-     */
-    public function cleanupStaleSessions(int $maxIdleSeconds = 3600): int
-    {
-        $count = 0;
-        $files = glob($this->pidDir . '/*.json');
-        
-        if (!$files) {
-            return 0;
-        }
-        
-        foreach ($files as $file) {
-            try {
-                $content = @file_get_contents($file);
-                if ($content === false) {
-                    continue;
-                }
-                
-                $info = json_decode($content, true);
-                if (!$info || !isset($info['user_id'])) {
-                    continue;
-                }
-                
-                $userId = $info['user_id'];
-                $pidFile = $this->pidDir . '/' . $userId . '.pid';
-                
-                // Check if process is still running
-                $isRunning = false;
-                if (file_exists($pidFile)) {
-                    $pid = trim(file_get_contents($pidFile));
-                    $isRunning = $this->isProcessRunning($pid);
-                }
-                
-                // If process is not running, clean up orphaned session files
-                if (!$isRunning) {
-                    error_log("Cleaning up orphaned terminal session for user {$userId} (process not running)");
-                    @unlink($file);
-                    if (file_exists($pidFile)) {
-                        @unlink($pidFile);
-                    }
-                    $count++;
-                    continue;
-                }
-                
-                // If process is running, check last activity to determine if idle
-                // Use last_activity if available, otherwise fall back to created_at
-                $lastActivity = $info['last_activity'] ?? $info['created_at'] ?? time();
-                $idleTime = time() - $lastActivity;
-                
-                // Only terminate running sessions if they've been idle (no activity updates)
-                if ($idleTime > $maxIdleSeconds) {
-                    error_log("Cleaning up idle terminal session for user {$userId} (idle for {$idleTime}s)");
-                    if ($this->stopSession($userId)) {
-                        $count++;
-                    }
-                }
-            } catch (\Exception $e) {
-                error_log("Error cleaning up session from file {$file}: " . $e->getMessage());
-            }
-        }
-        
-        return $count;
-    }
-    
-    /**
-     * Check if a process is running by PID
-     * 
-     * Uses posix_kill with signal 0 to check process existence.
-     * Note: Returns true if process exists, even if we don't have permission to signal it.
-     */
-    private function isProcessRunning(string $pid): bool
-    {
-        if (empty($pid) || !is_numeric($pid)) {
+        if ($session->status !== 'active') {
             return false;
         }
-        
-        // Use posix_kill with signal 0 to check if process exists
-        $result = posix_kill((int)$pid, 0);
-        
-        if ($result) {
-            // Process exists and we can signal it
-            return true;
+
+        // Check TTL
+        if ($session->expiresAt && strtotime($session->expiresAt) <= time()) {
+            return false;
         }
-        
-        // Check the error code to determine if process exists
-        $errorCode = posix_get_last_error();
-        
-        // EPERM (1) means the process exists but we don't have permission to signal it
-        // This can happen with processes started via nohup or running under different permissions
-        // ESRCH (3) means the process doesn't exist
-        if ($errorCode === 1) { // EPERM - Operation not permitted
-            return true; // Process exists, just no permission to signal it
+
+        // Check idle timeout
+        if ($session->lastSeenAt) {
+            $idle = time() - strtotime($session->lastSeenAt);
+            if ($idle > self::IDLE_TIMEOUT) {
+                return false;
+            }
         }
-        
-        // For any other error (including ESRCH), treat as not running
-        return false;
+
+        // Check OS process
+        if ($session->processId && !$this->isProcessRunning($session->processId)) {
+            return false;
+        }
+
+        return true;
     }
-    
+
     /**
-     * Find an available port for a terminal session
-     * 
-     * @param int $userId The panel user ID
-     * @return int Available port number
-     * @throws \RuntimeException If no ports are available
+     * Kill the OS process and mark the session as ended in the DB.
      */
-    private function findAvailablePort(int $userId): int
+    private function terminateSession(TerminalSession $session): void
     {
-        // Scan through the port range to find an available port
-        // Do NOT use userId in calculation as it can be any number (e.g., 200, 1000)
-        // which would result in invalid or out-of-range ports
-        
-        // Search in a range of 100 ports starting from basePort
-        for ($port = $this->basePort; $port < $this->basePort + 100; $port++) {
+        if ($session->processId) {
+            $this->killProcess($session->processId);
+        }
+        $this->sessionRepo->markEnded($session->id);
+    }
+
+    /**
+     * Launch ttyd in the background and return the PID.
+     *
+     * ttyd options used:
+     *   -p {port}       bind to specific port
+     *   -m 1            allow only a single WebSocket client
+     *   -o              exit once the client disconnects
+     *   -W              enable writable mode (required for interactive shells)
+     *   -b {base_path}  URL base path (used by the proxy)
+     *
+     * The wrapper script receives SESSION_ID and ROLE as positional arguments.
+     * All arguments are individually shell-escaped; the wrapper path is a
+     * hardcoded constant so it cannot be influenced by user input.
+     *
+     * @throws \RuntimeException if ttyd fails to start
+     */
+    private function launchTtyd(int $port, string $sessionId, string $role, int $userId): int
+    {
+        $wrapperExists = file_exists(self::WRAPPER_SCRIPT);
+        if ($wrapperExists) {
+            // Each component is individually shell-escaped; the wrapper path is
+            // a hardcoded constant and cannot be injected externally.
+            $shellCmd = escapeshellarg(self::WRAPPER_SCRIPT)
+                . ' ' . escapeshellarg($sessionId)
+                . ' ' . escapeshellarg($role);
+        } else {
+            $shellCmd = 'bash -l';
+        }
+
+        $logFile  = escapeshellarg($this->logDir . '/' . $userId . '_' . substr($sessionId, 0, 8) . '.log');
+        $basePath = escapeshellarg('/internal/terminal/' . $sessionId);
+
+        $command = sprintf(
+            'nohup ttyd -p %d -m 1 -o -W -b %s %s > %s 2>&1 & echo $!',
+            $port,
+            $basePath,
+            $shellCmd,
+            $logFile
+        );
+
+        $output = shell_exec($command);
+        $pid    = (int) trim($output ?? '');
+
+        if ($pid <= 0) {
+            throw new \RuntimeException(
+                'Failed to start terminal session: could not capture process ID'
+            );
+        }
+
+        // Brief pause to let ttyd bind its port
+        usleep(500000);
+
+        if (!$this->isProcessRunning($pid)) {
+            $rawLog = $this->logDir . '/' . $userId . '_' . substr($sessionId, 0, 8) . '.log';
+            $errorDetails = $this->readLastLines($rawLog, 5);
+            throw new \RuntimeException(
+                "Terminal process failed to start on port {$port}." .
+                ($errorDetails ? " Log: {$errorDetails}" : '')
+            );
+        }
+
+        return $pid;
+    }
+
+    /**
+     * Attempt a graceful then forceful process kill.
+     */
+    private function killProcess(int $pid): void
+    {
+        if (!$this->isProcessRunning($pid)) {
+            return;
+        }
+
+        @posix_kill($pid, SIGTERM);
+        usleep(500000);
+
+        if ($this->isProcessRunning($pid)) {
+            @posix_kill($pid, SIGKILL);
+            usleep(500000);
+        }
+
+        // Last-resort shell kill
+        if ($this->isProcessRunning($pid)) {
+            try {
+                $this->shell->execute('kill', ['-9', (string) $pid]);
+            } catch (\Exception $e) {
+                error_log("Shell kill failed for PID {$pid}: " . $e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * Check whether a process is running by PID.
+     */
+    private function isProcessRunning(int $pid): bool
+    {
+        if ($pid <= 0) {
+            return false;
+        }
+
+        $result    = posix_kill($pid, 0);
+        $errorCode = posix_get_last_error();
+
+        // EPERM (1) = process exists but we lack permission to signal it
+        return $result || $errorCode === 1;
+    }
+
+    /**
+     * Find an available TCP port in the configured range.
+     *
+     * @throws \RuntimeException if no port is available
+     */
+    private function findAvailablePort(): int
+    {
+        for ($port = self::BASE_PORT; $port < self::BASE_PORT + self::PORT_RANGE; $port++) {
             if ($this->isPortAvailable($port)) {
                 return $port;
             }
         }
-        
-        throw new \RuntimeException('No available ports for terminal session. All ports in range ' . 
-                                   $this->basePort . '-' . ($this->basePort + 99) . ' are in use.');
+
+        throw new \RuntimeException(
+            'No available ports for terminal session. All ports in range ' .
+            self::BASE_PORT . '-' . (self::BASE_PORT + self::PORT_RANGE - 1) . ' are in use.'
+        );
     }
-    
+
     /**
-     * Check if a port is available for use
-     * 
-     * @param int $port Port number to check
-     * @return bool True if port is available, false if in use
+     * Return true when no process is bound to $port on localhost.
      */
     private function isPortAvailable(int $port): bool
     {
-        // Try to connect to the port
         $connection = @fsockopen('127.0.0.1', $port, $errno, $errstr, 1);
-        
         if (is_resource($connection)) {
-            // Port is in use
             fclose($connection);
             return false;
         }
-        
-        // Port is available
         return true;
+    }
+
+    /**
+     * Generate a RFC-4122 v4 UUID.
+     */
+    private function generateUuid(): string
+    {
+        $data = random_bytes(16);
+        $data[6] = chr((ord($data[6]) & 0x0f) | 0x40);
+        $data[8] = chr((ord($data[8]) & 0x3f) | 0x80);
+        return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
+    }
+
+    /**
+     * Read the last N lines of a log file for error reporting.
+     */
+    private function readLastLines(string $path, int $lines): string
+    {
+        if (!file_exists($path)) {
+            return '';
+        }
+        $content = @file_get_contents($path);
+        if ($content === false) {
+            return '';
+        }
+        $all = array_filter(explode("\n", trim($content)));
+        return implode("\n", array_slice($all, -$lines));
     }
 }
