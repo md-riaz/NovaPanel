@@ -11,6 +11,7 @@ use App\Repositories\CronJobRepository;
 use App\Repositories\DomainRepository;
 use App\Repositories\DnsRecordRepository;
 use App\Repositories\RoleRepository;
+use App\Repositories\TerminalSessionRepository;
 use App\Services\CreateSiteService;
 use App\Services\CreateDatabaseService;
 use App\Services\CreateFtpUserService;
@@ -40,6 +41,7 @@ class App
     private static ?DomainRepository $domainRepository = null;
     private static ?DnsRecordRepository $dnsRecordRepository = null;
     private static ?RoleRepository $roleRepository = null;
+    private static ?TerminalSessionRepository $terminalSessionRepository = null;
     private static ?Shell $shell = null;
 
     /**
@@ -139,6 +141,17 @@ class App
             self::$roleRepository = new RoleRepository();
         }
         return self::$roleRepository;
+    }
+
+    /**
+     * Get TerminalSessionRepository instance
+     */
+    public static function terminalSessions(): TerminalSessionRepository
+    {
+        if (self::$terminalSessionRepository === null) {
+            self::$terminalSessionRepository = new TerminalSessionRepository();
+        }
+        return self::$terminalSessionRepository;
     }
 
     /**

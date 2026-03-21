@@ -73,6 +73,30 @@ class RoleRepository
         return $stmt->execute([$userId, $roleId]);
     }
 
+    /**
+     * Check if a user has a specific permission through any of their roles.
+     */
+    public function hasPermission(int $userId, string $permissionName): bool
+    {
+        $stmt = $this->db->prepare("
+            SELECT COUNT(*) FROM role_permissions rp
+            INNER JOIN user_roles ur ON rp.role_id = ur.role_id
+            INNER JOIN permissions p ON rp.permission_id = p.id
+            WHERE ur.user_id = ? AND p.name = ?
+        ");
+        $stmt->execute([$userId, $permissionName]);
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    /**
+     * Get the primary role name for a user (the first role assigned).
+     */
+    public function getPrimaryRoleName(int $userId): string
+    {
+        $roles = $this->getUserRoles($userId);
+        return !empty($roles) ? $roles[0]->name : 'ReadOnly';
+    }
+
     private function hydrate(array $row): Role
     {
         return new Role(
