@@ -363,25 +363,33 @@ TEXT;
      *   -b {base_path}  URL base path (used by the proxy)
      *
      * The wrapper script receives SESSION_ID and ROLE as positional arguments.
+     * All arguments are individually shell-escaped; the wrapper path is a
+     * hardcoded constant so it cannot be influenced by user input.
      *
      * @throws \RuntimeException if ttyd fails to start
      */
     private function launchTtyd(int $port, string $sessionId, string $role, int $userId): int
     {
         $wrapperExists = file_exists(self::WRAPPER_SCRIPT);
-        $shellCmd      = $wrapperExists
-            ? escapeshellcmd(self::WRAPPER_SCRIPT) . ' ' . escapeshellarg($sessionId) . ' ' . escapeshellarg($role)
-            : 'bash -l';
+        if ($wrapperExists) {
+            // Each component is individually shell-escaped; the wrapper path is
+            // a hardcoded constant and cannot be injected externally.
+            $shellCmd = escapeshellarg(self::WRAPPER_SCRIPT)
+                . ' ' . escapeshellarg($sessionId)
+                . ' ' . escapeshellarg($role);
+        } else {
+            $shellCmd = 'bash -l';
+        }
 
-        $logFile = $this->logDir . '/' . $userId . '_' . substr($sessionId, 0, 8) . '.log';
-        $basePath = '/internal/terminal/' . $sessionId;
+        $logFile  = escapeshellarg($this->logDir . '/' . $userId . '_' . substr($sessionId, 0, 8) . '.log');
+        $basePath = escapeshellarg('/internal/terminal/' . $sessionId);
 
         $command = sprintf(
             'nohup ttyd -p %d -m 1 -o -W -b %s %s > %s 2>&1 & echo $!',
             $port,
-            escapeshellarg($basePath),
+            $basePath,
             $shellCmd,
-            escapeshellarg($logFile)
+            $logFile
         );
 
         $output = shell_exec($command);
@@ -397,7 +405,8 @@ TEXT;
         usleep(500000);
 
         if (!$this->isProcessRunning($pid)) {
-            $errorDetails = $this->readLastLines($logFile, 5);
+            $rawLog = $this->logDir . '/' . $userId . '_' . substr($sessionId, 0, 8) . '.log';
+            $errorDetails = $this->readLastLines($rawLog, 5);
             throw new \RuntimeException(
                 "Terminal process failed to start on port {$port}." .
                 ($errorDetails ? " Log: {$errorDetails}" : '')

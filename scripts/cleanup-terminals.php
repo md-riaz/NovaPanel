@@ -21,7 +21,7 @@
  *   --verbose           Show detailed output
  *
  * Cron example (every 5 minutes):
- *   *\/5 * * * * cd /opt/novapanel && php scripts/cleanup-terminals.php \
+ *   */5 * * * * cd /opt/novapanel && php scripts/cleanup-terminals.php \
  *       >> storage/logs/terminal-cleanup.log 2>&1
  */
 

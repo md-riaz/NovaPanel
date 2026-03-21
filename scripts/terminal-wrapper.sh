@@ -49,7 +49,7 @@ cd "${NOVAPANEL_HOME}" 2>/dev/null || cd /tmp
 # ----------------------------------------------------------------------------
 ROLE_UPPER="$(echo "${ROLE}" | tr '[:lower:]' '[:upper:]')"
 echo "╔══════════════════════════════════════════════════════════╗"
-printf  "║  NovaPanel Terminal  │  Role: %-27s ║\n" "${ROLE}"
+printf  "║  NovaPanel Terminal  │  Role: %-27s ║\n" "${ROLE_UPPER}"
 printf  "║  Session: %-47s ║\n" "${SESSION_ID:0:36}"
 echo "╠══════════════════════════════════════════════════════════╣"
 echo "║  Working dir : ${NOVAPANEL_HOME}"

@@ -57,7 +57,7 @@
             <h5><i class="bi bi-shield-check"></i> Security Notice</h5>
             <ul class="mb-0">
                 <li>This terminal runs as the <strong>novapanel</strong> system user</li>
-                <li>Sessions expire after <strong>15 minutes</strong> and close automatically after <strong>5 minutes</strong> of inactivity</li>
+                <li>Sessions expire after <strong><?= (int) ($sessionTtlMinutes ?? 15) ?> minutes</strong> and close automatically after <strong><?= (int) ($idleTimeoutMinutes ?? 5) ?> minutes</strong> of inactivity</li>
                 <li>All terminal access is logged for security auditing</li>
                 <li>Environment variables containing secrets are sanitized</li>
             </ul>

@@ -40,7 +40,7 @@ class TerminalController extends Controller
             AuditLogger::log('terminal.access_denied', "Terminal access denied for user {$username}");
             return $this->view('pages/terminal/error', [
                 'title'        => 'Terminal - Access Denied',
-                'error'        => 'You do not have permission to access the terminal.',
+                'error'        => 'You do not have permission to access the terminal. Contact your administrator to request the terminal.access permission.',
                 'instructions' => ''
             ]);
         }
@@ -58,7 +58,9 @@ class TerminalController extends Controller
 
             return $this->view('pages/terminal/index', [
                 'title'       => 'Terminal',
-                'sessionInfo' => $sessionInfo
+                'sessionInfo' => $sessionInfo,
+                'sessionTtlMinutes'  => (int) (TerminalAdapter::SESSION_TTL / 60),
+                'idleTimeoutMinutes' => (int) (TerminalAdapter::IDLE_TIMEOUT / 60),
             ]);
 
         } catch (\Exception $e) {
