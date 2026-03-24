@@ -7,15 +7,15 @@
 <div class="row">
     <div class="col-md-8">
         <div id="form-messages"></div>
-        <form method="POST" action="/sites" 
-              hx-post="/sites" 
+        <form method="POST" action="/sites"
+              hx-post="/sites"
               hx-target="#form-messages"
               hx-swap="innerHTML"
               hx-indicator="#submit-indicator">
             <div class="mb-3">
                 <label for="domain" class="form-label">Domain Name</label>
                 <input type="text" class="form-control" id="domain" name="domain" required>
-                <div class="form-text">Enter the domain name (e.g., example.com)</div>
+                <div class="form-text">Enter the primary domain name, for example <code>example.com</code>.</div>
             </div>
 
             <div class="mb-3">
@@ -26,7 +26,7 @@
                         <option value="<?= $user->id ?>"><?= htmlspecialchars($user->username) ?> (<?= htmlspecialchars($user->email) ?>)</option>
                     <?php endforeach; ?>
                 </select>
-                <div class="form-text">The panel user who will own and manage this site</div>
+                <div class="form-text">The panel user who will own and manage this site.</div>
             </div>
 
             <div class="mb-3">
@@ -39,9 +39,45 @@
                 </select>
             </div>
 
-            <div class="mb-3 form-check">
-                <input type="checkbox" class="form-check-input" id="ssl_enabled" name="ssl_enabled">
-                <label class="form-check-label" for="ssl_enabled">Enable SSL</label>
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-shield-lock"></i> Certificate Workflow</span>
+                    <div class="form-check form-switch mb-0">
+                        <input type="checkbox" class="form-check-input" id="request_certificate" name="request_certificate" checked>
+                        <label class="form-check-label" for="request_certificate">Request certificate now</label>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label for="certificate_provider" class="form-label">Provider</label>
+                            <select class="form-select" id="certificate_provider" name="certificate_provider">
+                                <option value="letsencrypt">Let's Encrypt</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="certificate_validation_method" class="form-label">Validation Method</label>
+                            <select class="form-select" id="certificate_validation_method" name="certificate_validation_method">
+                                <option value="webroot">HTTP Webroot</option>
+                                <option value="dns">DNS Hook</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-text mt-2">
+                        Webroot validation requires the domain to resolve to this server and allow <code>/.well-known/acme-challenge/</code>. DNS validation requires hook scripts configured in <code>.env.php</code>.
+                    </div>
+
+                    <div class="mt-3 d-flex flex-column gap-2">
+                        <div class="form-check">
+                            <input type="checkbox" class="form-check-input" id="certificate_auto_renew" name="certificate_auto_renew" checked>
+                            <label class="form-check-label" for="certificate_auto_renew">Enable auto-renew</label>
+                        </div>
+                        <div class="form-check">
+                            <input type="checkbox" class="form-check-input" id="force_https" name="force_https">
+                            <label class="form-check-label" for="force_https">Redirect all HTTP requests to HTTPS after the certificate is active</label>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div class="mb-3">
@@ -58,10 +94,9 @@
 <script>
 document.body.addEventListener('htmx:afterRequest', function(evt) {
     if (evt.detail.successful && evt.detail.target.id === 'form-messages') {
-        // Redirect to sites page on success
         setTimeout(() => {
             window.location.href = '/sites';
-        }, 1000);
+        }, 1200);
     }
 });
 </script>

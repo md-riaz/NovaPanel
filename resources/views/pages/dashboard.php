@@ -2,8 +2,8 @@
 
 <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pb-2 mb-3 border-bottom">
     <h1 class="h2">Dashboard</h1>
-    <button class="btn btn-sm btn-outline-secondary" 
-            hx-get="/dashboard/stats" 
+    <button class="btn btn-sm btn-outline-secondary"
+            hx-get="/dashboard/stats"
             hx-target="#stats-container"
             hx-swap="innerHTML">
         <i class="bi bi-arrow-clockwise"></i> Refresh Stats
@@ -11,7 +11,6 @@
 </div>
 
 <div class="row" id="stats-container" hx-get="/dashboard/stats" hx-trigger="load, every 30s" hx-swap="innerHTML">
-    <!-- Loading skeleton -->
     <div class="col-md-3 mb-3">
         <div class="card text-white bg-secondary">
             <div class="card-body">
@@ -53,6 +52,27 @@
         </div>
     </div>
 </div>
+
+<?php if (!empty($certificateFailures ?? [])): ?>
+    <div class="alert alert-warning mt-4">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+                <strong>Certificate renewals need attention.</strong>
+                <div class="small">Failures are also logged to <code>storage/logs/certificates.log</code>.</div>
+            </div>
+            <a href="/sites" class="btn btn-sm btn-outline-dark">Review Sites</a>
+        </div>
+        <ul class="mt-3 mb-0">
+            <?php foreach ($certificateFailures as $failedSite): ?>
+                <li>
+                    <strong><?= htmlspecialchars($failedSite->domain) ?></strong>
+                    (<?= htmlspecialchars($failedSite->ownerUsername ?? ('User #' . $failedSite->userId)) ?>)
+                    — <?= htmlspecialchars($failedSite->lastCertificateError) ?>
+                </li>
+            <?php endforeach; ?>
+        </ul>
+    </div>
+<?php endif; ?>
 
 <div class="row mt-4">
     <div class="col-md-12">
