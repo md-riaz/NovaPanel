@@ -4,11 +4,11 @@
     <h1 class="h2">Create Site</h1>
 </div>
 
-<div class="row">
+<div class="row g-4">
     <div class="col-md-8">
         <div id="form-messages"></div>
-        <form method="POST" action="/sites" 
-              hx-post="/sites" 
+        <form method="POST" action="/sites"
+              hx-post="/sites"
               hx-target="#form-messages"
               hx-swap="innerHTML"
               hx-indicator="#submit-indicator">
@@ -27,6 +27,18 @@
                     <?php endforeach; ?>
                 </select>
                 <div class="form-text">The panel user who will own and manage this site</div>
+            </div>
+
+            <div class="mb-3">
+                <label for="template" class="form-label">Application Template</label>
+                <select class="form-select" id="template" name="template">
+                    <?php foreach ($templates ?? [] as $template): ?>
+                        <option value="<?= htmlspecialchars($template['key']) ?>" <?= ($selectedTemplate ?? 'basic_php') === $template['key'] ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($template['name']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+                <div class="form-text">Choose a starter blueprint to reduce post-provisioning setup work.</div>
             </div>
 
             <div class="mb-3">
@@ -53,12 +65,27 @@
             </div>
         </form>
     </div>
+    <div class="col-md-4">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body">
+                <h5 class="card-title">Template guide</h5>
+                <div class="list-group list-group-flush">
+                    <?php foreach ($templates ?? [] as $template): ?>
+                        <div class="list-group-item px-0">
+                            <div class="fw-semibold"><?= htmlspecialchars($template['name']) ?></div>
+                            <div class="small text-muted"><?= htmlspecialchars($template['summary']) ?></div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+                <a href="/templates" class="btn btn-sm btn-outline-primary mt-3">Browse module details</a>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>
 document.body.addEventListener('htmx:afterRequest', function(evt) {
     if (evt.detail.successful && evt.detail.target.id === 'form-messages') {
-        // Redirect to sites page on success
         setTimeout(() => {
             window.location.href = '/sites';
         }, 1000);

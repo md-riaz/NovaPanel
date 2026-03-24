@@ -18,6 +18,7 @@ use App\Services\CreateFtpUserService;
 use App\Services\AddCronJobService;
 use App\Services\SetupDnsZoneService;
 use App\Infrastructure\Shell\Shell;
+use App\Support\SiteTemplateService;
 
 /**
  * Application Facade
@@ -176,7 +177,8 @@ class App
             self::users(),
             WebServer::getInstance(),
             PhpRuntime::getInstance(),
-            self::shell()
+            self::shell(),
+            new SiteTemplateService()
         );
     }
 
