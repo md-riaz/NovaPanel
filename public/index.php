@@ -2,91 +2,83 @@
 
 /**
  * NovaPanel Entry Point
- * 
+ *
  * This file handles all HTTP requests to the panel.
  */
 
-// Bootstrap the application (loads env, autoloader, sets error reporting)
 require_once __DIR__ . '/../bootstrap/app.php';
 
-use App\Http\Router;
-use App\Http\Request;
 use App\Http\Controllers\AuthController;
-use App\Http\Controllers\DashboardController;
-use App\Http\Controllers\SiteController;
-use App\Http\Controllers\UserController;
-use App\Http\Controllers\TerminalController;
-use App\Http\Controllers\DatabaseController;
-use App\Http\Controllers\FtpController;
 use App\Http\Controllers\CronController;
+use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\DatabaseController;
 use App\Http\Controllers\DnsController;
+use App\Http\Controllers\FtpController;
+use App\Http\Controllers\SiteController;
+use App\Http\Controllers\TerminalController;
+use App\Http\Controllers\UserController;
 use App\Http\Middleware\AuthMiddleware;
+use App\Http\Middleware\PermissionMiddleware;
+use App\Http\Request;
+use App\Http\Router;
 
 $router = new Router();
+$auth = [AuthMiddleware::class];
+$withPermission = static fn (string ...$permissions): array => array_merge(
+    $auth,
+    [PermissionMiddleware::class . ':' . implode(',', $permissions)]
+);
 
-// Authentication routes (no auth middleware)
 $router->get('/login', AuthController::class . '@showLogin');
 $router->post('/login', AuthController::class . '@login');
 $router->post('/logout', AuthController::class . '@logout');
 
-// Protected routes (require authentication)
-// Dashboard routes
-$router->get('/', DashboardController::class . '@index', [AuthMiddleware::class]);
-$router->get('/dashboard', DashboardController::class . '@index', [AuthMiddleware::class]);
-$router->get('/dashboard/stats', DashboardController::class . '@stats', [AuthMiddleware::class]);
+$router->get('/', DashboardController::class . '@index', $auth);
+$router->get('/dashboard', DashboardController::class . '@index', $auth);
+$router->get('/dashboard/stats', DashboardController::class . '@stats', $auth);
 
-// User routes
-$router->get('/users', UserController::class . '@index', [AuthMiddleware::class]);
-$router->get('/users/create', UserController::class . '@create', [AuthMiddleware::class]);
-$router->post('/users', UserController::class . '@store', [AuthMiddleware::class]);
-$router->get('/users/{id}/edit', UserController::class . '@edit', [AuthMiddleware::class]);
-$router->post('/users/{id}', UserController::class . '@update', [AuthMiddleware::class]);
-$router->post('/users/{id}/delete', UserController::class . '@delete', [AuthMiddleware::class]);
+$router->get('/users', UserController::class . '@index', $withPermission('users.view', 'users.manage'));
+$router->get('/users/create', UserController::class . '@create', $withPermission('users.create', 'users.manage'));
+$router->post('/users', UserController::class . '@store', $withPermission('users.create', 'users.manage'));
+$router->get('/users/{id}/edit', UserController::class . '@edit', $withPermission('users.view', 'users.manage'));
+$router->post('/users/{id}', UserController::class . '@update', $withPermission('users.edit', 'users.manage'));
+$router->post('/users/{id}/delete', UserController::class . '@delete', $withPermission('users.delete', 'users.manage'));
 
-// Site routes
-$router->get('/sites', SiteController::class . '@index', [AuthMiddleware::class]);
-$router->get('/sites/create', SiteController::class . '@create', [AuthMiddleware::class]);
-$router->post('/sites', SiteController::class . '@store', [AuthMiddleware::class]);
+$router->get('/sites', SiteController::class . '@index', $withPermission('sites.view', 'sites.manage'));
+$router->get('/sites/create', SiteController::class . '@create', $withPermission('sites.create', 'sites.manage'));
+$router->post('/sites', SiteController::class . '@store', $withPermission('sites.create', 'sites.manage'));
 
-// Database routes
-$router->get('/databases', DatabaseController::class . '@index', [AuthMiddleware::class]);
-$router->get('/databases/create', DatabaseController::class . '@create', [AuthMiddleware::class]);
-$router->post('/databases', DatabaseController::class . '@store', [AuthMiddleware::class]);
-$router->post('/databases/{id}/delete', DatabaseController::class . '@delete', [AuthMiddleware::class]);
-$router->get('/phpmyadmin/signon', DatabaseController::class . '@phpMyAdminSignon', [AuthMiddleware::class]);
+$router->get('/databases', DatabaseController::class . '@index', $withPermission('databases.view', 'databases.manage'));
+$router->get('/databases/create', DatabaseController::class . '@create', $withPermission('databases.create', 'databases.manage'));
+$router->post('/databases', DatabaseController::class . '@store', $withPermission('databases.create', 'databases.manage'));
+$router->post('/databases/{id}/delete', DatabaseController::class . '@delete', $withPermission('databases.delete', 'databases.manage'));
+$router->get('/phpmyadmin/signon', DatabaseController::class . '@phpMyAdminSignon', $withPermission('databases.view', 'databases.manage'));
 
-// FTP routes
-$router->get('/ftp', FtpController::class . '@index', [AuthMiddleware::class]);
-$router->get('/ftp/create', FtpController::class . '@create', [AuthMiddleware::class]);
-$router->post('/ftp', FtpController::class . '@store', [AuthMiddleware::class]);
-$router->post('/ftp/{id}/delete', FtpController::class . '@delete', [AuthMiddleware::class]);
+$router->get('/ftp', FtpController::class . '@index', $withPermission('ftp.view', 'ftp.manage'));
+$router->get('/ftp/create', FtpController::class . '@create', $withPermission('ftp.create', 'ftp.manage'));
+$router->post('/ftp', FtpController::class . '@store', $withPermission('ftp.create', 'ftp.manage'));
+$router->post('/ftp/{id}/delete', FtpController::class . '@delete', $withPermission('ftp.delete', 'ftp.manage'));
 
-// Cron routes
-$router->get('/cron', CronController::class . '@index', [AuthMiddleware::class]);
-$router->get('/cron/create', CronController::class . '@create', [AuthMiddleware::class]);
-$router->post('/cron', CronController::class . '@store', [AuthMiddleware::class]);
-$router->post('/cron/{id}/delete', CronController::class . '@delete', [AuthMiddleware::class]);
+$router->get('/cron', CronController::class . '@index', $withPermission('cron.view', 'cron.manage'));
+$router->get('/cron/create', CronController::class . '@create', $withPermission('cron.create', 'cron.manage'));
+$router->post('/cron', CronController::class . '@store', $withPermission('cron.create', 'cron.manage'));
+$router->post('/cron/{id}/delete', CronController::class . '@delete', $withPermission('cron.delete', 'cron.manage'));
 
-// DNS routes
-$router->get('/dns', DnsController::class . '@index', [AuthMiddleware::class]);
-$router->get('/dns/create', DnsController::class . '@create', [AuthMiddleware::class]);
-$router->post('/dns', DnsController::class . '@store', [AuthMiddleware::class]);
-$router->get('/dns/{id}', DnsController::class . '@show', [AuthMiddleware::class]);
-$router->post('/dns/{id}/records', DnsController::class . '@addRecord', [AuthMiddleware::class]);
-$router->post('/dns/{domainId}/records/{recordId}/delete', DnsController::class . '@deleteRecord', [AuthMiddleware::class]);
+$router->get('/dns', DnsController::class . '@index', $withPermission('dns.view', 'dns.manage'));
+$router->get('/dns/create', DnsController::class . '@create', $withPermission('dns.create', 'dns.manage'));
+$router->post('/dns', DnsController::class . '@store', $withPermission('dns.create', 'dns.manage'));
+$router->get('/dns/{id}', DnsController::class . '@show', $withPermission('dns.view', 'dns.manage'));
+$router->post('/dns/{id}/records', DnsController::class . '@addRecord', $withPermission('dns.edit', 'dns.manage'));
+$router->post('/dns/{domainId}/records/{recordId}/delete', DnsController::class . '@deleteRecord', $withPermission('dns.delete', 'dns.manage'));
 
+$router->get('/terminal', TerminalController::class . '@index', $withPermission('terminal.access'));
+$router->post('/terminal/start', TerminalController::class . '@start', $withPermission('terminal.access'));
+$router->post('/terminal/stop', TerminalController::class . '@stop', $withPermission('terminal.access'));
+$router->post('/terminal/restart', TerminalController::class . '@restart', $withPermission('terminal.access'));
+$router->get('/terminal/status', TerminalController::class . '@status', $withPermission('terminal.access'));
 
-// Terminal routes
-$router->get('/terminal', TerminalController::class . '@index', [AuthMiddleware::class]);
-$router->post('/terminal/start', TerminalController::class . '@start', [AuthMiddleware::class]);
-$router->post('/terminal/stop', TerminalController::class . '@stop', [AuthMiddleware::class]);
-$router->post('/terminal/restart', TerminalController::class . '@restart', [AuthMiddleware::class]);
-$router->get('/terminal/status', TerminalController::class . '@status', [AuthMiddleware::class]);
-
-// Nginx auth_request endpoint (no auth middleware)
 $router->get('/auth_check', AuthController::class . '@authCheck');
 
-// Dispatch request
 $request = new Request();
 $response = $router->dispatch($request);
 $response->send();

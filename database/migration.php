@@ -4,15 +4,44 @@ require_once __DIR__ . '/../vendor/autoload.php';
 
 use App\Infrastructure\Database;
 
+$rolePermissions = [
+    'Admin' => ['*'],
+    'AccountOwner' => [
+        'users.view', 'users.edit',
+        'sites.view', 'sites.create', 'sites.edit', 'sites.delete', 'sites.manage',
+        'databases.view', 'databases.create', 'databases.edit', 'databases.delete', 'databases.manage',
+        'dns.view', 'dns.create', 'dns.edit', 'dns.delete', 'dns.manage',
+        'ftp.view', 'ftp.create', 'ftp.edit', 'ftp.delete', 'ftp.manage',
+        'cron.view', 'cron.create', 'cron.edit', 'cron.delete', 'cron.manage',
+        'terminal.access',
+    ],
+    'Developer' => [
+        'users.view', 'users.edit',
+        'sites.view', 'sites.create', 'sites.edit',
+        'databases.view', 'databases.create', 'databases.edit',
+        'dns.view',
+        'ftp.view', 'ftp.create',
+        'cron.view', 'cron.create', 'cron.edit',
+        'terminal.access',
+    ],
+    'ReadOnly' => [
+        'users.view', 'users.edit',
+        'sites.view',
+        'databases.view',
+        'dns.view',
+        'ftp.view',
+        'cron.view',
+    ],
+];
+
 echo "NovaPanel Database Migration\n";
 echo "=============================\n\n";
 
 try {
     $db = Database::panel();
-    
+
     echo "Creating tables...\n";
 
-    // Users table
     $db->exec("
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,7 +54,6 @@ try {
     ");
     echo "✓ Created users table\n";
 
-    // Roles table
     $db->exec("
         CREATE TABLE IF NOT EXISTS roles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,7 +63,6 @@ try {
     ");
     echo "✓ Created roles table\n";
 
-    // Permissions table
     $db->exec("
         CREATE TABLE IF NOT EXISTS permissions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,7 +72,6 @@ try {
     ");
     echo "✓ Created permissions table\n";
 
-    // User roles junction table
     $db->exec("
         CREATE TABLE IF NOT EXISTS user_roles (
             user_id INTEGER NOT NULL,
@@ -57,7 +83,6 @@ try {
     ");
     echo "✓ Created user_roles table\n";
 
-    // Role permissions junction table
     $db->exec("
         CREATE TABLE IF NOT EXISTS role_permissions (
             role_id INTEGER NOT NULL,
@@ -69,7 +94,6 @@ try {
     ");
     echo "✓ Created role_permissions table\n";
 
-    // Sites table (linked directly to users for single VPS)
     $db->exec("
         CREATE TABLE IF NOT EXISTS sites (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,7 +109,6 @@ try {
     ");
     echo "✓ Created sites table\n";
 
-    // Domains table
     $db->exec("
         CREATE TABLE IF NOT EXISTS domains (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,7 +120,6 @@ try {
     ");
     echo "✓ Created domains table\n";
 
-    // DNS records table
     $db->exec("
         CREATE TABLE IF NOT EXISTS dns_records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,7 +135,6 @@ try {
     ");
     echo "✓ Created dns_records table\n";
 
-    // FTP users table (linked directly to users)
     $db->exec("
         CREATE TABLE IF NOT EXISTS ftp_users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -127,7 +148,6 @@ try {
     ");
     echo "✓ Created ftp_users table\n";
 
-    // Cron jobs table (linked directly to users)
     $db->exec("
         CREATE TABLE IF NOT EXISTS cron_jobs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -141,7 +161,6 @@ try {
     ");
     echo "✓ Created cron_jobs table\n";
 
-    // Databases table (linked directly to users)
     $db->exec("
         CREATE TABLE IF NOT EXISTS databases (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -154,7 +173,6 @@ try {
     ");
     echo "✓ Created databases table\n";
 
-    // Database users table
     $db->exec("
         CREATE TABLE IF NOT EXISTS database_users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -167,21 +185,19 @@ try {
     ");
     echo "✓ Created database_users table\n";
 
-    // Insert default roles
-    $stmt = $db->prepare("INSERT OR IGNORE INTO roles (name, description) VALUES (?, ?)");
+    $stmt = $db->prepare('INSERT OR IGNORE INTO roles (name, description) VALUES (?, ?)');
     $roles = [
         ['Admin', 'Full system administrator access'],
-        ['AccountOwner', 'Account owner with full control over their account'],
-        ['Developer', 'Developer with limited access to sites and databases'],
-        ['ReadOnly', 'Read-only access to view information']
+        ['AccountOwner', 'Can manage only their own sites, databases, DNS, FTP users, and cron jobs'],
+        ['Developer', 'Can work with their own sites, databases, FTP users, and cron jobs without broader account management'],
+        ['ReadOnly', 'Can only view their own resources'],
     ];
-    
+
     foreach ($roles as $role) {
         $stmt->execute($role);
     }
     echo "✓ Inserted default roles\n";
 
-    // Terminal sessions table
     $db->exec("
         CREATE TABLE IF NOT EXISTS terminal_sessions (
             id TEXT PRIMARY KEY,
@@ -198,52 +214,48 @@ try {
     ");
     echo "✓ Created terminal_sessions table\n";
 
-    // Insert default permissions
-    $stmt = $db->prepare("INSERT OR IGNORE INTO permissions (name, description) VALUES (?, ?)");
+    $stmt = $db->prepare('INSERT OR IGNORE INTO permissions (name, description) VALUES (?, ?)');
     $permissions = [
-        // User management permissions
         ['users.view', 'View panel users'],
         ['users.create', 'Create panel users'],
         ['users.edit', 'Edit panel users'],
         ['users.delete', 'Delete panel users'],
-        // Site management permissions
+        ['users.manage', 'Manage panel users and role assignments'],
         ['sites.view', 'View sites'],
         ['sites.create', 'Create sites'],
         ['sites.edit', 'Edit sites'],
         ['sites.delete', 'Delete sites'],
-        // Database management permissions
+        ['sites.manage', 'Manage any site within the panel'],
         ['databases.view', 'View databases'],
         ['databases.create', 'Create databases'],
         ['databases.edit', 'Edit databases'],
         ['databases.delete', 'Delete databases'],
-        // DNS management permissions
-        ['dns.view', 'View DNS records'],
+        ['databases.manage', 'Manage any database within the panel'],
+        ['dns.view', 'View DNS zones and records'],
+        ['dns.create', 'Create DNS zones'],
         ['dns.edit', 'Edit DNS records'],
-        ['dns.create', 'Create DNS records'],
         ['dns.delete', 'Delete DNS records'],
-        // FTP management permissions
+        ['dns.manage', 'Manage DNS zones and records for any account'],
         ['ftp.view', 'View FTP users'],
         ['ftp.create', 'Create FTP users'],
         ['ftp.edit', 'Edit FTP users'],
         ['ftp.delete', 'Delete FTP users'],
-        // Cron management permissions
+        ['ftp.manage', 'Manage FTP users for any account'],
         ['cron.view', 'View cron jobs'],
         ['cron.create', 'Create cron jobs'],
         ['cron.edit', 'Edit cron jobs'],
         ['cron.delete', 'Delete cron jobs'],
-        // Terminal permission
+        ['cron.manage', 'Manage cron jobs for any account'],
         ['terminal.access', 'Access the web terminal'],
-        // System permissions
         ['system.settings', 'Manage system settings'],
-        ['system.logs', 'View system logs']
+        ['system.logs', 'View system logs'],
     ];
-    
+
     foreach ($permissions as $permission) {
         $stmt->execute($permission);
     }
     echo "✓ Inserted default permissions\n";
 
-    // Assign all permissions to Admin role
     $db->exec("
         INSERT OR IGNORE INTO role_permissions (role_id, permission_id)
         SELECT r.id, p.id
@@ -252,68 +264,26 @@ try {
         WHERE r.name = 'Admin'
     ");
     echo "✓ Assigned all permissions to Admin role\n";
-    
-    // Assign permissions to AccountOwner role (manage their own resources)
-    $accountOwnerPermissions = [
-        'sites.view', 'sites.create', 'sites.edit', 'sites.delete',
-        'databases.view', 'databases.create', 'databases.edit', 'databases.delete',
-        'dns.view', 'dns.edit', 'dns.create', 'dns.delete',
-        'ftp.view', 'ftp.create', 'ftp.edit', 'ftp.delete',
-        'cron.view', 'cron.create', 'cron.edit', 'cron.delete',
-        'terminal.access'
-    ];
-    
-    foreach ($accountOwnerPermissions as $permName) {
-        $db->exec("
-            INSERT OR IGNORE INTO role_permissions (role_id, permission_id)
-            SELECT r.id, p.id
-            FROM roles r, permissions p
-            WHERE r.name = 'AccountOwner' AND p.name = '$permName'
-        ");
-    }
-    echo "✓ Assigned permissions to AccountOwner role\n";
-    
-    // Assign permissions to Developer role (limited access)
-    $developerPermissions = [
-        'sites.view', 'sites.edit',
-        'databases.view', 'databases.create', 'databases.edit',
-        'ftp.view', 'ftp.create',
-        'cron.view', 'cron.create', 'cron.edit',
-        'terminal.access'
-    ];
-    
-    foreach ($developerPermissions as $permName) {
-        $db->exec("
-            INSERT OR IGNORE INTO role_permissions (role_id, permission_id)
-            SELECT r.id, p.id
-            FROM roles r, permissions p
-            WHERE r.name = 'Developer' AND p.name = '$permName'
-        ");
-    }
-    echo "✓ Assigned permissions to Developer role\n";
-    
-    // Assign permissions to ReadOnly role (view only)
-    $readOnlyPermissions = [
-        'sites.view',
-        'databases.view',
-        'dns.view',
-        'ftp.view',
-        'cron.view',
-        'terminal.access'
-    ];
-    
-    foreach ($readOnlyPermissions as $permName) {
-        $db->exec("
-            INSERT OR IGNORE INTO role_permissions (role_id, permission_id)
-            SELECT r.id, p.id
-            FROM roles r, permissions p
-            WHERE r.name = 'ReadOnly' AND p.name = '$permName'
-        ");
-    }
-    echo "✓ Assigned permissions to ReadOnly role\n";
 
+    foreach ($rolePermissions as $roleName => $permissionNames) {
+        if ($roleName === 'Admin') {
+            continue;
+        }
+
+        foreach ($permissionNames as $permName) {
+            $assignment = $db->prepare("
+                INSERT OR IGNORE INTO role_permissions (role_id, permission_id)
+                SELECT r.id, p.id
+                FROM roles r
+                INNER JOIN permissions p ON p.name = ?
+                WHERE r.name = ?
+            ");
+            $assignment->execute([$permName, $roleName]);
+        }
+    }
+
+    echo "✓ Assigned permissions to non-admin roles\n";
     echo "\n✅ Migration completed successfully!\n";
-    
 } catch (Exception $e) {
     echo "\n❌ Error: " . $e->getMessage() . "\n";
     exit(1);
