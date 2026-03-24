@@ -44,6 +44,9 @@ $router->post('/users/{id}', UserController::class . '@update', [AuthMiddleware:
 $router->post('/users/{id}/delete', UserController::class . '@delete', [AuthMiddleware::class]);
 
 // Site routes
+// Supported resource actions: index, create, store.
+// Per-site show/edit/update/delete routes are intentionally not exposed because
+// there are no matching controller methods or views for them yet.
 $router->get('/sites', SiteController::class . '@index', [AuthMiddleware::class]);
 $router->get('/sites/create', SiteController::class . '@create', [AuthMiddleware::class]);
 $router->post('/sites', SiteController::class . '@store', [AuthMiddleware::class]);
@@ -56,6 +59,8 @@ $router->post('/databases/{id}/delete', DatabaseController::class . '@delete', [
 $router->get('/phpmyadmin/signon', DatabaseController::class . '@phpMyAdminSignon', [AuthMiddleware::class]);
 
 // FTP routes
+// Supported resource actions: index, create, store, delete.
+// FTP edit/show/update routes are intentionally omitted until implemented.
 $router->get('/ftp', FtpController::class . '@index', [AuthMiddleware::class]);
 $router->get('/ftp/create', FtpController::class . '@create', [AuthMiddleware::class]);
 $router->post('/ftp', FtpController::class . '@store', [AuthMiddleware::class]);

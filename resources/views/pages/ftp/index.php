@@ -36,8 +36,12 @@
                             </td>
                             <td><?= htmlspecialchars($ftpUser->createdAt) ?></td>
                             <td>
-                                <a href="/ftp/edit?id=<?= urlencode($ftpUser->id) ?>" class="btn btn-sm btn-secondary">Edit</a>
-                                <a href="/ftp/delete?id=<?= urlencode($ftpUser->id) ?>" class="btn btn-sm btn-danger" onclick="return confirm('Delete this FTP user?')">Delete</a>
+                                <form method="POST" action="/ftp/<?= $ftpUser->id ?>/delete" style="display: inline;"
+                                      onsubmit="return confirm('Are you sure you want to delete this FTP user?');">
+                                    <button type="submit" class="btn btn-sm btn-danger">
+                                        <i class="bi bi-trash"></i> Delete
+                                    </button>
+                                </form>
                             </td>
                         </tr>
                 <?php

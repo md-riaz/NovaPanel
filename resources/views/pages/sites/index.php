@@ -45,8 +45,7 @@
                         </td>
                         <td><?= htmlspecialchars($site->createdAt) ?></td>
                         <td>
-                            <a href="/sites/<?= $site->id ?>" class="btn btn-sm btn-info">View</a>
-                            <a href="/sites/<?= $site->id ?>/edit" class="btn btn-sm btn-warning">Edit</a>
+                            <span class="text-muted small">No per-site actions available</span>
                         </td>
                     </tr>
                 <?php endforeach; ?>
