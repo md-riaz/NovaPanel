@@ -97,4 +97,20 @@ class AcmeCertificateServiceTest extends TestCase
 
         $this->service->issue($site, 'letsencrypt', 'dns', true, false);
     }
+
+    public function testSanitizeCertbotOutputRedactsSensitiveValues(): void
+    {
+        $raw = 'Failed to connect 10.0.0.1 using token ABCDEFGHIJKLMNOP and path /etc/letsencrypt/live/example.com/fullchain.pem';
+
+        $method = new \ReflectionMethod($this->service, 'sanitizeCertbotOutput');
+        $method->setAccessible(true);
+        $sanitized = $method->invoke($this->service, $raw);
+
+        $this->assertStringNotContainsString('10.0.0.1', $sanitized);
+        $this->assertStringNotContainsString('ABCDEFGHIJKLMNOP', $sanitized);
+        $this->assertStringNotContainsString('/etc/letsencrypt/live/example.com/fullchain.pem', $sanitized);
+        $this->assertStringContainsString('[redacted-ip]', $sanitized);
+        $this->assertStringContainsString('[redacted-token]', $sanitized);
+        $this->assertStringContainsString('[redacted-path]', $sanitized);
+    }
 }
