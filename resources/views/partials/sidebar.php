@@ -42,6 +42,21 @@
                 </a>
             </li>
             <li class="nav-item">
+                <a class="nav-link" href="/logs">
+                    <i class="bi bi-journal-text"></i> Log Viewer
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="/security">
+                    <i class="bi bi-shield-check"></i> Security
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="/templates">
+                    <i class="bi bi-grid-1x2"></i> App Templates
+                </a>
+            </li>
+            <li class="nav-item">
                 <a class="nav-link" href="/terminal">
                     <i class="bi bi-terminal"></i> Terminal
                 </a>

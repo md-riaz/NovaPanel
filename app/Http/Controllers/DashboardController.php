@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Facades\App;
 use App\Http\Request;
 use App\Http\Response;
+use App\Support\SystemStatusService;
 
 class DashboardController extends Controller
 {
@@ -13,6 +14,7 @@ class DashboardController extends Controller
         return $this->view('pages/dashboard', [
             'title' => 'Dashboard',
             'stats' => $this->getStats(),
+            'systemStatus' => (new SystemStatusService())->snapshot(),
             'certificateFailures' => $this->getCertificateFailures(),
         ]);
     }
@@ -28,8 +30,22 @@ class DashboardController extends Controller
         return new Response($html);
     }
 
+    public function systemStatus(Request $request): Response
+    {
+        $systemStatus = (new SystemStatusService())->snapshot();
+
+        ob_start();
+        include __DIR__ . '/../../../resources/views/partials/widgets/system-status.php';
+        $html = ob_get_clean();
+
+        return new Response($html);
+    }
+
     private function getStats(): array
     {
+        $users = App::users()->all();
+        $sites = App::sites()->all();
+
         if ($this->isAdmin()) {
             return [
                 'accounts' => count(App::users()->all()),

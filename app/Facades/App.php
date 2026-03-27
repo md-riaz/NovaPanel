@@ -19,6 +19,8 @@ use App\Services\CreateDatabaseService;
 use App\Services\CreateFtpUserService;
 use App\Services\CreateSiteService;
 use App\Services\SetupDnsZoneService;
+use App\Infrastructure\Shell\Shell;
+use App\Support\SiteTemplateService;
 use App\Services\SiteHttpsService;
 
 class App
@@ -169,6 +171,18 @@ class App
             WebServer::getInstance(),
             PhpRuntime::getInstance(),
             self::shell(),
+            self::siteTemplateService()
+        );
+    }
+
+    public static function siteTemplateService(): SiteTemplateService
+    {
+        return new SiteTemplateService();
+    }
+
+    /**
+     * Create CreateDatabaseService instance (Factory method)
+     */
             self::acmeCertificates()
         );
     }

@@ -13,6 +13,9 @@ use App\Http\Controllers\CronController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DatabaseController;
 use App\Http\Controllers\DnsController;
+use App\Http\Controllers\LogsController;
+use App\Http\Controllers\SecurityController;
+use App\Http\Controllers\TemplatesController;
 use App\Http\Controllers\FtpController;
 use App\Http\Controllers\SiteController;
 use App\Http\Controllers\TerminalController;
@@ -79,6 +82,7 @@ $router->get('/terminal/status', TerminalController::class . '@status', $withPer
 $router->get('/', DashboardController::class . '@index', [AuthMiddleware::class]);
 $router->get('/dashboard', DashboardController::class . '@index', [AuthMiddleware::class]);
 $router->get('/dashboard/stats', DashboardController::class . '@stats', [AuthMiddleware::class]);
+$router->get('/dashboard/system-status', DashboardController::class . '@systemStatus', [AuthMiddleware::class]);
 
 $router->get('/users', UserController::class . '@index', [AuthMiddleware::class]);
 $router->get('/users/create', UserController::class . '@create', [AuthMiddleware::class]);
@@ -127,6 +131,14 @@ $router->get('/dns/{id}', DnsController::class . '@show', [AuthMiddleware::class
 $router->post('/dns/{id}/records', DnsController::class . '@addRecord', [AuthMiddleware::class]);
 $router->post('/dns/{domainId}/records/{recordId}/delete', DnsController::class . '@deleteRecord', [AuthMiddleware::class]);
 
+
+// Observability and delivery routes
+$router->get('/logs', LogsController::class . '@index', [AuthMiddleware::class]);
+$router->get('/security', SecurityController::class . '@index', [AuthMiddleware::class]);
+$router->post('/security/actions', SecurityController::class . '@runAction', [AuthMiddleware::class]);
+$router->get('/templates', TemplatesController::class . '@index', [AuthMiddleware::class]);
+
+// Terminal routes
 $router->get('/terminal', TerminalController::class . '@index', [AuthMiddleware::class]);
 $router->post('/terminal/start', TerminalController::class . '@start', [AuthMiddleware::class]);
 $router->post('/terminal/stop', TerminalController::class . '@stop', [AuthMiddleware::class]);

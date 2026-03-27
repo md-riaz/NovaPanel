@@ -9,6 +9,7 @@ use App\Domain\Entities\PhpRuntime;
 use App\Domain\Entities\Site;
 use App\Repositories\SiteRepository;
 use App\Repositories\UserRepository;
+use App\Support\SiteTemplateService;
 
 class CreateSiteService
 {
@@ -18,6 +19,7 @@ class CreateSiteService
         private WebServerManagerInterface $webServerManager,
         private PhpRuntimeManagerInterface $phpRuntimeManager,
         private ShellInterface $shell,
+        private SiteTemplateService $siteTemplateService
         private AcmeCertificateService $acmeCertificateService
     ) {}
 
@@ -25,6 +27,8 @@ class CreateSiteService
         int $userId,
         string $domain,
         string $phpVersion = '8.2',
+        bool $sslEnabled = false,
+        string $template = 'basic_php'
         bool $requestCertificate = false,
         string $validationMethod = 'webroot',
         bool $autoRenew = true,
@@ -43,6 +47,8 @@ class CreateSiteService
         if (!$user) {
             throw new \RuntimeException('User not found');
         }
+
+        $this->siteTemplateService->find($template);
 
         $availableVersions = $this->phpRuntimeManager->listAvailable();
         $versionExists = false;
@@ -101,6 +107,17 @@ class CreateSiteService
             $this->phpRuntimeManager->createPool($site, $runtime);
             $this->webServerManager->createSite($site);
 
+            $this->siteTemplateService->apply($template, $documentRoot, [
+                'domain' => $domain,
+                'owner' => $user->username,
+            ]);
+        } catch (\Exception $e) {
+            error_log('Site creation failed for domain ' . $domain . ': ' . $e->getMessage());
+
+            try {
+                $this->phpRuntimeManager->deletePool($site);
+            } catch (\Exception $poolError) {
+                error_log('Failed to rollback PHP-FPM pool for ' . $domain . ': ' . $poolError->getMessage());
             $indexContent = "<?php\necho '<h1>Welcome to {$domain}</h1>';\necho '<p>Site owner: {$user->username}</p>';\nphpinfo();\n";
             $writeResult = $this->shell->writeFile("{$documentRoot}/index.php", $indexContent);
             if ($writeResult['exitCode'] !== 0) {
@@ -117,6 +134,8 @@ class CreateSiteService
 
             try {
                 $this->webServerManager->deleteSite($site);
+            } catch (\Exception $vhostError) {
+                error_log('Failed to rollback Nginx vhost for ' . $domain . ': ' . $vhostError->getMessage());
             } catch (\Throwable $vhostError) {
                 error_log("Failed to rollback Nginx vhost for {$domain}: " . $vhostError->getMessage());
             }
@@ -125,12 +144,15 @@ class CreateSiteService
                 if (is_dir($documentRoot)) {
                     $this->shell->executeSudo('rm', ['-rf', $documentRoot]);
                 }
+            } catch (\Exception $dirError) {
+                error_log('Failed to rollback directory ' . $documentRoot . ': ' . $dirError->getMessage());
             } catch (\Throwable $dirError) {
                 error_log("Failed to rollback directory {$documentRoot}: " . $dirError->getMessage());
             }
 
             $this->siteRepository->delete($site->id);
 
+            throw new \RuntimeException('Failed to create site infrastructure: ' . $e->getMessage());
             throw new \RuntimeException('Failed to create site infrastructure: ' . $exception->getMessage());
         }
 
