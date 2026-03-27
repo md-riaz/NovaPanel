@@ -13,6 +13,8 @@ class Shell implements ShellInterface
     private array $allowedCommands = [
         'nginx',
         'systemctl',
+        'ufw',
+        'fail2ban-client',
         'mkdir',
         'chown',
         'chmod',
@@ -35,6 +37,7 @@ class Shell implements ShellInterface
     // Note: No Linux user management commands (useradd/usermod/userdel) are allowed
     private array $sudoCommands = [
         'systemctl',
+        'ufw',
         'mkdir',
         'chown',
         'chmod',

@@ -47,6 +47,20 @@ class SiteTemplateServiceTest extends TestCase
         $this->assertStringContainsString('static.example.com', file_get_contents($this->documentRoot . '/index.html'));
     }
 
+    public function testApplyCreatesWordpressTemplateFiles(): void
+    {
+        $service = new SiteTemplateService();
+        $service->apply('wordpress', $this->documentRoot, [
+            'domain' => 'blog.example.com',
+            'owner' => 'alice',
+        ]);
+
+        $this->assertFileExists($this->documentRoot . '/index.php');
+        $this->assertFileExists($this->documentRoot . '/wp-config-sample.php');
+        $this->assertDirectoryExists($this->documentRoot . '/wp-content/uploads');
+        $this->assertStringContainsString('blog.example.com', file_get_contents($this->documentRoot . '/index.php'));
+    }
+
     public function testFindThrowsForUnknownTemplate(): void
     {
         $service = new SiteTemplateService();

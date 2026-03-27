@@ -19,13 +19,13 @@ class AuthMiddleware
             // Session validation failed (expired or hijacked)
             // Destroy the invalid session and redirect to login
             Session::destroy();
-            return $this->redirectToLogin();
+            return $this->redirectToLogin($request);
         }
         
         // Check if user is authenticated
         if (!$this->isAuthenticated()) {
             // Redirect to login page
-            return $this->redirectToLogin();
+            return $this->redirectToLogin($request);
         }
         
         return $next($request);
@@ -42,9 +42,13 @@ class AuthMiddleware
     /**
      * Redirect to login page
      */
-    private function redirectToLogin(): Response
+    private function redirectToLogin(Request $request): Response
     {
-        // Return a redirect response
+        if ($request->isHtmx()) {
+            header('HX-Redirect: /login');
+            exit;
+        }
+
         header('Location: /login');
         exit;
     }

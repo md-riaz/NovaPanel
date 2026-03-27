@@ -67,7 +67,11 @@
                         <?php endif; ?>
                     </div>
                 </div>
-                <pre class="bg-dark text-light p-3 rounded" style="min-height: 540px; max-height: 70vh; overflow: auto;"><?= htmlspecialchars($log['content']) ?></pre>
+                <?php if (!empty($log['available'])): ?>
+                    <pre class="bg-dark text-light p-3 rounded" style="min-height: 540px; max-height: 70vh; overflow: auto;"><?= htmlspecialchars($log['content']) ?></pre>
+                <?php else: ?>
+                    <div class="alert alert-warning mb-0"><?= htmlspecialchars($log['content']) ?></div>
+                <?php endif; ?>
             </div>
         </div>
     </div>

@@ -178,8 +178,13 @@ class App
             WebServer::getInstance(),
             PhpRuntime::getInstance(),
             self::shell(),
-            new SiteTemplateService()
+            self::siteTemplateService()
         );
+    }
+
+    public static function siteTemplateService(): SiteTemplateService
+    {
+        return new SiteTemplateService();
     }
 
     /**

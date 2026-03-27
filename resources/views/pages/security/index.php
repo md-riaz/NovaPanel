@@ -41,6 +41,7 @@
                         <?php else: ?>
                             <?php foreach ($component['actions'] as $action): ?>
                                 <form method="POST" action="/security/actions" class="d-inline">
+                                    <input type="hidden" name="_csrf_token" value="<?= htmlspecialchars((string) ($csrfToken ?? '')) ?>">
                                     <input type="hidden" name="action" value="<?= htmlspecialchars($action['key']) ?>">
                                     <button type="submit" class="btn btn-sm btn-outline-primary" <?= $overview['can_manage'] ? '' : 'disabled' ?>>
                                         <?= htmlspecialchars($action['label']) ?>

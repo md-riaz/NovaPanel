@@ -2,8 +2,6 @@
 
 namespace App\Support;
 
-use SplFileObject;
-
 class LogViewerService
 {
     private string $projectRoot;
@@ -65,7 +63,7 @@ class LogViewerService
     {
         $source = $this->findSource($sourceKey);
         $path = $source['path'];
-        $lines = max(25, min(500, $lines));
+        $lines = max(1, min(500, $lines));
 
         if ($path === null) {
             return [
@@ -91,14 +89,36 @@ class LogViewerService
             ];
         }
 
-        $content = implode("\n", $this->tailFile($path, $lines));
+        try {
+            clearstatcache(true, $path);
+
+            if (!file_exists($path) || !is_readable($path)) {
+                return [
+                    'source' => $source,
+                    'available' => false,
+                    'content' => sprintf('Log file not available: %s', $path),
+                ];
+            }
+
+            $content = implode("\n", $this->tailFile($path, $lines));
+
+            clearstatcache(true, $path);
+            $updatedAt = @filemtime($path);
+            $size = @filesize($path);
+        } catch (\Throwable) {
+            return [
+                'source' => $source,
+                'available' => false,
+                'content' => sprintf('Log file not available: %s', $path),
+            ];
+        }
 
         return [
             'source' => $source,
             'available' => true,
             'content' => $content !== '' ? $content : 'Log file is empty.',
-            'updated_at' => date('Y-m-d H:i:s', (int) filemtime($path)),
-            'size_human' => $this->formatBytes((int) filesize($path)),
+            'updated_at' => $updatedAt !== false ? date('Y-m-d H:i:s', (int) $updatedAt) : 'Unavailable',
+            'size_human' => $size !== false ? $this->formatBytes((int) $size) : 'Unavailable',
         ];
     }
 
@@ -154,24 +174,48 @@ class LogViewerService
      */
     private function tailFile(string $path, int $lines): array
     {
-        $file = new SplFileObject($path, 'r');
-        $file->seek(PHP_INT_MAX);
-        $lastLine = $file->key();
-        $start = max(0, $lastLine - $lines + 1);
-        $buffer = [];
-
-        $file->seek($start);
-
-        while (!$file->eof()) {
-            $buffer[] = rtrim((string) $file->current(), "\r\n");
-            $file->next();
+        $handle = @fopen($path, 'rb');
+        if ($handle === false) {
+            throw new \RuntimeException(sprintf('Unable to open log file: %s', $path));
         }
 
-        while ($buffer !== [] && end($buffer) === '') {
-            array_pop($buffer);
+        $buffer = '';
+        $position = @filesize($path);
+        $chunkSize = 4096;
+
+        if ($position === false) {
+            fclose($handle);
+            throw new \RuntimeException(sprintf('Unable to stat log file: %s', $path));
         }
 
-        return $buffer;
+        while ($position > 0 && substr_count($buffer, "\n") <= $lines) {
+            $readSize = min($chunkSize, $position);
+            $position -= $readSize;
+
+            if (fseek($handle, $position, SEEK_SET) !== 0) {
+                fclose($handle);
+                throw new \RuntimeException(sprintf('Unable to seek log file: %s', $path));
+            }
+
+            $chunk = fread($handle, $readSize);
+            if ($chunk === false) {
+                fclose($handle);
+                throw new \RuntimeException(sprintf('Unable to read log file: %s', $path));
+            }
+
+            $buffer = $chunk . $buffer;
+        }
+
+        fclose($handle);
+
+        $allLines = preg_split("/\r\n|\n|\r/", $buffer) ?: [];
+        $allLines = array_map(static fn (string $line): string => rtrim($line, "\r\n"), $allLines);
+
+        while ($allLines !== [] && end($allLines) === '') {
+            array_pop($allLines);
+        }
+
+        return array_slice($allLines, -$lines);
     }
 
     private function formatBytes(int $bytes): string

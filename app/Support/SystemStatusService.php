@@ -2,8 +2,18 @@
 
 namespace App\Support;
 
+use App\Facades\App;
+use App\Infrastructure\Shell\Shell;
+
 class SystemStatusService
 {
+    private Shell $shell;
+
+    public function __construct(?Shell $shell = null)
+    {
+        $this->shell = $shell ?? App::shell();
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -55,6 +65,8 @@ class SystemStatusService
             ];
         }
 
+        $firstInstalled = null;
+
         foreach ($units as $unit) {
             $loadState = trim($this->runCommand(sprintf('systemctl show %s --property=LoadState --value 2>/dev/null', escapeshellarg($unit))));
 
@@ -67,7 +79,7 @@ class SystemStatusService
 
             $healthy = $activeState === 'active';
 
-            return [
+            $candidate = [
                 'key' => $key,
                 'label' => $label,
                 'unit' => $unit,
@@ -79,6 +91,18 @@ class SystemStatusService
                     ? sprintf('Unit %s is %s (%s).', $unit, $activeState ?: 'unknown', $subState)
                     : sprintf('Unit %s is %s.', $unit, $activeState ?: 'unknown'),
             ];
+
+            if ($healthy) {
+                return $candidate;
+            }
+
+            if ($firstInstalled === null) {
+                $firstInstalled = $candidate;
+            }
+        }
+
+        if ($firstInstalled !== null) {
+            return $firstInstalled;
         }
 
         return [
@@ -117,8 +141,8 @@ class SystemStatusService
      */
     private function diskUsage(string $path): array
     {
-        $total = @disk_total_space($path) ?: 0;
-        $free = @disk_free_space($path) ?: 0;
+        $total = (function_exists('disk_total_space') && is_readable($path)) ? (disk_total_space($path) ?: 0) : 0;
+        $free = (function_exists('disk_free_space') && is_readable($path)) ? (disk_free_space($path) ?: 0) : 0;
         $used = max(0, $total - $free);
         $percent = $total > 0 ? round(($used / $total) * 100, 1) : null;
 
@@ -139,7 +163,9 @@ class SystemStatusService
      */
     private function memoryUsage(): array
     {
-        $memInfo = @file('/proc/meminfo', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+        $memInfo = is_readable('/proc/meminfo')
+            ? (file('/proc/meminfo', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [])
+            : [];
         $values = [];
 
         foreach ($memInfo as $line) {
@@ -181,7 +207,9 @@ class SystemStatusService
 
     private function cpuCores(): int
     {
-        $cpuInfo = @file('/proc/cpuinfo', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+        $cpuInfo = is_readable('/proc/cpuinfo')
+            ? (file('/proc/cpuinfo', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [])
+            : [];
         $cores = count(array_filter($cpuInfo, static fn (string $line): bool => str_starts_with($line, 'processor')));
 
         return max(1, $cores);
@@ -189,13 +217,22 @@ class SystemStatusService
 
     private function commandExists(string $command): bool
     {
-        $result = trim($this->runCommand(sprintf('command -v %s 2>/dev/null', escapeshellarg($command))));
+        $result = trim($this->runCommand(sprintf('command -v %s', escapeshellarg($command))));
         return $result !== '';
     }
 
     private function runCommand(string $command): string
     {
-        return (string) shell_exec($command);
+        try {
+            $result = $this->shell->execute('bash', ['-lc', $command . ' 2>/dev/null']);
+            if (($result['exitCode'] ?? 1) !== 0) {
+                return '';
+            }
+
+            return (string) ($result['output'] ?? '');
+        } catch (\Throwable) {
+            return '';
+        }
     }
 
     private function formatBytes(int|float $bytes): string

@@ -2,8 +2,13 @@
 
 namespace App\Support;
 
+use App\Facades\App;
+use App\Infrastructure\Shell\Shell;
+
 class SecurityManagerService
 {
+    private Shell $shell;
+
     /**
      * @var array<string, array<string, string>>
      */
@@ -11,14 +16,23 @@ class SecurityManagerService
         'ufw_reload' => [
             'label' => 'Reload UFW',
             'component' => 'ufw',
-            'command' => 'sudo -n ufw reload',
+            'command' => 'ufw',
+            'args' => 'reload',
+            'sudo' => 'true',
         ],
         'fail2ban_restart' => [
             'label' => 'Restart fail2ban',
             'component' => 'fail2ban',
-            'command' => 'sudo -n systemctl restart fail2ban',
+            'command' => 'systemctl',
+            'args' => 'restart fail2ban',
+            'sudo' => 'true',
         ],
     ];
+
+    public function __construct(?Shell $shell = null)
+    {
+        $this->shell = $shell ?? App::shell();
+    }
 
     /**
      * @return array<string, mixed>
@@ -64,7 +78,11 @@ class SecurityManagerService
         }
 
         $definition = $this->actions[$action];
-        $result = $this->execCommand($definition['command']);
+        $result = $this->execCommand(
+            $definition['command'],
+            $definition['args'] !== '' ? explode(' ', $definition['args']) : [],
+            ($definition['sudo'] ?? 'false') === 'true'
+        );
 
         if ($result['exit_code'] !== 0) {
             throw new \RuntimeException(trim($result['output']) ?: 'Security action failed.');
@@ -94,8 +112,7 @@ class SecurityManagerService
             return $this->statusPayload('not installed', 'secondary', 'UFW is not installed on this host.');
         }
 
-        $command = $this->canRunPrivilegedActions() ? 'sudo -n ufw status' : 'ufw status';
-        $result = $this->execCommand($command);
+        $result = $this->execCommand('ufw', ['status'], $this->canRunPrivilegedActions());
         $output = trim($result['output']);
 
         if (stripos($output, 'Status: active') !== false) {
@@ -123,7 +140,8 @@ class SecurityManagerService
         }
 
         if ($this->commandExists('systemctl')) {
-            $state = trim((string) shell_exec('systemctl show fail2ban --property=ActiveState --value 2>/dev/null'));
+            $result = $this->execCommand('systemctl', ['show', 'fail2ban', '--property=ActiveState', '--value']);
+            $state = ($result['exit_code'] === 0) ? trim($result['output']) : '';
 
             if ($state !== '') {
                 return $this->statusPayload(
@@ -134,7 +152,7 @@ class SecurityManagerService
             }
         }
 
-        $result = $this->execCommand('fail2ban-client ping');
+        $result = $this->execCommand('fail2ban-client', ['ping']);
 
         if ($result['exit_code'] === 0 && stripos($result['output'], 'Server replied') !== false) {
             return $this->statusPayload('active', 'success', trim($result['output']));
@@ -161,13 +179,13 @@ class SecurityManagerService
             return true;
         }
 
-        $result = $this->execCommand('sudo -n true');
+        $result = $this->execCommand('systemctl', ['--version'], true);
         return $result['exit_code'] === 0;
     }
 
     private function commandExists(string $command): bool
     {
-        $result = $this->execCommand(sprintf('command -v %s', escapeshellarg($command)));
+        $result = $this->execCommand('bash', ['-lc', sprintf('command -v %s', escapeshellarg($command))]);
         return trim($result['output']) !== '';
     }
 
@@ -177,22 +195,25 @@ class SecurityManagerService
             return false;
         }
 
-        $state = trim((string) shell_exec(sprintf('systemctl show %s --property=LoadState --value 2>/dev/null', escapeshellarg($unit))));
+        $result = $this->execCommand('systemctl', ['show', $unit, '--property=LoadState', '--value']);
+        $state = ($result['exit_code'] === 0) ? trim($result['output']) : '';
         return $state !== '' && $state !== 'not-found';
     }
 
     /**
      * @return array<string, mixed>
      */
-    private function execCommand(string $command): array
+    private function execCommand(string $command, array $args = [], bool $sudo = false): array
     {
-        $output = [];
-        $exitCode = 0;
-        exec($command . ' 2>&1', $output, $exitCode);
+        if ($sudo) {
+            $result = $this->shell->executeSudo($command, $args);
+        } else {
+            $result = $this->shell->execute($command, $args);
+        }
 
         return [
-            'output' => implode("\n", $output),
-            'exit_code' => $exitCode,
+            'output' => (string) ($result['output'] ?? ''),
+            'exit_code' => (int) ($result['exitCode'] ?? 1),
         ];
     }
 }

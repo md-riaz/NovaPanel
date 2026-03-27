@@ -54,8 +54,8 @@ class SiteTemplateService
 
         foreach ($this->directoriesFor($key) as $directory) {
             $path = rtrim($documentRoot, '/') . '/' . ltrim($directory, '/');
-            if (!is_dir($path)) {
-                mkdir($path, 0775, true);
+            if (!is_dir($path) && !mkdir($path, 0775, true) && !is_dir($path)) {
+                throw new \RuntimeException(sprintf('Failed to create template directory: %s', $path));
             }
         }
 
@@ -63,11 +63,13 @@ class SiteTemplateService
             $path = rtrim($documentRoot, '/') . '/' . ltrim($relativePath, '/');
             $parent = dirname($path);
 
-            if (!is_dir($parent)) {
-                mkdir($parent, 0775, true);
+            if (!is_dir($parent) && !mkdir($parent, 0775, true) && !is_dir($parent)) {
+                throw new \RuntimeException(sprintf('Failed to create template directory: %s', $parent));
             }
 
-            file_put_contents($path, $content);
+            if (file_put_contents($path, $content, LOCK_EX) === false) {
+                throw new \RuntimeException(sprintf('Failed to write template file: %s', $path));
+            }
         }
     }
 
@@ -90,8 +92,11 @@ class SiteTemplateService
      */
     private function filesFor(string $key, array $context): array
     {
-        $domain = $context['domain'] ?? 'example.com';
-        $owner = $context['owner'] ?? 'novapanel';
+        $domain = $this->normalizeDomain($context['domain'] ?? 'example.com');
+        $owner = $this->normalizeOwner($context['owner'] ?? 'novapanel');
+        $domainHtml = htmlspecialchars($domain, ENT_QUOTES, 'UTF-8');
+        $ownerHtml = htmlspecialchars($owner, ENT_QUOTES, 'UTF-8');
+        $domainPhp = var_export($domain, true);
 
         return match ($key) {
             'basic_php' => [
@@ -99,6 +104,7 @@ class SiteTemplateService
 <?php
 
 \$appName = 'NovaPanel Starter';
+\$domain = {$domainPhp};
 ?>
 <!doctype html>
 <html lang="en">
@@ -114,15 +120,15 @@ class SiteTemplateService
 </head>
 <body>
     <div class="card">
-        <p>Provisioned by NovaPanel for {$owner}</p>
+        <p>Provisioned by NovaPanel for {$ownerHtml}</p>
         <h1><?= htmlspecialchars(\$appName) ?></h1>
-        <p>Your site for <strong>{$domain}</strong> is live and ready for application code.</p>
+        <p>Your site for <strong><?= htmlspecialchars(\$domain, ENT_QUOTES, 'UTF-8') ?></strong> is live and ready for application code.</p>
         <p>Use <code>tmp/</code> for uploads and local runtime files that should stay writable.</p>
     </div>
 </body>
 </html>
 PHP,
-                'README.md' => "# Basic PHP template\n\nThis site was scaffolded for {$domain}. Replace `index.php` with your app entrypoint and keep writable data inside `tmp/`.\n",
+                'README.md' => "# Basic PHP template\n\nThis site was scaffolded for {$domainHtml}. Replace `index.php` with your app entrypoint and keep writable data inside `tmp/`.\n",
             ],
             'wordpress' => [
                 'index.php' => <<<PHP
@@ -146,7 +152,7 @@ if (file_exists(__DIR__ . '/wp-blog-header.php')) {
 </head>
 <body>
     <div class="shell">
-        <p>NovaPanel created a WordPress-ready deployment for <strong>{$domain}</strong>.</p>
+        <p>NovaPanel created a WordPress-ready deployment for <strong>{$domainHtml}</strong>.</p>
         <h1>Finish WordPress setup</h1>
         <ol>
             <li>Create a MySQL database and user in NovaPanel.</li>
@@ -166,12 +172,12 @@ define('DB_USER', 'replace_me');
 define('DB_PASSWORD', 'replace_me');
 define('DB_HOST', '127.0.0.1');
 
-define('WP_HOME', 'https://{$domain}');
-define('WP_SITEURL', 'https://{$domain}');
+define('WP_HOME', 'https://{$domainHtml}');
+define('WP_SITEURL', 'https://{$domainHtml}');
 
 $table_prefix = 'wp_';
 PHP,
-                'README.md' => "# WordPress-ready template\n\nProvisioned for {$domain} and owned by {$owner}. Upload the official WordPress package into this document root, create `wp-config.php`, and finish the installer from `/wp-admin/install.php`.\n",
+                'README.md' => "# WordPress-ready template\n\nProvisioned for {$domainHtml} and owned by {$ownerHtml}. Upload the official WordPress package into this document root, create `wp-config.php`, and finish the installer from `/wp-admin/install.php`.\n",
             ],
             'static_site' => [
                 'index.html' => <<<HTML
@@ -180,13 +186,13 @@ PHP,
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{$domain}</title>
+    <title>{$domainHtml}</title>
     <link rel="stylesheet" href="/assets/css/site.css">
 </head>
 <body>
     <main>
         <span class="eyebrow">NovaPanel static template</span>
-        <h1>{$domain}</h1>
+        <h1>{$domainHtml}</h1>
         <p>Launch a documentation site, product landing page, or marketing microsite quickly.</p>
     </main>
 </body>
@@ -218,9 +224,26 @@ main {
     color: #bfdbfe;
 }
 CSS,
-                'README.md' => "# Static site template\n\nThis site was scaffolded for {$domain}. Replace `index.html` and `assets/css/site.css` with your static assets.\n",
+                'README.md' => "# Static site template\n\nThis site was scaffolded for {$domainHtml}. Replace `index.html` and `assets/css/site.css` with your static assets.\n",
             ],
             default => [],
         };
+    }
+
+    private function normalizeDomain(string $domain): string
+    {
+        $normalized = strtolower(trim($domain));
+        if ($normalized === '') {
+            return 'example.com';
+        }
+
+        $isValid = filter_var($normalized, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME) !== false;
+        return $isValid ? $normalized : 'example.com';
+    }
+
+    private function normalizeOwner(string $owner): string
+    {
+        $normalized = preg_replace('/[^a-zA-Z0-9._-]/', '', trim($owner)) ?? '';
+        return $normalized !== '' ? $normalized : 'novapanel';
     }
 }

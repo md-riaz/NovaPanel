@@ -6,7 +6,6 @@ use App\Facades\App;
 use App\Http\Request;
 use App\Http\Response;
 use App\Support\AuditLogger;
-use App\Support\SiteTemplateService;
 
 class SiteController extends Controller
 {
@@ -28,7 +27,7 @@ class SiteController extends Controller
     public function create(Request $request): Response
     {
         $users = App::users()->all();
-        $templateService = new SiteTemplateService();
+        $templateService = App::siteTemplateService();
 
         return $this->view('pages/sites/create', [
             'title' => 'Create Site',
@@ -48,7 +47,7 @@ class SiteController extends Controller
             $template = (string) $request->post('template', 'basic_php');
 
             $service = App::createSiteService();
-            $site = $service->execute($userId, $domain, $phpVersion, $sslEnabled, $template);
+            $service->execute($userId, $domain, $phpVersion, $sslEnabled, $template);
 
             AuditLogger::logCreated('site', $domain, [
                 'user_id' => $userId,

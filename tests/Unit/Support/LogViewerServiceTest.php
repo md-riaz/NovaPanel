@@ -27,7 +27,7 @@ class LogViewerServiceTest extends TestCase
             $lines[] = 'audit line ' . $i;
         }
 
-        file_put_contents($this->projectRoot . '/storage/logs/audit.log', implode("\n", $lines));
+        file_put_contents($this->projectRoot . '/storage/logs/audit.log', implode("\n", $lines) . "\n");
 
         $service = new LogViewerService($this->projectRoot);
         $result = $service->read('panel_audit', 3);

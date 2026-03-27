@@ -74,7 +74,7 @@
                     <div class="text-primary mb-2"><i class="bi bi-cpu fs-3"></i></div>
                     <h5>System status</h5>
                     <p class="text-muted">Surface expected panel health signals without leaving the dashboard.</p>
-                    <a href="/dashboard" class="btn btn-sm btn-outline-primary">View module</a>
+                    <a href="/dashboard/system-status" class="btn btn-sm btn-outline-primary">Refresh widget</a>
                 </div>
             </div>
         </div>
