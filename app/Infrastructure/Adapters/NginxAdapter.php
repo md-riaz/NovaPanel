@@ -77,15 +77,6 @@ class NginxAdapter implements WebServerManagerInterface
 
     private function generateHttpServerBlock(Site $site): string
     {
-        $redirectLines = [];
-        if ($site->hasActiveCertificate() && $site->forceHttps) {
-            $redirectLines[] = '    location / {';
-            $redirectLines[] = '        return 301 https://$host$request_uri;';
-            $redirectLines[] = '    }';
-        } else {
-            $redirectLines = $this->applicationLocationBlock();
-        }
-
         $lines = [
             'server {',
             '    listen 80;',
@@ -100,7 +91,18 @@ class NginxAdapter implements WebServerManagerInterface
             '        allow all;',
             '    }',
             '',
-            ...$redirectLines,
+        ];
+
+        if ($site->hasActiveCertificate() && $site->forceHttps) {
+            $lines[] = '    if ($request_uri !~ "^/\\.well-known/acme-challenge/") {';
+            $lines[] = '        return 301 https://$host$request_uri;';
+            $lines[] = '    }';
+            $lines[] = '';
+        }
+
+        $lines = [
+            ...$lines,
+            ...$this->applicationLocationBlock(),
             '',
             ...$this->phpLocationBlock($site),
             '',
@@ -117,8 +119,9 @@ class NginxAdapter implements WebServerManagerInterface
     {
         $lines = [
             'server {',
-            '    listen 443 ssl http2;',
-            '    listen [::]:443 ssl http2;',
+            '    listen 443 ssl;',
+            '    listen [::]:443 ssl;',
+            '    http2 on;',
             "    server_name {$site->domain};",
             "    root {$site->documentRoot};",
             '    index index.php index.html index.htm;',
@@ -130,6 +133,15 @@ class NginxAdapter implements WebServerManagerInterface
             '    ssl_protocols TLSv1.2 TLSv1.3;',
             '    ssl_prefer_server_ciphers off;',
             '',
+        ];
+
+        if ($site->forceHttps) {
+            $lines[] = '    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;';
+            $lines[] = '';
+        }
+
+        $lines = [
+            ...$lines,
             ...$this->applicationLocationBlock(),
             '',
             ...$this->phpLocationBlock($site),

@@ -441,7 +441,7 @@ See [SECURITY.md](SECURITY.md) for detailed security documentation.
 - [ ] REST API
 - [ ] Plugin system
 - [ ] Multi-server support
-- [ ] Let's Encrypt integration
+- [x] Let's Encrypt integration
 - [ ] File manager
 - [ ] Resource monitoring
 - [ ] Two-factor authentication

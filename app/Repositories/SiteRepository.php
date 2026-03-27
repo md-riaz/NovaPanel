@@ -24,6 +24,20 @@ class SiteRepository
         return $row ? $this->hydrate($row) : null;
     }
 
+    public function findWithOwner(int $id): ?Site
+    {
+        $stmt = $this->db->prepare(
+            'SELECT s.*, u.username AS owner_username
+            FROM sites s
+            LEFT JOIN users u ON u.id = s.user_id
+            WHERE s.id = ?'
+        );
+        $stmt->execute([$id]);
+        $row = $stmt->fetch();
+
+        return $row ? $this->hydrate($row) : null;
+    }
+
     public function findByDomain(string $domain): ?Site
     {
         $stmt = $this->db->prepare('SELECT * FROM sites WHERE domain = ?');
@@ -41,6 +55,18 @@ class SiteRepository
         return array_map(fn (array $row) => $this->hydrate($row), $rows);
     }
 
+    public function allWithOwners(): array
+    {
+        $stmt = $this->db->query(
+            'SELECT s.*, u.username AS owner_username
+            FROM sites s
+            LEFT JOIN users u ON u.id = s.user_id
+            ORDER BY s.created_at DESC'
+        );
+
+        return array_map(fn (array $row) => $this->hydrate($row), $stmt->fetchAll());
+    }
+
     public function findByUserId(int $userId): array
     {
         $stmt = $this->db->prepare('SELECT * FROM sites WHERE user_id = ? ORDER BY created_at DESC');
@@ -54,15 +80,15 @@ class SiteRepository
     {
         $modifier = sprintf('+%d days', max(0, $withinDays));
         $stmt = $this->db->prepare(
-            "SELECT * FROM sites
+            'SELECT * FROM sites
             WHERE ssl_enabled = 1
               AND certificate_auto_renew = 1
-              AND certificate_status IN ('active', 'expiring', 'failed')
+              AND certificate_status IN (\'active\', \'expiring\', \'failed\')
               AND (
                     certificate_expires_at IS NULL
-                    OR datetime(certificate_expires_at) <= datetime('now', ?)
+                    OR datetime(certificate_expires_at) <= datetime(\'now\', ?)
                   )
-            ORDER BY certificate_expires_at ASC, domain ASC"
+            ORDER BY certificate_expires_at ASC, domain ASC'
         );
         $stmt->execute([$modifier]);
 
@@ -72,10 +98,12 @@ class SiteRepository
     public function findWithCertificateFailures(): array
     {
         $stmt = $this->db->query(
-            "SELECT * FROM sites
-            WHERE last_certificate_error IS NOT NULL
-              AND TRIM(last_certificate_error) <> ''
-            ORDER BY updated_at DESC, domain ASC"
+            "SELECT s.*, u.username AS owner_username
+            FROM sites s
+            LEFT JOIN users u ON u.id = s.user_id
+            WHERE s.last_certificate_error IS NOT NULL
+              AND TRIM(s.last_certificate_error) <> ''
+            ORDER BY s.updated_at DESC, s.domain ASC"
         );
 
         return array_map(fn (array $row) => $this->hydrate($row), $stmt->fetchAll());
@@ -144,7 +172,7 @@ class SiteRepository
                 force_https = ?,
                 last_certificate_renewal_at = ?,
                 last_certificate_error = ?,
-                updated_at = datetime("now")
+                updated_at = datetime(\'now\')
             WHERE id = ?'
         );
 
@@ -194,7 +222,8 @@ class SiteRepository
             lastCertificateRenewalAt: $row['last_certificate_renewal_at'] ?? null,
             lastCertificateError: $row['last_certificate_error'] ?? null,
             createdAt: $row['created_at'],
-            updatedAt: $row['updated_at']
+            updatedAt: $row['updated_at'],
+            ownerUsername: $row['owner_username'] ?? null
         );
     }
 }

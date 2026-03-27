@@ -102,19 +102,22 @@ class CreateSiteService
             $this->webServerManager->createSite($site);
 
             $indexContent = "<?php\necho '<h1>Welcome to {$domain}</h1>';\necho '<p>Site owner: {$user->username}</p>';\nphpinfo();\n";
-            file_put_contents("{$documentRoot}/index.php", $indexContent);
-        } catch (\Exception $exception) {
+            $writeResult = $this->shell->writeFile("{$documentRoot}/index.php", $indexContent);
+            if ($writeResult['exitCode'] !== 0) {
+                throw new \RuntimeException('Failed to write default index file: ' . $writeResult['output']);
+            }
+        } catch (\Throwable $exception) {
             error_log("Site creation failed for domain {$domain}: " . $exception->getMessage());
 
             try {
                 $this->phpRuntimeManager->deletePool($site);
-            } catch (\Exception $poolError) {
+            } catch (\Throwable $poolError) {
                 error_log("Failed to rollback PHP-FPM pool for {$domain}: " . $poolError->getMessage());
             }
 
             try {
                 $this->webServerManager->deleteSite($site);
-            } catch (\Exception $vhostError) {
+            } catch (\Throwable $vhostError) {
                 error_log("Failed to rollback Nginx vhost for {$domain}: " . $vhostError->getMessage());
             }
 
@@ -122,7 +125,7 @@ class CreateSiteService
                 if (is_dir($documentRoot)) {
                     $this->shell->executeSudo('rm', ['-rf', $documentRoot]);
                 }
-            } catch (\Exception $dirError) {
+            } catch (\Throwable $dirError) {
                 error_log("Failed to rollback directory {$documentRoot}: " . $dirError->getMessage());
             }
 
@@ -141,6 +144,7 @@ class CreateSiteService
                     $forceHttps
                 );
             } catch (\Throwable $exception) {
+                error_log("Certificate issuance failed for {$domain}: " . $exception->getMessage());
                 $site->certificateStatus = 'failed';
                 $site->lastCertificateError = $exception->getMessage();
                 $this->siteRepository->update($site);

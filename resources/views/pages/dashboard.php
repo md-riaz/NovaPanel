@@ -65,9 +65,9 @@
         <ul class="mt-3 mb-0">
             <?php foreach ($certificateFailures as $failedSite): ?>
                 <li>
-                    <strong><?= htmlspecialchars($failedSite->domain) ?></strong>
-                    (<?= htmlspecialchars($failedSite->ownerUsername ?? ('User #' . $failedSite->userId)) ?>)
-                    — <?= htmlspecialchars($failedSite->lastCertificateError) ?>
+                    <strong><?= htmlspecialchars($failedSite['domain']) ?></strong>
+                    (<?= htmlspecialchars($failedSite['ownerUsername'] ?? 'Unknown') ?>)
+                    — <?= htmlspecialchars($failedSite['lastCertificateError']) ?>
                 </li>
             <?php endforeach; ?>
         </ul>

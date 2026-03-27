@@ -41,11 +41,13 @@ class DashboardController extends Controller
     {
         $sites = App::sites()->findWithCertificateFailures();
 
-        foreach ($sites as $site) {
-            $user = App::users()->find($site->userId);
-            $site->ownerUsername = $user ? $user->username : 'Unknown';
-        }
-
-        return $sites;
+        return array_map(static fn ($site) => [
+            'id' => $site->id,
+            'domain' => $site->domain,
+            'ownerUsername' => $site->ownerUsername ?? 'Unknown',
+            'certificateStatus' => $site->certificateStatus,
+            'lastCertificateError' => $site->lastCertificateError,
+            'certificateExpiresAt' => $site->certificateExpiresAt,
+        ], $sites);
     }
 }

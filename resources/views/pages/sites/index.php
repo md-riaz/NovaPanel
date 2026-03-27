@@ -62,7 +62,7 @@
                         <td>
                             <div class="btn-group btn-group-sm" role="group">
                                 <a href="/sites/<?= $site->id ?>" class="btn btn-outline-primary">Manage</a>
-                                <form method="POST" action="/sites/<?= $site->id ?>/certificate/renew">
+                                <form method="POST" action="/sites/<?= $site->id ?>/certificate/renew" class="d-inline">
                                     <button type="submit" class="btn btn-outline-success">Renew</button>
                                 </form>
                             </div>

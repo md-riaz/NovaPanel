@@ -12,6 +12,7 @@
               hx-target="#form-messages"
               hx-swap="innerHTML"
               hx-indicator="#submit-indicator">
+            <?= \App\Support\CSRF::field() ?>
             <div class="mb-3">
                 <label for="domain" class="form-label">Domain Name</label>
                 <input type="text" class="form-control" id="domain" name="domain" required>

@@ -39,7 +39,10 @@ class AcmeCertificateService
         $this->siteRepository->update($site);
 
         try {
-            $this->prepareWebroot($site);
+            if ($validationMethod === 'webroot') {
+                $this->prepareWebroot($site);
+            }
+
             $command = $this->buildIssueCommand($site, $validationMethod, $forceRenewal);
             $result = $this->shell->executeSudo('bash', ['-lc', $command]);
 
@@ -47,21 +50,24 @@ class AcmeCertificateService
                 throw new \RuntimeException(trim($result['output']) ?: 'ACME client returned a non-zero exit code.');
             }
         } catch (\Throwable $exception) {
+            $sanitizedError = $this->sanitizeCertbotOutput($exception->getMessage());
+
             $site->certificateStatus = 'failed';
-            $site->lastCertificateError = $exception->getMessage();
+            $site->lastCertificateError = $sanitizedError;
             $this->siteRepository->update($site);
-            $this->log(sprintf('Certificate issue/renew failed for %s: %s', $site->domain, $site->lastCertificateError));
+
+            $this->log(sprintf('Certificate issue/renew failed for %s: %s', $site->domain, $sanitizedError));
             AuditLogger::log('certificate.failed', "Certificate request failed for {$site->domain}", [
                 'site_id' => $site->id,
                 'provider' => $provider,
                 'validation_method' => $validationMethod,
                 'force_renewal' => $forceRenewal,
-                'output' => $site->lastCertificateError,
+                'output' => $sanitizedError,
             ]);
 
             throw $exception instanceof \RuntimeException
                 ? $exception
-                : new \RuntimeException($site->lastCertificateError, 0, $exception);
+                : new \RuntimeException($sanitizedError, 0, $exception);
         }
 
         $this->refreshCertificateState($site, 'active');
@@ -100,10 +106,10 @@ class AcmeCertificateService
 
         if ($result['exitCode'] !== 0) {
             $message = trim($result['output']) ?: 'Unable to revoke certificate.';
-            $site->lastCertificateError = $message;
+            $site->lastCertificateError = $this->sanitizeCertbotOutput($message);
             $site->certificateStatus = 'failed';
             $this->siteRepository->update($site);
-            $this->log(sprintf('Certificate revoke failed for %s: %s', $site->domain, $message));
+            $this->log(sprintf('Certificate revoke failed for %s: %s', $site->domain, $site->lastCertificateError));
             throw new \RuntimeException($message);
         }
 
@@ -115,8 +121,9 @@ class AcmeCertificateService
         $site->forceHttps = false;
         $site->lastCertificateRenewalAt = date('Y-m-d H:i:s');
         $site->lastCertificateError = null;
-        $this->siteRepository->update($site);
+
         $this->webServerManager->updateSite($site);
+        $this->siteRepository->update($site);
 
         AuditLogger::log('certificate.revoked', "Certificate revoked for {$site->domain}", [
             'site_id' => $site->id,
@@ -130,7 +137,9 @@ class AcmeCertificateService
         $certificatePath = $this->defaultCertificatePath($site);
         $certificateKeyPath = $this->defaultCertificateKeyPath($site);
 
-        if (!is_file($certificatePath) || !is_file($certificateKeyPath)) {
+        $certExists = $this->shell->executeSudo('bash', ['-lc', 'test -f ' . escapeshellarg($certificatePath)])['exitCode'] === 0;
+        $keyExists = $this->shell->executeSudo('bash', ['-lc', 'test -f ' . escapeshellarg($certificateKeyPath)])['exitCode'] === 0;
+        if (!$certExists || !$keyExists) {
             throw new \RuntimeException('Certificate files were not found in the default Certbot live directory.');
         }
 
@@ -142,8 +151,9 @@ class AcmeCertificateService
         $site->lastCertificateRenewalAt = date('Y-m-d H:i:s');
         $site->lastCertificateError = null;
         $site->certificateExpiresAt = $this->readCertificateExpiry($site);
-        $this->siteRepository->update($site);
+
         $this->webServerManager->updateSite($site);
+        $this->siteRepository->update($site);
 
         AuditLogger::log('certificate.reinstalled', "Certificate paths reinstalled for {$site->domain}", [
             'site_id' => $site->id,
@@ -166,7 +176,7 @@ class AcmeCertificateService
                 $summary['renewed']++;
             } catch (\Throwable $exception) {
                 $summary['failed']++;
-                $this->log(sprintf('Scheduled renewal failed for %s: %s', $site->domain, $exception->getMessage()));
+                $this->log(sprintf('Scheduled renewal failed for %s: %s', $site->domain, $this->sanitizeCertbotOutput($exception->getMessage())));
             }
         }
 
@@ -182,13 +192,18 @@ class AcmeCertificateService
         $site->certificateExpiresAt = $this->readCertificateExpiry($site);
         $site->lastCertificateRenewalAt = date('Y-m-d H:i:s');
         $site->lastCertificateError = null;
-        $this->siteRepository->update($site);
+
         $this->webServerManager->updateSite($site);
+        $this->siteRepository->update($site);
     }
 
     private function prepareWebroot(Site $site): void
     {
-        $challengePath = rtrim($site->documentRoot ?? '', '/') . '/.well-known/acme-challenge';
+        if (empty($site->documentRoot)) {
+            throw new \RuntimeException('Webroot validation requires a document root.');
+        }
+
+        $challengePath = rtrim($site->documentRoot, '/') . '/.well-known/acme-challenge';
         $result = $this->shell->executeSudo('mkdir', ['-p', $challengePath]);
 
         if ($result['exitCode'] !== 0) {
@@ -206,6 +221,13 @@ class AcmeCertificateService
             '-d ' . escapeshellarg($site->domain),
             '--keep-until-expiring',
         ];
+
+        $acmeEmail = trim((string) Env::get('ACME_EMAIL', ''));
+        if ($acmeEmail !== '') {
+            $base[] = '--email ' . escapeshellarg($acmeEmail);
+        } else {
+            $base[] = '--register-unsafely-without-email';
+        }
 
         if ($forceRenewal) {
             $base[] = '--force-renewal';
@@ -227,7 +249,7 @@ class AcmeCertificateService
         } else {
             $base[] = '--preferred-challenges http';
             $base[] = '--webroot';
-            $base[] = '-w ' . escapeshellarg($site->documentRoot);
+            $base[] = '-w ' . escapeshellarg((string) $site->documentRoot);
         }
 
         return implode(' ', $base);
@@ -235,7 +257,7 @@ class AcmeCertificateService
 
     private function readCertificateExpiry(Site $site): ?string
     {
-        $result = $this->shell->execute('bash', ['-lc', sprintf(
+        $result = $this->shell->executeSudo('bash', ['-lc', sprintf(
             'openssl x509 -enddate -noout -in %s | cut -d= -f2',
             escapeshellarg($this->defaultCertificatePath($site))
         )]);
@@ -262,24 +284,44 @@ class AcmeCertificateService
     private function assertSupportedProvider(string $provider): void
     {
         if ($provider !== 'letsencrypt') {
-            throw new \InvalidArgumentException('Only the letsencrypt ACME provider is currently supported.');
+            throw new \InvalidArgumentException("Unsupported certificate provider: {$provider}");
         }
     }
 
     private function assertSupportedValidationMethod(string $validationMethod): void
     {
         if (!in_array($validationMethod, ['webroot', 'dns'], true)) {
-            throw new \InvalidArgumentException('Validation method must be either webroot or dns.');
+            throw new \InvalidArgumentException("Unsupported certificate validation method: {$validationMethod}");
         }
+    }
+
+    private function sanitizeCertbotOutput(string $output): string
+    {
+        $sanitized = preg_replace('/\b(?:\d{1,3}\.){3}\d{1,3}\b/', '[redacted-ip]', $output) ?? $output;
+        $sanitized = preg_replace('/\/[A-Za-z0-9_\-\.\/]+/', '[redacted-path]', $sanitized) ?? $sanitized;
+        $sanitized = preg_replace('/([A-Za-z0-9_\-]{16,})/', '[redacted-token]', $sanitized) ?? $sanitized;
+        $sanitized = preg_replace('/\s+/', ' ', trim($sanitized)) ?? trim($sanitized);
+
+        if (strlen($sanitized) > 500) {
+            $sanitized = substr($sanitized, 0, 497) . '...';
+        }
+
+        return $sanitized;
     }
 
     private function log(string $message): void
     {
-        $directory = dirname(self::LOG_FILE);
-        if (!is_dir($directory)) {
-            @mkdir($directory, 0750, true);
-        }
+        $line = sprintf('[%s] %s', date('Y-m-d H:i:s'), $message) . PHP_EOL;
+        $command = sprintf(
+            'mkdir -p %s && printf %s >> %s',
+            escapeshellarg(dirname(self::LOG_FILE)),
+            escapeshellarg($line),
+            escapeshellarg(self::LOG_FILE)
+        );
 
-        @file_put_contents(self::LOG_FILE, sprintf("[%s] %s\n", date('Y-m-d H:i:s'), $message), FILE_APPEND);
+        $result = $this->shell->executeSudo('bash', ['-lc', $command]);
+        if ($result['exitCode'] !== 0) {
+            error_log('Failed to write certificate log: ' . $result['output']);
+        }
     }
 }

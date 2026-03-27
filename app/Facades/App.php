@@ -19,6 +19,7 @@ use App\Services\CreateDatabaseService;
 use App\Services\CreateFtpUserService;
 use App\Services\CreateSiteService;
 use App\Services\SetupDnsZoneService;
+use App\Services\SiteHttpsService;
 
 class App
 {
@@ -33,6 +34,8 @@ class App
     private static ?RoleRepository $roleRepository = null;
     private static ?TerminalSessionRepository $terminalSessionRepository = null;
     private static ?Shell $shell = null;
+    private static ?AcmeCertificateService $acmeCertificateService = null;
+    private static ?SiteHttpsService $siteHttpsService = null;
 
     public static function users(): UserRepository
     {
@@ -135,11 +138,27 @@ class App
 
     public static function acmeCertificates(): AcmeCertificateService
     {
-        return new AcmeCertificateService(
-            self::sites(),
-            WebServer::getInstance(),
-            self::shell()
-        );
+        if (self::$acmeCertificateService === null) {
+            self::$acmeCertificateService = new AcmeCertificateService(
+                self::sites(),
+                WebServer::getInstance(),
+                self::shell()
+            );
+        }
+
+        return self::$acmeCertificateService;
+    }
+
+    public static function siteHttpsService(): SiteHttpsService
+    {
+        if (self::$siteHttpsService === null) {
+            self::$siteHttpsService = new SiteHttpsService(
+                self::sites(),
+                WebServer::getInstance()
+            );
+        }
+
+        return self::$siteHttpsService;
     }
 
     public static function createSiteService(): CreateSiteService

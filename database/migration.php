@@ -6,14 +6,17 @@ use App\Infrastructure\Database;
 
 function ensureColumn(\PDO $db, string $table, string $column, string $definition): void
 {
-    $columns = $db->query("PRAGMA table_info($table)")->fetchAll(\PDO::FETCH_ASSOC);
+    $quotedTable = '"' . str_replace('"', '""', $table) . '"';
+    $quotedColumn = '"' . str_replace('"', '""', $column) . '"';
+
+    $columns = $db->query("PRAGMA table_info({$quotedTable})")->fetchAll(\PDO::FETCH_ASSOC);
     foreach ($columns as $existingColumn) {
         if (($existingColumn['name'] ?? null) === $column) {
             return;
         }
     }
 
-    $db->exec(sprintf('ALTER TABLE %s ADD COLUMN %s %s', $table, $column, $definition));
+    $db->exec(sprintf('ALTER TABLE %s ADD COLUMN %s %s', $quotedTable, $quotedColumn, $definition));
     echo "✓ Ensured {$table}.{$column} column\n";
 }
 

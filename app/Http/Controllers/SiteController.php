@@ -6,6 +6,7 @@ use App\Facades\App;
 use App\Http\Request;
 use App\Http\Response;
 use App\Support\AuditLogger;
+use App\Support\CSRF;
 
 class SiteController extends Controller
 {
@@ -21,13 +22,10 @@ class SiteController extends Controller
 
     public function show(Request $request, int $id): Response
     {
-        $site = App::sites()->find($id);
+        $site = App::sites()->findWithOwner($id);
         if (!$site) {
             return new Response('Site not found', 404);
         }
-
-        $user = App::users()->find($site->userId);
-        $site->ownerUsername = $user ? $user->username : 'Unknown';
 
         return $this->view('pages/sites/show', [
             'title' => 'Manage Site',
@@ -46,6 +44,11 @@ class SiteController extends Controller
     public function store(Request $request): Response
     {
         try {
+            $csrfToken = (string) $request->post('_csrf_token');
+            if (!CSRF::verify($csrfToken)) {
+                throw new \RuntimeException('Invalid CSRF token. Please refresh and try again.');
+            }
+
             $domain = trim((string) $request->post('domain'));
             $userId = (int) $request->post('user_id');
             $phpVersion = (string) $request->post('php_version', '8.2');
@@ -131,19 +134,7 @@ class SiteController extends Controller
             return new Response('Site not found', 404);
         }
 
-        $site->forceHttps = $request->post('force_https') !== null;
-        App::sites()->update($site);
-
-        if ($site->hasActiveCertificate()) {
-            App::acmeCertificates()->reinstall($site);
-        } else {
-            \App\Facades\WebServer::getInstance()->updateSite($site);
-        }
-
-        AuditLogger::logUpdated('site', $site->domain, [
-            'site_id' => $site->id,
-            'force_https' => $site->forceHttps,
-        ]);
+        App::siteHttpsService()->updateForceHttps($site, $request->post('force_https') !== null);
 
         return $this->redirect('/sites/' . $site->id);
     }
@@ -176,12 +167,6 @@ class SiteController extends Controller
 
     private function loadSites(): array
     {
-        $sites = App::sites()->all();
-        foreach ($sites as $site) {
-            $user = App::users()->find($site->userId);
-            $site->ownerUsername = $user ? $user->username : 'Unknown';
-        }
-
-        return $sites;
+        return App::sites()->allWithOwners();
     }
 }
