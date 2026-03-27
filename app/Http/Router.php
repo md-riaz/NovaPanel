@@ -33,7 +33,7 @@ class Router
             'method' => $method,
             'path' => $path,
             'handler' => $handler,
-            'middleware' => $middleware
+            'middleware' => $middleware,
         ];
     }
 
@@ -41,12 +41,11 @@ class Router
     {
         $this->globalMiddleware[] = $middleware;
     }
-    
+
     public function dispatch(Request $request): Response
     {
         foreach ($this->routes as $route) {
             if ($this->matchRoute($route, $request)) {
-                // Merge global middleware with route-specific middleware
                 $route['middleware'] = array_merge($this->globalMiddleware, $route['middleware'] ?? []);
                 return $this->handleRoute($route, $request);
             }
@@ -70,42 +69,50 @@ class Router
     private function handleRoute(array $route, Request $request): Response
     {
         $handler = $route['handler'];
-        
-        // Process middleware
         $middlewares = $route['middleware'] ?? [];
-        
-        // Create the final handler
-        $next = function($request) use ($handler, $route) {
-            // Extract route parameters
+
+        $next = function ($request) use ($handler, $route) {
             $params = $this->extractParams($route['path'], $request->path());
-            
+
             if (is_string($handler) && str_contains($handler, '@')) {
                 [$controller, $method] = explode('@', $handler);
                 $controller = new $controller();
-                
-                // Pass request and any route parameters
+
                 if (!empty($params)) {
                     return $controller->$method($request, ...$params);
                 }
+
                 return $controller->$method($request);
             }
-            
+
             if (is_callable($handler)) {
                 return $handler($request);
             }
-            
+
             return new Response('Handler not found', 500);
         };
-        
-        // Apply middleware in reverse order
+
         foreach (array_reverse($middlewares) as $middleware) {
-            $middlewareInstance = new $middleware();
-            $next = function($request) use ($middlewareInstance, $next) {
+            [$middlewareClass, $arguments] = $this->parseMiddleware($middleware);
+            $middlewareInstance = new $middlewareClass(...$arguments);
+            $next = function ($request) use ($middlewareInstance, $next) {
                 return $middlewareInstance->handle($request, $next);
             };
         }
-        
+
         return $next($request);
+    }
+
+    private function parseMiddleware(string $middleware): array
+    {
+        if (!str_contains($middleware, ':')) {
+            return [$middleware, []];
+        }
+
+        [$middlewareClass, $argumentList] = explode(':', $middleware, 2);
+        $arguments = $argumentList === '' ? [] : array_map('trim', explode(',', $argumentList));
+
+        return [$middlewareClass, $arguments];
     }
 
     private function extractParams(string $routePath, string $requestPath): array

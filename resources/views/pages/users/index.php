@@ -2,14 +2,16 @@
 
 <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pb-2 mb-3 border-bottom">
     <h1 class="h2">Panel Users</h1>
-    <a href="/users/create" class="btn btn-primary">
-        <i class="bi bi-plus-circle"></i> Create Panel User
-    </a>
+    <?php if (!empty($canCreateUsers ?? true)): ?>
+        <a href="/users/create" class="btn btn-primary">
+            <i class="bi bi-plus-circle"></i> Create Panel User
+        </a>
+    <?php endif; ?>
 </div>
 
 <div class="alert alert-info" role="alert">
-    <i class="bi bi-info-circle"></i> 
-    <strong>Panel Users</strong> are people who can log into the NovaPanel interface. 
+    <i class="bi bi-info-circle"></i>
+    <strong>Panel Users</strong> are people who can log into the NovaPanel interface.
     After creating a panel user, you can create <strong>Accounts</strong> (system-level hosting accounts) and assign them to panel users.
 </div>
 
@@ -46,9 +48,11 @@
                         <td><?= htmlspecialchars($user->createdAt) ?></td>
                         <td>
                             <a href="/users/<?= $user->id ?>/edit" class="btn btn-sm btn-warning">Edit</a>
-                            <form method="POST" action="/users/<?= $user->id ?>/delete" style="display: inline;">
-                                <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Are you sure you want to delete this user?')">Delete</button>
-                            </form>
+                            <?php if (!empty($canDeleteUsers ?? false)): ?>
+                                <form method="POST" action="/users/<?= $user->id ?>/delete" style="display: inline;">
+                                    <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Are you sure you want to delete this user?')">Delete</button>
+                                </form>
+                            <?php endif; ?>
                         </td>
                     </tr>
                 <?php endforeach; ?>

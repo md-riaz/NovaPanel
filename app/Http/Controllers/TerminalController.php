@@ -2,12 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Facades\App;
 use App\Http\Request;
 use App\Http\Response;
-use App\Http\Session;
 use App\Infrastructure\Adapters\TerminalAdapter;
 use App\Infrastructure\Shell\Shell;
-use App\Facades\App;
 use App\Support\AuditLogger;
 
 class TerminalController extends Controller
@@ -16,38 +15,32 @@ class TerminalController extends Controller
 
     public function __construct()
     {
-        $shell = new Shell();
-        $this->terminalAdapter = new TerminalAdapter($shell);
+        $this->terminalAdapter = new TerminalAdapter(new Shell());
     }
 
-    /**
-     * Display the terminal page
-     */
     public function index(Request $request): Response
     {
-        Session::start();
-        $userId   = (int) Session::get('user_id');
-        $username = Session::get('username', 'unknown');
+        $userId = $this->currentUserId();
+        $username = $this->currentUsername();
 
         if (!$this->terminalAdapter->isTtydInstalled()) {
             return $this->view('pages/terminal/install', [
-                'title'        => 'Terminal - Installation Required',
-                'instructions' => $this->terminalAdapter->getInstallationInstructions()
+                'title' => 'Terminal - Installation Required',
+                'instructions' => $this->terminalAdapter->getInstallationInstructions(),
             ]);
         }
 
         if (!$this->checkTerminalAccess($userId)) {
             AuditLogger::log('terminal.access_denied', "Terminal access denied for user {$username}");
             return $this->view('pages/terminal/error', [
-                'title'        => 'Terminal - Access Denied',
-                'error'        => 'You do not have permission to access the terminal. Contact your administrator to request the terminal.access permission.',
-                'instructions' => ''
+                'title' => 'Terminal - Access Denied',
+                'error' => 'You do not have permission to access the terminal. Contact your administrator to request the terminal.access permission.',
+                'instructions' => '',
             ]);
         }
 
         try {
             $role = App::roles()->getPrimaryRoleName($userId);
-
             $sessionInfo = $this->terminalAdapter->getSessionInfo($userId);
 
             if (!$sessionInfo || !$this->terminalAdapter->isSessionActive($userId)) {
@@ -57,34 +50,29 @@ class TerminalController extends Controller
             }
 
             return $this->view('pages/terminal/index', [
-                'title'       => 'Terminal',
+                'title' => 'Terminal',
                 'sessionInfo' => $sessionInfo,
-                'sessionTtlMinutes'  => (int) (TerminalAdapter::SESSION_TTL / 60),
+                'sessionTtlMinutes' => (int) (TerminalAdapter::SESSION_TTL / 60),
                 'idleTimeoutMinutes' => (int) (TerminalAdapter::IDLE_TIMEOUT / 60),
             ]);
-
         } catch (\Exception $e) {
             return $this->view('pages/terminal/error', [
-                'title'        => 'Terminal - Error',
-                'error'        => $e->getMessage(),
-                'instructions' => $this->terminalAdapter->getInstallationInstructions()
+                'title' => 'Terminal - Error',
+                'error' => $e->getMessage(),
+                'instructions' => $this->terminalAdapter->getInstallationInstructions(),
             ]);
         }
     }
 
-    /**
-     * Start a new terminal session via AJAX
-     */
     public function start(Request $request): Response
     {
         try {
-            Session::start();
-            $userId = (int) Session::get('user_id');
+            $userId = $this->currentUserId();
 
             if (!$this->terminalAdapter->isTtydInstalled()) {
                 return $this->json([
-                    'error'        => 'ttyd is not installed on this system',
-                    'instructions' => $this->terminalAdapter->getInstallationInstructions()
+                    'error' => 'ttyd is not installed on this system',
+                    'instructions' => $this->terminalAdapter->getInstallationInstructions(),
                 ], 400);
             }
 
@@ -92,50 +80,43 @@ class TerminalController extends Controller
                 return $this->json(['error' => 'Access denied'], 403);
             }
 
-            $role        = App::roles()->getPrimaryRoleName($userId);
-            $sessionInfo = $this->terminalAdapter->startSession($userId, $role);
-
             return $this->json([
                 'success' => true,
-                'session' => $sessionInfo
+                'session' => $this->terminalAdapter->startSession($userId, App::roles()->getPrimaryRoleName($userId)),
             ]);
-
         } catch (\Exception $e) {
             return $this->json(['error' => $e->getMessage()], 500);
         }
     }
 
-    /**
-     * Stop the current terminal session via AJAX
-     */
     public function stop(Request $request): Response
     {
         try {
-            Session::start();
-            $userId = (int) Session::get('user_id');
+            $userId = $this->currentUserId();
 
-            $stopped = $this->terminalAdapter->stopSession($userId);
+            if (!$this->checkTerminalAccess($userId)) {
+                return $this->json(['error' => 'Access denied'], 403);
+            }
 
             return $this->json([
                 'success' => true,
-                'stopped' => $stopped
+                'stopped' => $this->terminalAdapter->stopSession($userId),
             ]);
-
         } catch (\Exception $e) {
             return $this->json(['error' => $e->getMessage()], 500);
         }
     }
 
-    /**
-     * Get current session status via AJAX and update activity timestamp
-     */
     public function status(Request $request): Response
     {
         try {
-            Session::start();
-            $userId = (int) Session::get('user_id');
+            $userId = $this->currentUserId();
 
-            $active      = $this->terminalAdapter->isSessionActive($userId);
+            if (!$this->checkTerminalAccess($userId)) {
+                return $this->json(['error' => 'Access denied'], 403);
+            }
+
+            $active = $this->terminalAdapter->isSessionActive($userId);
             $sessionInfo = $this->terminalAdapter->getSessionInfo($userId);
 
             if ($active) {
@@ -143,24 +124,19 @@ class TerminalController extends Controller
             }
 
             return $this->json([
-                'active'         => $active,
-                'session'        => $sessionInfo,
-                'ttyd_installed' => $this->terminalAdapter->isTtydInstalled()
+                'active' => $active,
+                'session' => $sessionInfo,
+                'ttyd_installed' => $this->terminalAdapter->isTtydInstalled(),
             ]);
-
         } catch (\Exception $e) {
             return $this->json(['error' => $e->getMessage()], 500);
         }
     }
 
-    /**
-     * Restart the terminal session via AJAX
-     */
     public function restart(Request $request): Response
     {
         try {
-            Session::start();
-            $userId = (int) Session::get('user_id');
+            $userId = $this->currentUserId();
 
             if (!$this->checkTerminalAccess($userId)) {
                 return $this->json(['error' => 'Access denied'], 403);
@@ -168,8 +144,7 @@ class TerminalController extends Controller
 
             $this->terminalAdapter->stopSession($userId);
 
-            $maxAttempts = 10;
-            for ($attempt = 0; $attempt < $maxAttempts; $attempt++) {
+            for ($attempt = 0; $attempt < 10; $attempt++) {
                 if (!$this->terminalAdapter->isSessionActive($userId)) {
                     break;
                 }
@@ -180,28 +155,17 @@ class TerminalController extends Controller
                 throw new \RuntimeException('Failed to stop existing session. Please try again in a few seconds.');
             }
 
-            $role        = App::roles()->getPrimaryRoleName($userId);
-            $sessionInfo = $this->terminalAdapter->startSession($userId, $role);
-
             return $this->json([
                 'success' => true,
-                'session' => $sessionInfo
+                'session' => $this->terminalAdapter->startSession($userId, App::roles()->getPrimaryRoleName($userId)),
             ]);
-
         } catch (\Exception $e) {
             return $this->json(['error' => $e->getMessage()], 500);
         }
     }
 
-    /**
-     * Check whether the current user has the terminal.access permission.
-     */
     private function checkTerminalAccess(int $userId): bool
     {
-        if ($userId <= 0) {
-            return false;
-        }
-        return App::roles()->hasPermission($userId, 'terminal.access');
+        return $userId > 0 && App::roles()->hasPermission($userId, 'terminal.access');
     }
 }
-

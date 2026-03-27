@@ -44,6 +44,12 @@ class SiteController extends Controller
     public function store(Request $request): Response
     {
         try {
+            $domain = $request->post('domain');
+            $userId = $this->resolveOwnedUserId((int) $request->post('user_id'));
+            $phpVersion = $request->post('php_version', '8.2');
+            $sslEnabled = (bool) $request->post('ssl_enabled');
+
+            $site = App::createSiteService()->execute($userId, $domain, $phpVersion, $sslEnabled);
             $csrfToken = (string) $request->post('_csrf_token');
             if (!CSRF::verify($csrfToken)) {
                 throw new \RuntimeException('Invalid CSRF token. Please refresh and try again.');
@@ -72,6 +78,9 @@ class SiteController extends Controller
             AuditLogger::logCreated('site', $domain, [
                 'user_id' => $userId,
                 'php_version' => $phpVersion,
+                'ssl_enabled' => $sslEnabled,
+            ]);
+
                 'request_certificate' => $requestCertificate,
                 'certificate_provider' => $provider,
                 'certificate_validation_method' => $validationMethod,
@@ -95,6 +104,8 @@ class SiteController extends Controller
                 return new Response($this->errorAlert($exception->getMessage()), 400);
             }
 
+            return $this->redirect('/sites');
+        } catch (\Exception $e) {
             return $this->json(['error' => $exception->getMessage()], 400);
         }
     }

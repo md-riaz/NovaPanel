@@ -2,37 +2,37 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Request;
-use App\Http\Response;
 use App\Facades\App;
 use App\Facades\DatabaseManager;
+use App\Http\Request;
+use App\Http\Response;
+use App\Support\ForbiddenException;
 use App\Support\AuditLogger;
 
 class DatabaseController extends Controller
 {
     public function index(Request $request): Response
     {
-        $databases = App::databases()->all();
-        
-        // Load owner information for each database
-        foreach ($databases as $db) {
-            $user = App::users()->find($db->userId);
-            $db->ownerUsername = $user ? $user->username : 'Unknown';
+        $databases = $this->isAdmin()
+            ? App::databases()->all()
+            : App::databases()->findByUserId($this->currentUserId());
+
+        foreach ($databases as $database) {
+            $user = App::users()->find($database->userId);
+            $database->ownerUsername = $user ? $user->username : 'Unknown';
         }
-        
+
         return $this->view('pages/databases/index', [
             'title' => 'Databases',
-            'databases' => $databases
+            'databases' => $databases,
         ]);
     }
 
     public function create(Request $request): Response
     {
-        $users = App::users()->all();
-        
         return $this->view('pages/databases/create', [
             'title' => 'Create Database',
-            'users' => $users
+            'users' => $this->scopedUsers(),
         ]);
     }
 
@@ -40,41 +40,35 @@ class DatabaseController extends Controller
     {
         try {
             $dbName = $request->post('db_name');
-            $userId = (int) $request->post('user_id');
+            $userId = $this->resolveOwnedUserId((int) $request->post('user_id'));
             $dbType = $request->post('db_type', 'mysql');
             $dbUsername = $request->post('db_username');
             $dbPassword = $request->post('db_password');
-            
-            // Use App facade to get service with all dependencies injected
-            $service = App::createDatabaseService();
-            
-            $database = $service->execute(
+
+            App::createDatabaseService()->execute(
                 userId: $userId,
                 dbName: $dbName,
                 dbType: $dbType,
                 dbUsername: $dbUsername,
                 dbPassword: $dbPassword
             );
-            
-            // Log audit event
+
             AuditLogger::logCreated('database', $dbName, [
                 'user_id' => $userId,
                 'db_type' => $dbType,
-                'db_username' => $dbUsername
+                'db_username' => $dbUsername,
             ]);
-            
-            // Check if this is an HTMX request
+
             if ($request->isHtmx()) {
                 return new Response($this->successAlert('Database created successfully! Redirecting...'));
             }
-            
+
             return $this->redirect('/databases');
-            
         } catch (\Exception $e) {
-            // Check if this is an HTMX request
             if ($request->isHtmx()) {
                 return new Response($this->errorAlert($e->getMessage()), 400);
             }
+
             return $this->json(['error' => $e->getMessage()], 400);
         }
     }
@@ -83,58 +77,55 @@ class DatabaseController extends Controller
     {
         try {
             $database = App::databases()->find($id);
-            
             if (!$database) {
                 throw new \Exception('Database not found');
             }
-            
-            // Log audit event before deletion
+
+            $this->authorizeOwnedUserId((int) $database->userId);
+
             AuditLogger::logDeleted('database', $database->name, [
                 'database_id' => $id,
-                'db_type' => $database->type
+                'db_type' => $database->type,
             ]);
-            
-            // Delete from infrastructure
+
             DatabaseManager::getInstance()->deleteDatabase($database);
-            
-            // Delete from panel database
             App::databases()->delete($id);
-            
+
             return $this->redirect('/databases');
-            
+        } catch (ForbiddenException $e) {
+            return $this->json(['error' => $e->getMessage()], 403);
         } catch (\Exception $e) {
             return $this->json(['error' => $e->getMessage()], 400);
         }
     }
 
-    /**
-     * Handle phpMyAdmin SSO (Single Sign-On)
-     * 
-     * This method sets up the phpMyAdmin signon session and redirects to phpMyAdmin.
-     * The user is automatically authenticated without entering credentials.
-     */
     public function phpMyAdminSignon(Request $request): Response
     {
-        // Get MySQL credentials from environment using Env facade
-        $mysqlHost = \App\Support\Env::get('MYSQL_HOST', 'localhost');
-        $mysqlUser = \App\Support\Env::get('MYSQL_ROOT_USER', 'root');
-        $mysqlPassword = \App\Support\Env::get('MYSQL_ROOT_PASSWORD', '');
-        
-        // Set phpMyAdmin signon session with MySQL credentials
-        $_SESSION['novapanel_pma_signon'] = [
-            'user' => $mysqlUser,
-            'password' => $mysqlPassword,
-            'host' => $mysqlHost,
-        ];
-        
-        // Build redirect URL with optional database parameter
-        $redirectUrl = '/phpmyadmin/';
-        $db = $request->get('db');
-        if ($db && !empty($db)) {
-            $redirectUrl .= '?db=' . urlencode($db);
+        $dbName = $request->query('db');
+        if (!$this->isAdmin() && $dbName) {
+            $database = App::databases()->findByName($dbName);
+            if (!$database) {
+                return $this->json(['error' => 'Database not found'], 404);
+            }
+
+            try {
+                $this->authorizeOwnedUserId((int) $database->userId);
+            } catch (ForbiddenException $e) {
+                return $this->json(['error' => $e->getMessage()], 403);
+            }
         }
-        
-        // Redirect to phpMyAdmin
+
+        $_SESSION['novapanel_pma_signon'] = [
+            'user' => \App\Support\Env::get('MYSQL_ROOT_USER', 'root'),
+            'password' => \App\Support\Env::get('MYSQL_ROOT_PASSWORD', ''),
+            'host' => \App\Support\Env::get('MYSQL_HOST', 'localhost'),
+        ];
+
+        $redirectUrl = '/phpmyadmin/';
+        if ($dbName && !empty($dbName)) {
+            $redirectUrl .= '?db=' . urlencode($dbName);
+        }
+
         return $this->redirect($redirectUrl);
     }
 }

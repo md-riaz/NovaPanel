@@ -176,6 +176,34 @@ All directories owned by `novapanel:novapanel`.
 
 **CRITICAL:** There is only ONE Linux system user. Panel users exist only in the database for access control. See [ARCHITECTURE.md](ARCHITECTURE.md) for full details.
 
+### Authorization Model
+
+NovaPanel now applies permission-aware route guards across every protected feature area, not just terminal access. The router enforces feature permissions before a controller runs, and controllers apply ownership checks so non-admin users can only read or mutate their own resources.
+
+#### Route Permission Map
+
+- **Users**: `users.view`, `users.create`, `users.edit`, `users.delete`, `users.manage`
+- **Sites**: `sites.view`, `sites.create`, `sites.edit`, `sites.delete`, `sites.manage`
+- **Databases**: `databases.view`, `databases.create`, `databases.edit`, `databases.delete`, `databases.manage`
+- **DNS**: `dns.view`, `dns.create`, `dns.edit`, `dns.delete`, `dns.manage`
+- **FTP**: `ftp.view`, `ftp.create`, `ftp.edit`, `ftp.delete`, `ftp.manage`
+- **Cron**: `cron.view`, `cron.create`, `cron.edit`, `cron.delete`, `cron.manage`
+- **Terminal**: `terminal.access`
+
+#### Ownership Rules
+
+- **Admin** users can view and manage resources for every account.
+- **AccountOwner**, **Developer**, and **ReadOnly** users are restricted to resources tied to their own `user_id`.
+- Destructive actions such as deleting databases, FTP users, cron jobs, or DNS records perform ownership validation in the controller before the action executes.
+- Non-admin users can edit only their own panel profile; only admins can change role assignments or delete users.
+
+#### Default Role Capability Summary
+
+- **Admin**: all permissions.
+- **AccountOwner**: full management of their own sites, databases, DNS, FTP users, cron jobs, plus terminal access.
+- **Developer**: scoped access to their own sites, databases, FTP users, and cron jobs with read-only DNS visibility plus terminal access.
+- **ReadOnly**: scoped read access to their own resources only.
+
 ### Creating a Panel User
 
 1. Log in as admin
