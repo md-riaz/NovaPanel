@@ -298,7 +298,7 @@ class AcmeCertificateService
     private function sanitizeCertbotOutput(string $output): string
     {
         $sanitized = $this->safePregReplace('/\b(?:\d{1,3}\.){3}\d{1,3}\b/', '[redacted-ip]', $output);
-        $sanitized = $this->safePregReplace('/\/[A-Za-z0-9_.\-\/]+/', '[redacted-path]', $sanitized);
+        $sanitized = $this->safePregReplace('#/[A-Za-z0-9_.\-/]+#', '[redacted-path]', $sanitized);
         $sanitized = $this->safePregReplace('/([A-Za-z0-9_\-]{16,})/', '[redacted-token]', $sanitized);
         $sanitized = $this->safePregReplace('/\s+/', ' ', trim($sanitized));
 
@@ -312,6 +312,9 @@ class AcmeCertificateService
     private function safePregReplace(string $pattern, string $replacement, string $subject): string
     {
         $result = preg_replace($pattern, $replacement, $subject);
+        if (!is_string($result)) {
+            error_log(sprintf('preg_replace failed during certificate output sanitization (code: %d)', preg_last_error()));
+        }
 
         return is_string($result) ? $result : $subject;
     }
