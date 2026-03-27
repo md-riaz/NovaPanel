@@ -52,6 +52,7 @@
                             <?php endif; ?>
                         </td>
                         <td>
+                            <span class="text-muted small">No per-site actions available</span>
                             <div class="small">
                                 Auto renew: <strong><?= $site->certificateAutoRenew ? 'On' : 'Off' ?></strong>
                             </div>
