@@ -4,6 +4,22 @@ require_once __DIR__ . '/../vendor/autoload.php';
 
 use App\Infrastructure\Database;
 
+function ensureColumn(\PDO $db, string $table, string $column, string $definition): void
+{
+    $quotedTable = '"' . str_replace('"', '""', $table) . '"';
+    $quotedColumn = '"' . str_replace('"', '""', $column) . '"';
+
+    $columns = $db->query("PRAGMA table_info({$quotedTable})")->fetchAll(\PDO::FETCH_ASSOC);
+    foreach ($columns as $existingColumn) {
+        if (($existingColumn['name'] ?? null) === $column) {
+            return;
+        }
+    }
+
+    $db->exec(sprintf('ALTER TABLE %s ADD COLUMN %s %s', $quotedTable, $quotedColumn, $definition));
+    echo "✓ Ensured {$table}.{$column} column\n";
+}
+
 echo "NovaPanel Database Migration\n";
 echo "=============================\n\n";
 
@@ -78,12 +94,33 @@ try {
             document_root TEXT NOT NULL,
             php_version TEXT NOT NULL DEFAULT '8.2',
             ssl_enabled INTEGER NOT NULL DEFAULT 0,
+            certificate_provider TEXT DEFAULT 'letsencrypt',
+            certificate_status TEXT NOT NULL DEFAULT 'unissued',
+            certificate_expires_at TEXT,
+            certificate_auto_renew INTEGER NOT NULL DEFAULT 1,
+            certificate_validation_method TEXT NOT NULL DEFAULT 'webroot',
+            certificate_path TEXT,
+            certificate_key_path TEXT,
+            force_https INTEGER NOT NULL DEFAULT 0,
+            last_certificate_renewal_at TEXT,
+            last_certificate_error TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     ");
     echo "✓ Created sites table\n";
+
+    ensureColumn($db, 'sites', 'certificate_provider', "TEXT DEFAULT 'letsencrypt'");
+    ensureColumn($db, 'sites', 'certificate_status', "TEXT NOT NULL DEFAULT 'unissued'");
+    ensureColumn($db, 'sites', 'certificate_expires_at', 'TEXT');
+    ensureColumn($db, 'sites', 'certificate_auto_renew', 'INTEGER NOT NULL DEFAULT 1');
+    ensureColumn($db, 'sites', 'certificate_validation_method', "TEXT NOT NULL DEFAULT 'webroot'");
+    ensureColumn($db, 'sites', 'certificate_path', 'TEXT');
+    ensureColumn($db, 'sites', 'certificate_key_path', 'TEXT');
+    ensureColumn($db, 'sites', 'force_https', 'INTEGER NOT NULL DEFAULT 0');
+    ensureColumn($db, 'sites', 'last_certificate_renewal_at', 'TEXT');
+    ensureColumn($db, 'sites', 'last_certificate_error', 'TEXT');
 
     // Domains table
     $db->exec("
