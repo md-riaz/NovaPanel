@@ -7,6 +7,7 @@ use App\Facades\App;
 use App\Facades\Dns;
 use App\Http\Request;
 use App\Http\Response;
+use App\Support\ForbiddenException;
 use App\Support\AuditLogger;
 
 class DnsController extends Controller
@@ -37,7 +38,7 @@ class DnsController extends Controller
 
         try {
             $this->authorizeOwnedDomainId($id);
-        } catch (\RuntimeException $e) {
+        } catch (ForbiddenException $e) {
             return new Response($e->getMessage(), 403);
         }
 
@@ -85,6 +86,12 @@ class DnsController extends Controller
             }
 
             return $this->redirect('/dns');
+        } catch (ForbiddenException $e) {
+            if ($request->isHtmx()) {
+                return new Response($this->errorAlert($e->getMessage()), 403);
+            }
+
+            return $this->json(['error' => $e->getMessage()], 403);
         } catch (\Exception $e) {
             if ($request->isHtmx()) {
                 return new Response($this->errorAlert($e->getMessage()), 400);
@@ -117,6 +124,8 @@ class DnsController extends Controller
             ]);
 
             return $this->redirect("/dns/{$domainId}");
+        } catch (ForbiddenException $e) {
+            return $this->json(['error' => $e->getMessage()], 403);
         } catch (\Exception $e) {
             return $this->json(['error' => $e->getMessage()], 400);
         }
@@ -142,6 +151,8 @@ class DnsController extends Controller
             App::dnsRecords()->delete($recordId);
 
             return $this->redirect("/dns/{$domainId}");
+        } catch (ForbiddenException $e) {
+            return $this->json(['error' => $e->getMessage()], 403);
         } catch (\Exception $e) {
             return $this->json(['error' => $e->getMessage()], 400);
         }

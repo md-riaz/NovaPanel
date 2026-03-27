@@ -6,6 +6,7 @@ use App\Facades\App;
 use App\Facades\Cron;
 use App\Http\Request;
 use App\Http\Response;
+use App\Support\ForbiddenException;
 use App\Support\AuditLogger;
 
 class CronController extends Controller
@@ -94,6 +95,8 @@ class CronController extends Controller
             App::cronJobs()->delete($id);
 
             return $this->redirect('/cron');
+        } catch (ForbiddenException $e) {
+            return $this->json(['error' => $e->getMessage()], 403);
         } catch (\Exception $e) {
             return $this->json(['error' => $e->getMessage()], 400);
         }

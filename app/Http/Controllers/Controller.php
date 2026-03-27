@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Facades\App;
 use App\Http\Response;
 use App\Http\Session;
+use App\Support\ForbiddenException;
 
 abstract class Controller
 {
@@ -36,19 +37,23 @@ abstract class Controller
 
     protected function currentUserId(): int
     {
-        Session::start();
         return (int) Session::get('user_id', 0);
     }
 
     protected function currentUsername(): string
     {
-        Session::start();
         return (string) Session::get('username', 'unknown');
     }
 
     protected function isAdmin(): bool
     {
-        return App::roles()->getPrimaryRoleName($this->currentUserId()) === 'Admin';
+        foreach (App::roles()->getUserRoles($this->currentUserId()) as $role) {
+            if ($role->name === 'Admin') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     protected function scopedUsers(): array
@@ -77,7 +82,7 @@ abstract class Controller
         }
 
         if ($userId !== $this->currentUserId()) {
-            throw new \RuntimeException('You do not have access to this resource.');
+            throw new ForbiddenException('You do not have access to this resource.');
         }
     }
 

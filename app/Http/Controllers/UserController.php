@@ -6,6 +6,7 @@ use App\Domain\Entities\User;
 use App\Facades\App;
 use App\Http\Request;
 use App\Http\Response;
+use App\Support\ForbiddenException;
 use App\Support\AuditLogger;
 
 class UserController extends Controller
@@ -130,11 +131,11 @@ class UserController extends Controller
 
     public function update(Request $request, int $id): Response
     {
-        try {
-            if (!$this->isAdmin() && $id !== $this->currentUserId()) {
-                throw new \Exception('You do not have access to this user.');
-            }
+        if (!$this->isAdmin() && $id !== $this->currentUserId()) {
+            return $this->json(['error' => 'You do not have access to this user.'], 403);
+        }
 
+        try {
             $userRepo = App::users();
             $roleRepo = App::roles();
             $user = $userRepo->find($id);
@@ -204,6 +205,8 @@ class UserController extends Controller
             ]);
 
             return $this->redirect('/users');
+        } catch (ForbiddenException $e) {
+            return $this->json(['error' => $e->getMessage()], 403);
         } catch (\Exception $e) {
             return $this->json(['error' => $e->getMessage()], 400);
         }
@@ -211,11 +214,11 @@ class UserController extends Controller
 
     public function delete(Request $request, int $id): Response
     {
-        try {
-            if (!$this->isAdmin()) {
-                throw new \Exception('You do not have permission to delete users.');
-            }
+        if (!$this->isAdmin()) {
+            return $this->json(['error' => 'You do not have permission to delete users.'], 403);
+        }
 
+        try {
             $user = App::users()->find($id);
             if (!$user) {
                 throw new \Exception('User not found');
@@ -229,6 +232,8 @@ class UserController extends Controller
             App::users()->delete($id);
 
             return $this->redirect('/users');
+        } catch (ForbiddenException $e) {
+            return $this->json(['error' => $e->getMessage()], 403);
         } catch (\Exception $e) {
             return $this->json(['error' => $e->getMessage()], 400);
         }

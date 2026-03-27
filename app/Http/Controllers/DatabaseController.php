@@ -6,6 +6,7 @@ use App\Facades\App;
 use App\Facades\DatabaseManager;
 use App\Http\Request;
 use App\Http\Response;
+use App\Support\ForbiddenException;
 use App\Support\AuditLogger;
 
 class DatabaseController extends Controller
@@ -91,6 +92,8 @@ class DatabaseController extends Controller
             App::databases()->delete($id);
 
             return $this->redirect('/databases');
+        } catch (ForbiddenException $e) {
+            return $this->json(['error' => $e->getMessage()], 403);
         } catch (\Exception $e) {
             return $this->json(['error' => $e->getMessage()], 400);
         }
@@ -107,7 +110,7 @@ class DatabaseController extends Controller
 
             try {
                 $this->authorizeOwnedUserId((int) $database->userId);
-            } catch (\RuntimeException $e) {
+            } catch (ForbiddenException $e) {
                 return $this->json(['error' => $e->getMessage()], 403);
             }
         }

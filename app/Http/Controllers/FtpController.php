@@ -6,6 +6,7 @@ use App\Facades\App;
 use App\Facades\Ftp;
 use App\Http\Request;
 use App\Http\Response;
+use App\Support\ForbiddenException;
 use App\Support\AuditLogger;
 
 class FtpController extends Controller
@@ -88,6 +89,8 @@ class FtpController extends Controller
             App::ftpUsers()->delete($id);
 
             return $this->redirect('/ftp');
+        } catch (ForbiddenException $e) {
+            return $this->json(['error' => $e->getMessage()], 403);
         } catch (\Exception $e) {
             return $this->json(['error' => $e->getMessage()], 400);
         }
