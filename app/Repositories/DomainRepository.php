@@ -17,7 +17,7 @@ class DomainRepository
 
     public function find(int $id): ?Domain
     {
-        $stmt = $this->db->prepare("SELECT * FROM domains WHERE id = ?");
+        $stmt = $this->db->prepare('SELECT * FROM domains WHERE id = ?');
         $stmt->execute([$id]);
         $row = $stmt->fetch();
 
@@ -26,7 +26,7 @@ class DomainRepository
 
     public function findByName(string $name): ?Domain
     {
-        $stmt = $this->db->prepare("SELECT * FROM domains WHERE name = ?");
+        $stmt = $this->db->prepare('SELECT * FROM domains WHERE name = ?');
         $stmt->execute([$name]);
         $row = $stmt->fetch();
 
@@ -35,31 +35,46 @@ class DomainRepository
 
     public function all(): array
     {
-        $stmt = $this->db->query("SELECT * FROM domains ORDER BY created_at DESC");
+        $stmt = $this->db->query('SELECT * FROM domains ORDER BY created_at DESC');
         $rows = $stmt->fetchAll();
 
-        return array_map(fn($row) => $this->hydrate($row), $rows);
+        return array_map(fn ($row) => $this->hydrate($row), $rows);
+    }
+
+    public function findByUserId(int $userId): array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT d.*
+             FROM domains d
+             INNER JOIN sites s ON s.id = d.site_id
+             WHERE s.user_id = ?
+             ORDER BY d.created_at DESC'
+        );
+        $stmt->execute([$userId]);
+        $rows = $stmt->fetchAll();
+
+        return array_map(fn ($row) => $this->hydrate($row), $rows);
     }
 
     public function findBySiteId(int $siteId): array
     {
-        $stmt = $this->db->prepare("SELECT * FROM domains WHERE site_id = ? ORDER BY created_at DESC");
+        $stmt = $this->db->prepare('SELECT * FROM domains WHERE site_id = ? ORDER BY created_at DESC');
         $stmt->execute([$siteId]);
         $rows = $stmt->fetchAll();
 
-        return array_map(fn($row) => $this->hydrate($row), $rows);
+        return array_map(fn ($row) => $this->hydrate($row), $rows);
     }
 
     public function create(Domain $domain): Domain
     {
-        $stmt = $this->db->prepare("
+        $stmt = $this->db->prepare('
             INSERT INTO domains (site_id, name)
             VALUES (?, ?)
-        ");
-        
+        ');
+
         $stmt->execute([
             $domain->siteId,
-            $domain->name
+            $domain->name,
         ]);
 
         $domain->id = (int) $this->db->lastInsertId();
@@ -68,7 +83,7 @@ class DomainRepository
 
     public function delete(int $id): bool
     {
-        $stmt = $this->db->prepare("DELETE FROM domains WHERE id = ?");
+        $stmt = $this->db->prepare('DELETE FROM domains WHERE id = ?');
         return $stmt->execute([$id]);
     }
 

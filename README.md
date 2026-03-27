@@ -47,6 +47,7 @@ NovaPanel uses **BIND9** for DNS management, providing superior security compare
 - MySQL/MariaDB
 - SQLite3
 - BIND9 (for DNS management)
+- Certbot (for ACME certificate issue/renew/revoke/reinstall workflows)
 - Composer
 
 ## Quick Start
@@ -69,8 +70,9 @@ The installer will:
 4. Create MySQL user for panel database management (auto-generated password)
 5. Install and configure BIND9 for DNS management (uses zone files for complete isolation)
 6. Configure Nginx
-7. Create an admin user
-8. Set up security permissions
+7. Install Certbot and prepare the ACME renewal workflow
+8. Create an admin user
+9. Set up security permissions
 
 ## Configuration
 
@@ -174,6 +176,34 @@ All directories owned by `novapanel:novapanel`.
 
 **CRITICAL:** There is only ONE Linux system user. Panel users exist only in the database for access control. See [ARCHITECTURE.md](ARCHITECTURE.md) for full details.
 
+### Authorization Model
+
+NovaPanel now applies permission-aware route guards across every protected feature area, not just terminal access. The router enforces feature permissions before a controller runs, and controllers apply ownership checks so non-admin users can only read or mutate their own resources.
+
+#### Route Permission Map
+
+- **Users**: `users.view`, `users.create`, `users.edit`, `users.delete`, `users.manage`
+- **Sites**: `sites.view`, `sites.create`, `sites.edit`, `sites.delete`, `sites.manage`
+- **Databases**: `databases.view`, `databases.create`, `databases.edit`, `databases.delete`, `databases.manage`
+- **DNS**: `dns.view`, `dns.create`, `dns.edit`, `dns.delete`, `dns.manage`
+- **FTP**: `ftp.view`, `ftp.create`, `ftp.edit`, `ftp.delete`, `ftp.manage`
+- **Cron**: `cron.view`, `cron.create`, `cron.edit`, `cron.delete`, `cron.manage`
+- **Terminal**: `terminal.access`
+
+#### Ownership Rules
+
+- **Admin** users can view and manage resources for every account.
+- **AccountOwner**, **Developer**, and **ReadOnly** users are restricted to resources tied to their own `user_id`.
+- Destructive actions such as deleting databases, FTP users, cron jobs, or DNS records perform ownership validation in the controller before the action executes.
+- Non-admin users can edit only their own panel profile; only admins can change role assignments or delete users.
+
+#### Default Role Capability Summary
+
+- **Admin**: all permissions.
+- **AccountOwner**: full management of their own sites, databases, DNS, FTP users, cron jobs, plus terminal access.
+- **Developer**: scoped access to their own sites, databases, FTP users, and cron jobs with read-only DNS visibility plus terminal access.
+- **ReadOnly**: scoped read access to their own resources only.
+
 ### Creating a Panel User
 
 1. Log in as admin
@@ -185,15 +215,73 @@ All directories owned by `novapanel:novapanel`.
 ### Creating a Website
 
 1. Navigate to **Sites** > **Create Site**
-2. Enter domain name (e.g., `example.com`)
+2. Enter the primary domain name (for example, `example.com`)
 3. Select the panel user who will own this site
-4. Choose PHP version
-5. Enable SSL if needed
-6. The system will:
-   - Create document root under `/opt/novapanel/sites/{username}/{domain}`
-   - Generate Nginx vhost
-   - Create PHP-FPM pool
-   - Reload services
+4. Choose the PHP version
+5. Decide whether NovaPanel should request a certificate immediately
+6. Pick the ACME validation method:
+   - **HTTP Webroot**: the domain must already resolve to this server and allow `/.well-known/acme-challenge/` over port 80
+   - **DNS Hook**: configure `ACME_DNS_AUTH_HOOK` and `ACME_DNS_CLEANUP_HOOK` in `.env.php` so Certbot can create and remove TXT challenges automatically
+7. Optionally enable auto-renew and force HTTPS
+8. The system will:
+   - Create the document root under `/opt/novapanel/sites/{username}/{domain}`
+   - Generate HTTP and HTTPS-ready Nginx vhosts
+   - Create the PHP-FPM pool
+   - Request and install the certificate when selected
+   - Reload Nginx after configuration changes
+
+### Managing Certificates
+
+Each site now has a dedicated certificate workflow screen at **Sites** > **Manage** where you can:
+
+- Request or reissue a certificate
+- View provider, validation method, paths, expiry, and renewal status
+- Renew the certificate on demand
+- Reinstall certificate paths into Nginx
+- Revoke the certificate
+- Toggle HTTP-to-HTTPS redirects while preserving the ACME challenge path on port 80
+
+### Automated Renewals
+
+NovaPanel includes a cron-friendly renewal command:
+
+```bash
+php /opt/novapanel/scripts/renew-certificates.php
+```
+
+To renew certificates that will expire within the next 15 days instead of the default 30-day window:
+
+```bash
+php /opt/novapanel/scripts/renew-certificates.php 15
+```
+
+Recommended cron entry:
+
+```cron
+17 3 * * * /usr/bin/php /opt/novapanel/scripts/renew-certificates.php >> /opt/novapanel/storage/logs/certificate-renewal-cron.log 2>&1
+```
+
+Renewal failures are written to `storage/logs/certificates.log`, surfaced on the dashboard, and recorded in the audit log.
+
+### ACME Validation Requirements
+
+#### HTTP Webroot Validation
+
+- The DNS `A`/`AAAA` record for the site must already point to this server before requesting the certificate
+- Port 80 must be reachable from the internet
+- Any reverse proxy or firewall must allow `/.well-known/acme-challenge/` requests through to the site root
+
+#### DNS Hook Validation
+
+- Configure hook paths in `.env.php`:
+
+```php
+'ACME_DNS_AUTH_HOOK' => '/opt/novapanel/scripts/acme-dns-auth.sh',
+'ACME_DNS_CLEANUP_HOOK' => '/opt/novapanel/scripts/acme-dns-cleanup.sh',
+```
+
+- The hook scripts are responsible for creating and removing the `_acme-challenge` TXT record with your DNS provider
+- Ensure the hook scripts are executable by the `novapanel` user and available to `sudo certbot`
 
 ### Managing Databases
 
@@ -381,7 +469,7 @@ See [SECURITY.md](SECURITY.md) for detailed security documentation.
 - [ ] REST API
 - [ ] Plugin system
 - [ ] Multi-server support
-- [ ] Let's Encrypt integration
+- [x] Let's Encrypt integration
 - [ ] File manager
 - [ ] Resource monitoring
 - [ ] Two-factor authentication

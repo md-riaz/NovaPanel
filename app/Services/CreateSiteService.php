@@ -20,6 +20,7 @@ class CreateSiteService
         private PhpRuntimeManagerInterface $phpRuntimeManager,
         private ShellInterface $shell,
         private SiteTemplateService $siteTemplateService
+        private AcmeCertificateService $acmeCertificateService
     ) {}
 
     public function execute(
@@ -28,13 +29,18 @@ class CreateSiteService
         string $phpVersion = '8.2',
         bool $sslEnabled = false,
         string $template = 'basic_php'
+        bool $requestCertificate = false,
+        string $validationMethod = 'webroot',
+        bool $autoRenew = true,
+        bool $forceHttps = false,
+        string $provider = 'letsencrypt'
     ): Site {
         if (!$this->isValidDomain($domain)) {
             throw new \InvalidArgumentException('Invalid domain format');
         }
 
         if ($this->siteRepository->findByDomain($domain)) {
-            throw new \RuntimeException("Site with domain '$domain' already exists");
+            throw new \RuntimeException("Site with domain '{$domain}' already exists");
         }
 
         $user = $this->userRepository->find($userId);
@@ -52,6 +58,7 @@ class CreateSiteService
                 break;
             }
         }
+
         if (!$versionExists) {
             throw new \InvalidArgumentException("PHP version {$phpVersion} is not installed on this system. Please install it first or choose an available version.");
         }
@@ -64,7 +71,12 @@ class CreateSiteService
             domain: $domain,
             documentRoot: $documentRoot,
             phpVersion: $phpVersion,
-            sslEnabled: $sslEnabled,
+            sslEnabled: false,
+            certificateProvider: $provider,
+            certificateStatus: $requestCertificate ? 'pending' : 'unissued',
+            certificateAutoRenew: $autoRenew,
+            certificateValidationMethod: $validationMethod,
+            forceHttps: $forceHttps,
             ownerUsername: $user->username
         );
 
@@ -106,12 +118,26 @@ class CreateSiteService
                 $this->phpRuntimeManager->deletePool($site);
             } catch (\Exception $poolError) {
                 error_log('Failed to rollback PHP-FPM pool for ' . $domain . ': ' . $poolError->getMessage());
+            $indexContent = "<?php\necho '<h1>Welcome to {$domain}</h1>';\necho '<p>Site owner: {$user->username}</p>';\nphpinfo();\n";
+            $writeResult = $this->shell->writeFile("{$documentRoot}/index.php", $indexContent);
+            if ($writeResult['exitCode'] !== 0) {
+                throw new \RuntimeException('Failed to write default index file: ' . $writeResult['output']);
+            }
+        } catch (\Throwable $exception) {
+            error_log("Site creation failed for domain {$domain}: " . $exception->getMessage());
+
+            try {
+                $this->phpRuntimeManager->deletePool($site);
+            } catch (\Throwable $poolError) {
+                error_log("Failed to rollback PHP-FPM pool for {$domain}: " . $poolError->getMessage());
             }
 
             try {
                 $this->webServerManager->deleteSite($site);
             } catch (\Exception $vhostError) {
                 error_log('Failed to rollback Nginx vhost for ' . $domain . ': ' . $vhostError->getMessage());
+            } catch (\Throwable $vhostError) {
+                error_log("Failed to rollback Nginx vhost for {$domain}: " . $vhostError->getMessage());
             }
 
             try {
@@ -120,11 +146,31 @@ class CreateSiteService
                 }
             } catch (\Exception $dirError) {
                 error_log('Failed to rollback directory ' . $documentRoot . ': ' . $dirError->getMessage());
+            } catch (\Throwable $dirError) {
+                error_log("Failed to rollback directory {$documentRoot}: " . $dirError->getMessage());
             }
 
             $this->siteRepository->delete($site->id);
 
             throw new \RuntimeException('Failed to create site infrastructure: ' . $e->getMessage());
+            throw new \RuntimeException('Failed to create site infrastructure: ' . $exception->getMessage());
+        }
+
+        if ($requestCertificate) {
+            try {
+                $site = $this->acmeCertificateService->issue(
+                    $site,
+                    $provider,
+                    $validationMethod,
+                    $autoRenew,
+                    $forceHttps
+                );
+            } catch (\Throwable $exception) {
+                error_log("Certificate issuance failed for {$domain}: " . $exception->getMessage());
+                $site->certificateStatus = 'failed';
+                $site->lastCertificateError = $exception->getMessage();
+                $this->siteRepository->update($site);
+            }
         }
 
         return $site;

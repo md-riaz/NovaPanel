@@ -16,6 +16,12 @@
             <i class="bi bi-cpu"></i> Refresh Status
         </button>
     </div>
+    <button class="btn btn-sm btn-outline-secondary"
+            hx-get="/dashboard/stats"
+            hx-target="#stats-container"
+            hx-swap="innerHTML">
+        <i class="bi bi-arrow-clockwise"></i> Refresh Stats
+    </button>
 </div>
 
 <div class="row" id="stats-container" hx-get="/dashboard/stats" hx-trigger="load, every 30s" hx-swap="innerHTML">
@@ -110,6 +116,26 @@
         </div>
     </div>
 </section>
+<?php if (!empty($certificateFailures ?? [])): ?>
+    <div class="alert alert-warning mt-4">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+                <strong>Certificate renewals need attention.</strong>
+                <div class="small">Failures are also logged to <code>storage/logs/certificates.log</code>.</div>
+            </div>
+            <a href="/sites" class="btn btn-sm btn-outline-dark">Review Sites</a>
+        </div>
+        <ul class="mt-3 mb-0">
+            <?php foreach ($certificateFailures as $failedSite): ?>
+                <li>
+                    <strong><?= htmlspecialchars($failedSite['domain']) ?></strong>
+                    (<?= htmlspecialchars($failedSite['ownerUsername'] ?? 'Unknown') ?>)
+                    — <?= htmlspecialchars($failedSite['lastCertificateError']) ?>
+                </li>
+            <?php endforeach; ?>
+        </ul>
+    </div>
+<?php endif; ?>
 
 <div class="row mt-4">
     <div class="col-md-12">
