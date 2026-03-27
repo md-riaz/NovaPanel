@@ -36,7 +36,7 @@
                             </td>
                             <td><?= htmlspecialchars($ftpUser->createdAt) ?></td>
                             <td>
-                                <form method="POST" action="/ftp/<?= $ftpUser->id ?>/delete" style="display: inline;"
+                                <form method="POST" action="/ftp/<?= htmlspecialchars((string) ($ftpUser->id ?? '')) ?>/delete" class="d-inline"
                                       onsubmit="return confirm('Are you sure you want to delete this FTP user?');">
                                     <button type="submit" class="btn btn-sm btn-danger">
                                         <i class="bi bi-trash"></i> Delete

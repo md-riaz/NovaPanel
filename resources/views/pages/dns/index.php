@@ -31,7 +31,7 @@
                         <td><?= htmlspecialchars($domain->siteDomain ?? 'Unknown') ?></td>
                         <td><?= htmlspecialchars($domain->createdAt ?? '') ?></td>
                         <td>
-                            <a href="/dns/<?= $domain->id ?>" class="btn btn-sm btn-outline-primary">
+                            <a href="/dns/<?= htmlspecialchars((string) ($domain->id ?? '')) ?>" class="btn btn-sm btn-outline-primary">
                                 <i class="bi bi-eye"></i> View Records
                             </a>
                         </td>
