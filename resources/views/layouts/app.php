@@ -6,6 +6,7 @@
     <title><?= $title ?? 'NovaPanel' ?></title>
     <link href="/assets/css/bootstrap.min.css" rel="stylesheet">
     <link href="/assets/css/bootstrap-icons.css" rel="stylesheet">
+    <?= \App\Support\CSRF::meta() ?>
     <style>
         .htmx-indicator {
             display: none;

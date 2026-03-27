@@ -8,14 +8,14 @@
 </div>
 
 <div class="table-responsive">
-    <table class="table table-striped table-hover">
+    <table class="table table-striped table-hover align-middle">
         <thead>
             <tr>
                 <th>Domain</th>
                 <th>Owner</th>
-                <th>PHP Version</th>
-                <th>SSL</th>
-                <th>Created</th>
+                <th>PHP</th>
+                <th>Certificate</th>
+                <th>Renewal</th>
                 <th>Actions</th>
             </tr>
         </thead>
@@ -27,25 +27,46 @@
             <?php else: ?>
                 <?php foreach ($sites as $site): ?>
                     <tr>
-                        <td><strong><?= htmlspecialchars($site->domain) ?></strong></td>
                         <td>
-                            <?php if (isset($site->ownerUsername)): ?>
-                                <i class="bi bi-person"></i> <?= htmlspecialchars($site->ownerUsername) ?>
-                            <?php else: ?>
-                                User #<?= $site->userId ?>
-                            <?php endif; ?>
+                            <strong><?= htmlspecialchars($site->domain) ?></strong>
+                            <div class="small text-muted"><?= htmlspecialchars($site->documentRoot) ?></div>
                         </td>
+                        <td><i class="bi bi-person"></i> <?= htmlspecialchars($site->ownerUsername ?? ('User #' . $site->userId)) ?></td>
                         <td><span class="badge bg-info">PHP <?= htmlspecialchars($site->phpVersion) ?></span></td>
                         <td>
-                            <?php if ($site->sslEnabled): ?>
-                                <span class="badge bg-success"><i class="bi bi-lock-fill"></i> Enabled</span>
-                            <?php else: ?>
-                                <span class="badge bg-secondary"><i class="bi bi-unlock"></i> Disabled</span>
+                            <?php
+                                $statusClass = match ($site->certificateStatus) {
+                                    'active' => 'success',
+                                    'pending', 'renewing' => 'warning text-dark',
+                                    'failed', 'revoked' => 'danger',
+                                    default => 'secondary',
+                                };
+                            ?>
+                            <span class="badge bg-<?= $statusClass ?>"><?= htmlspecialchars(ucfirst($site->certificateStatus ?? 'unissued')) ?></span>
+                            <div class="small text-muted mt-1">
+                                <?= htmlspecialchars(strtoupper($site->certificateValidationMethod ?? 'webroot')) ?>
+                                · <?= $site->forceHttps ? 'Force HTTPS' : 'HTTP + HTTPS' ?>
+                            </div>
+                            <?php if (!empty($site->lastCertificateError)): ?>
+                                <div class="small text-danger mt-1"><?= htmlspecialchars($site->lastCertificateError) ?></div>
                             <?php endif; ?>
                         </td>
-                        <td><?= htmlspecialchars($site->createdAt) ?></td>
                         <td>
                             <span class="text-muted small">No per-site actions available</span>
+                            <div class="small">
+                                Auto renew: <strong><?= $site->certificateAutoRenew ? 'On' : 'Off' ?></strong>
+                            </div>
+                            <div class="small text-muted">
+                                Expires: <?= htmlspecialchars($site->certificateExpiresAt ?: 'Not installed') ?>
+                            </div>
+                        </td>
+                        <td>
+                            <div class="btn-group btn-group-sm" role="group">
+                                <a href="/sites/<?= $site->id ?>" class="btn btn-outline-primary">Manage</a>
+                                <form method="POST" action="/sites/<?= $site->id ?>/certificate/renew" class="d-inline">
+                                    <button type="submit" class="btn btn-outline-success">Renew</button>
+                                </form>
+                            </div>
                         </td>
                     </tr>
                 <?php endforeach; ?>
