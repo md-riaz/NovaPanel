@@ -50,6 +50,15 @@ Third-party executable plugins
 > roles are minimal: **owner, admin, read-only**. No tiers, no packages, no per-customer isolation
 > *as a product* (per-site isolation stays, for safety — see §6).
 
+**Concretely dropped (BHPanel's tenancy surface — ~90 of its 267 verbs):** customer SSO
+(billing-system sign-in links), DNS-cluster connector (`dnscluster.*`), collaborator invites/ACLs
+(`collab.*`), per-customer/reseller branding, the billing REST API and WHMCS/Blesta/FossBilling
+integrations, admin/reseller/user **tiers + impersonation** ("log in as"), accounts-as-product
+(`account.create/suspend/setPackage/export`), **packages/plans** (`package.*`), competitor-import
+(`import.*`), the paid-license nag (`license.*`), and per-account quota/limits *as tenancy
+boundaries*. Also simplified away: multiple panel "sides"/ports + per-port cookies → **one port, one
+cookie**; three-panel role-gating → **one panel**.
+
 ### Design principles (the "no fuss" contract)
 ```
 Opinionated defaults; few knobs. Structured settings, never raw config editing (v1).
@@ -129,6 +138,47 @@ lockouts; CloudPanel/Froxlor generator CVEs.)
 10. **Secrets sealed by the agent.** Provider tokens / DB creds are encrypted with a key the
     **agent** holds (root-only), so a `panel-web` compromise leaks ciphertext, not the key.
 
+### Web-tier hardening checklist (verified in BHPanel's shipped code — adopt as our baseline)
+```
+[ ] Exactly ONE web-reachable file; everything else outside the document root.
+[ ] CSRF checked in ONE central place for every POST (hash_equals compare).
+[ ] Sec-Fetch-Site check on all state-changing methods (same-origin/none only).
+[ ] Strict CSP: default-src 'none', NO unsafe-inline, self-hosted assets, no CDN.
+    (Widths/visuals come from CSS classes, never inline style= — CSP drops it.)
+[ ] Full header set: HSTS, X-Frame-Options: DENY, nosniff, Referrer-Policy: no-referrer,
+    Permissions-Policy off camera/mic/geo.
+[ ] Sessions: cookies-only, strict-mode, HttpOnly, SameSite=Strict, Secure, __Host- prefix;
+    regenerate id on EVERY privilege change; idle (30m) + absolute (12h) timeouts.
+[ ] Session validity re-checked against the agent EVERY request (session.whoami) — a
+    removed/suspended/role-changed login dies on the next click, not at idle-timeout.
+[ ] Session key never stored whole (server-side half XOR a browser-cookie mask).
+[ ] Unconditional output escaping — there is no "trusted" string.
+[ ] Open-redirect guard incl. the backslash→// normalization trick.
+[ ] Argon2id-when-available / bcrypt fallback + rehash-on-login; length-first policy (>=12).
+[ ] Lockout per-username AND per-IP from REMOTE_ADDR only — never X-Forwarded-For unless a
+    trusted-proxy list is configured (spoofable header = lockout bypass / CDN foot-gun).
+[ ] TOTP: hash_equals, single-use (remember matched step), recovery codes at enrolment,
+    QR rendered locally as inline SVG (the 2FA secret never leaves the box).
+[ ] Audit log append-only via chattr +a; records successes, refusals AND panics, with the
+    real peer uid (SO_PEERCRED); logrotate by RENAME not copytruncate; web tier can't read it.
+[ ] First-run setup gated by "no user exists yet" AND a one-time installer-printed token held
+    in root-only agent state (so first-to-the-URL can't claim the panel).
+[ ] Secrets shown ONCE in a dedicated card — never in a flash, URL, session, or the audit log.
+    Private keys handled entirely in the web tier, never sent to the agent.
+[ ] Token-click (email confirm, password reset) renders a confirm FORM (GET→POST), never acts
+    on the GET — SameSite=Strict cookies don't ride a cross-site redirect, and a GET must not mutate.
+```
+
+### Usability patterns worth stealing (the "no fuss" that users feel)
+```
+- One-verb site creation: vhost + PHP pool + DB + cert bootstrap in a single agent call.
+- Opinionated safe defaults, honestly named: first admin is NOT "admin"; show the exact fix in
+  every error ("agent not running" vs "web user not in the vpspanel group"); upload size in words.
+- Show-once secret cards for generated DB/API passwords and keys.
+- A self-test that tests ENFORCEMENT (actually hit the limit) not configuration (read a number back).
+- Paged lists (20/page) that degrade gracefully when the agent is down (dashes, not a broken page).
+```
+
 ---
 
 ## 4. Settled decisions
@@ -179,10 +229,14 @@ another), *not* as a tenancy product:
 - **Density guidance, not a promise:** every pool keeps a resident FPM master (~2–5 MB). Publish a
   per-VPS site-count guideline from (RAM − masters − system) ÷ (peak workers × ~30–80 MB).
 
-> **Simplify vs BHPanel:** BHPanel adds per-account **cgroup slices + kernel disk/inode quotas**
-> because it sells accounts. For a single-owner VPS this is optional polish, not v1 — offer an
-> optional per-site cgroup cap later for stability, but don't make quotas a day-one requirement.
-> (Pending the deeper BHPanel mining audit; this section may gain a short "optional hardening" note.)
+> **Minimal viable isolation (decided, from the BHPanel mining audit):** BHPanel ties each account to
+> a Linux user + **four kernel boundaries** (per-account cgroup slice, dual-cgroup caps for FPM *and*
+> cron, XFS/ext4 disk+inode quota) *because it sells accounts*. With one owner there are no competing
+> tenants to meter. **v1 keeps only:** the per-site non-login user + `0750` home + per-site FPM pool
+> (defense-in-depth so a compromised site can't read another). **v1 drops:** kernel disk/inode quotas
+> (and the quota-bootstrap/reboot dance and `quotaon`-ordering drop-in). **Optional later:** a single
+> shared `vpspanel.slice` CPU/memory cap to keep the box responsive under load — one cap for the
+> whole machine, not per-site metering.
 
 ---
 
@@ -254,8 +308,19 @@ files/Git/cron/logs → backups → firewall/SSH → DNS → integrations/API �
   verified before executing anything** (BHPanel's installer is the reference — signature-checked
   ed25519 manifest, sha256-pinned tarball, every entry validated before unpack); never change
   SSH/firewall during install without preserving access; `vpspanelctl status|doctor|logs|
-  backup-config|repair-nginx`; **idempotent, rerun-safe installer** (every completed step detectable
-  and safe to repeat).
+  backup-config|repair-nginx`; **idempotent, rerun-safe installer** (state detected from disk, no
+  stored-profile "second source of truth," every completed step safe to repeat).
+  - **Sign the release archive with an out-of-band key** (do *not* ship only an in-tree
+    `SHA256SUMS` — BHPanel's own installer documents that an in-tree checksum is a corruption check,
+    **not** supply-chain authenticity, "anyone who can rewrite the binary can rewrite the checksum in
+    the same edit." Authenticity must be a signature over the whole archive verified against a key
+    that does not travel with it.). Build with `CGO_ENABLED=0`.
+  - **Design the upgrade path up front.** BHPanel has **none** — every install is fresh, and its
+    installer refuses a non-fresh server. Rerun-to-finish is a good *install* model but not an
+    *upgrade* model; a product we iterate on needs migrations + a safe in-place update (ties to **D2**).
+  - **Trusted-proxy note:** the panel reads `REMOTE_ADDR` and ignores `X-Forwarded-For` by default
+    (correct — a spoofable header is a lockout bypass). Before placing it behind a CDN/LB, configure
+    an explicit trusted-proxy list, or rate-limiting and audit IPs break. Document this.
 
 ---
 
@@ -281,3 +346,27 @@ Back up and restore one site and one DB; add SSH keys and a UFW preset without l
 Every mutating action produces an audit event + job result.
 A failed config/deploy leaves the prior working site online.
 ```
+
+---
+
+## Appendix A — Known traps to get right the first time
+
+Real, dated failures BHPanel hit and documented in its shipped code — a free pre-mortem. Each is a
+**silent** failure (it works until it doesn't, with no error), so each needs a test.
+
+| Trap | What happens | Guard |
+|---|---|---|
+| seccomp kills `quotactl` silently | Daemon reads "quota unenforced" and refuses to provision on a fine server | If quotas are used, allowlist `quotactl`/`quotactl_fd` explicitly; A/B test with and without the filter |
+| `quotaon` races the rw-remount at boot | Quota enforcement is a boot-time coin toss | systemd drop-in ordering `After=systemd-remount-fs` |
+| `StartLimit*` placed in `[Service]` | systemd silently ignores it; a crash-loop never rate-limits | Keep `StartLimit*` in `[Unit]`; `systemd-analyze verify` in CI catches it |
+| `RuntimeDirectory=` on the daemon | Daemon restart **deletes** every live PHP socket → every site 503s while units show "active" | Create `/run/vpspanel` via `tmpfiles.d` (survives unit stop); `RuntimeDirectoryPreserve=yes` |
+| logrotate `copytruncate` on the audit log | Loses records in the truncate race — exactly the window an attacker wants | Rotate by **rename**, have the agent follow the rotation |
+| CSP drops inline `style=` | Meters/bars render full or empty with no error | Visuals from CSS classes, never inline styles; test rendered output |
+| `chattr +a` audit log vs `systemd LogsDirectory=` | systemd re-chowns the ExecDirectory on every start and fails against the append-only bit → daemon won't start | No `LogsDirectory=`; installer/agent create the log dir themselves |
+| `X-Forwarded-For` trusted blindly | Lockout bypass / spoofed audit IPs | `REMOTE_ADDR` only unless a trusted-proxy list is set (see §8) |
+
+> **Highest-value process to keep re-reviewing:** after the agent itself, the web PHP/FPM master (it
+> binds a socket, then drops privilege). BHPanel starts it as root and contains it with caps +
+> `ProtectSystem=strict`; prefer **systemd socket activation** to avoid root in the web path entirely
+> if feasible. And the **deploy webhook is the only endpoint that answers a stranger** — audit it
+> hardest (HMAC in the agent, uniform refusal, body-capped, 404 before reading).
