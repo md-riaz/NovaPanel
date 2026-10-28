@@ -327,9 +327,9 @@ files/Git/cron/logs → backups → firewall/SSH → DNS → integrations/API �
 ## 9. Decisions & remaining blockers
 
 1. **Product name — DECIDED: `NovaPanel`** (binary `novapanelctl`).
-2. **`go.mod` module path — DECIDED: a branded/vanity path** (not `github.com/...`). Exact string to
-   confirm (a domain the owner controls, e.g. `novapanel.app`); resolve via a `go-import` meta tag at
-   that domain. The path is the import prefix in every `.go` file.
+2. **`go.mod` module path — DECIDED: `novapanel`** (bare, no domain). Imports read
+   `novapanel/internal/...`. Builds with zero setup; not remotely `go get`-able (irrelevant for a
+   proprietary app built from its own repo). The path is the import prefix in every `.go` file.
 3. **PHP cutover — DECIDED: freeze on a branch.** Preserve the current PHP at a branch/tag
    (`php-legacy`); the Go rewrite takes a clean repo root. PHP history stays in git. Executed as the
    first Phase-0 action on a fresh branch.
