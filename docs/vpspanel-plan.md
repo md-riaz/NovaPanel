@@ -326,14 +326,16 @@ files/Git/cron/logs → backups → firewall/SSH → DNS → integrations/API �
 
 ## 9. Decisions & remaining blockers
 
-1. **Product name — DECIDED: `NovaPanel`.** `go.mod` module path and the `novapanelctl` binary name
-   follow from it. (Exact module path, e.g. a vanity/import path, still to pick.)
-2. **License — DECIDED: proprietary.** This repo is currently **MIT**; relicensing is a deliberate
-   act (new `LICENSE`, source headers) and prior MIT commits remain MIT in history. *Mechanics to be
-   executed on request — not changed unilaterally.*
-3. **PHP NovaPanel cutover — OPEN.** Greenfield-in-this-repo: move the existing PHP under `legacy/`
-   (or freeze it on a branch), keep both buildable during transition, define an explicit cutover.
-   Don't interleave Go and PHP at repo root.
+1. **Product name — DECIDED: `NovaPanel`** (binary `novapanelctl`).
+2. **`go.mod` module path — DECIDED: a branded/vanity path** (not `github.com/...`). Exact string to
+   confirm (a domain the owner controls, e.g. `novapanel.app`); resolve via a `go-import` meta tag at
+   that domain. The path is the import prefix in every `.go` file.
+3. **PHP cutover — DECIDED: freeze on a branch.** Preserve the current PHP at a branch/tag
+   (`php-legacy`); the Go rewrite takes a clean repo root. PHP history stays in git. Executed as the
+   first Phase-0 action on a fresh branch.
+4. **License — DECIDED: proprietary.** Repo is currently **MIT**; relicensing (new `LICENSE`, source
+   headers) is deliberate and prior MIT commits stay MIT. Consider making the repo private before the
+   first proprietary Go commit. *Mechanics executed on request — not changed unilaterally.*
 
 ---
 

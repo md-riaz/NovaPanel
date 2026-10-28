@@ -26,9 +26,16 @@ index: what was decided, what's still open, what every document contains, and th
 
 ## 2. Decisions settled
 
-- **Product name:** `NovaPanel`. Binary `novapanelctl`. (Exact `go.mod` module path still to pick.)
+- **Product name:** `NovaPanel`. Binary `novapanelctl`.
+- **`go.mod` module path:** a **branded/vanity path** (not `github.com/...`). **Exact string still to
+  confirm** (a domain the owner controls, e.g. `novapanel.app`); needs a `go-import` meta tag served
+  at that domain for `go get` to resolve.
+- **PHP cutover:** **freeze the existing PHP on a branch/tag** (e.g. `php-legacy`); the Go rewrite
+  takes a clean repo root. PHP history stays in git. Execute as the first Phase-0 step, on a fresh
+  branch (not done yet).
 - **License:** proprietary. (Repo is currently MIT; relicensing mechanics to be executed on request;
-  prior MIT commits remain MIT in history.)
+  prior MIT commits remain MIT in history. Consider making the repo private before the first
+  proprietary Go commit.)
 - **Architecture:** unprivileged Go `panel-web` + root Go `panel-agent` over a `0660 root:novapanel`
   Unix socket, typed verbs only, authz enforced in the agent. Verified sound against BHPanel's real
   release.
@@ -45,11 +52,13 @@ index: what was decided, what's still open, what every document contains, and th
 - **DB:** SQLite/WAL control plane (metadata only); MariaDB for sites; one engine by default.
 - **Tenancy:** dropped entirely (~90 of BHPanel's 267 verbs). Roles = owner / admin / read-only.
 
-## 3. Open blockers (decide before first code commit)
+## 3. Open items (before first code commit)
 
-1. **`go.mod` module path** — the import path / product namespace (name is NovaPanel; path TBD).
-2. **PHP NovaPanel cutover** — move existing PHP under `legacy/` (or freeze on a branch), keep both
-   buildable during transition, define the explicit cutover. **This is the last gate before Phase 0.**
+1. **Confirm the exact vanity module-path string** (approach decided = vanity/branded; literal domain
+   TBD — e.g. `novapanel.app`).
+2. **Execute the PHP freeze** (approach decided = branch/tag `php-legacy` + clean Go root) — this is
+   the first Phase-0 action, done on a fresh branch when Phase 0 starts.
+3. *(Optional, pairs with proprietary license)* make the repo private before the first Go commit.
 
 ---
 
