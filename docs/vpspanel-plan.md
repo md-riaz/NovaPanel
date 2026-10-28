@@ -324,15 +324,16 @@ files/Git/cron/logs → backups → firewall/SSH → DNS → integrations/API �
 
 ---
 
-## 9. Open blockers — decide before the first commit
+## 9. Decisions & remaining blockers
 
-1. **Product name / `go.mod` module path** — placeholder today; load-bearing for every import and the
-   `vpspanelctl` binary name.
-2. **License** — this repo is **MIT**; the product is **proprietary**. Prior MIT commits stay MIT;
-   relicensing is a deliberate act before the first proprietary commit enters public history.
-3. **PHP NovaPanel cutover** — greenfield-in-this-repo: move the existing PHP under `legacy/` (or
-   freeze it on a branch), keep both buildable during transition, define an explicit cutover. Don't
-   interleave Go and PHP at repo root.
+1. **Product name — DECIDED: `NovaPanel`.** `go.mod` module path and the `novapanelctl` binary name
+   follow from it. (Exact module path, e.g. a vanity/import path, still to pick.)
+2. **License — DECIDED: proprietary.** This repo is currently **MIT**; relicensing is a deliberate
+   act (new `LICENSE`, source headers) and prior MIT commits remain MIT in history. *Mechanics to be
+   executed on request — not changed unilaterally.*
+3. **PHP NovaPanel cutover — OPEN.** Greenfield-in-this-repo: move the existing PHP under `legacy/`
+   (or freeze it on a branch), keep both buildable during transition, define an explicit cutover.
+   Don't interleave Go and PHP at repo root.
 
 ---
 
