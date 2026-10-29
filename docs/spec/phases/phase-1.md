@@ -28,10 +28,14 @@ Phase 0. Reads: `00-foundations.md` F1, F5, F6, F7, F10, F11, F13.
    `/run/novapanel` and `/var/lib/novapanel`). `systemd-analyze verify` passes (the Phase-0 CI job
    now has units to check).
 6. **Walking skeleton:** `service.status{unit}` — a real typed verb that runs
-   `systemctl is-active/is-enabled <unit>` via `internal/exec` (argv), validated unit name, returns
-   structured status. A minimal `panel-web` handler calls it over the socket and renders the result,
-   proving the whole channel. `service.restart{unit}` is the **first slow verb** (goes through the
-   job queue) to exercise F6 end-to-end.
+   `systemctl is-active/is-enabled <unit>` via `internal/exec` (argv), validated **unit name**
+   (`validate.UnitName`, allowlist of manageable units), returns structured status
+   `{unit, active, enabled}`. Exercised end-to-end **via `novapanelctl`** (local, peer-gated — there
+   is no web auth until Phase 2, so the skeleton does **not** go through `panel-web` yet). It is
+   `Public=false, MinRole=admin`; `novapanelctl` runs as the `novapanel` user and the agent resolves
+   a local-admin session for ctl (a bootstrap `kind=user` session minted for the peer-gated ctl, per
+   F4). `service.restart{unit}` is the **first slow + effectful verb** (job queue) to exercise F6.
+   *(The `panel-web` rendering of `service.status` moves to Phase 2, once sessions exist.)*
 
 ## Blueprint
 - **`internal/store/store.go`** — `type Store`; `Open(path) (*Store, error)`; `migrate()`; typed
@@ -77,8 +81,10 @@ Phase 0. Reads: `00-foundations.md` F1, F5, F6, F7, F10, F11, F13.
 4.  Audit: every dispatch (ok, refused, error, and a forced panic) writes an events row AND an
       audit.log line; the log file is append-only (`chattr +a` set; a truncate attempt fails).
 5.  Secret: seal a value, reopen → equal; the sealed blob is not the plaintext; key file is 0600 root.
-6.  Walking skeleton: from panel-web, `service.status{unit:"nginx"}` returns structured status over
-      the socket; `service.restart` runs as a job; an invalid unit name → code:"invalid_argument".
+6.  Walking skeleton [integration]: `novapanelctl service.status nginx` returns structured status over
+      the socket; `service.restart` runs as a job (effectful — a crashed run marks `failed`,
+      `code:"interrupted"`, not a silent re-run); an invalid/unlisted unit name →
+      code:"invalid_argument". (panel-web rendering is Phase 2.)
 7.  CI (Phase 0 gate) still green with the new packages + the systemd-analyze job now active.
 ```
 

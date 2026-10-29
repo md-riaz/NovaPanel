@@ -32,7 +32,7 @@ server {                                   # :80 — ACME on :80, everything els
     listen 80; listen [::]:80;
     server_name {{domain}};
     location ^~ /.well-known/acme-challenge/ {    # MUST be above the redirect, never 301'd
-        root /var/lib/novapanel/acme/{{site}};
+        root /var/www/acme/{{site}};              # world-traversable (B-D8), NOT under /var/lib (0700)
         default_type "text/plain";
         try_files $uri =404;
     }
@@ -76,13 +76,33 @@ Keep a last-known-good copy of every rendered file. `nginx -t` is necessary **bu
 (it does not connect FPM upstreams, does not check cert validity/CN, misses logic errors) — the
 post-reload request probe is the real safety net.
 
+### Render states, docroot ownership, cert atomicity (B-D8 / B-D9)
+- **Three render states** (the renderer takes the site's cert+flag state, never assumes a cert):
+  1. **no cert** — emit only the :80 server: serve the docroot over HTTP **and** the ACME location;
+     **no :443 block** (so `nginx -t` never references a missing `fullchain.pem`).
+  2. **cert present, `force_https=0`** — :80 serves + ACME (no blanket 301) and :443 serves.
+  3. **cert present, `force_https=1`** — :80 does ACME then 301→https; :443 serves; HSTS allowed.
+  `force_https` is a `sites` column (02-data-model) set by `site.update`; it is **refused**
+  (`precondition_failed`) until a **valid cert** exists = parses, unexpired, a SAN covers the domain,
+  and the key matches; a **staging** cert is not "valid" for force-HTTPS.
+- **Docroot ownership (so nginx can serve a `0750 site:site` home):** docroot is
+  `/srv/sites/<site>/public` owned `site:www-data`, mode `2750` (setgid, group-read+traverse); the
+  site home is `0751` so `www-data` can traverse to it. nginx (`www-data`) thus reads static files and
+  can `stat` for `try_files` without being able to write. (Owner model stated once here; Phase 4
+  creates the user/dirs to match.)
+- **Atomic cert install:** write the new cert+key into a **versioned dir** `tls_dir/<fqdn>/<ulid>/`
+  then swap a single symlink `tls_dir/<fqdn>/current → <ulid>/`; nginx references
+  `…/current/fullchain.pem` + `…/current/privkey.pem`, so a reload never sees a half-written pair
+  (replaces the impossible "two independent atomic renames").
+- **HSTS** is emitted only in state 3, starting `max-age=300`; a separate, explicit action raises it;
+  never `preload` automatically.
+
 ### ACME (lego as a library)
-- **Library:** `github.com/go-acme/lego` — **pin the major version in this spec** (v4 is stable and
-  the signatures below are verified against it; v5 exists — head confirms the pin before coding and
-  the implementer verifies signatures on pkg.go.dev for the pinned version).
-- HTTP-01 via the **webroot provider** pointed at `/var/lib/novapanel/acme/<site>` (same dir nginx's
-  :80 ACME `root` serves). `ObtainRequest{Domains, Bundle:true}` → `res.Certificate` (fullchain),
-  `res.PrivateKey`, `res.IssuerCertificate`, each PEM, written atomically.
+- **Library (pinned): `github.com/go-acme/lego/v4`** (stable; verified signatures). Do not use v5 in
+  v1. The implementer confirms exact signatures on pkg.go.dev for the pinned minor before coding.
+- HTTP-01 via the **webroot provider** pointed at `/var/www/acme/<site>` (same dir nginx's :80 ACME
+  `root` serves; world-traversable per B-D8). `ObtainRequest{Domains, Bundle:true}` →
+  `res.Certificate` (fullchain), `res.PrivateKey`, `res.IssuerCertificate`, each PEM.
 - **Default to the staging directory** in dev/tests (`lego.LEDirectoryStaging`); prod only on real
   issuance. Prefer ARI-aware renewal (`Renew` is deprecated).
 - **No wildcards via HTTP-01** (needs DNS-01 → gated behind Phase 7).
@@ -118,7 +138,8 @@ post-reload request probe is the real safety net.
 4.  ACME (staging): issuance obtains a cert; the :80 ACME path returns 200/404 and is NOT 301'd;
       cert+key written atomically (no reload observes a half-written pair); force-HTTPS is REFUSED
       (code:"precondition_failed") until a valid cert is installed.
-5.  Wildcard via HTTP-01 → code:"unsupported" (needs Phase 7 DNS-01).
+5.  Wildcard with **no DNS provider configured** → code:"unsupported"; once a provider exists
+      (Phase 7) `ssl.issue` for a wildcard uses DNS-01 (this gate is rewritten in Phase 7, not failed).
 6.  Every site/ssl verb is a job + audit event; concurrent site.update on the same site serializes.
 ```
 

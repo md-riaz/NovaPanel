@@ -64,6 +64,47 @@ re-registration + rate-limit risk). Restore order: binary+OS pkgs → agent conf
 TLS/ACME account keys → site data+DBs → firewall (SSH first) → cron/timers. **Repo passwords must be
 recoverable out-of-band** — never store the only copy inside the repo they unlock.
 
+### Resolved design details (B-D7, DB swap, self-backup, D2)
+
+**Firewall deadman — concrete (B-D7).**
+- The revert is a self-contained **`novapanelctl fw-revert <snapshot-path>`** subcommand run by an
+  **independent transient systemd unit** (`systemd-run --on-active=<N>min`), so it fires **even if the
+  agent is down**. The snapshot captures `/etc/ufw/*.rules` **and** `iptables-save`/`ip6tables-save`;
+  revert = restore the `.rules` files + `ufw reload` (persistent state, not just runtime).
+- `firewall.apply` writes an `fw_pending` row (`snapshot_path, revert_unit, deadline`) and arms the
+  timer **before** applying. **`firewall.confirm{id}`** stops the timer + clears the row;
+  **`firewall.revert{id}`** fires it early. Both are MFA-gated.
+- **"Verify a new connection" is a client round-trip, not an agent self-probe** (the agent cannot
+  prove external reachability from inside the box). After apply, the admin's browser/CLI must reach
+  the panel again and call `firewall.confirm` within N minutes (default **15**); if the change broke
+  their access, the confirm never arrives and the transient unit reverts. The **never-removable SSH
+  rule** (port from config, source any unless the admin pins one) is re-asserted `prepend`/`insert 1`
+  on every apply.
+
+**MariaDB restore swap (no RENAME DATABASE).** Restore the dump into a **scratch DB**
+`<db>__r<shortts>` (bounded to the 47-char name limit — truncate `<db>` if needed), validate (import
+exit 0 + a sanity check), take a **pre-restore safety dump** of the live DB, then swap **table-by-
+table with atomic `RENAME TABLE`** (`RENAME TABLE live.t TO old.t, scratch.t TO live.t` is atomic per
+statement), finally drop the scratch/old DBs. A crash mid-swap leaves the pre-restore dump for manual
+recovery.
+
+**Self-backup chicken-and-egg (resolves B20).** `panel.backup_config` backs up **`panel.db` +
+`/etc/novapanel/agent.toml` + `seal.key` + the ACME account key** to a **dedicated panel repo**. The
+circularity (DB holds sealed repo creds; `seal.key` unseals them) is broken by: the panel repo's
+password is generated and **shown once to the operator at setup, stored out-of-band** (never inside
+any restic repo). Restore order: install binary → restore agent.toml + **seal.key** → restic-restore
+the panel repo using the out-of-band password → restore panel.db → ACME keys → per-site data.
+
+**D2 update protocol (folded in so this phase stands alone).** `update.check` fetches a channel
+**`manifest.json` + `manifest.json.sig`**; the agent **verifies the ed25519 signature with a public
+key compiled into the binary BEFORE parsing**, refuses a `version` **≤ installed** (anti-rollback),
+and checks each artifact's sha256 + size against the signed manifest. `update.apply` (owner, MFA,
+effectful) downloads the artifact, **unpacks defensively** (tar-slip: reject abs/`..`/non-regular/
+outside-top), swaps the binary, and restarts via systemd; a failed post-restart health check rolls
+back to the prior binary. A `security_fix` marker flags the update urgent; "notify" is a persistent
+dashboard banner. (Channels + approval-gated CI signing remain Phase-4-of-releases scope, per the
+plan; v1 ships single-manifest verify + anti-rollback.)
+
 ## External refs (gathered — verified)
 - restic env vars, argv, `--stdin-from-command` failure-awareness, exit codes (3=failure), default
   `check` does NOT read pack data (`--read-data`/`--read-data-subset=n/t` do), `unlock` stale-only vs

@@ -15,11 +15,15 @@ Nothing. This is the first executable work. Reads: `00-foundations.md` (F1, F2, 
 2. **Go workspace**, `module novapanel`:
    - `cmd/panel-agent`, `cmd/panel-web`, `cmd/novapanelctl` — each builds to a binary; at this phase
      `panel-web`/`novapanelctl` are near-empty stubs, `panel-agent` serves the socket + registry.
-   - `internal/rpc/` (codec, server, session stub, messages registry), `internal/exec/`,
-     `internal/validate/` (skeleton with the F9 validators), `internal/version/`.
+   - `internal/rpc/` (codec, server, client, session stub, messages registry per F14), **`internal/agent/`**
+     (the `Agent` struct, F14 — minimal now), `internal/exec/`, `internal/validate/` (F9/F15
+     validators), `internal/config/` (F16), `internal/version/`, and **`internal/verbs/`** (holds the
+     seed verbs and self-registers via `init()`; blank-imported by `cmd/panel-agent`).
 3. **RPC codec + server** per F2: NDJSON, size caps, close-on-malformed, `SO_PEERCRED` peer gate (F1).
-4. **Verb registry** per F13 with **two seed verbs**: `ping` (no auth, returns agent version) and
-   `agent.info` (owner, returns build/version/uptime). No system-touching verbs yet.
+4. **Verb registry** per F13 with **two seed verbs**: `ping` (`Public=true`, returns agent version)
+   and `agent.info` (`MinRole=owner`, returns build/version/uptime). `Public` is how "no auth" is
+   expressed (F13). No system-touching verbs yet. (`agent.info` is exercised in Phase 1 once the
+   local-ctl session exists; Phase 0 verifies `ping` end-to-end.)
 5. **Architecture tests** (the invariants, machine-enforced):
    - no-unregistered-verb test (F13).
    - no-shell test: a test/CI grep that fails if `internal/` contains `sh -c`, `exec.Command("sh"`,

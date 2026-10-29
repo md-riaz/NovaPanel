@@ -43,6 +43,25 @@ Phases 0–1 (RPC, store, audit, secret seal). Reads: `00-foundations.md` F4, F1
 - **MFA-gate middleware** (agent-side): a verb marked `MFA` (F13) requires the session was minted with
   TOTP and is within a short re-auth window, else `code:"forbidden"` + `reauth_required`.
 
+### Resolved details (B34, B33, C5; most of phase-2 is now settled by F4)
+- **First-owner bootstrap + user management.** The installer/first-run creates the single `owner`
+  (`user.create` run locally via `novapanelctl`, peer-gated, before any web login). `user.*` verbs:
+  `user.create/list/update/delete/set_password` (owner/admin). `session.login` on an unknown user
+  does a **dummy Argon2id** to equalize timing (no user enumeration); failures are uniform.
+- **TOTP replay store** = a `mfa_used` set of `(user_id, step_counter)` in the agent DB (not memory),
+  so a code already accepted within its window is rejected across restarts. Enrollment **forces** MFA
+  setup at first owner login is optional; MFA is required only to *call* MFA-gated verbs.
+- **QR secret exception (C5):** `mfa.enroll` returns the `otpauth://…` URI **once** for the web tier
+  to render a QR; this is the one allowed moment `panel-web` handles the secret (in transit, never
+  stored). The Guardrail "never sees a secret in the clear" means never **persists/logs** it — the
+  password login form and the enroll QR are forwarding, not storage.
+- **CSRF token** lives in the session row (`sessions.csrf_token`, F4), returned by `session.whoami`;
+  `panel-web` echoes it in the `X-CSRF-Token` header and the agent compares constant-time. It is not a
+  cookie and rotates with the session.
+- **Sec-Fetch-Site** ships behind a config flag defaulting to **enforce** for non-safe methods (with
+  Origin/Referer fallback); the "log-only first" note is an ops rollout aid, and the gate test sets
+  enforce.
+
 ## External refs (gathered — verified values to honor)
 - **Argon2id:** OWASP minimum **m=19456 KiB, t=2, p=1** (memory already in KiB — pass `19456`, don't
   multiply); `argon2.Version = 0x13` (=19, matches `v=19`). Library returns raw bytes only — you own

@@ -58,6 +58,34 @@ design — this phase implements it), `00-foundations.md` F2–F4, F6, F11, F13.
 > (`messages.go`) is the source of truth** — pick one spelling there and make the OpenAPI match; do
 > not ship two names for one verb.
 
+### Folded-in API surface (so this phase stands alone — resolves C2, B22–B26, C3)
+- **Token identity flow (authoritative):** `panel-web` passes the bare `npat_<id>_<secret>` as the
+  RPC `session`; the **agent** resolves it (O(1) by `<id>`, Argon2id-verify `<secret>`) to
+  `{scopes, automation}` and **the dispatcher enforces `Verb.Scope` agent-side**. `panel-web` does
+  **not** hold a scope→verb map and makes no authz decision (removes the review's contradiction). A
+  separate `tokens.verify` is unnecessary — the normal session resolution covers it.
+- **Scopes:** `system:read/write`, `sites:read/write`, `databases:read/write`, `dns:read/write`,
+  `backups:read/write`, `deploy`. **Excluded** (need user+MFA or an automation-grant token):
+  `backups:restore`, `firewall:write`, `ssh:write`, `tokens:write`, `system:power`. The per-verb scope
+  is the `Scope` column in `01-rpc-and-verbs.md`.
+- **Error → HTTP status:** 200 read ok · 202 mutation accepted (+job) · 400 `bad_request`/
+  `invalid_argument` · 401 `unauthenticated` · 403 `forbidden` (scope/role/MFA) · 404 `not_found` ·
+  409 `conflict`/idempotency-mismatch · 412 `precondition_failed` · 423 `locked` · 429 rate-limited
+  (+`Retry-After`) · 504 `deadline_exceeded` · 503 `agent_error`/agent down (`agent_unavailable`).
+- **Async body:** `202 { "job": {id,status,verb}, "links": {"self","job","events"} }`; `GET /v1/jobs/{id}`
+  returns `{status, progress, events[], result}` from `jobs` + `job_events` (02-data-model). A
+  show-once secret is fetched via the job `claim`, not the job body.
+- **Idempotency** is stored in the **agent `idempotency` table** keyed by `(token_id, Idempotency-Key)`
+  with a payload hash + 24h TTL (never in the stateless web tier). Same key+payload → same job; same
+  key+different payload → 409. Required on `POST`/`DELETE` (400 if missing).
+- **Webhook HMAC (D1):** header `X-Hub-Signature-256: sha256=<hex>` over **`<timestamp> "." <raw body>`**
+  (so the timestamp is authenticated), plus `X-Delivery-Timestamp`; replay window **5 min** + the
+  `(hook_id, signature)` seen-set rejects replays; body size-capped at 1 MiB; the agent does a dummy
+  HMAC for an unknown `hook_id` (constant-ish work, no enumeration). The uniform response —
+  **`202 "accepted"` for success AND every failure, byte-identical** — is the only thing the route
+  ever returns. `deploy.hook` enqueues `deploy.run` with the pushed SHA from the (validated) payload.
+  Hook lifecycle: `deploy.hook_create/list/delete` (admin), secret sealed, shown once.
+
 ## External refs (gathered by the head)
 - `npat_` greppable-prefix pattern (GitHub `ghp_` secret-scanning precedent).
 - HMAC-SHA256 webhook verification in the agent + uniform refusal: BHPanel `web/routes/deploy_hook.php`

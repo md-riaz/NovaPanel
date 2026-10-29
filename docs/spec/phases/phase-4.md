@@ -82,6 +82,25 @@ wp core install --url=https://{{domain}} --title=... --admin_user=... \
 WP-CLI runs as the **site user** (it refuses `--allow-root` by design); file ownership must match the
 FPM pool user so auto-updates work.
 
+### Privilege drop, secrets, sockets (resolves B-D11, B29, B39)
+- **PHP version pinned: 8.3** (F0a). Pool dir `/etc/php/8.3/fpm/pool.d/`, reload `php8.3-fpm`.
+- **Run as the site user** via `exec.Run` with `RunOpts{Uid, Gid, Groups}` (F15) — the agent forks a
+  child dropped to the site uid/gid (`setgroups`+`setgid`+`setuid`); no `sudo`/`su`/`runuser`, no
+  shell. `wp`/`git`/`mysql` all go through this.
+- **DB admin** connects as root via the **`unix_socket`** plugin (no password, no argv secret). A
+  **site** DB user's password is generated, applied with `CREATE USER … IDENTIFIED BY` /
+  `ALTER USER … IDENTIFIED BY` run through an admin connection (DDL, not argv), and delivered to the
+  caller **show-once via the F6 job `claim`** — never stored in `jobs.result_json`, the DB, or audit.
+- **wp-config password off argv:** `wp config create … --prompt=dbpass` with the password on the
+  child's **stdin** (`RunOpts.Stdin`); never `--dbpass=<pw>` on the command line. `mysqldump`/`mysql`
+  that need the site cred use `--defaults-extra-file=<root-0600 tmp>` written then removed, not `-p`.
+- **FPM socket dir:** `/run/php/novapanel/` created by a **tmpfiles** line
+  (`d /run/php/novapanel 0755 root root -`) so it survives an fpm restart (same rationale as
+  `/run/novapanel`). Socket `listen.owner/group = www-data` (F0a nginx user).
+- **Docroot/home ownership** follows Phase 3's model (docroot `site:www-data 2750`, home `0751`) so
+  nginx can serve; Phase 4 creates the user and dirs to match. `useradd -r -s /usr/sbin/nologin -m`,
+  home `/srv/sites/<site>`, group = the site name; reserved-name list in `internal/validate`.
+
 ## External refs (gathered — verified, with flags to resolve before coding)
 - **502 cause (verified):** FPM socket default owner = FPM run-user (site user) mode 0660 → nginx
   `connect()` EACCES → 502; fix is `listen.owner/group = nginx`, not the worker identity.

@@ -227,3 +227,24 @@ Priya B1–B57/C1–C14).
 6. **Re-run a naive comprehension spot-check** on the revised corpus; target confidence ≥4/5.
 
 Nothing is coded until this tracker is all ☑ and the re-check passes.
+
+## Status — remediation pass complete (pending re-check)
+
+All root causes are now resolved in the corpus:
+
+- **Group A (code-level layer):** A1,A2,A4,A5 → `00-foundations.md` F14–F17 (package layout + `Agent`,
+  signatures, config, client). A3 → F6 executor binding. A6 → `02-data-model.md` (full DDL). A7 →
+  `06-test-strategy.md` (unit/integration tiers + seams). A8 → `packaging-reference.md`.
+- **Group B (design holes):** B-D1 → phase-1 (ctl-only walking skeleton) + F13 `Public`. B-D2/B-D3/
+  B-D4/B-D5 → F4 (anon session, rotation, reauth, token identity, agent-side scopes, CSRF-in-row,
+  idempotency table). B-D6 → F6 idempotent-vs-effectful classes. B-D7 → phase-6 (fw-revert transient
+  unit + confirm/revert verbs + client round-trip reachability). B-D8/B-D9 → phase-3 (ACME webroot
+  `/var/www/acme`, docroot `2750 site:www-data`, three render states, versioned-dir+symlink cert
+  swap). B-D10 → phase-5 (file API rooted at docroot, `.ssh` excluded). B-D11 → phase-4 (priv-drop via
+  `exec` uid/gid, unix_socket admin, show-once claim, wp-config off-argv) + phase-6 (table-rename DB
+  swap).
+- **Group C:** C1 → F0b glossary. C2 → API surface folded into phase-8, D2 into phase-6, isolation
+  into phase-3/4. C3 → F0a target platform. C4 → `01-rpc-and-verbs.md` verb table.
+
+**Remaining:** re-run a naive comprehension spot-check (step 6) to confirm confidence ≥4/5, then
+coding may begin.

@@ -51,6 +51,28 @@ F6, F7, F9, F10, F11.
 - **`internal/verbs/log.go`** — allowlist map `{name → (path | journalctl unit)}`; tail with a line
   cap; never accept a raw path.
 
+### Rooting, exclusions, deploy specifics (resolves B-D10, B13, B11)
+- **The file API is rooted at the site's `docroot` (`/srv/sites/<site>/public`), NOT the home.** This
+  keeps `~/.ssh/authorized_keys`, cron units, and deploy config **out of reach** of `files.*`, so the
+  only path to SSH keys is the MFA-gated `sshkey.*` verb (closes the authz-bypass hole). If a site
+  legitimately needs files above docroot, that is a separate, explicitly-scoped verb — not a wider
+  file root.
+- **Path resolution for not-yet-existing targets** (write/mkdir/move-dest/extract): resolve the
+  **parent** with `EvalSymlinks`, assert it is inside the root, then append the (validated) base name;
+  `files.list{path:""}` on the root itself is allowed (`realpath == root` passes). `O_NOFOLLOW` on the
+  final component; a pre-planted symlink at a write target is **refused** (`invalid_argument`), not
+  followed or blindly replaced.
+- **Archive entries** use `validate.ArchiveEntry(top, name)` (F15): reject absolute paths, `..`,
+  backslashes/null, symlink/hardlink/device entries, and a per-archive entry-count + decompressed-size
+  cap (decompression-bomb guard). Same rule as the updater untar.
+- **Deploy SHA:** `deploy.run{ref}` resolves `ref` (branch or tag) to a concrete SHA with
+  `git ls-remote`/`rev-parse` **before** fetching, records it in `deploys.sha`, fetches enough depth
+  to contain it, and checks it out detached — so the deployed commit is pinned even though the input
+  was a ref. First deploy does `git init` + `remote add` (or a shallow `clone`) when `<projdir>` is
+  not yet a repo. Harden git against repo-supplied hooks/filters: run with
+  `-c core.hooksPath=/dev/null -c core.fsmonitor=false` and never execute post-checkout build hooks
+  from the agent (a build step, if offered, is a separate explicit verb).
+
 ## External refs (gathered by the head)
 - Zip-slip / tar-slip: validate each archive entry's cleaned path stays inside the target; reject
   absolute paths, `..`, and symlink entries (Snyk zip-slip advisory; same rule as the Phase-0/updater

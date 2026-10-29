@@ -31,6 +31,26 @@ and real demand. Reads: `00-foundations.md` (all), `vpspanel-plan.md` §1 non-go
   snapshot current config → render the new stack's config → validate → swap → health-probe → on any
   failure restore the snapshot. A stack switch is a slow job on `objectKey site:<name>`.
 
+### Resolved interface (B29, C22)
+```go
+type Module interface {
+    Name() string
+    Scope() ModuleScope            // Global or PerSite
+    Install(ctx, *Agent) error
+    Enable(ctx, *Agent, target string) error   // target = "" for Global modules, site name for PerSite
+    Disable(ctx, *Agent, target string) error
+    Status(ctx, *Agent) (any, error)
+    Uninstall(ctx, *Agent) error
+}
+```
+- A module's verbs carry `Verb.Module = "<name>"` (F13); the dispatcher returns **`unsupported`** when
+  `module_state.enabled = 0` — the handler does not check per-call. `module.*` state lives in
+  `module_state` (02-data-model).
+- **Global vs PerSite** is explicit (`Scope()`), so `Enable("")` is meaningful for mail/PowerDNS and
+  `Enable("<site>")` for OLS/FTP. This phase builds **no module**; it fixes the interface each future
+  module sub-project implements. Each module is scheduled individually; "demand proven / core boring"
+  is the operator's call, recorded when a module sub-project is opened — not a measurable gate here.
+
 ## External refs (gathered by the head, per module when it is scheduled)
 - OLS behind nginx as a private upstream; rewrite-rule translation scope (explicitly not `.htaccess`).
 - PowerDNS secondary-NS requirement and DNSSEC basics (gathered when this module is scheduled).

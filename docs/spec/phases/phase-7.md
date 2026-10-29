@@ -37,6 +37,36 @@ Phases 1–3 (jobs, auth, sites/TLS). Reads: `00-foundations.md` F6, F9, F10, F1
 - **ACME DNS-01 glue** — extend `ssl.issue` (Phase 3) so a wildcard domain routes through the
   provider's `PresentTXT`/`CleanupTXT`; HTTP-01 stays the default for non-wildcard.
 
+### Resolved types & flows (B48–B56)
+```go
+type Record struct {
+    ID       string // provider record id (empty on create)
+    Type     string // A|AAAA|CNAME|TXT|MX
+    Name     string // fqdn
+    Value    string // IP / target / text
+    TTL      int    // 1 = auto
+    Priority int    // MX only
+    Proxied  bool   // only valid for A/AAAA/CNAME (guard)
+}
+// zone is identified by name; the impl maps name→provider_zone_id via dns_zones (02-data-model).
+// Every method takes ctx (deadline, F2/F10).
+```
+- **Token storage:** `integration.set{kind:"cloudflare", token, zones[]}` (admin, MFA) seals the token
+  (`secrets` name `integration:<id>:token`) and records zones in `dns_zones`. The Cloudflare token
+  must carry **Zone:Read + DNS:Edit + Cache Purge** on exactly the listed zones (least privilege but
+  enough for the listed ops — the review's "DNS:Edit only" was too narrow). The agent does not mint
+  the token; it validates scope by a probe call and reports if insufficient.
+- **`dns.verify(domain)`** = a public-resolver lookup that the domain resolves to this host's public
+  IP(s) (from config/detection); for a **proxied** record it instead confirms via the provider API
+  that the record exists and is proxied (a plain lookup would see Cloudflare IPs). Returns which check
+  was used.
+- **`Purge(zone, []string)`** takes URLs (empty = purge-everything for the zone).
+- **DNS-01 adapter:** `ssl.issue` for a wildcard looks up the domain's configured provider+zone; with
+  none → `code:"unsupported"`. `PresentTXT/CleanupTXT` set/remove `_acme-challenge.<domain>` TXT;
+  wildcard + apex share that name with two values, so Cleanup removes only the value it added. Either
+  drive lego's `providers/dns/cloudflare` directly or implement the two methods — **decided: use
+  lego's Cloudflare DNS provider** (same pinned lego/v4) to avoid re-implementing propagation waits.
+
 ## External refs (gathered by the head)
 - Cloudflare API: token auth (scoped to a zone, least privilege — `DNS:Edit` on the one zone, not a
   global key); record objects carry a `proxied` boolean valid only for A/AAAA/CNAME; MX/TXT are never
