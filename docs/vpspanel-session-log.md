@@ -48,6 +48,19 @@ index: what was decided, what's still open, what every document contains, and th
   optional single shared `novapanel.slice` cap later.
 - **D4 — Modules:** first-party, compiled-in only; `module.install` enables/configures a shipped
   module, never fetches/executes code.
+- **D5 — Caller trust:** `actor` = audit label only; identity = agent-minted session token; socket
+  gated by `0660` group **+ SO_PEERCRED uid-pin** (reject any peer uid ≠ `panel-web`).
+- **D6 — Job model:** durable job queue + **single in-process worker goroutine**, per-object
+  serialized; `202 {job}` + `job.status` for slow verbs; sync only for reads.
+- **D7 — Crash safety:** idempotent "ensure-state" verbs + **roll-forward** (re-run stuck job from
+  top); one `reconcile` verb heals drift + half-created state; liveness-checked lock.
+- **D8 — Config generator = attacker-controlled sink:** allowlist names, no empty/unquoted
+  interpolation, `nginx -t` before atomic-rename+reload, `O_NOFOLLOW`, no `chown -R` of site paths.
+  Build-enforced.
+- **D9 — State ownership:** the **agent owns all state** (root-only SQLite); `panel-web` is
+  stateless (no DB). (Switched from the earlier "web owns SQLite" plan.)
+- **Updates (D2, lighter):** ed25519-signed manifest + verify-before-parse + **anti-rollback** +
+  tar-slip-hardened unpack now; beta/stable channels + approval-gated CI signing → Phase 4.
 - **Web stack:** Nginx-only in v1 (OpenLiteSpeed, mail, PowerDNS, FTP, Docker all deferred modules).
 - **DB:** SQLite/WAL control plane (metadata only); MariaDB for sites; one engine by default.
 - **Tenancy:** dropped entirely (~90 of BHPanel's 267 verbs). Roles = owner / admin / read-only.
@@ -71,6 +84,13 @@ Full detail in `vpspanel-plan-amendments.md`. We downloaded and read BHPanel's r
   verified in the daemon, signed installer). It's **multi-tenant**; we keep its security, drop its
   tenancy. Its stack is OpenLiteSpeed + mail/PowerDNS/Mongo; broader than our v1. Beta-only, no
   upgrade path, no user docs.
+- **BHPanel release infra** (`wpexpertinbd/bhpanel-releases`, audited 2026-10-29; latest beta
+  **0.2.91**) — a full **signed supply chain** we adopted a lighter form of: ed25519-signed
+  beta/stable channel manifests, public key compiled into the daemon, **verify-before-parse**,
+  **anti-rollback**, tar-slip-hardened unpack, `install.sh` sha256-pinned in the signed manifest,
+  signing key only in a required-reviewer-gated CI `sign` environment, mirror root-owned with the
+  release dir `chattr +i`. Drove the D2/§7 refinement. No new panel-code lessons (0.2.88→0.2.91 is
+  three patch bumps).
 - **aaPanel** — the **cautionary tale**: root monolith with authenticated command-injection → root
   RCE CVEs. The argument *for* our privilege split (only works with argv, no shell interpolation).
 - **Coolify** — webhook is a **bearer token, NOT HMAC** (plan's "HMAC like Coolify" was false);

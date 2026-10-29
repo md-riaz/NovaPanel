@@ -79,9 +79,9 @@ reading BHPanel 0.2.88's shipped code (see `vpspanel-plan-amendments.md` §0):
 ```
 Browser
   → Nginx (public TLS, :80/:443)
-  → panel-web   — Go, runs as unprivileged `vpspanel`; UI, API, SQLite, job queue
-  → Unix socket /run/vpspanel/agent.sock  (0660 root:vpspanel)
-  → panel-agent — Go, runs as root; the ONLY root component; typed verbs only
+  → panel-web   — Go, runs as unprivileged `vpspanel`; UI + API only, STATELESS (no DB)
+  → Unix socket /run/vpspanel/agent.sock  (0660 root:vpspanel + SO_PEERCRED uid-pin)
+  → panel-agent — Go, runs as root; the ONLY root component; owns ALL state (SQLite) + job worker; typed verbs only
   → Nginx, PHP-FPM, MariaDB, systemd, UFW, Restic, Git
 ```
 
@@ -89,17 +89,43 @@ Browser
 - **Transport:** newline-delimited JSON over the Unix socket. Request
   `{id, verb, args(object), actor, session, deadline}` → reply `{ok, data, error, code}` where
   `code` is a **stable string** the UI branches on.
-- **Access is filesystem-gated:** socket `0660 root:vpspanel`; `panel-web` is in the `vpspanel`
-  group. The web tier does **not** authenticate to the agent — the kernel already did.
-- **Authorization lives in the agent, not the UI** (resolves the trust-model gap): the agent issues
-  a **session token at sign-in** and acts on its own record of who signed in; the web tier only
-  presents the token. Role checks happen agent-side.
+- **Access is filesystem-gated + peer-pinned (D5):** socket `0660 root:vpspanel`; `panel-web` is in
+  the `vpspanel` group. On every accepted connection the agent reads **SO_PEERCRED** and rejects any
+  peer whose uid ≠ the `panel-web` uid — group membership alone is not enough. The web tier does
+  **not** authenticate to the agent; the kernel already did.
+- **Authorization lives in the agent, not the UI:** the agent issues a **session token at sign-in**
+  and acts on its own record of who signed in; the web tier only presents the token. `actor` is an
+  **audit label only, never an authz input** (the confused-deputy fix; Cockpit/polkit precedent).
+  Role checks happen agent-side.
 - **No command verb, ever.** Args are JSON, never interpolated; the agent executes **argv arrays,
   never `sh -c`**. "If the web tier is ever exploited, the attacker inherits exactly this: the
   ability to call a fixed set of typed verbs." `internal/rpc/messages.go` is the **single canonical
   registry**; an architecture test fails the build if any agent handler is reachable without a
   registered verb.
 - **Forbidden permanently:** `shell.execute`, run-command, write-arbitrary-root-path.
+
+### Job & state model (D6 / D7 / D9 — decided)
+- **The agent owns all persistent state (D9).** One **root-only SQLite** at
+  `/var/lib/vpspanel/panel.db` (`0700 root`); `panel-web` has **no database** and is a stateless
+  renderer — every read and write is a typed verb. A web compromise then leaks nothing at rest, has
+  no DB to poison, and never sits near the sealed secrets. (BHPanel ships exactly this; `/var/lib`
+  is `0700 root`, the web user can't read it.)
+- **Durable job queue, single in-process worker (D6).** A verb that can exceed ~2 s writes a durable
+  `jobs` row and returns `202 {job}` immediately; **one worker goroutine** drains the queue,
+  **serialized per object** (two verbs never interleave on one site — systemd-style conflict
+  avoidance for free). The web tier polls `job.status`; fast reads stay synchronous. The job row *is*
+  the durability across an agent restart. (HestiaCP's synchronous `v-*` model is the cautionary tale
+  this avoids; ISPConfig/cPanel/Coolify all run slow work off a durable store.)
+- **Idempotent "ensure-state" verbs + roll-forward recovery (D7).** Every verb means "make reality
+  match this row," not "do this action" (check-before-create; temp-file + atomic rename). On worker
+  start, any job stuck `running` **re-runs from the top** — safe because steps are idempotent; no
+  compensation for local resources (explicit compensation only for external/billed steps: ACME,
+  provider DNS). The crash-safety test is Ansible's: **run the verb twice; the second run changes
+  nothing.** Serialize with a **liveness-checked lock**, never a bare lockfile (ISPConfig's
+  `.ispconfig_lock` footgun: a segfault leaves it behind and wedges every later run).
+- **One `reconcile` verb.** Re-renders all config from the DB (the desired state) and reloads
+  services; heals both drift (hand-edited nginx) and half-created state. Config files are **derived
+  artifacts**, never parsed back into the DB. (ISPConfig Resync / Plesk `repair` precedent.)
 
 **Tech stack:** Go; `net/http` + `chi`; `html/template`; Tailwind (built to static CSS); HTMX;
 Alpine.js for small local UI state only; SQLite (WAL); systemd; Nginx; PHP-FPM; MariaDB; `lego` or
@@ -128,9 +154,16 @@ lockouts; CloudPanel/Froxlor generator CVEs.)
    atomic rename → reload → active HTTPS health probe → restore prior good config + reload on
    failure`. Skip reload when the rendered config hash is unchanged. (Caddy only auto-reverts
    *load-time* failures; the runtime health-check-and-revert is ours to build.)
-7. **Signed releases + explicit security advisories.** Verify the release signature before applying
-   any update; every security fix gets a published advisory. Silent patching is a named anti-pattern
-   (CyberPanel shipped its fix silently → operators stayed exposed).
+7. **Signed releases + explicit security advisories.** The update manifest is **ed25519-signed**; the
+   agent **verifies the signature before it parses the manifest**, refuses any version **older than
+   the installed one** (anti-rollback / no-downgrade), and checks each file's sha256 + size against
+   the signed manifest. **Unpack defensively** (reject absolute paths, `..`, non-regular entries,
+   anything outside the top folder, pathological entry counts — tar-slip). Every security fix gets a
+   published advisory; a `security_fix` marker flags the update as urgent. Silent patching is a named
+   anti-pattern (CyberPanel shipped its fix silently → operators stayed exposed). *(Full beta/stable
+   channels + approval-gated CI signing → Phase 4; BHPanel's `bhpanel-releases` is the verified
+   reference — public key compiled into the agent, publish files-first-manifest-last, mirror
+   root-owned + release dir `chattr +i`.)*
 8. **Append-only audit log** (e.g. `chattr +a`, root-owned), written by the **agent** as the source
    of truth for privileged actions — not forgeable by a compromised web tier.
 9. **Assume the HTTP tier will eventually have an RCE** and make it non-catastrophic. This is the
@@ -189,16 +222,39 @@ lockouts; CloudPanel/Froxlor generator CVEs.)
   internet-facing route holds no secret and returns a **uniform refusal** (no id enumeration).
   Matches BHPanel's real `X-Hub-Signature-256` prior art; exceeds Coolify (which is bearer-only).
 - **D2 — Updates: notify + one-click apply** (never silent auto-apply). Prominent, persistent
-  in-panel advisory + one-click apply; signature verified before apply; explicit advisories.
+  in-panel advisory + one-click apply. **Mechanism (lighter, decided):** ed25519-signed manifest,
+  public key compiled into the agent, **signature verified before the manifest is parsed**,
+  **anti-rollback** (refuse a version older than installed), sha256 + size per file, tar-slip-hardened
+  unpack; a `security_fix` marker flags an update urgent. Beta/stable channels + an approval-gated CI
+  signing pipeline are **deferred to Phase 4** (BHPanel's full `bhpanel-releases` model is the ready
+  reference).
 - **D3 — Per-site isolation: Unix socket + `pm=ondemand` + Nginx-direct static.** See §6.
 - **D4 — Modules: first-party, compiled-in only.** `module.install` only enables/configures a
   shipped module — never fetches or executes downloaded code. No third-party executable plugins.
+- **D5 — Caller trust: session token + SO_PEERCRED uid-pin.** `actor` is an audit label only;
+  identity is the agent-minted session token; the agent rejects any socket peer whose uid ≠
+  `panel-web`. (Cockpit/polkit precedent; the confused-deputy fix. BHPanel proves the token model;
+  the uid-pin is one hardening it lacks.)
+- **D6 — Job model: durable queue + single in-process worker goroutine, per-object serialized.**
+  `202 {job}` + `job.status` for anything slow; sync only for reads. Job rows live in the agent's
+  root-only SQLite, so the queue survives an agent restart.
+- **D7 — Crash safety: idempotent ensure-state verbs + roll-forward.** Re-run a stuck job from the
+  top (no compensation for local resources; compensation only for ACME/provider-DNS). One
+  `reconcile` verb heals drift + half-created state. Liveness-checked lock, never a bare lockfile.
+- **D8 — The config generator is an attacker-controlled sink.** Allowlist every domain/site/user
+  name before it reaches a template or argv; **no empty/unquoted interpolation**; `nginx -t` on a
+  temp render before atomic rename + reload; writes under site homes use `O_NOFOLLOW`; never
+  `chown -R` a site-influenced path. (BHServe `root $root;` outage; Froxlor `/etc`-chown CVE; Hestia
+  DNS-field injection.) **Build-enforced** (CI grep + hostile-name test).
+- **D9 — The agent owns all persistent state** (root-only SQLite); `panel-web` is a stateless
+  renderer with no DB. See §2 and §5.
 
 ---
 
 ## 5. Control-plane data
 
-One SQLite DB at `/var/lib/vpspanel/panel.db`, **metadata only**.
+One SQLite DB at `/var/lib/vpspanel/panel.db` — **root-only (`0700`), owned by the `panel-agent`
+(D9); `panel-web` has no database**. **Metadata only.**
 ```sql
 PRAGMA journal_mode = WAL;  PRAGMA foreign_keys = ON;  PRAGMA busy_timeout = 5000;
 ```
@@ -336,6 +392,16 @@ files/Git/cron/logs → backups → firewall/SSH → DNS → integrations/API �
 4. **License — DECIDED: proprietary.** Repo is currently **MIT**; relicensing (new `LICENSE`, source
    headers) is deliberate and prior MIT commits stay MIT. Consider making the repo private before the
    first proprietary Go commit. *Mechanics executed on request — not changed unilaterally.*
+5. **Agent design — DECIDED (D5–D9).** Agent owns all state (root-only SQLite; stateless web);
+   durable job queue + single in-process worker, per-object serialized; session token + SO_PEERCRED
+   uid-pin; idempotent ensure-state verbs + roll-forward + one `reconcile` verb; config generator
+   treated as an attacker-controlled, build-enforced sink. See §2 and §4.
+6. **Updates — DECIDED (D2, lighter).** Signed manifest + verify-before-parse + anti-rollback +
+   tar-slip-hardened unpack now; beta/stable channels and the approval-gated CI signing pipeline in
+   Phase 4. See §3 invariant 7 and §4.
+
+**No design decisions remain open — Phase 0 is unblocked.** (Phase 0 first action is still the PHP
+freeze on `php-legacy`, then the Go scaffold; not started, awaiting the go-ahead.)
 
 ---
 
