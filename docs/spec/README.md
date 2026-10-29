@@ -63,15 +63,16 @@ Guardrails      — the "nevers" specific to this phase (plus the global invaria
 |---|---|---|
 | `00-foundations.md` | Shared contracts: RPC envelope/codec, error catalog, session/authz, data-model conventions, job/worker, config-render loop, audit, secrets, exec runner, validation | **drafted** |
 | `phases/phase-0.md` | Foundation: Go workspace, PHP freeze, RPC registry + codec, CI + supply-chain gates, arch tests | **drafted** |
-| `phases/phase-1.md` | State & plumbing: SQLite + migrations, durable jobs (roll-forward, not compensation), audit, systemd packaging, walking skeleton (`service.status`) | pending |
-| `phases/phase-2.md` | Auth & UI shell: Argon2id, sessions, TOTP MFA, HTMX shell + CSRF, roles | pending |
-| `phases/phase-3.md` | Nginx sites/domains/TLS: site model, render-and-revert loop, ACME HTTP-01 | pending |
-| `phases/phase-4.md` | PHP/WordPress/MariaDB: per-site user+FPM pool, DB lifecycle, WP install | pending |
-| `phases/phase-5.md` | Daily controls: file API, Git deploy, cron, log viewer, SSH keys | pending |
-| `phases/phase-6.md` | Backups/firewall/status: Restic, UFW safe-apply, self-backup, updates (D2) | pending |
+| `phases/phase-1.md` | State & plumbing: SQLite + migrations, durable jobs (roll-forward, not compensation), audit, systemd packaging, walking skeleton (`service.status`) | **drafted** |
+| `phases/phase-2.md` | Auth & UI shell: Argon2id, sessions, TOTP MFA, HTMX shell + CSRF, roles | gathering refs |
+| `phases/phase-3.md` | Nginx sites/domains/TLS: site model, render-and-revert loop, ACME HTTP-01 | gathering refs |
+| `phases/phase-4.md` | PHP/WordPress/MariaDB: per-site user+FPM pool, DB lifecycle, WP install | gathering refs |
+| `phases/phase-5.md` | Daily controls: file API, Git deploy, cron, log viewer, SSH keys | **drafted** |
+| `phases/phase-6.md` | Backups/firewall/status: Restic, UFW safe-apply, self-backup, updates (D2) | gathering refs |
 | `phases/phase-7.md` | DNS (external first): `dns.Provider` + Cloudflare | pending |
 | `phases/phase-8.md` | Integrations & API: OpenAPI, scoped tokens, deploy API + webhooks (D1) | pending |
-| `phases/phase-9.md` | Optional modules (after core is boring): OLS perf mode, mail, PowerDNS, FTP, Docker | pending |
+| `phases/phase-9.md` | Optional modules (after core is boring): OLS perf mode, mail, PowerDNS, FTP, Docker | **drafted** |
 
 The head fills the pending rows in order. Coding begins only after a phase's spec is marked drafted
-and its external refs gathered.
+and its external refs gathered. "gathering refs" = external-reference research in flight for the
+technically-deep phases (Nginx/TLS, backups/firewall, auth/DB/WP) before those specs are finalized.
