@@ -90,7 +90,8 @@ type Record struct {
 5.  DNS-01 wildcard: ssl.issue for `*.example.com` obtains a cert via a TXT challenge (staging first);
       the TXT record is created then cleaned up; the Phase-3 wildcard `unsupported` path now succeeds.
 6.  Credential: the Cloudflare token is stored sealed (ciphertext), opened only in the agent, scoped
-      to the zone; panel-web never sees it. All dns.* verbs are jobs + audited.
+      to the zone; panel-web never sees it. Mutating dns.* verbs are jobs; `dns.record.list`/`dns.verify`
+      are sync (per 01); all are audited.
 ```
 
 ## Definition of Done

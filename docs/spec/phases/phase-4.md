@@ -129,7 +129,8 @@ FPM pool user so auto-updates work.
 5.  WP install: verify-checksums runs and a tampered file FAILS the install; wp-config.php is 440/400
       owned by the site user; install over a non-empty docroot is refused; WP-CLI ran as the site user.
 6.  No destructive WP op (update/clone/staging) is callable yet (returns unsupported until Phase 6).
-7.  All verbs are jobs + audit; passwords are show-once (never returned twice, never logged).
+7.  All **mutating** verbs are jobs (reads are sync per 01); all are audited; passwords are show-once
+      via the job claim (never returned twice, never in result_json/logs).
 ```
 
 ## Definition of Done

@@ -73,7 +73,7 @@ Newline-delimited JSON, one request per line, one reply per line.
 // request
 { "id": "<ulid>", "verb": "site.create", "args": { ... },
   "actor": "<audit label, NOT authz>", "session": "<nps_<id>_<secret> | npat_<id>_<secret> | absent>",
-  "deadline_ms": 120000 }
+  "deadline_ms": 120000, "idempotency_key": "<optional; from the API Idempotency-Key header>" }
 // reply
 { "id": "<echoes the request id>", "ok": true,  "data": { ... } }
 { "id": "<echoes the request id>", "ok": false, "error": "human message", "code": "stable_string", "data": { ... optional ... } }
@@ -173,7 +173,17 @@ mfa_at}` where `kind ∈ {anon, user, token}`.
 - **Timeouts:** idle **10 min**, absolute **12 h** (high-value panel), both enforced agent-side from
   `last_seen`/`created`; revocation = row delete. *(Supersedes any earlier "30 min" default.)*
 - **Idempotency** for the public API lives in an agent `idempotency` table keyed by
-  `(token_id, key) → job_id` with a payload hash and a TTL — never in the stateless web tier (B-D5).
+  `sha256(token_id,key) → job_id|result` with a payload hash and a TTL — never in the stateless web
+  tier (B-D5). An `Idempotency-Key` HTTP header becomes the optional `idempotency_key` request field
+  (F2); the agent stores the job (async) or the result (sync).
+- **Local root (`novapanelctl`) caller** is **not** a `sessions` row (root has no `users` row): the
+  peer gate (F1) grants a uid-0 peer an **in-memory synthetic `Caller{Role:"owner", Actor:"root@local",
+  MFAat:now, Scopes:all}`**; nothing is persisted. Internal verbs (F13) are likewise authorized by the
+  **peer uid** (web uid), carried in `Caller.Peer`, not by any payload marker.
+- **Job ownership:** `jobs.created_by` records the caller's session/token id. `job.status`/`job.claim`
+  on a job are permitted to **that owner regardless of scope** (so a `sites:write` token can poll and
+  claim the job its own `POST` created); otherwise the normal scope/role applies. This is what makes
+  the show-once claim reachable by the API caller that created it.
 
 ---
 
@@ -232,12 +242,17 @@ object_key = the resource a job serializes on (e.g. "site:example.com")
 - `reconcile{scope?}` re-renders derived config from the DB and reloads; heals drift and
   half-created state. Config files are **derived artifacts**, never parsed back into the DB.
 
-**Executor binding (how a slow verb runs).** A slow verb's `Verb.Run` (F13) **validates args and
-enqueues** a job (returning `{job}`); the **worker** calls the same verb's `Verb.Exec(ctx, a, *Job)`
-(the step function). `Verb.ObjectKey(args) string` derives the per-object lock key. `step` (string)
-names the last completed step so a roll-forward resumes/re-checks from the top; the worker updates
-`progress` and appends `job_events`. A panic inside `Exec` is recovered → `state=failed`,
-`code="agent_error"`, audited (F11).
+**Executor binding (how a slow verb runs).** A slow verb's `Verb.Run` (F13) **validates args,
+generates any new id, persists the row (e.g. a `sites` row in `state='creating'`), writes that id into
+the job's `args_json`, and enqueues** (returning `{job}`); the **worker** calls the same verb's
+`Verb.Exec(ctx, a, *Job)`. So `Exec` re-runs idempotently from `args_json` alone after a crash (the id
+is already there). `Verb.ObjectKey(args) string` derives the lock key **from ids in args** — the
+convention is `site:<site_id>` / `db:<db_id>` / `zone:<zone>` / `system` / `firewall` (an **id**, which
+`Run` has already ensured is present; it never needs a store lookup). `step` names the last completed
+step; the worker updates `progress` and appends `job_events`. A panic inside `Exec` is recovered →
+`state=failed`, `code="agent_error"`, audited with the job's stored `actor`/`role` (F11). **Recovery**
+reads `jobs.effectful` (a column, 02) so `internal/jobs` needs no Registry: on start, an idempotent
+job left `running` → `queued` (re-run); an effectful one → `failed`,`code="interrupted"`.
 
 **Two verb classes (crash semantics).**
 - **`idempotent` (default, D7):** ensure-state; a re-run from the top makes **zero** changes
@@ -273,12 +288,15 @@ One pipeline for every system config (nginx vhost, FPM pool, …), in `internal/
 
 ```
 render(desired)  → bytes          // text/template; context-correct escaping; NO empty/unquoted interpolation
+keep LKG         → copy the current good file to <target>.lkg (none on first create)
 write temp       → <target>.tmp   // same dir, 0644 root (or per-file owner), O_NOFOLLOW parent
-validate         → `nginx -t` / `php-fpm -t` on the temp set   // argv, never shell
-atomic rename    → <target>
-reload           → `systemctl reload nginx` (skip if rendered hash unchanged)
-health-probe     → active HTTPS/socket probe of the affected target
-revert           → restore prior good file + reload if validate or probe fails; return code:"agent_error"
+atomic rename    → <target>       // into sites-enabled; NOT served until a reload, so this is safe
+validate         → `nginx -t` / `php-fpm -t`   // tests the full live set; argv, never shell
+                 on fail: rename <target>.lkg back (or remove on first create); DO NOT reload; code:"agent_error"
+reload           → `systemctl reload nginx` (skip if rendered hash unchanged; a cert-only swap forces it)
+health-probe     → state-aware (HTTP-only when no cert); 5xx/connect-fail = worse; an intended 503
+                   (maintenance) is NOT "worse"
+revert           → on probe failure restore <target>.lkg + reload; return code:"agent_error"
 ```
 
 - **Names are attacker-controlled.** Validate every `server_name`/pool name/path against F9 **before**
@@ -463,7 +481,7 @@ func (*Queue) SetRunner(run func(ctx context.Context, j *Job) error) // injected
 // the worker step itself is Verb.Exec (F13) — there is no separate Step type
 
 // rpc dispatch plumbing
-type Caller struct{ Session, Actor, Role string; Scopes []string; UserID string; MFAat int64 }
+type Caller struct{ Session, Actor, Role string; Scopes []string; UserID string; MFAat int64; Peer uint32 } // Peer = SO_PEERCRED uid
 func CallerFrom(ctx context.Context) Caller
 type CodedError struct{ Code, Msg string }       // func Errf(code, msg string, a ...any) *CodedError
 
@@ -488,6 +506,8 @@ type Runner interface {
 func (*V) Hostname(s string) error;  func (*V) SiteName(s string) error;  func (*V) DBName(s string) error
 func (*V) UnixUser(s string) error;  func (*V) UnitName(s string) error;  func (*V) PathIn(root, p string) (abs string, err error)
 func (*V) GitURL(s string) error;    func (*V) ArchiveEntry(top, name string) error
+func (*V) Port(n int) error;         func (*V) CIDR(s string) error            // firewall rule fields (F9)
+func (*V) RedirectTarget(s string) error  // http(s) URL or site-relative path; no CRLF/space (nginx sink)
 ```
 
 ## F16. Configuration
@@ -503,6 +523,16 @@ web_user      = "novapanel"          # agent resolves its uid/gid for the SO_PEE
 acme_webroot  = "/var/www/acme"       # world-traversable (B-D8); per-site subdir under it
 sites_root    = "/srv/sites"
 tls_dir       = "/etc/novapanel/tls"
+acme_directory_prod    = "https://acme-v02.api.letsencrypt.org/directory"
+acme_directory_staging = "https://acme-staging-v02.api.letsencrypt.org/directory"
+acme_email    = ""                    # required before prod issuance; ssl.issue refuses prod if empty
+acme_use_staging = false              # dev/CI set true
+ssh_port      = 22                    # the never-removable firewall rule (B-D7) pins this
+firewall_window_min = 15              # deadman revert timer default
+update_manifest_url = "https://releases.example/novapanel/stable/manifest.json"  # D2; pubkey is compiled in
+rate_limit_rps = 5   rate_limit_burst = 20     # per-token/per-session token bucket (web tier)
+login_max_attempts = 5   login_window_sec = 900   totp_max_attempts = 5
+webhook_body_max_kb = 512             # deploy.hook raw body cap (fits base64 in the 1 MiB frame)
 reauth_window_sec = 300   idle_sec = 600   abs_sec = 43200   deadline_default_ms = 120000
 ```
 `panel-web` has its own minimal config (listen addr, socket_path, web key for nothing secret).
@@ -532,6 +562,14 @@ config hash), `backup.create`/`backup.verify` (per the repo's retention), a **ba
 (alerts if the newest snapshot per repo is older than its interval), and `update.check`. The scheduler
 uses the injectable `Clock` (F15/06) so cadence is unit-testable. It does **not** fire while a prior
 job for the same `object_key` is still running (the queue's keyed lock covers overlap).
+
+**Scheduler authority (security).** A scheduled firing is **not** a privilege bypass: the enqueued job
+carries the **stored owner's** `actor`/`role` and runs through the same dispatcher checks. **MFA-gated
+verbs may not be scheduled** (no live TOTP) unless the schedule's owner holds an **automation grant**,
+and even then only verbs that grant permits. `schedule.set` validates `verb` against an **allowlist of
+schedulable verbs** (`ssl.renew`, `backup.create`, `backup.verify`, `update.check`, `reconcile`,
+site-`cron`) — never `backup.restore`/`firewall.apply`/`site.delete`/etc. The scheduler goroutine and
+`schedule.*` verbs are a **Phase-1 deliverable** (core infra), consumed by later phases.
 
 ## F19. Show-once secret claim (F6 detail)
 

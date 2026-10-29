@@ -69,7 +69,7 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 | `backup.restore` | | A | | **backups:restore** | ✓ | ✓ | ✓ | `db:<name>` or `site:<name>` per target (excluded scope) |
 | `firewall.status` | | A | ✓ | system:read | | | | |
 | `firewall.apply` | | A | | **firewall:write** | ✓ | ✓ | ✓ | `firewall` (excluded scope, armed revert) |
-| `firewall.confirm` / `firewall.revert` | | A | | — | | | ✓ | cancels/fires the deadman |
+| `firewall.confirm` / `firewall.revert` | | A | | firewall:write | | | ✓ | cancels/fires the deadman (automation can confirm) |
 | `dns.record.create`/`update`/`delete` | | A | | dns:write | ✓ | | | `zone:<zone>` |
 | `dns.record.list` | | RO | ✓ | dns:read | | | | |
 | `dns.verify` | | A | | dns:read | | | | resolver + provider check |
@@ -92,7 +92,8 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 |---|---|---|---|---|---|---|---|---|
 | `user.create`/`update`/`delete`/`set_password` | | O | | — | | | ✓ | first owner via local ctl |
 | `user.list` | | A | ✓ | — | | | | |
-| `repo.create`/`delete` | | A | | backups:write | | | ✓ | sealed repo creds |
+| `repo.create` | | A | | backups:write | ✓ | | ✓ | runs `restic init`; password via claim |
+| `repo.delete` | | A | | backups:write | | | ✓ | |
 | `repo.list` | | RO | ✓ | backups:read | | | | |
 | `schedule.list`/`set`/`enable`/`disable` | | A | list:✓ | system:read/write | | | | drives F18 |
 | `stack.status` | | A | ✓ | system:read | | | | module (Phase 9) |
@@ -112,7 +113,3 @@ counts them as registered, and the dispatcher refuses them unless the connection
 token (F4). `firewall.confirm`/`revert` now carry `firewall:write` (above) so an automation-grant
 apply can be confirmed instead of always auto-reverting. **Forbidden permanently:** `shell.execute`, run-command, write-arbitrary-root-path (no
 entry, ever).
-
-**Internal, not web/registry-reachable:** `tokens.verify` and `deploy.hook` are called only by
-`panel-web`'s API/webhook handlers over the socket with a trusted marker; they are not in the public
-scope map and carry no `Scope`.

@@ -59,6 +59,10 @@ CREATE TABLE jobs (
   verb       TEXT NOT NULL,
   args_json  TEXT NOT NULL,
   object_key TEXT NOT NULL,
+  effectful  INTEGER NOT NULL DEFAULT 0, -- from Verb.Effectful at enqueue; recoverRunning reads it w/o the Registry
+  actor      TEXT NOT NULL,             -- caller audit label at enqueue (job-side audit)
+  role       TEXT,                      -- caller role at enqueue
+  created_by TEXT,                      -- session/token id that created the job (owner may read/claim its own job)
   state      TEXT NOT NULL CHECK (state IN ('queued','running','done','failed')),
   step       TEXT NOT NULL DEFAULT '',
   attempts   INTEGER NOT NULL DEFAULT 0,
@@ -142,9 +146,10 @@ CREATE TABLE api_tokens (
 );
 
 CREATE TABLE idempotency (             -- F4 (public API)
-  id          TEXT PRIMARY KEY,        -- (token_id || ':' || key) hashed
-  job_id      TEXT NOT NULL REFERENCES jobs(id),
-  payload_hash TEXT NOT NULL,
+  id          TEXT PRIMARY KEY,        -- sha256(token_id || ':' || key)
+  job_id      TEXT REFERENCES jobs(id),-- set for async (202+job) mutations
+  result_json TEXT,                    -- set for sync mutations (no job)
+  payload_hash TEXT NOT NULL,          -- sha256(method || path || body); replay w/ a different hash → 409
   created     INTEGER NOT NULL         -- TTL enforced on read (default 24h)
 );
 ```
@@ -160,6 +165,7 @@ CREATE TABLE sites (
   docroot      TEXT NOT NULL,         -- /srv/sites/<name>/public
   php_version  TEXT,                  -- NULL for static
   force_https  INTEGER NOT NULL DEFAULT 0,
+  hsts_max_age INTEGER NOT NULL DEFAULT 0,  -- 0 = no HSTS; set by site.update (owner), only served in render state 3
   maintenance  INTEGER NOT NULL DEFAULT 0,
   config_hash  TEXT,                  -- hash of the last rendered nginx config (skip-reload compare)
   created      INTEGER NOT NULL,
@@ -172,6 +178,7 @@ CREATE TABLE domains (
   fqdn       TEXT NOT NULL UNIQUE,
   is_primary INTEGER NOT NULL DEFAULT 0,
   cert_state TEXT NOT NULL DEFAULT 'none' CHECK (cert_state IN ('none','issued','expired')),
+  cert_staging INTEGER NOT NULL DEFAULT 0,  -- 1 = cert is from the ACME staging CA → NOT valid for force-HTTPS
   cert_not_after INTEGER,
   created    INTEGER NOT NULL
 );
@@ -241,9 +248,15 @@ CREATE TABLE repos (
   id        TEXT PRIMARY KEY,
   name      TEXT NOT NULL UNIQUE,
   kind      TEXT NOT NULL CHECK (kind IN ('local','sftp','s3')),  -- B2 via s3-compat endpoint
+  role      TEXT NOT NULL DEFAULT 'site' CHECK (role IN ('site','panel')), -- exactly one 'panel' repo (self-backup)
   location  TEXT NOT NULL,          -- restic repo string
+  retention_json TEXT NOT NULL DEFAULT '{"keep_daily":7,"keep_weekly":4,"keep_monthly":6}',
   created   INTEGER NOT NULL
-);  -- repo password + object-store creds stored sealed (secrets name repo:<id>:*)
+);  -- repo password + object-store/sftp creds stored sealed (secrets names repo:<id>:password / repo:<id>:s3 / repo:<id>:sftp)
+CREATE TABLE webhook_deliveries (    -- replay seen-set for deploy.hook (B-D1); pruned past the window
+  id        TEXT PRIMARY KEY,        -- hook_id || ':' || signature
+  seen_at   INTEGER NOT NULL
+);
 CREATE TABLE backups (
   id          TEXT PRIMARY KEY,
   repo_id     TEXT NOT NULL REFERENCES repos(id),

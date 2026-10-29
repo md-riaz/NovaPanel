@@ -22,7 +22,7 @@ Phases 1–4 (jobs, sites, DB). Reads: `00-foundations.md` F6, F7, F10, F11, F12
    full site; restore a DB into a **scratch DB first**, validate, then swap (never DROP+restore in
    place).
 4. **UFW safe-apply** (`firewall.status/apply`): **dry-run → arm timed revert (deadman) → apply with
-   a never-removable SSH rule → verify a NEW connection → confirm cancels the revert**.
+   a never-removable SSH rule → fresh-request confirm (nonce) cancels the revert, else auto-revert**.
 5. **Panel self-backup** (`novapanelctl backup-config`): panel DB + agent config + ACME account keys,
    with a defined restore order.
 6. **Status + manual updates (D2):** signed-manifest update check (verify-before-parse, anti-rollback)
@@ -53,7 +53,10 @@ Phases 1–4 (jobs, sites, DB). Reads: `00-foundations.md` F6, F7, F10, F11, F12
 ### UFW safe-apply (the deadman — reference)
 ```
 1. snapshot: capture `iptables-save`/`ip6tables-save` (stdout → file via exec, not shell `>`) + `ufw status numbered`
-2. dry-run:  `ufw --dry-run <changes>`; assert the SSH allow is present and ordering is safe
+2. dry-run:  `firewall.apply{rules:[{action,proto,port,source?,comment?}], default_incoming?, window_min?}`
+      is a **full desired set** (not a delta): the agent computes the target ruleset, renders the ufw
+      commands, `ufw --dry-run` each, and asserts the pinned SSH allow is present and ordered first.
+      Every field is validated (`validate.Port`/`validate.CIDR`, F9); **raw ufw strings are refused**.
 3. ARM the revert BEFORE applying: `systemd-run --on-active=15min --timer-property=AccuracySec=1s <fw-revert>`
       (atd-free; fallback `at now + 15 minutes`). The revert restores the snapshotted `/etc/ufw/*.rules`
       **and the prior enabled/disabled state** + `ufw reload` (see the resolved block for the exact
@@ -87,15 +90,23 @@ recoverable out-of-band** — never store the only copy inside the repo they unl
   then `ufw reload` (or `disable` if it was inactive).
 - `firewall.apply` **refuses with `conflict` if an `fw_pending` row is already armed** (no second
   armed change). It writes `fw_pending` (`id, snapshot_path, revert_unit, deadline`) and arms the timer
-  **before** applying, and returns that `fw_pending.id` to the caller. **`firewall.confirm{id}`** (the
-  `fw_pending.id`) stops the transient `.timer` unit + deletes the row; **`firewall.revert{id}`** runs
-  the revert now + deletes the row. Both are MFA-gated and carry `firewall:write` so an automation-grant
-  apply can be confirmed. When the timer fires on its own, `fw-revert` restores state and leaves a
-  marker the agent turns into an audit event on next start (a fired revert is not silently unlogged).
-- **"Verify a new connection" is a client round-trip, not an agent self-probe** (the agent cannot
-  prove external reachability from inside the box). After apply, the admin's browser/CLI must reach
-  the panel again and call `firewall.confirm` within N minutes (default **15**); if the change broke
-  their access, the confirm never arrives and the transient unit reverts. The **never-removable SSH
+  **before** applying, and returns `{pending_id}` to the caller. **`firewall.confirm{pending_id}`**
+  stops the transient `.timer` unit + deletes the `fw_pending` row; **`firewall.revert{pending_id}`**
+  runs the revert now + deletes the row. Both are MFA-gated and carry `firewall:write` so an
+  automation-grant apply can be confirmed. **When the timer fires on its own**, the root
+  `panel-agent fw-revert` subcommand restores state **and deletes the `fw_pending` row itself** (it
+  opens the DB directly — it must work with the daemon down) and writes a revert marker file; the agent
+  turns that marker into an audit event on next start (a fired revert is never silently unlogged, and
+  never leaves a stale armed row that would `conflict` future applies).
+- **Confirmation is a fresh client round-trip, not an agent self-probe** (the agent cannot prove
+  external reachability from inside the box, and an existing keep-alive connection survives UFW's
+  ESTABLISHED rule so it would prove nothing). `firewall.apply` returns a one-time **confirm nonce**
+  (in `pending_id`'s reply); the panel serves the confirm UI/endpoint with `Cache-Control: no-store`
+  and `Connection: close`, so the client must open a **new request** to submit `firewall.confirm`. A
+  successful fresh confirm within N minutes (default **15**) is sufficient evidence the panel is still
+  reachable (the actual safety goal); if the change broke access, no confirm arrives and the transient
+  unit reverts. We do not claim to verify a specific new *TCP* connection — only that a fresh
+  authenticated request completed. The **never-removable SSH
   rule** (port from config, source any unless the admin pins one) is re-asserted `prepend`/`insert 1`
   on every apply.
 
@@ -152,25 +163,26 @@ plan; v1 ships single-manifest verify + anti-rollback.)
       first then swaps (a forced-bad restore leaves the live DB intact via the pre-snapshot).
 4.  Firewall: apply arms a timed revert BEFORE applying; the SSH allow is prepended and present after;
       a simulated "no confirm" fires the revert and restores access; `ufw --force reset`/default-deny
-      without an SSH rule is impossible via the API. A NEW connection check gates confirmation.
+      without an SSH rule is impossible via the API. A fresh-request confirm (no-store nonce) gates it.
 5.  Repo lock: a stale lock (exit 11) → unlock(stale)+retry once; `--remove-all` is never issued blindly.
 6.  Self-backup: backup-config captures DB+agent config+ACME keys; a documented restore order; repo
       password is not the only-copy-inside-its-own-repo.
 7.  Updates (D2): a manifest with a bad signature or an older version is REFUSED before parse/apply;
-      a good one shows notify + one-click apply. All verbs are jobs + audited.
+      a good one shows notify + one-click apply. All **mutating** verbs are jobs; **all** verbs are audited
+      (reads like `backup.list`/`firewall.status`/`update.check` are sync, per the 01 table).
 ```
 
 ## Definition of Done
 - [ ] Restic backups (path + failure-aware DB stream), secrets never on argv; exit-code 3 = failure.
 - [ ] Verify = structural + rolling read-data-subset + restore drill (not structural check alone).
 - [ ] Restore: typed confirm + pre-restore snapshot + scratch-DB-then-swap; never DROP+restore in place.
-- [ ] UFW safe-apply: dry-run → armed timed revert → SSH-first apply → new-connection verify → confirm/cancel.
+- [ ] UFW safe-apply: dry-run → armed timed revert → SSH-first apply → fresh-request confirm (nonce) → cancel/auto-revert.
 - [ ] Never-removable SSH rule re-asserted on every apply.
 - [ ] Panel self-backup (DB + agent config + ACME keys) with a restore order; out-of-band repo password.
 - [ ] Signed + anti-rollback update check with notify + one-click (D2).
 
 ## Guardrails (this phase)
-- **Never apply a firewall change without an armed timed revert and a new-connection verify.** The SSH
+- **Never apply a firewall change without an armed timed revert and a fresh-request confirm.** The SSH
   allow is a pinned, never-removable, prepended invariant.
 - **Treat restic exit code 3 as failure;** never let a `--stdin` dumper failure pass as a good backup.
 - **Never restore over a live DB without a pre-restore snapshot** (scratch-DB-then-swap).
