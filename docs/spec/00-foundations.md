@@ -56,8 +56,12 @@ Socket: `/run/novapanel/agent.sock`, created `0660 root:novapanel`. `/run/novapa
 it and drop every live FPM socket — BHPanel's measured 503 bug).
 
 **Peer gate (D5):** on every accepted connection the agent reads `SO_PEERCRED`
-(`golang.org/x/sys/unix`, `unix.GetsockoptUcred`) and **closes any connection whose `uid` ≠ the
-`novapanel` web user's uid**. Group membership on the socket is necessary but not sufficient.
+(`golang.org/x/sys/unix`, `unix.GetsockoptUcred`) and accepts **only two peer uids**: the `novapanel`
+**web uid** (normal sessions, must `session.login`) and **uid 0** (root — local `novapanelctl`/ops,
+granted an **implicit `owner` session** with `mfa_at=now`, since root already owns the box). Every
+other uid is closed. This is what lets `novapanelctl` run privileged local verbs while a compromised
+`panel-web` (web uid) still only ever holds the sessions it logged into — the two are distinguished by
+uid, not by a forgeable marker. (Group membership alone is necessary but not sufficient.)
 
 ---
 
@@ -67,8 +71,9 @@ Newline-delimited JSON, one request per line, one reply per line.
 
 ```jsonc
 // request
-{ "id": "<uuid>", "verb": "site.create", "args": { ... },
-  "actor": "<audit label, NOT authz>", "session": "<64-hex or absent>", "deadline_ms": 120000 }
+{ "id": "<ulid>", "verb": "site.create", "args": { ... },
+  "actor": "<audit label, NOT authz>", "session": "<nps_<id>_<secret> | npat_<id>_<secret> | absent>",
+  "deadline_ms": 120000 }
 // reply
 { "id": "<echoes the request id>", "ok": true,  "data": { ... } }
 { "id": "<echoes the request id>", "ok": false, "error": "human message", "code": "stable_string", "data": { ... optional ... } }
@@ -90,8 +95,14 @@ Rules:
 - **`deadline_ms`** is advisory from the caller; the agent clamps it to a per-verb max and enforces
   it on the handler's `context.Context`.
 
-Codec lives in `internal/rpc/codec.go`. It is the **only** encode/decode path; no verb hand-rolls
-JSON.
+Codec lives in `internal/rpc/codec.go`: the server reads a line with a `bufio.Scanner` (buffer cap
+**1 MiB**, the request cap) and calls `DecodeLine([]byte) (Request, error)` on it (so Decode composes
+with the Scanner, not its own reader); `Encode(io.Writer, Reply)` enforces the **4 MiB reply cap** —
+a handler reply over cap is **not** sent; the agent logs it and returns `agent_error` (never a silent
+truncation or desync). It is the **only** encode/decode path; no verb hand-rolls JSON. **Browser
+session tokens are `nps_<id>_<secret>`** (parallel to API `npat_<id>_<secret>`): the agent looks up the
+row by `<id>` and compares `<secret>` (sessions: sha256; tokens: argon2id). `panel-web` passes the
+whole string as `session`.
 
 ---
 
@@ -114,6 +125,7 @@ string).
 | `locked` | another job holds this object |
 | `deadline_exceeded` | handler/child exceeded the clamped deadline |
 | `agent_error` | internal failure (logged + audited; never leaks internals to web) |
+| `interrupted` | an effectful job was left running by a crash/restart and was not blindly re-run (F6) |
 | `unsupported` | feature is a deferred module / not enabled |
 
 ---
@@ -359,9 +371,22 @@ type Verb struct {
 }
 var Registry = map[string]Verb{} // populated by verb packages' init() (see F14)
 ```
-Every reachable verb is in `Registry`; the dispatcher reads `Public`/`MinRole`/`ReadOnly`/`Scope`/`MFA`
-before `Run`. The **per-verb attribute table** (which verb sets which flags) lives in
-`01-rpc-and-verbs.md`; a verb's phase spec must match that table.
+Every reachable verb is in `Registry`; the dispatcher reads the attributes before `Run`. The per-verb
+table is `01-rpc-and-verbs.md` (one **`Min` role** column = `anon`|`read_only`|`admin`|`owner`;
+`Public` ⇔ `Min=anon`). Resolving the review's contract gaps:
+- **Role semantics:** `Min` is the floor. `ReadOnly=true` additionally lets a `read_only` user call a
+  verb whose `Min` is higher (reads only). A `kind=token` session is gated by `Scope`, **not** by
+  `Min`. `anon` sessions may call only `Public` verbs.
+- **The caller reaches a handler via context**, not a parameter: the dispatcher puts a
+  `Caller{Session, Actor, Role, Scopes, UserID, MFAat}` in `ctx`; handlers read `agent.CallerFrom(ctx)`
+  (needed by `tokens.create`, `job.claim`, enqueue, audit). `Run`/`Exec` keep the `(ctx, *Agent, …)`
+  shape.
+- **Errors carry a code:** a handler returns `rpc.Errf(code, msg, …)` (a `*CodedError`) for any F3
+  code; the dispatcher maps a `*CodedError`→that code and any other error→`agent_error` (logged +
+  audited, never leaked). `validate.*` returns `invalid_argument` this way.
+- **Deadline:** `Verb.MaxDeadlineMs` (0 = use `deadline_default_ms`) caps the clamp (F2).
+- **One worker-step type:** the slow-verb worker step is `Verb.Exec` only; there is no separate `Step`
+  type (F15 corrected).
 
 - **Architecture test:** a test enumerates every handler in `internal/verbs` (by convention/reflection
   or a generated list) and **fails the build** if any is absent from `Registry`, or if any `Registry`
@@ -402,13 +427,22 @@ type Agent struct {
     Plat     platform.Platform
 }
 ```
-**Import-cycle rule.** `internal/rpc` defines `Verb`, `Registry`, `Dispatch`, and the `*Agent` type is
-imported from `internal/agent`. Verb packages (`internal/verbs/*`) import `internal/rpc` and
-`internal/agent` and **register themselves in `init()`**: `func init(){ rpc.Register(Verb{...}) }`.
-`internal/rpc` does **not** import `internal/verbs` (no cycle). `cmd/panel-agent` blank-imports
-`internal/verbs` (`_ "novapanel/internal/verbs"`) so the `init()`s run. The no-unregistered-verb arch
-test checks that every exported handler symbol in `internal/verbs` is referenced by exactly one
-`Register` call.
+**Import layering (no cycle — resolves the review's compile blocker).** Dependencies point one way:
+```
+internal/jobs   → (store only)         Job is plain data here; the Queue holds an injected
+                                       run func(ctx, *Job) error — it does NOT import rpc/agent.
+internal/agent  → jobs, store, audit, secret, exec, validate, render, config, platform
+internal/rpc    → agent, jobs          Verb.Exec is func(ctx,*agent.Agent,*jobs.Job) error; defines
+                                       Verb, Registry, Dispatch, Caller, CodedError, the client/codec.
+internal/verbs  → rpc, agent, jobs     each file registers in init(): rpc.Register(Verb{...}).
+cmd/panel-agent → blank-imports internal/verbs so the init()s run, then wires:
+                   a := agent.New(...); jobs.Queue.SetRunner(func(ctx,j){ rpc.Registry[j.Verb].Exec(ctx,a,j) })
+```
+So `jobs` imports nothing high-level (the worker runs the injected closure); `rpc` imports `agent`+`jobs`
+(never `verbs`); the agent wires the Registry into the Queue at startup. The no-unregistered-verb arch
+test checks that every exported handler in `internal/verbs` is referenced by exactly one `Register`
+call. `internal/id` (ULID), `internal/platform` (F0a table), and `internal/render` are additional leaf
+packages.
 
 ## F15. Internal package signatures (code-level contract)
 
@@ -418,11 +452,17 @@ Exact enough to implement against; each phase uses these, never a re-invented va
 func Open(path string) (*Store, error)                 // WAL+FK+busy_timeout; runs migrations
 func (*Store) Tx(ctx, func(*sql.Tx) error) error       // short transactions only
 
-// jobs (F6)
-func (*Queue) Enqueue(ctx, verb string, args any, objectKey string) (Job, error)
+// jobs (F6) — Job is plain data defined here; no agent/rpc import
+func (*Queue) Enqueue(ctx, verb string, args any, objectKey string) (EnqueueResult, error) // {Job, ClaimToken}
 func (*Queue) Status(ctx, id string) (Job, error)
-func (*Queue) Claim(ctx, id, claim string) (map[string]any, error)   // show-once secret, one-shot
-type Step func(ctx context.Context, a *Agent, j *Job) error
+func (*Queue) Claim(ctx, id, claim string) (map[string]any, error)   // show-once secret, one-shot, TTL
+func (*Queue) SetRunner(run func(ctx context.Context, j *Job) error) // injected by the agent at wiring
+// the worker step itself is Verb.Exec (F13) — there is no separate Step type
+
+// rpc dispatch plumbing
+type Caller struct{ Session, Actor, Role string; Scopes []string; UserID string; MFAat int64 }
+func CallerFrom(ctx context.Context) Caller
+type CodedError struct{ Code, Msg string }       // func Errf(code, msg string, a ...any) *CodedError
 
 // audit (F11) — called in a defer on the one dispatch path
 func (*Log) Record(ev Event)                            // writes events row + append-only file
@@ -432,9 +472,13 @@ type Event struct{ Actor, Role, Verb, ObjectKey, Outcome, Code string; Detail ma
 func (*Sealer) Seal(plain []byte) (Sealed, error)
 func (*Sealer) Open(s Sealed) ([]byte, error)          // XChaCha20-Poly1305; key /var/lib/novapanel/seal.key 0600
 
-// exec (F10) — the ONLY external-program path; argv only, never a shell
+// exec (F10) — the ONLY external-program path; argv only, never a shell. Runner is an INTERFACE
+// (tests inject a fake that records argv, per 06); exec.Real is the production impl.
 type RunOpts struct { Dir string; Env []string; Stdin io.Reader; Uid, Gid uint32; Groups []uint32; MaxOutput int }
-func (*Runner) Run(ctx context.Context, prog string, args []string, o RunOpts) (stdout, stderr []byte, exit int, err error)
+type Runner interface {
+    Run(ctx context.Context, prog string, args []string, o RunOpts) (stdout, stderr []byte, exit int, err error)
+}
+// Clock is likewise an interface (06 time-window tests): Now() int64 ; agent holds one.
 // prog is an absolute path from the platform table (F0a); Uid/Gid≠0 drops the child to a site user.
 
 // validate (F9) — returns code:"invalid_argument" on failure
