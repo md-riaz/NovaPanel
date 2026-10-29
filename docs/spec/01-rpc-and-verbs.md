@@ -11,9 +11,15 @@ match this table**; the Registry is the single source of truth and the arch test
 - "All verbs are jobs" is **wrong**: only verbs with `Slow=true` enqueue. Reads (`*.list/get/status`,
   `files.read`, `log.tail`) are synchronous.
 
-**Column key:** Pub=callable with no/anon session · Role=min user role (O/A/RO) · R/O=callable by
-`read_only` · Scope=API-token scope (— = not token-reachable) · Slow · Eff=effectful (F6) · MFA.
+**Column key:** Pub=callable with an anon/no session · Role=min user role (O/A/RO) · R/O=`read_only`
+may call it too · Scope=API-token scope (— = not token-reachable) · Slow · Eff=effectful (F6) · MFA.
 `ObjectKey` given where Slow.
+
+**Semantics (per F13), resolving the review's Role-vs-R/O confusion:** `Role` is the floor for a
+privileged user; **`R/O ✓` additionally admits a `read_only` user** to that (read-only) verb even
+though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callable by an admin, an owner,
+**and** a read-only user, but not by a token lacking `system:read`. A `kind=token` session is gated by
+`Scope` alone, never by `Role`. `anon` may call only `Pub ✓` verbs.
 
 | Verb | Pub | Role | R/O | Scope | Slow | Eff | MFA | ObjectKey / note |
 |---|---|---|---|---|---|---|---|---|
@@ -60,7 +66,7 @@ match this table**; the Registry is the single source of truth and the arch test
 | `backup.create` | | A | | backups:write | ✓ | ✓ | | `backup:<repo>` |
 | `backup.list` | | RO | ✓ | backups:read | | | | |
 | `backup.verify` | | A | | backups:read | ✓ | | | `backup:<repo>` |
-| `backup.restore` | | A | | **backups:restore** | ✓ | ✓ | ✓ | `site:<name>` (excluded scope) |
+| `backup.restore` | | A | | **backups:restore** | ✓ | ✓ | ✓ | `db:<name>` or `site:<name>` per target (excluded scope) |
 | `firewall.status` | | A | ✓ | system:read | | | | |
 | `firewall.apply` | | A | | **firewall:write** | ✓ | ✓ | ✓ | `firewall` (excluded scope, armed revert) |
 | `firewall.confirm` / `firewall.revert` | | A | | — | | | ✓ | cancels/fires the deadman |
@@ -80,9 +86,31 @@ match this table**; the Registry is the single source of truth and the arch test
 | `module.status` / `module.list` | | RO | ✓ | system:read | | | | |
 | `audit.tail` | | A | ✓ | system:read | | | | |
 
+**Additional verbs (pass-2 — were missing rows):**
+
+| Verb | Pub | Role | R/O | Scope | Slow | Eff | MFA | ObjectKey / note |
+|---|---|---|---|---|---|---|---|---|
+| `user.create`/`update`/`delete`/`set_password` | | O | | — | | | ✓ | first owner via local ctl |
+| `user.list` | | A | ✓ | — | | | | |
+| `repo.create`/`delete` | | A | | backups:write | | | ✓ | sealed repo creds |
+| `repo.list` | | RO | ✓ | backups:read | | | | |
+| `schedule.list`/`set`/`enable`/`disable` | | A | list:✓ | system:read/write | | | | drives F18 |
+| `stack.status` | | A | ✓ | system:read | | | | module (Phase 9) |
+| `stack.switch` | | O | | — | ✓ | ✓ | ✓ | `system` (server-wide, auto-rollback) |
+| `firewall.apply` confirm flow → `firewall.confirm`/`revert` | | A | | **firewall:write** | | | ✓ | now token-reachable so automation can confirm |
+
+**Internal** (not web/registry-reachable in the public scope map, called by `panel-web` handlers over
+the socket from a **uid-authenticated** peer, i.e. the web uid, with an internal verb flag — not a
+payload marker): `tokens.verify`, `deploy.hook`, `deploy.hook_create`/`list`/`delete`. These still
+have `Registry` entries (invariant 3) with `Public=false, Scope="", Internal=true`; the arch test
+counts them as registered, and the dispatcher refuses them unless the connection is the web peer.
+
+**HTTP status for the pass-2 codes:** `interrupted` → 409; `unsupported` → 501.
+
 **Excluded scopes** (`backups:restore`, `firewall:write`, `ssh:write`, `tokens:write`,
 `system:power`) are never on an ordinary token; they require a user+MFA session or an automation-grant
-token (F4). **Forbidden permanently:** `shell.execute`, run-command, write-arbitrary-root-path (no
+token (F4). `firewall.confirm`/`revert` now carry `firewall:write` (above) so an automation-grant
+apply can be confirmed instead of always auto-reverting. **Forbidden permanently:** `shell.execute`, run-command, write-arbitrary-root-path (no
 entry, ever).
 
 **Internal, not web/registry-reachable:** `tokens.verify` and `deploy.hook` are called only by

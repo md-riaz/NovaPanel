@@ -26,10 +26,23 @@ and real demand. Reads: `00-foundations.md` (all), `vpspanel-plan.md` §1 non-go
   **enables/configures a shipped module** — it never fetches or executes downloaded code (D4).
 - A module registers its verbs in the **same** registry (F13) with the same validation/audit/job
   rules; a disabled module's verbs return `code:"unsupported"`.
-- **Web-stack switching must be transactional with backup + rollback.** aaPanel corrupts vhosts by
-  editing them with `#`-marker heuristics on a stack switch — **do not copy that**. A switch:
-  snapshot current config → render the new stack's config → validate → swap → health-probe → on any
-  failure restore the snapshot. A stack switch is a slow job on `objectKey site:<name>`.
+- **Web-stack switching is server-wide, transactional, migration-free (verified against BHPanel's real
+  `stack.switch`).** The stack is one global choice (e.g. `nginx` ↔ `ols`); **no data migration** —
+  PHP-FPM pools, certificates, DB users and accounts are stack-independent, so only the web-server
+  config is **re-rendered from the DB** (the derived-artifact model). aaPanel corrupts vhosts by
+  editing them with `#`-marker heuristics — **never do that**; always regenerate from the DB. The
+  `stack.switch` job (owner, MFA, effectful, `objectKey system`) follows BHPanel's sequence:
+  1. **Install the new stack beside the running one** — visitors unaffected.
+  2. **Render + validate** the new stack's config for every site; if validation is refused, **stop —
+     nothing has changed**.
+  3. **Baseline:** record how every site answers now (status, redirect, certificate), site by site.
+  4. **Swap** — a brief all-sites outage of a few seconds (honest; not zero-downtime).
+  5. **Re-probe** every site; **if any answers worse, switch back automatically** and report which.
+  A **dry-run ("only check, don't switch")** runs steps 1–3. `stack.status` reports the current stack,
+  versions, and whether a switch is in progress. (Note BHPanel's lesson: there is no "Nginx-only" —
+  Nginx silently ignores `.htaccess`; our v1 is Nginx-only *because* we render rewrite rules from
+  structured fields rather than honoring `.htaccess`, so this is a module concern only if an
+  Apache-compatible stack is ever offered.)
 
 ### Resolved interface (B29, C22)
 ```go

@@ -364,6 +364,8 @@ type Verb struct {
     Effectful bool               // F6 effectful class (no blind roll-forward)
     MFA       bool               // requires fresh TOTP re-auth window (F4)
     Module    string             // owning module name ("" = core); a disabled module's verb → "unsupported"
+    Internal  bool               // callable only by the web-uid peer (tokens.verify, deploy.hook); not in the public scope map
+    MaxDeadlineMs int            // clamp ceiling (0 = deadline_default_ms)
     NewArgs   func() any         // typed arg struct; decoded + validated (F9) before Run
     ObjectKey func(args any) string                              // per-object lock key for a slow verb
     Run       func(ctx context.Context, a *Agent, args any) (any, error) // sync, or validate+enqueue for Slow
@@ -516,3 +518,26 @@ func (*Client) Call(ctx context.Context, verb string, args any, session string) 
 error (F2). A non-`ok` reply is returned as a typed error carrying `Reply.Code` so callers branch on
 the stable code. The client never interprets `actor`; `panel-web` sets `actor` to the audit label
 (user email or `token:<name>`) and `session` to the presented token.
+
+## F18. Scheduler (recurring work)
+
+The job queue (F6) only runs **enqueued** work; recurring work is driven by an agent-internal
+**scheduler goroutine** over the `schedules` table (02-data-model): each tick it finds due rows
+(`next_run ≤ now`), **enqueues** the row's verb as a normal job (so it inherits per-object locking,
+audit, and the effectful rules), advances `next_run` from `cron`, and persists any rolling `state_json`
+(e.g. the backup verify's `n` in `--read-data-subset=n/7`). Default schedules seeded at install:
+`ssl.renew` (daily; renews certs within 30 days of expiry and **forces a reload** despite an unchanged
+config hash), `backup.create`/`backup.verify` (per the repo's retention), a **backup-freshness check**
+(alerts if the newest snapshot per repo is older than its interval), and `update.check`. The scheduler
+uses the injectable `Clock` (F15/06) so cadence is unit-testable. It does **not** fire while a prior
+job for the same `object_key` is still running (the queue's keyed lock covers overlap).
+
+## F19. Show-once secret claim (F6 detail)
+
+A slow verb that mints a secret (DB/admin password) writes it **sealed** into `job_claims`
+(`claim_hash`, sealed ciphertext, short `expires`) from its `Exec`, and the **enqueue reply** carries
+the one-time `claim` token (`EnqueueResult.ClaimToken`, F15). The caller later calls
+`job.claim{job_id, claim}`; the agent checks the claim hash, opens the secret, **deletes the row**, and
+returns it exactly once. The secret is never in `jobs.result_json`, `job_events`, audit, or any log.
+For the public API, the `202` body includes the `claim` so a token caller can retrieve its secret; an
+idempotent replay returns the same (still-unclaimed) `claim` or `410`-style `not_found` once claimed.

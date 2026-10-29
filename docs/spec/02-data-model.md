@@ -81,6 +81,26 @@ CREATE TABLE job_events (
 );
 CREATE INDEX idx_job_events_job ON job_events(job_id, ts);
 
+CREATE TABLE job_claims (              -- show-once secret delivery (F6 claim)
+  job_id     TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+  claim_hash TEXT NOT NULL,           -- sha256 of the one-time claim token
+  nonce      BLOB NOT NULL,           -- the secret is sealed (F12) at rest here
+  ciphertext BLOB NOT NULL,
+  expires    INTEGER NOT NULL,        -- short TTL; row deleted on claim or expiry
+  claimed    INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE schedules (               -- the agent's internal scheduler (F18)
+  id        TEXT PRIMARY KEY,
+  verb      TEXT NOT NULL,            -- the verb to enqueue
+  args_json TEXT NOT NULL,
+  cron      TEXT NOT NULL,            -- OnCalendar-style spec
+  state_json TEXT NOT NULL DEFAULT '{}', -- e.g. the rolling read-data-subset n
+  next_run  INTEGER NOT NULL,
+  enabled   INTEGER NOT NULL DEFAULT 1,
+  last_run  INTEGER
+);
+
 CREATE TABLE events (                  -- audit (F11); mirror of the append-only file
   id         TEXT PRIMARY KEY,
   ts         INTEGER NOT NULL,
