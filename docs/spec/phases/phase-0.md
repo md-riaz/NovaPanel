@@ -26,10 +26,13 @@ Nothing. This is the first executable work. Reads: `00-foundations.md` (F1, F2, 
    local-ctl session exists; Phase 0 verifies `ping` end-to-end.)
 5. **Architecture tests** (the invariants, machine-enforced):
    - no-unregistered-verb test (F13).
-   - no-shell test: a test/CI grep that fails if `internal/` contains `sh -c`, `exec.Command("sh"`,
-     backtick shelling, or `os/exec` used outside `internal/exec`.
-   - no-root-web test: `panel-web` build/boot path asserts `os.Geteuid() != 0` and refuses to run as
-     root; a test asserts the agent is the only `cmd` that calls privileged syscalls (static check).
+   - no-shell test: a Go test that walks the AST of `internal/` (and `cmd/`) and fails if anything
+     outside `internal/exec` imports `os/exec` or `syscall` for process spawn, or references `"sh"`,
+     `"bash"`, `"-c"` as an exec arg. (A plain grep is the CI backstop; the AST test is authoritative.)
+   - no-root-web test: `cmd/panel-web/main.go` asserts `os.Geteuid() != 0` at boot (overridable
+     `geteuid` var for the test) and refuses to run as root; an AST test fails if `cmd/panel-web` or
+     `cmd/novapanelctl` imports `internal/exec`, `internal/store`, `internal/secret`, or
+     `golang.org/x/sys/unix` (only `cmd/panel-agent` may).
 6. **CI + supply-chain gates** (none exist in the repo today — this is the deliverable):
    `go build ./...`, `go vet`, `staticcheck`, `govulncheck`, `go test ./...`, `gofmt -l` (empty),
    the three architecture tests above, and `systemd-analyze verify` on the packaged units (added in
@@ -38,19 +41,22 @@ Nothing. This is the first executable work. Reads: `00-foundations.md` (F1, F2, 
    `build/test/lint/ci` targets, `LICENSE` handling per the proprietary decision (executed on request).
 
 ## Blueprint
-- **`internal/rpc/codec.go`** — `Decode(io.Reader) (Request, error)` with a 1 MiB cap;
-  `Encode(io.Writer, Reply) error`; `Reply` helpers `OK(data)`, `Err(code, msg)`. One line in, one
-  line out. Table-test malformed/oversized/empty inputs.
-- **`internal/rpc/server.go`** — `Serve(ln net.Listener, dispatch)`; `accept` loop; per-conn goroutine
-  with a `bufio.Scanner` (buffer cap 4 MiB) → decode → `dispatch(req)` → encode; close on any decode
-  error. `peerUID(*net.UnixConn) (uint32, error)` via `unix.GetsockoptUcred`; reject uid ≠ configured
-  web uid **before** reading any line.
+- **`internal/rpc/codec.go`** — `DecodeLine([]byte) (Request, error)` (F2 — composes with the server's
+  Scanner, which has the 1 MiB request-buffer cap); `Encode(io.Writer, Reply) error` enforces the
+  4 MiB reply cap (over-cap → `agent_error`). `Reply` helpers `OK(data)`, `Err(code, msg)`; errors are
+  `*CodedError` via `Errf`. One line in, one line out. Table-test malformed/oversized/empty inputs.
+- **`internal/rpc/server.go`** — `NewServer(a *Agent)`, `Serve(ln net.Listener)`; `accept` loop; per-conn
+  goroutine with a `bufio.Scanner` (buffer cap **1 MiB**) → `DecodeLine` → `Dispatch` → `Encode`; close
+  on any decode error. `peerUID(*net.UnixConn)` via `unix.GetsockoptUcred`; per F1 **accept only the web
+  uid or uid 0 (root → synthetic owner Caller), reject every other uid before reading any line**; put
+  the resolved `Caller` (incl. `Peer`) in ctx.
 - **`internal/rpc/messages.go`** — `type Verb`, `Registry`, and `Dispatch(ctx, req) Reply` that:
   looks up `verb` (`unknown_verb` if absent), resolves role from `session` (stub: `ping`/`agent.info`
   only, real sessions in Phase 2), checks `MinRole`/`ReadOnly`, decodes+validates args, runs, maps a
   returned `error` to a `code`. `actor` is passed to audit only (audit lands Phase 1; here it is a
   no-op sink).
-- **`internal/exec/exec.go`** — F10 runner skeleton (`Run(ctx, name string, args ...string)`), with
+- **`internal/exec/exec.go`** — the F15 `Runner` **interface** + `Real` impl
+  (`Run(ctx, prog string, args []string, RunOpts)`; RunOpts carries uid/gid/dir/env/stdin), with
   process-group kill on ctx cancel; **used by nothing yet**, but present so no verb reaches for
   `os/exec` directly (the no-shell test enforces it).
 - **`cmd/panel-agent/main.go`** — parse config (socket path, web uid), open listener
@@ -76,11 +82,16 @@ Nothing. This is the first executable work. Reads: `00-foundations.md` (F1, F2, 
 4.  `gofmt -l .`                                  → prints nothing.
 5.  `go test ./...`                               → green, including:
       - codec table tests (malformed/oversized/empty → defined errors, connection-close semantics).
-      - arch: no-unregistered-verb (add a dummy unregistered handler in a test → build/test FAILS).
-      - arch: no-shell grep (inject `sh -c` in a test fixture dir → FAILS).
-      - arch: panel-web refuses euid 0 (simulated) ; only panel-agent is root-capable.
-6.  Boot `panel-agent` on a scratch socket; `novapanelctl ping` returns the version;
-    a client whose uid ≠ web uid is rejected at connect (peer-gate test).
+      - arch: no-unregistered-verb. A "handler" = a func value assigned to `Verb.Run`/`Verb.Exec` in a
+        `rpc.Register(Verb{...})` call inside `internal/verbs`. The test loads the built `Registry` and
+        asserts it is non-empty and every `internal/verbs` `Register` call's `Name` is unique; the
+        negative fixture (testdata module with a verbs file that defines a `Run` but never calls
+        `Register`) is built in a subprocess `go test` and must FAIL.
+      - arch: no-shell AST test (the testdata fixture importing `os/exec` outside `internal/exec` FAILS).
+      - arch: panel-web refuses euid 0 (via the overridable `geteuid`); only panel-agent imports the
+        privileged packages.
+6.  [integration] Boot `panel-agent` on a scratch socket; `novapanelctl ping` returns the version; a
+    peer whose uid is neither the web uid nor 0 is rejected at connect (peer-gate test).
 7.  CI workflow runs steps 2–6 on push and fails the build if any step fails.
 ```
 

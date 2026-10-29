@@ -11,11 +11,13 @@ Phase 0. Reads: `00-foundations.md` F1, F5, F6, F7, F10, F11, F13.
 ## Deliverables
 1. **SQLite store** (`internal/store`): `Open()` opens `/var/lib/novapanel/panel.db` with the F5
    pragmas, runs pending migrations, exposes typed accessors. Migration `0001_init.sql` creates the
-   core tables that exist now: `schema_migrations`, `users`, `sessions`, `jobs`, `events`,
-   `settings`, `secrets` (empty shells for later phases are fine, but `jobs`/`events`/`settings`
-   must be complete).
-2. **Job queue + worker** (`internal/jobs`) per F6: `Enqueue(verb, args, objectKey) (Job, error)`,
-   the single worker goroutine, the keyed per-object lock, `job.status`/`job.list` verbs, and
+   **full Phase-1 core from 02-data-model**: `schema_migrations`(+hash), `users`, `backup_codes`,
+   `sessions`, `jobs`(+effectful/actor/role/created_by), `job_events`, `job_claims`, `schedules`,
+   `events`, `secrets`, `settings` — all complete (not shells). The migration-integrity test (02) runs
+   in CI.
+2. **Job queue + worker** (`internal/jobs`) per F6/F15: `Enqueue(ctx, verb, args, objectKey)
+   (EnqueueResult, error)`, `SetRunner` (agent injects the Registry dispatch — no rpc import),
+   the single worker goroutine, the keyed per-object lock, `job.status`/`job.list`/`job.claim` verbs, and
    **roll-forward recovery** on start (reset `running` → `queued`, re-run from the top). A
    `reconcile` verb stub (no-op registry entry that later phases extend).
 3. **Audit** (`internal/audit`) per F11: every dispatch outcome (ok/refused/error/panic) writes an
@@ -23,31 +25,37 @@ Phase 0. Reads: `00-foundations.md` F1, F5, F6, F7, F10, F11, F13.
    `recover()` on the dispatch path audits panics.
 4. **Secret sealing** (`internal/secret`) per F12: `Seal`/`Open` with the root-held key; a
    `settings`-backed smoke test (seal a value, reopen it). No real secrets consumed yet.
-5. **systemd packaging** (`packaging/systemd`): `novapanel-agent.service` (hardened, from the BHPanel
-   template minus quota lines), `novapanel-web.service`, `novapanel.tmpfiles` (creates
-   `/run/novapanel` and `/var/lib/novapanel`). `systemd-analyze verify` passes (the Phase-0 CI job
-   now has units to check).
-6. **Walking skeleton:** `service.status{unit}` — a real typed verb that runs
+5. **systemd packaging** per `packaging-reference.md`: `novapanel-agent.service` + `novapanel-web.service`
+   + `novapanel.tmpfiles` (creates `/run/novapanel`, `/var/lib/novapanel`, `/var/log/novapanel`,
+   `/var/www/acme`) + `novapanel.sysusers` (creates the `novapanel` user/group). The agent at first
+   start generates `seal.key` (`0600`) if absent and creates/`chattr +a`'s `audit.log` (no installer
+   deliverable needed). `systemd-analyze verify` passes.
+6. **Scheduler (F18)** — the `internal/jobs` scheduler goroutine over the `schedules` table +
+   `schedule.list/set/enable/disable` verbs (verb-allowlist enforced). No default schedules seeded yet
+   (later phases seed renewal/backup/update rows).
+7. **Walking skeleton:** `service.status{unit}` — a real typed verb that runs
    `systemctl is-active/is-enabled <unit>` via `internal/exec` (argv), validated **unit name**
    (`validate.UnitName`, allowlist of manageable units), returns structured status
-   `{unit, active, enabled}`. Exercised end-to-end **via `novapanelctl`** (local, peer-gated — there
-   is no web auth until Phase 2, so the skeleton does **not** go through `panel-web` yet). It is
-   `Public=false, MinRole=admin`; `novapanelctl` runs as the `novapanel` user and the agent resolves
-   a local-admin session for ctl (a bootstrap `kind=user` session minted for the peer-gated ctl, per
-   F4). `service.restart{unit}` is the **first slow + effectful verb** (job queue) to exercise F6.
+   `{unit, active:bool, enabled:bool, state:string}` (03). Exercised end-to-end **via `novapanelctl`**
+   (local, peer-gated — there is no web auth until Phase 2, so the skeleton does **not** go through
+   `panel-web` yet). Per 01 `service.status` is `MinRole=admin, ReadOnly✓, scope system:read`;
+   `novapanelctl` runs as **root (uid 0)** and the peer gate gives it the **in-memory synthetic owner
+   Caller** (F1/F4) — no `sessions` row. `service.restart{unit}` is the **first slow + effectful verb**
+   (job queue) to exercise F6.
    *(The `panel-web` rendering of `service.status` moves to Phase 2, once sessions exist.)*
 
 ## Blueprint
 - **`internal/store/store.go`** — `type Store`; `Open(path) (*Store, error)`; `migrate()`; typed
   methods per table added as phases need them. Jobs/events/settings methods complete now.
-- **`internal/store/migrations/0001_init.sql`** — `schema_migrations(version, applied_at)`;
-  `users(...)`, `sessions(...)` (shapes per F4, used in Phase 2); `jobs(...)` (F6 columns);
-  `events(...)` (F11 columns); `settings(key, value_json)`; `secrets(id, name, nonce, ciphertext)`.
+- **`internal/store/migrations/0001_init.sql`** — the exact DDL in `02-data-model.md` "Phase 1 — core"
+  (verbatim; that file is the source of truth for every column, type, constraint, and index).
 - **`internal/jobs/queue.go`** + **`keyedlock.go`** + **`worker.go`** — `Enqueue`, `Worker.Run(ctx)`,
   per-`objectKey` `sync.Mutex` map with reference counting. On start: `recoverRunning()`.
-- **`internal/jobs/registry glue`** — a slow verb's `Run` enqueues and returns `{job}`; `job.status`
-  reads a row; the worker calls the verb's **step function** (the real work), which must be idempotent
-  (F7). Define `type Step func(ctx, *Agent, args) error`.
+- **Executor wiring** — a slow verb's `Run` validates+generates-id+persists+enqueues and returns
+  `{job}` (F6); the worker runs the **injected runner** (`SetRunner`, set by `cmd/panel-agent` to call
+  `Registry[j.Verb].Exec(ctx, a, j)`), so `internal/jobs` never imports `rpc`/`verbs` (F14). There is
+  **no `type Step`** — the worker step is `Verb.Exec` (F13). `recoverRunning` reads `jobs.effectful`
+  (idempotent → requeue; effectful → `failed`/`interrupted`).
 - **`internal/audit/audit.go`** — `Record(ev Event)`; opens the append-only file once; the dispatch
   path calls it in a `defer` that also catches panics → `outcome:"error", code:"agent_error"`.
 - **`internal/secret/secret.go`** — `Seal([]byte) (Sealed, error)`, `Open(Sealed) ([]byte, error)`;

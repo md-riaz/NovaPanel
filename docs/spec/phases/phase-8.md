@@ -6,8 +6,11 @@ verbs, plus the **inbound deploy webhook** (D1). Scripts/CI can drive the panel 
 token inherits only its scopes, and underneath only the fixed agent verbs.
 
 ## Depends on
-Phases 1–6 (jobs, auth/MFA, sites, DB, deploy, backups/firewall). Reads: `vpspanel-api.md` (the full
-design — this phase implements it), `00-foundations.md` F2–F4, F6, F11, F13.
+Phases 1–6, **and Phase 7** for the `dns:*` scopes/resources (gate those routes on a configured DNS
+provider, else `unsupported`). **Required reading (not optional background): `../vpspanel-api.md`** —
+it is the authoritative route table (§5 paths/methods/bodies), scope list (§4) and status-code table
+(§8); every route maps 1:1 to a verb in `01-rpc-and-verbs.md` with the args/reply in `03-verb-shapes.md`.
+Also `00-foundations.md` F2–F4, F6, F11, F13.
 
 ## Deliverables
 1. **`/v1` router** in `panel-web`: default-deny (every route carries an explicit auth decision or a
@@ -45,10 +48,13 @@ design — this phase implements it), `00-foundations.md` F2–F4, F6, F11, F13.
   token and the dispatcher enforces `Verb.Scope` (authoritative; see the folded-in block). `panel-web`
   makes no authz decision.
 - **`internal/api/jobs.go`** — translate agent `{job}` replies to the `202` body; `GET /jobs/{id}`
-  reads `job.status`; idempotency store keyed by `(token, Idempotency-Key)` → job id.
+  reads `job.status`. **Idempotency is stored in the agent** (`idempotency` table, F4/02): `panel-web`
+  forwards the `Idempotency-Key` as the `idempotency_key` request field; it keeps **no** store itself
+  (it holds no DB). The agent returns the same job/result on a replay, `409` on a payload mismatch.
 - **`internal/api/webhooks.go`** — size-capped raw-body read; forward `{hook_id, body, signature,
   timestamp}` to `deploy.hook`; always return the uniform response regardless of outcome.
-- **`internal/verbs/tokens.go`** (agent) — `tokens.create/list/revoke/verify`; hash with argon2id;
+- **`internal/verbs/tokens.go`** (agent) — `tokens.create/list/revoke` (+ internal `tokens.verify`);
+  hash with argon2id;
   `tokens.create` for an automation grant requires a stepped-up session.
 - **`internal/verbs/deploy.go`** — extend with `deploy.hook{hook_id, body, signature, timestamp}`:
   look up the hook's sealed secret (F12), `hmac.Equal` over the raw body, check the replay window,
@@ -80,7 +86,9 @@ design — this phase implements it), `00-foundations.md` F2–F4, F6, F11, F13.
   key+different payload → 409. Required on `POST`/`DELETE` (400 if missing).
 - **Webhook HMAC (D1):** header `X-Hub-Signature-256: sha256=<hex>` over **`<timestamp> "." <raw body>`**
   (so the timestamp is authenticated), plus `X-Delivery-Timestamp`; replay window **5 min** + the
-  `(hook_id, signature)` seen-set rejects replays; body size-capped at 1 MiB; the agent does a dummy
+  `(hook_id, signature)` seen-set (`webhook_deliveries` table, 02) rejects replays; **raw body capped at
+  `webhook_body_max_kb` = 512 KiB** so its base64 fits the 1 MiB RPC frame (never an over-cap close);
+  the agent does a dummy
   HMAC for an unknown `hook_id` (constant-ish work, no enumeration). The uniform response —
   **`202 "accepted"` for success AND every failure, byte-identical** — is the only thing the route
   ever returns. `deploy.hook` enqueues `deploy.run` with the pushed SHA from the (validated) payload.

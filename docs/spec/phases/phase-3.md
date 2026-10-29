@@ -15,9 +15,11 @@ Phases 1–2 (jobs, auth, audit). Reads: `00-foundations.md` F6, F7, F8, F9, F10
 2. **Structured Nginx renderer** (`internal/render/nginx`): pure `desired → bytes` from **structured
    fields only** (root, index, php on/off, redirects, subdomain, maintenance) — never a raw-directive
    passthrough. Hostile-name unit tests (F9). The apply side runs the full F8 loop.
-3. **Static-site workflow:** create a static site end-to-end (user+docroot in Phase 4 owns the user;
-   here a static site can use a shared docroot owner until Phase 4 lands per-site users — spec the
-   seam, don't block).
+3. **Static sites only in Phase 3.** `site.create type:'static'` end-to-end, **including the per-site
+   Unix user + docroot** (created here — see the pass-2 reconciliation block; no "shared owner" seam).
+   `type:'php'|'wordpress'` is **refused in Phase 3** (`code:"unsupported"`) and lands in Phase 4 with
+   the FPM pool; the renderer emits no PHP `location` for a site with no `php_version`, so the probe
+   never hits a missing FPM socket.
 4. **ACME HTTP-01 issuance** (`ssl.issue`, `ssl.renew`, `ssl.status`) as jobs: challenge served on
    **:80** at `/.well-known/acme-challenge/` (never redirected), cert written atomically, nginx
    reloaded, **force-HTTPS gated on a valid installed cert**.

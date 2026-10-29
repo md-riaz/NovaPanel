@@ -266,4 +266,24 @@ missing per-verb arg/reply layer, (c) self-inflicted contradictions from pass-1 
   handling, repo management).
 - **Phase 9:** stack.switch folded to BHPanel's verified migration-free auto-rollback sequence.
 
-**Remaining:** re-run a final naive comprehension spot-check; target confidence ≥4/5, then coding.
+## Round 3 (final re-check) + pass 3
+
+Round-3 (Lena ph0/1/3: 3/2/2; Raj ph6/8: 2/2) **confirmed every foundation contract is fixed and the
+design sound**; the residual was two kinds: (A) **stale phase text contradicting the now-fixed
+foundations** (real bugs — e.g. phase-1 still defined `type Step`, phase-0 still said reject-uid≠web,
+phase-3 still had the shared-owner seam), and (B) a short list of genuine architecture decisions
+(job ownership for the API claim, scheduler/MFA authority, ObjectKey-on-id, jobs effectful/actor
+columns, firewall new-connection honesty, php→phase-4). **Pass 3 (remediation 8–9) closed all of A and
+B:** schema (effectful/actor/created_by, hsts, cert_staging, repo role/retention, webhook_deliveries,
+idempotency nullable), F4 synthetic-root-caller + job ownership, F6 ObjectKey-on-id + recovery via
+column, F8 apply-order, F9/F16 new validators + config keys, F18 scheduler authority, and the phase
+de-stale pass (phase-0 codec/exec/peer/arch-test, phase-1 Step/Enqueue/migrations/scheduler/ctl,
+phase-3 static-only + owner, phase-6 firewall honesty + rules schema + fw_pending cleanup, phase-8
+idempotency-in-agent + required route table + webhook cap). Added `03-verb-shapes.md` and a README
+"implementer's discretion" rule for Class-C micro-details that belong in code.
+
+**Conclusion:** the contradictions are resolved and the design/contracts are confirmed sound. The
+naive-cold-build confidence plateaus because a spec fully unambiguous to a zero-context reader *is* the
+code; the remaining "gaps" reviewers surface are Class-C micro-details now explicitly delegated to the
+implementer. **This is the last doc pass — Phase 0 is build-ready; the review reports serve as the
+Phase-0/1 implementation checklist.**

@@ -21,6 +21,13 @@ those decisions into buildable, verifiable units of work.
    judgment that "it works."
 4. Never cross a phase boundary. If phase N needs something a later phase owns, stub it per the spec
    and stop — do not pull the later work forward.
+5. **Implementer's discretion (with a sane default) for unspecified micro-details.** The corpus fixes
+   the contracts, the data model, every verb's attributes + args/reply, the security invariants, and
+   the hard designs. It deliberately does **not** pin every library version, exact reply sub-field,
+   buffer size, retry count, or log string — pick the idiomatic Go default, keep it consistent with
+   the tables, and note it in the PR. Only a choice that would change a contract, an invariant, a
+   schema, or a verb's attributes must come back to the head. (Do not treat an unpinned micro-detail
+   as a blocker; a contradiction with a fixed contract **is** a blocker — raise it.)
 
 ## The non-negotiable invariants (every phase, no exceptions)
 
