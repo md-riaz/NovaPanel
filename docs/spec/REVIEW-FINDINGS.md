@@ -246,5 +246,24 @@ All root causes are now resolved in the corpus:
 - **Group C:** C1 → F0b glossary. C2 → API surface folded into phase-8, D2 into phase-6, isolation
   into phase-3/4. C3 → F0a target platform. C4 → `01-rpc-and-verbs.md` verb table.
 
-**Remaining:** re-run a naive comprehension spot-check (step 6) to confirm confidence ≥4/5, then
-coding may begin.
+## Round 2 (re-check after pass 1) + pass 2
+
+The re-check (Sara ph0/1/3, Omar ph6/8) confirmed the structural layer is clear (auth, scope, Agent,
+package all "clear") but confidence held at 2–3/5 due to: (a) compile-level contract gaps, (b) a
+missing per-verb arg/reply layer, (c) self-inflicted contradictions from pass-1 folded-in blocks, and
+(d) three still-loose designs (firewall deadman, scheduler, phase-3 multi-domain). **Pass 2
+(remediations 4–7) resolved all of these:**
+
+- **Contracts:** import layering (jobs leaf + injected runner), Exec/Step/Runner unified (Runner
+  interface), caller-via-ctx, `CodedError`, codec composition + reply cap, peer-gate uid-0 vs web
+  (ctl-bootstrap hole), session format, `interrupted`/`unsupported` codes + HTTP map, `MaxDeadlineMs`.
+- **Missing pieces:** F18 scheduler + `schedules` table; F19 + `job_claims` show-once; repo/user/
+  schedule/stack verbs; `03-verb-shapes.md` (every verb's args/reply).
+- **De-conflict:** phase-3 (http2 1.24, cert `current/` path, per-site user in ph3, SAN cert,
+  state-aware probe, renewal reload, maintenance/HSTS, apply order, ACME config), phase-8 (uniform
+  202, agent-side scope, naming), phase-6 (unix_socket dump, firewall deadman v2 as a root transient
+  subcommand with enabled-state + confirm-id + conflict + client round-trip, restore-swap edge
+  handling, repo management).
+- **Phase 9:** stack.switch folded to BHPanel's verified migration-free auto-rollback sequence.
+
+**Remaining:** re-run a final naive comprehension spot-check; target confidence ≥4/5, then coding.

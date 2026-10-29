@@ -9,8 +9,13 @@ Phases 1–4 (jobs, sites, DB). Reads: `00-foundations.md` F6, F7, F10, F11, F12
 §3.5 (firewall), D2.
 
 ## Deliverables
-1. **Restic backups** (`backup.create/list/restore/verify`, targets local/SFTP/S3/B2): per-site path
-   backup + per-DB **stream** backup that is **failure-aware**; secrets via env/`*_FILE`, never argv.
+1. **Repo management + restic backups.** `repo.create/list/delete` register a restic repo (local/SFTP/
+   S3; **B2 via its S3-compatible endpoint**) — the repo password + object-store/SFTP creds are
+   **sealed** (`secrets` name `repo:<id>:*`), the password shown once via the F19 claim; `restic init`
+   runs on create. `backup.create/list/restore/verify` then reference a `repo_id`: per-site path backup
+   + per-DB **failure-aware stream** backup; all restic secrets go via env/`*_FILE` written to a
+   root-`0600` tmp and removed after, never argv. Recurring backups/verify/retention are driven by the
+   **F18 scheduler** (a `schedule` row per repo), not an inline loop.
 2. **Verify by reading back**, honestly: structural `check` + rolling `check --read-data-subset=n/7`
    + periodic **restore drill**. A clean structural check is necessary but not sufficient.
 3. **Restore** with a typed confirmation + **pre-restore safety snapshot**; restore order file → DB →
@@ -94,12 +99,19 @@ recoverable out-of-band** — never store the only copy inside the repo they unl
   rule** (port from config, source any unless the admin pins one) is re-asserted `prepend`/`insert 1`
   on every apply.
 
-**MariaDB restore swap (no RENAME DATABASE).** Restore the dump into a **scratch DB**
-`<db>__r<shortts>` (bounded to the 47-char name limit — truncate `<db>` if needed), validate (import
-exit 0 + a sanity check), take a **pre-restore safety dump** of the live DB, then swap **table-by-
-table with atomic `RENAME TABLE`** (`RENAME TABLE live.t TO old.t, scratch.t TO live.t` is atomic per
-statement), finally drop the scratch/old DBs. A crash mid-swap leaves the pre-restore dump for manual
-recovery.
+**MariaDB restore swap (no RENAME DATABASE).** Steps: (1) take a **pre-restore safety dump** of the
+live DB to the panel repo first (so the current state is always recoverable); (2) create a **scratch
+DB** `<db>__r<shortts>` (name bounded to MariaDB's 64-char limit — truncate `<db>` and keep a short
+ts); (3) import the backup dump into scratch; (4) **sanity check** = import exit 0 **and** the scratch
+DB's table count ≥ 1 and matches the dump's expected set; (5) put the site in **maintenance** (Phase-3
+`maintenance` flag) so readers don't see a mixed state; (6) swap **table-by-table** with atomic
+`RENAME TABLE live.t TO <db>__old.t, scratch.t TO live.t` (per-statement atomic); **tables in live but
+absent from the dump are dropped** (the result equals the backup, not a hybrid); **views/routines/
+events** are dropped-and-recreated from the dump's DDL (not RENAME, which they don't support), and a
+table **with triggers** is handled by dropping its triggers before the cross-DB rename then recreating
+them; (7) drop `<db>__old` and scratch; (8) clear maintenance. A crash mid-swap leaves `<db>__old` +
+the pre-restore dump; on restart the agent reports the interrupted restore (effectful, `interrupted`)
+for an operator to complete — it does not auto-reswap.
 
 **Self-backup chicken-and-egg (resolves B20).** `panel.backup_config` backs up **`panel.db` +
 `/etc/novapanel/agent.toml` + `seal.key` + the ACME account key** to a **dedicated panel repo**. The
