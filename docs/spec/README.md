@@ -12,8 +12,10 @@ those decisions into buildable, verifiable units of work.
 
 ## How an implementing agent uses this corpus
 
-1. Read `00-foundations.md` **first, every time** — it is the shared contract (RPC, errors, session,
-   data model, jobs, config render, audit, secrets, exec, validation). Phases do not repeat it.
+1. Read `00-foundations.md` **first, every time** — the shared contract (incl. the `Agent` type,
+   package layout, signatures, config, client). Then skim `01-rpc-and-verbs.md` (your verb's
+   attributes), `02-data-model.md` (tables you touch), and `06-test-strategy.md` (which checks are
+   unit vs integration). Phases do not repeat these.
 2. Read your assigned `phases/phase-N.md`. Build **only** its Deliverables. Honor its Guardrails.
 3. Make its **Verification** gate pass — all of it. The gate is the definition of done, not your
    judgment that "it works."
@@ -61,7 +63,11 @@ Guardrails      — the "nevers" specific to this phase (plus the global invaria
 
 | File | What it specifies | Status |
 |---|---|---|
-| `00-foundations.md` | Shared contracts: RPC envelope/codec, error catalog, session/authz, data-model conventions, job/worker, config-render loop, audit, secrets, exec runner, validation | **drafted** |
+| `00-foundations.md` | Shared contracts F0–F17: target platform, D1–D9 glossary, RPC envelope/codec, error catalog, session/authz/token/CSRF, job/executor + effectful class, config-render, audit, secrets, exec runner, validation, **package layout + the `Agent` type, internal signatures, config, RPC client** | **drafted** |
+| `01-rpc-and-verbs.md` | The canonical v1 verb table — every verb's Role/ReadOnly/Scope/Slow/Effectful/MFA/ObjectKey; naming reconciliations | **drafted** |
+| `02-data-model.md` | Complete SQLite DDL for every table (per phase), ULID/migrations/integrity test | **drafted** |
+| `06-test-strategy.md` | Unit vs integration tiers, CI seams (injectable geteuid/exec, pebble for ACME), negative arch tests | **drafted** |
+| `packaging-reference.md` | Concrete systemd units, tmpfiles, sysusers (the former "session notes") | **drafted** |
 | `phases/phase-0.md` | Foundation: Go workspace, PHP freeze, RPC registry + codec, CI + supply-chain gates, arch tests | **drafted** |
 | `phases/phase-1.md` | State & plumbing: SQLite + migrations, durable jobs (roll-forward, not compensation), audit, systemd packaging, walking skeleton (`service.status`) | **drafted** |
 | `phases/phase-2.md` | Auth & UI shell: Argon2id, sessions, TOTP MFA, HTMX shell + CSRF, roles | **drafted** |
