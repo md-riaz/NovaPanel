@@ -6,6 +6,43 @@ the affected phases. Module path is `novapanel`; all imports read `novapanel/int
 
 ---
 
+## F0a. Target platform (v1)
+
+**Ubuntu 24.04 LTS first** (matches the acceptance criteria). Concrete, code-level facts the
+implementer must use (do not hardcode a different distro's values):
+
+| Thing | Value on Ubuntu 24.04 |
+|---|---|
+| Nginx user / group | `www-data` |
+| Nginx layout | `/etc/nginx/sites-available/` + `/etc/nginx/sites-enabled/` (symlinks); main conf includes `sites-enabled/*` |
+| Nginx version | **1.24.0** — does **not** accept `http2 on;` (added 1.25.1). The renderer emits `listen 443 ssl; http2 on;` only when nginx ≥1.25.1, else the legacy `listen 443 ssl http2;` form. Detect the version once at startup. |
+| PHP | 8.3; FPM unit `php8.3-fpm.service`; pool dir `/etc/php/8.3/fpm/pool.d/`; binary `/usr/sbin/php-fpm8.3`; CLI `/usr/bin/php8.3` |
+| MariaDB | 10.11 LTS; socket `/run/mysqld/mysqld.sock`; `unix_socket` auth plugin available for `root@localhost` |
+| systemctl / journalctl | `/usr/bin/systemctl`, `/usr/bin/journalctl` |
+| chattr | `/usr/bin/chattr` |
+
+RHEL/Rocky/Alma differ (user `nginx`, `conf.d/` layout, `php-fpm` names, socket path) — a **later
+port**, not v1. The agent resolves these from a small platform table, not scattered literals.
+
+## F0b. Decisions glossary (D1–D9)
+
+The specs cite these labels; they are defined in `vpspanel-plan.md` §4/§9 and summarized here so the
+corpus stands alone.
+
+| ID | Decision |
+|---|---|
+| D1 | Webhooks: HMAC-SHA256 + replay protection, **verified in the agent**; uniform refusal. |
+| D2 | Updates: notify + one-click apply; ed25519-signed manifest, **verify-before-parse**, anti-rollback. |
+| D3 | Per-site isolation: per-site Unix user + FPM pool over a Unix socket + `pm=ondemand` + Nginx-direct static. |
+| D4 | Modules: first-party, **compiled-in only**; `module.install` never fetches/executes code. |
+| D5 | Caller trust: identity = agent-minted **session token**; socket `0660` group + **SO_PEERCRED uid-pin**; `actor` = audit label only. |
+| D6 | Job model: durable queue + **single in-process worker**, per-object serialized. |
+| D7 | Crash safety: idempotent **ensure-state** verbs + **roll-forward** (no compensation for local resources) + one `reconcile` verb. |
+| D8 | The config generator is an **attacker-controlled sink** (validate names, no empty/unquoted interpolation, atomic + validate + revert). |
+| D9 | The **agent owns all persistent state** (root-only SQLite); `panel-web` is stateless (no DB). |
+
+---
+
 ## F1. Process & socket
 
 Two binaries, one module:
@@ -33,9 +70,14 @@ Newline-delimited JSON, one request per line, one reply per line.
 { "id": "<uuid>", "verb": "site.create", "args": { ... },
   "actor": "<audit label, NOT authz>", "session": "<64-hex or absent>", "deadline_ms": 120000 }
 // reply
-{ "ok": true,  "data": { ... } }
-{ "ok": false, "error": "human message", "code": "stable_string" }
+{ "id": "<echoes the request id>", "ok": true,  "data": { ... } }
+{ "id": "<echoes the request id>", "ok": false, "error": "human message", "code": "stable_string", "data": { ... optional ... } }
 ```
+
+The reply **echoes the request `id`** (clients match replies to requests). `data` **may appear on an
+error reply** too, carrying structured hints the UI branches on — e.g.
+`{"ok":false,"code":"forbidden","error":"…","data":{"reauth_required":true}}` (F4). On success `code`
+is omitted; on failure `error` is the human string and `code` the stable branch key.
 
 Rules:
 - **Framing:** read with a bounded scanner; **hard cap a reply at 4 MiB** and a request at 1 MiB.
@@ -78,18 +120,48 @@ string).
 
 ## F4. Session & authorization
 
-- **Login is an agent verb.** `session.login{user, password, totp?}` → agent verifies (Argon2id;
-  TOTP if enabled), mints a **64-hex opaque token**, stores `token → {user_id, role, created,
-  last_seen, idle_deadline, abs_deadline}` in the agent DB, returns the token. `panel-web` stores it
-  in a secure, httpOnly cookie and presents it as `session` on every call.
-- **Roles:** `owner` > `admin` > `read_only`. Each registered verb declares a **minimum role**.
-  `read_only` may call only verbs marked read-only. There are **no tenants, packages, or resellers.**
-- **`actor`** is a free string used only for the audit label; it is **never** read for an authz
-  decision. Authz is `role(session)`, resolved in the agent.
-- **MFA-gated verbs** (firewall write, backup restore, ssh write, security settings, token issue,
-  reboot): require that the session was minted with TOTP **and** is within a short re-auth window;
-  otherwise `forbidden` with `code:"forbidden"` and a `reauth_required` hint in `data`.
-- Sessions expire on idle (default 30 min) and absolute (default 12 h); revocation is a row delete.
+**The session is the single identity primitive.** Browser logins, API tokens, and the pre-login page
+all present a `session` string; the agent resolves it to `{identity, role, scopes, mfa_at}` from its
+own `sessions`/`api_tokens` tables. `actor` is a free string used **only** for the audit label, never
+for an authz decision.
+
+**Session row** (`sessions`; full DDL in `02-data-model.md`):
+`{id, token_hash, kind, user_id, role, csrf_token, created, last_seen, idle_deadline, abs_deadline,
+mfa_at}` where `kind ∈ {anon, user, token}`.
+
+- **Pre-login anonymous session.** The first page visit mints an `anon` session (no user, role below
+  `read_only`, carries a `csrf_token`). It exists so the login form has a CSRF token and so login can
+  **rotate** to a fresh session id (fixation defense). Only `session.login` and read of public assets
+  are allowed under an `anon` session.
+- **Login** (`session.login{user, password, totp?}`): agent verifies (Argon2id; TOTP if enrolled),
+  **mints a new session id** (the anon one is deleted — this is the "rotate on login"), stores
+  `kind=user`, sets `mfa_at = now` iff a TOTP/backup code was verified, returns the token. `panel-web`
+  stores it in a `__Host-` cookie and presents it as `session`.
+- **Roles:** `owner` > `admin` > `read_only`. Each verb declares a **minimum role** (F13);
+  `read_only` may call only verbs flagged `ReadOnly`. **No tenants, packages, or resellers.**
+- **Token sessions (API).** An API token is `npat_<id>_<secret>`; the agent looks the row up by `<id>`
+  (O(1)), Argon2id-verifies `<secret>`, and treats it as a `kind=token` session carrying **scopes**
+  (not a role beyond what its scopes imply). `panel-web` passes the bare `npat_…` as `session`; the
+  agent resolves it. **Scope enforcement is agent-side** (a verb declares a `Scope`; the dispatcher
+  checks the token's scopes), so a web-tier RCE cannot widen scope.
+- **"Privilege change" = rotate the session id.** Rotation happens on: login, re-auth step-up, and
+  any role change. The old id is invalidated.
+- **MFA gate.** A verb flagged `MFA` (F13) requires `kind=user` **and** `now − mfa_at ≤ reauth_window`
+  (default **5 min**). Otherwise the agent returns
+  `{ok:false, code:"forbidden", error:"…", data:{"reauth_required":true}}`. The client then calls
+  **`session.reauth{totp}`** (or a backup code), which re-verifies TOTP and sets `mfa_at = now`
+  (rotating the session id). A `kind=token` session can reach an MFA-gated verb **only** if the token
+  carries an **automation grant** (`api_tokens.automation = true`), which `tokens.create` issues only
+  from a stepped-up (`mfa_at` fresh) `user` session; such tokens are exempt from the TOTP-recency
+  check but still scope-checked.
+- **CSRF token storage.** The synchronizer CSRF token lives in the **session row** (`csrf_token`,
+  returned by `session.whoami`); it is **not** a cookie. `panel-web` injects it into pages and
+  validates the `X-CSRF-Token` header against the session's value (constant-time). It rotates with the
+  session id.
+- **Timeouts:** idle **10 min**, absolute **12 h** (high-value panel), both enforced agent-side from
+  `last_seen`/`created`; revocation = row delete. *(Supersedes any earlier "30 min" default.)*
+- **Idempotency** for the public API lives in an agent `idempotency` table keyed by
+  `(token_id, key) → job_id` with a payload hash and a TTL — never in the stateless web tier (B-D5).
 
 ---
 
@@ -119,10 +191,17 @@ PRAGMA journal_mode = WAL;  PRAGMA foreign_keys = ON;  PRAGMA busy_timeout = 500
 Any verb whose p95 can exceed ~2 s is marked **slow** and goes through the queue.
 
 ```
-jobs(id, verb, args_json, object_key, state, step, attempts, error, created, updated, finished)
+jobs(id, verb, args_json, object_key, state, step, attempts, progress, result_json, error, code,
+     created, updated, finished)
+job_events(id, job_id, ts, msg)            -- the streamed progress lines the API exposes
 state ∈ { queued, running, done, failed }
 object_key = the resource a job serializes on (e.g. "site:example.com")
 ```
+- `result_json` holds the **non-secret** result (the created resource / a link). A **show-once
+  secret** (a generated DB or admin password) is **never** written to `result_json`, the row, or
+  audit — it is delivered once via a sealed one-shot: the enqueue reply carries a `claim` token and
+  the secret is readable exactly once through `job.claim{job_id, claim}` within a short TTL, then
+  destroyed. `code` mirrors the F3 catalog on failure.
 
 - A slow verb's handler **enqueues a row and returns** `202`-style `{ ok:true, data:{ job } }`
   immediately. The web tier polls `job.status{id}` or `job.list`.
@@ -140,6 +219,26 @@ object_key = the resource a job serializes on (e.g. "site:example.com")
   (ISPConfig's stale `.ispconfig_lock` wedge is the anti-pattern).
 - `reconcile{scope?}` re-renders derived config from the DB and reloads; heals drift and
   half-created state. Config files are **derived artifacts**, never parsed back into the DB.
+
+**Executor binding (how a slow verb runs).** A slow verb's `Verb.Run` (F13) **validates args and
+enqueues** a job (returning `{job}`); the **worker** calls the same verb's `Verb.Exec(ctx, a, *Job)`
+(the step function). `Verb.ObjectKey(args) string` derives the per-object lock key. `step` (string)
+names the last completed step so a roll-forward resumes/re-checks from the top; the worker updates
+`progress` and appends `job_events`. A panic inside `Exec` is recovered → `state=failed`,
+`code="agent_error"`, audited (F11).
+
+**Two verb classes (crash semantics).**
+- **`idempotent` (default, D7):** ensure-state; a re-run from the top makes **zero** changes
+  (`service.*` config, `site.*`, `database.*` creation, `files.*`, config renders). The F7 "run twice
+  = no change" test applies.
+- **`effectful` (explicit `Verb.Effectful = true`):** each run has a real external effect that a naive
+  re-run would duplicate or that has safety timing — `backup.create` (new snapshot), `firewall.apply`
+  (armed deadman), `service.restart`. These **do not** use blind roll-forward: on worker restart an
+  effectful job left `running` is marked `failed` with `code="interrupted"` (not silently re-run); the
+  caller/UI decides whether to retry, and the verb's own design handles the in-flight artifact (e.g.
+  `firewall.apply` leaves its armed revert to fire; `backup.create` leaves a possibly-partial snapshot
+  that the next verify catches). The F7 idempotency test is replaced by an **effect-specific** test
+  named in each such phase.
 
 ---
 
@@ -244,19 +343,132 @@ outcome ∈ { ok, refused, error }
 ```go
 type Role uint8 // ReadOnly < Admin < Owner
 type Verb struct {
-    Name     string              // "namespace.action"
-    MinRole  Role
-    ReadOnly bool                // callable by read_only
-    Slow     bool                // → job queue (F6)
-    MFA      bool                // requires TOTP re-auth (F4)
-    NewArgs  func() any          // typed arg struct; decoded + validated (F9) before Run
-    Run      func(ctx context.Context, a *Agent, args any) (any, error)
+    Name      string             // "namespace.action"
+    Public    bool               // callable with an anon/no session (e.g. ping); overrides MinRole
+    MinRole   Role               // minimum role for a user session
+    ReadOnly  bool               // callable by read_only
+    Scope     string             // required API-token scope (empty = not reachable by a token)
+    Slow      bool               // → job queue (F6); pairs with Exec
+    Effectful bool               // F6 effectful class (no blind roll-forward)
+    MFA       bool               // requires fresh TOTP re-auth window (F4)
+    Module    string             // owning module name ("" = core); a disabled module's verb → "unsupported"
+    NewArgs   func() any         // typed arg struct; decoded + validated (F9) before Run
+    ObjectKey func(args any) string                              // per-object lock key for a slow verb
+    Run       func(ctx context.Context, a *Agent, args any) (any, error) // sync, or validate+enqueue for Slow
+    Exec      func(ctx context.Context, a *Agent, j *Job) error // worker step for a Slow verb
 }
-var Registry = map[string]Verb{ ... }
+var Registry = map[string]Verb{} // populated by verb packages' init() (see F14)
 ```
+Every reachable verb is in `Registry`; the dispatcher reads `Public`/`MinRole`/`ReadOnly`/`Scope`/`MFA`
+before `Run`. The **per-verb attribute table** (which verb sets which flags) lives in
+`01-rpc-and-verbs.md`; a verb's phase spec must match that table.
 
 - **Architecture test:** a test enumerates every handler in `internal/verbs` (by convention/reflection
   or a generated list) and **fails the build** if any is absent from `Registry`, or if any `Registry`
   entry lacks a handler. This is invariant 3's enforcement.
 - Namespacing follows the v1 verb set in `vpspanel-plan.md` (single-tenant filtered). Adding a verb =
   one `Registry` entry + one typed arg struct + one handler + its tests; nothing else reaches root.
+
+---
+
+## F14. Package layout & the `Agent` type
+
+```
+cmd/panel-agent/main.go     load config (F16) → open store → build Agent → start worker → serve socket
+cmd/panel-web/main.go        HTTP server; uses internal/rpc/client; holds NO state
+cmd/novapanelctl/main.go     thin local client (ops/debug/self-backup/fw-revert subcommand)
+internal/
+  rpc/        codec.go  server.go  client.go  messages.go(Registry, Verb, Dispatch)  session.go
+  agent/      agent.go  — defines the Agent struct (the injected dependency bundle)
+  store/      store.go  migrations/*.sql
+  jobs/       queue.go  worker.go  keyedlock.go
+  audit/  secret/  exec/  validate/  render/  dns/  config/  platform/
+  verbs/      service.go site.go ssl.go db.go files.go deploy.go cron.go firewall.go backup.go
+              dns.go tokens.go mfa.go session.go ...   (one file per namespace)
+```
+
+**`Agent` (in `internal/agent`)** is the dependency bundle every handler receives — the only thing a
+verb needs:
+```go
+type Agent struct {
+    Store    *store.Store
+    Jobs     *jobs.Queue
+    Audit    *audit.Log
+    Secret   *secret.Sealer
+    Exec     *exec.Runner
+    Validate *validate.V
+    Render   *render.R
+    Cfg      config.Config
+    Plat     platform.Platform
+}
+```
+**Import-cycle rule.** `internal/rpc` defines `Verb`, `Registry`, `Dispatch`, and the `*Agent` type is
+imported from `internal/agent`. Verb packages (`internal/verbs/*`) import `internal/rpc` and
+`internal/agent` and **register themselves in `init()`**: `func init(){ rpc.Register(Verb{...}) }`.
+`internal/rpc` does **not** import `internal/verbs` (no cycle). `cmd/panel-agent` blank-imports
+`internal/verbs` (`_ "novapanel/internal/verbs"`) so the `init()`s run. The no-unregistered-verb arch
+test checks that every exported handler symbol in `internal/verbs` is referenced by exactly one
+`Register` call.
+
+## F15. Internal package signatures (code-level contract)
+
+Exact enough to implement against; each phase uses these, never a re-invented variant.
+```go
+// store
+func Open(path string) (*Store, error)                 // WAL+FK+busy_timeout; runs migrations
+func (*Store) Tx(ctx, func(*sql.Tx) error) error       // short transactions only
+
+// jobs (F6)
+func (*Queue) Enqueue(ctx, verb string, args any, objectKey string) (Job, error)
+func (*Queue) Status(ctx, id string) (Job, error)
+func (*Queue) Claim(ctx, id, claim string) (map[string]any, error)   // show-once secret, one-shot
+type Step func(ctx context.Context, a *Agent, j *Job) error
+
+// audit (F11) — called in a defer on the one dispatch path
+func (*Log) Record(ev Event)                            // writes events row + append-only file
+type Event struct{ Actor, Role, Verb, ObjectKey, Outcome, Code string; Detail map[string]any }
+
+// secret (F12)
+func (*Sealer) Seal(plain []byte) (Sealed, error)
+func (*Sealer) Open(s Sealed) ([]byte, error)          // XChaCha20-Poly1305; key /var/lib/novapanel/seal.key 0600
+
+// exec (F10) — the ONLY external-program path; argv only, never a shell
+type RunOpts struct { Dir string; Env []string; Stdin io.Reader; Uid, Gid uint32; Groups []uint32; MaxOutput int }
+func (*Runner) Run(ctx context.Context, prog string, args []string, o RunOpts) (stdout, stderr []byte, exit int, err error)
+// prog is an absolute path from the platform table (F0a); Uid/Gid≠0 drops the child to a site user.
+
+// validate (F9) — returns code:"invalid_argument" on failure
+func (*V) Hostname(s string) error;  func (*V) SiteName(s string) error;  func (*V) DBName(s string) error
+func (*V) UnixUser(s string) error;  func (*V) UnitName(s string) error;  func (*V) PathIn(root, p string) (abs string, err error)
+func (*V) GitURL(s string) error;    func (*V) ArchiveEntry(top, name string) error
+```
+
+## F16. Configuration
+
+One source, read once at agent start: **a TOML file at `/etc/novapanel/agent.toml`**, each key
+overridable by an env var `NOVAPANEL_<KEY>`; flags override env (for tests). Keys + defaults:
+```
+socket_path   = "/run/novapanel/agent.sock"
+db_path       = "/var/lib/novapanel/panel.db"
+seal_key_path = "/var/lib/novapanel/seal.key"
+log_dir       = "/var/log/novapanel"
+web_user      = "novapanel"          # agent resolves its uid/gid for the SO_PEERCRED gate (F1)
+acme_webroot  = "/var/www/acme"       # world-traversable (B-D8); per-site subdir under it
+sites_root    = "/srv/sites"
+tls_dir       = "/etc/novapanel/tls"
+reauth_window_sec = 300   idle_sec = 600   abs_sec = 43200   deadline_default_ms = 120000
+```
+`panel-web` has its own minimal config (listen addr, socket_path, web key for nothing secret).
+
+## F17. RPC client
+
+`internal/rpc/client.go` — the one socket client used by `panel-web`, `novapanelctl`, and the API:
+```go
+type Client struct{ /* socket path; optional cached conn */ }
+func Dial(socket string) (*Client, error)
+func (*Client) Call(ctx context.Context, verb string, args any, session string) (Reply, error)
+```
+`panel-web` caches one `*Client` connection per inbound HTTP request and closes it on any decode
+error (F2). A non-`ok` reply is returned as a typed error carrying `Reply.Code` so callers branch on
+the stable code. The client never interprets `actor`; `panel-web` sets `actor` to the audit label
+(user email or `token:<name>`) and `session` to the presented token.
