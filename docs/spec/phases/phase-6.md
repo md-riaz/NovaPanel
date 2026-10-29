@@ -31,7 +31,9 @@ Phases 1–4 (jobs, sites, DB). Reads: `00-foundations.md` F6, F7, F10, F11, F12
   SFTP via SSH keys. Never the repo password on argv (restic has no `--password` by design).
 - Path backup: `restic -r <repo> backup <path> --tag site:<name> --host <panelhost>`.
 - **DB backup — failure-aware (primary):**
-  `restic -r <repo> backup --stdin-filename <db>.sql --stdin-from-command -- mysqldump --host 127.0.0.1 <db>`
+  `restic -r <repo> backup --stdin-filename <db>.sql --stdin-from-command -- mysqldump --single-transaction --routines --triggers --events <db>`
+  (the agent runs as root → `mysqldump` authenticates via the **`unix_socket`** plugin over
+  `/run/mysqld/mysqld.sock`; **no `--host`/`-p`/password on argv**)
   (a non-zero `mysqldump` **fails the snapshot** — plain `--stdin` "will not notice failures"; if ever
   used, the agent builds the pipe in Go, checks the dumper exit, and deletes the snapshot on failure).
 - List: `snapshots --json`. Restore: `restore <id> --target <dir> [--include <p>]` (optionally
@@ -48,9 +50,13 @@ Phases 1–4 (jobs, sites, DB). Reads: `00-foundations.md` F6, F7, F10, F11, F12
 1. snapshot: capture `iptables-save`/`ip6tables-save` (stdout → file via exec, not shell `>`) + `ufw status numbered`
 2. dry-run:  `ufw --dry-run <changes>`; assert the SSH allow is present and ordering is safe
 3. ARM the revert BEFORE applying: `systemd-run --on-active=15min --timer-property=AccuracySec=1s <fw-revert>`
-      (atd-free; fallback `at now + 15 minutes`). The revert restores the snapshot (or reset + re-add SSH).
+      (atd-free; fallback `at now + 15 minutes`). The revert restores the snapshotted `/etc/ufw/*.rules`
+      **and the prior enabled/disabled state** + `ufw reload` (see the resolved block for the exact
+      artifact — this reference line defers to it).
 4. apply:    ensure the SSH allow lands FIRST (`prepend`/`insert 1`), then `ufw --force enable`
-5. verify:   confirm the SSH allow rule present AND a NEW TCP connection to the SSH port succeeds
+5. verify:   confirm the SSH allow rule is present; **reachability is a client round-trip** (the admin
+      must reach the panel again and call `firewall.confirm` within N min) — the agent does NOT claim
+      to prove an external connection from inside the box (see the resolved block)
 6. confirm:  cancel the revert (stop the transient unit / `atrm <id>`). No confirmation in N min → auto-revert fires.
 ```
 Model the admin/SSH allow as a **pinned invariant** the engine re-asserts (prepended) on every apply;
@@ -67,13 +73,20 @@ recoverable out-of-band** — never store the only copy inside the repo they unl
 ### Resolved design details (B-D7, DB swap, self-backup, D2)
 
 **Firewall deadman — concrete (B-D7).**
-- The revert is a self-contained **`novapanelctl fw-revert <snapshot-path>`** subcommand run by an
-  **independent transient systemd unit** (`systemd-run --on-active=<N>min`), so it fires **even if the
-  agent is down**. The snapshot captures `/etc/ufw/*.rules` **and** `iptables-save`/`ip6tables-save`;
-  revert = restore the `.rules` files + `ufw reload` (persistent state, not just runtime).
-- `firewall.apply` writes an `fw_pending` row (`snapshot_path, revert_unit, deadline`) and arms the
-  timer **before** applying. **`firewall.confirm{id}`** stops the timer + clears the row;
-  **`firewall.revert{id}`** fires it early. Both are MFA-gated.
+- The revert is a **root** `panel-agent fw-revert <snapshot-dir>` subcommand (NOT the unprivileged
+  `novapanelctl` — the revert must restore firewall state as root) run by an **independent transient
+  systemd unit** the agent creates with `systemd-run --unit=novapanel-fwrevert-<id> --on-active=<N>min`,
+  so it fires **even if the agent is down**. The snapshot is a **dir** holding `ufw/*.rules`, an
+  `enabled` marker (ufw's prior active/inactive state), `iptables-save`/`ip6tables-save`, and
+  `ufw status numbered`. Revert = restore the `.rules` files, **restore the enabled/disabled state**,
+  then `ufw reload` (or `disable` if it was inactive).
+- `firewall.apply` **refuses with `conflict` if an `fw_pending` row is already armed** (no second
+  armed change). It writes `fw_pending` (`id, snapshot_path, revert_unit, deadline`) and arms the timer
+  **before** applying, and returns that `fw_pending.id` to the caller. **`firewall.confirm{id}`** (the
+  `fw_pending.id`) stops the transient `.timer` unit + deletes the row; **`firewall.revert{id}`** runs
+  the revert now + deletes the row. Both are MFA-gated and carry `firewall:write` so an automation-grant
+  apply can be confirmed. When the timer fires on its own, `fw-revert` restores state and leaves a
+  marker the agent turns into an audit event on next start (a fired revert is not silently unlogged).
 - **"Verify a new connection" is a client round-trip, not an agent self-probe** (the agent cannot
   prove external reachability from inside the box). After apply, the admin's browser/CLI must reach
   the panel again and call `firewall.confirm` within N minutes (default **15**); if the change broke

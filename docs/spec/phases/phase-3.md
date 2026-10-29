@@ -40,11 +40,12 @@ server {                                   # :80 — ACME on :80, everything els
 }
 server {                                   # :443 — TLS
     listen 443 ssl; listen [::]:443 ssl;
-    http2 on;                              # nginx ≥1.25.1 form (NOT `listen ... http2`)
-    server_name {{domain}};
+    {{http2_directive}}                    # renderer emits `http2 on;` (nginx≥1.25.1) or folds `http2`
+                                           # into the listen line on 1.24 (F0a) — NEVER a bare `http2 on;` on 1.24
+    server_name {{all_site_domains}};      # one block per site; server_name lists every domain of the site
     root /srv/sites/{{site}}/public; index index.php index.html;
-    ssl_certificate     /etc/novapanel/tls/{{domain}}/fullchain.pem;
-    ssl_certificate_key /etc/novapanel/tls/{{domain}}/privkey.pem;
+    ssl_certificate     /etc/novapanel/tls/{{primary_fqdn}}/current/fullchain.pem;   # versioned dir + symlink (B-D9)
+    ssl_certificate_key /etc/novapanel/tls/{{primary_fqdn}}/current/privkey.pem;
     location / { try_files $uri $uri/ /index.php?$query_string; }
     location ~ \.php$ {
         try_files $uri =404;                       # cgi.fix_pathinfo RCE guard — load-bearing
@@ -106,6 +107,40 @@ post-reload request probe is the real safety net.
 - **Default to the staging directory** in dev/tests (`lego.LEDirectoryStaging`); prod only on real
   issuance. Prefer ARI-aware renewal (`Renew` is deprecated).
 - **No wildcards via HTTP-01** (needs DNS-01 → gated behind Phase 7).
+
+### Pass-2 reconciliations (resolve review contradictions)
+- **Per-site Unix user is created in Phase 3, not Phase 4** (every site needs an owner+docroot). Phase 4
+  only adds the PHP-FPM pool/DB on top. This removes the undefined "shared docroot owner" seam: the
+  agent creates `useradd -r -s /usr/sbin/nologin -m` home `/srv/sites/<site>` mode **0751**, docroot
+  `/srv/sites/<site>/public` **`2750 <site>:www-data`** (setgid, group read+traverse) so nginx serves
+  without write. Set the site user's umask so new files stay group-readable. (The home is **0751**, not
+  0750 — the earlier "0750" phrasing was wrong; www-data needs `o+x` traverse, not read.)
+- **State-aware probe:** in render **state 1 (no cert)** the probe is HTTP only (GET `/` on :80 +
+  the ACME path returns 200/404, never 301); the HTTPS probe runs only in states 2/3. "Answers worse"
+  = a 5xx or a connection failure; a 404/403 on an empty docroot is **not** a failure. Probe target
+  `127.0.0.1` with the `Host`/SNI set; in CI/pebble, TLS verification is relaxed against the test CA.
+- **One cert per site (SAN), not per domain:** `ssl.issue` requests **all of the site's domains** in
+  one `ObtainRequest.Domains` (SAN cert) stored under `tls/<primary_fqdn>/`; `domains.cert_state`
+  tracks coverage. Force-HTTPS is allowed once the SAN cert covers **every** domain on the site.
+- **Renewal forces a reload:** `ssl.renew` swaps the `current` symlink (bytes unchanged) so it
+  **always reloads nginx** (the skip-if-hash-unchanged rule does not apply to a cert swap). The F18
+  scheduler runs renewal daily (within 30 days of expiry) and flips `cert_state`.
+- **Maintenance mode** renders a `return 503` + a static maintenance page served from
+  `/var/www/novapanel/maintenance.html`; it is a `sites.maintenance` field set by `site.update`.
+- **HSTS raise** is `site.update{hsts_max_age}` (owner), only in state 3; never auto-`preload`.
+- **ACME config** (F16): `acme_directory_staging`/`acme_directory_prod`, `acme_email`; separate
+  account keys sealed as `acme:account:staging` and `acme:account:prod`; tests/dev default to staging,
+  real issuance uses prod (chosen by a `staging` arg/flag, default prod in production config). A local
+  per-registered-domain issuance limiter (counter in `settings`) guards the LE failure limit.
+- **Apply order (reconciles F8):** render to `sites-available/<site>.conf.tmp` → atomic-rename to the
+  real `sites-available/<site>.conf` (symlinked into `sites-enabled`) → `nginx -t` (validates the full
+  live set) → on pass reload; **on fail, atomic-rename the last-known-good copy back** (kept at
+  `sites-available/<site>.conf.lkg`) and do not reload. First-ever render has no LKG → on `nginx -t`
+  failure remove the new file.
+- **ssl.issue/renew effect-specific test (F6):** issue a cert against pebble, assert the cert file
+  pair appears under a new versioned dir and `current` points at it; a second `ssl.issue` within the
+  renewal window is a no-op (does not re-hit ACME) — the effectful-verb test in place of "run twice =
+  no change".
 
 ## External refs (gathered — verified values to honor)
 - **The 502 cause:** FPM socket default owner is the FPM run-user (site user), mode 0660 → nginx

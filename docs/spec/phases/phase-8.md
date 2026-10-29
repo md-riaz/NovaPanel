@@ -28,8 +28,9 @@ design — this phase implements it), `00-foundations.md` F2–F4, F6, F11, F13.
    `/command`, raw-config endpoint — ever.**
 7. **Inbound deploy webhook** (D1, §7): `POST /v1/webhooks/deploy/{hook_id}` — thin route forwards
    **raw body + signature** to agent `deploy.hook`; HMAC-SHA256 verified **in the agent** (secret
-   root-only); **uniform refusal** (`202 "not accepted"`) for bad sig / unknown hook / stale
-   timestamp (no enumeration); replay window; POST-only; routed **before** CSRF and the sign-in gate.
+   root-only); **one uniform `202 "accepted"` for success AND every failure** (bad sig / unknown hook /
+   stale timestamp), byte-identical, so a prober learns nothing; replay window; POST-only; routed
+   **before** CSRF and the sign-in gate. (See the folded-in webhook block for the exact HMAC input.)
 8. **Errors + limits** (§8): typed `{error:{code,message,details}}`, the status-code table, per-token
    token-bucket rate limiting with `Retry-After`, `503 agent_unavailable` when the agent is down.
 9. **`docs/api/openapi.yaml`** (OpenAPI 3.1): the single source of truth; the server validates
@@ -39,9 +40,10 @@ design — this phase implements it), `00-foundations.md` F2–F4, F6, F11, F13.
 - **`internal/api/router.go`** (in `panel-web`) — route table with a required `auth` field per route
   (`token(scope…) | session(role, mfa?) | public`); a registration test fails the build if any route
   omits it (mirrors the no-unregistered-verb arch test, on the HTTP side).
-- **`internal/api/auth.go`** — bearer-token parse (`npat_`), hash-compare against the agent
-  (`tokens.verify` verb returns `{token_id, scopes, automation}`); session-cookie path for the UI;
-  scope→verb authorization map; the excluded-scope gate.
+- **`internal/api/auth.go`** — bearer-token parse (`npat_`) and the session-cookie path for the UI; it
+  **passes the token through as `session`** and holds **no scope→verb map** — the agent resolves the
+  token and the dispatcher enforces `Verb.Scope` (authoritative; see the folded-in block). `panel-web`
+  makes no authz decision.
 - **`internal/api/jobs.go`** — translate agent `{job}` replies to the `202` body; `GET /jobs/{id}`
   reads `job.status`; idempotency store keyed by `(token, Idempotency-Key)` → job id.
 - **`internal/api/webhooks.go`** — size-capped raw-body read; forward `{hook_id, body, signature,
@@ -53,10 +55,8 @@ design — this phase implements it), `00-foundations.md` F2–F4, F6, F11, F13.
   then enqueue a `deploy.run` job; uniform refusal on any failure.
 - **`docs/api/openapi.yaml`** — authored alongside; CI validates the server's routes against it.
 
-> **Naming note (head to reconcile in the registry):** `vpspanel-api.md` uses `database.*` and
-> `dns.record.*`; the v1 verb set in the plan abbreviates some as `db.*`. The **registry
-> (`messages.go`) is the source of truth** — pick one spelling there and make the OpenAPI match; do
-> not ship two names for one verb.
+> **Naming (resolved in `01-rpc-and-verbs.md`):** the canonical verbs are `database.*`, `dbuser.*`,
+> `dns.record.*`, `deploy.run`. The OpenAPI must match the `01` verb table exactly.
 
 ### Folded-in API surface (so this phase stands alone — resolves C2, B22–B26, C3)
 - **Token identity flow (authoritative):** `panel-web` passes the bare `npat_<id>_<secret>` as the

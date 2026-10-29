@@ -401,9 +401,10 @@ table is `01-rpc-and-verbs.md` (one **`Min` role** column = `anon`|`read_only`|`
 ## F14. Package layout & the `Agent` type
 
 ```
-cmd/panel-agent/main.go     load config (F16) → open store → build Agent → start worker → serve socket
+cmd/panel-agent/main.go     serve (default) + root subcommands: `fw-revert <snapshot-dir>` (B-D7),
+                            `update-apply` helper — run by transient units, must work with the daemon down
 cmd/panel-web/main.go        HTTP server; uses internal/rpc/client; holds NO state
-cmd/novapanelctl/main.go     thin local client (ops/debug/self-backup/fw-revert subcommand)
+cmd/novapanelctl/main.go     thin local client (ops/debug/self-backup); unprivileged, over the socket
 internal/
   rpc/        codec.go  server.go  client.go  messages.go(Registry, Verb, Dispatch)  session.go
   agent/      agent.go  — defines the Agent struct (the injected dependency bundle)
