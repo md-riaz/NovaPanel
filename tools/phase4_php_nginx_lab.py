@@ -123,12 +123,12 @@ def main():
 
         configure(baseline, first=True)
         status, body = probe("/index.php")
-        production_pending = False
-        try:
+        production_pending = "fastcgi_pass" not in fixtures["Nginx"]
+        if production_pending:
+            assert status == 200 and b"<?php" in body, "unexpected baseline failure, not the known missing PHP route"
+            (evidence / "production-pending.txt").write_text("Known missing PHP route: static renderer returns PHP source. Never deploy it for PHP sites.\n")
+        else:
             verify_response("/index.php", status, body, b"executed:0:/tmp/lab/public/index.php:")
-        except AssertionError as err:
-            production_pending = True
-            (evidence / "production-pending.txt").write_text(str(err) + "\n")
         # Test-only specification, NOT a substitute production renderer.
         block = '''    location ~ \\.php$ {
         try_files $uri =404;
