@@ -240,7 +240,7 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 	}
 	// Both environment slots point only to loopback Pebble. False is explicit and
 	// persisted; it must not silently fall back to the staging default.
-	run("ssl.renew", map[string]any{"site_id": sid, "staging": false}, key)
+	run("ssl.issue", map[string]any{"site_id": sid, "staging": false}, key)
 	run("site.update", map[string]any{"site_id": sid, "force_https": true}, key)
 	labGet(t, "/", 301, "")
 	added := run("domain.add", map[string]any{"site_id": sid, "fqdn": "alias.test"}, key)
