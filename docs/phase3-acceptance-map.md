@@ -1,6 +1,6 @@
 # Phase 3 acceptance map
 
-Reviewed production source: `40cbb3bc4d508e7fc83dad299799ed8dca2884cf`. This is not whole-phase approval. Only tests, a lab launcher and this evidence map were added.
+Reviewed initial production source: `40cbb3bc4d508e7fc83dad299799ed8dca2884cf`. The final integration adds the committed v2 startup recovery and real-backend browser siblings, fixes canonical wildcard refusal, and reruns exact-HEAD acceptance. Historical evidence below remains attributed to its original SHA, not to the final combined source. This is not whole-phase approval.
 
 ## Evidence and limits
 
@@ -22,7 +22,7 @@ Reviewed production source: `40cbb3bc4d508e7fc83dad299799ed8dca2884cf`. This is 
 | D4 / gate 4: real ACME HTTP01 and atomic pair publication | `internal/acme/client.go`, `webroot.go`, `internal/verbs/ssl_acme.go`, `ssl_publication.go`, `internal/tls`; new `TestRealPebbleNginxJobs` obtains from genuine Pebble through real nginx, validates stored pairs/current and metadata, renews/reloads, expands SANs | Covered locally, not public :80/LE acceptance |
 | F6 effect-specific issuance test / phase lines 152-155 | New Pebble job test verifies first version and second issue returns unchanged without reload; Pebble logs establish exactly three orders for issue + renew + expanded renew, not duplicate issue | Covered |
 | Force-HTTPS/HSTS installed validity and all-domain coverage | `internal/verbs/site_mutations.go`, nginx TLS loading/rendering; `TestTLSAwareSiteMutations`, `TestTLSRenderRefusals`, new Pebble staging refusal, prior real-nginx manual TLS force-HTTPS case | Covered safe logic and real manual TLS rendering; privileged delivery boundary deferred |
-| Gate 5: `ssl.issue{wildcard:true}` returns unsupported without DNS provider | Canonical `03-verb-shapes.md:70`; implementation `sslACMEArgs` has only site_id/staging at `ssl_acme.go:21-24`; shared decoder rejects unknown fields | Hard contract gap: canonical flag is missing, resulting bad_request instead of unsupported. Wildcard-domain checks in lower ACME layers do not implement this RPC shape |
+| Gate 5: `ssl.issue{wildcard:true}` returns unsupported without DNS provider | Canonical `03-verb-shapes.md:70`; issue-only `sslIssueArgs` validates wildcard before admission; `TestACMEWildcardRPCContract` and `TestACMEWildcardWorkerRefusesDurableInput` | Fixed with test-first dispatch/worker regressions; invalid types and renew extra shape remain bad_request |
 | Gate 6 / F6: all mutations queued, audited, per-site serialized | Registry tests, `TestKeyedLockSerializesAndReleasesReferences`, site mutation tests and `TestACMEWorkerCanonicalResults`; real Pebble production queue completes jobs with canonical results | Covered by separate assertions, not a new exhaustive every-verb combined concurrency/audit matrix |
 | Structured redirects, subdomains, maintenance | Domain/redirect/site verbs, render tests, `TestTLSAwareSiteMutations`, prior real nginx maintenance HTTP503 and challenge bypass | Covered at safe seams; not whole browser acceptance |
 | Manual upload and F6 sealed input | `TestSSLUploadSealedAndPublished`, `TestSSLProductionWorker`, sealed worker tests; real nginx manual cert publication/recovery | Covered; real owner/group enforcement VM-deferred |
@@ -30,14 +30,14 @@ Reviewed production source: `40cbb3bc4d508e7fc83dad299799ed8dca2884cf`. This is 
 | Primary promotion, removal safeguards and deletion order | `TestTLSPrimaryPublicationExecutor`, `TestSiteMutations`, store atomic promotion tests, prior real-nginx primary rekey case | Covered safe seams; real account purge VM-deferred |
 | F18 daily renewal, <=30-day window, manual/disabled exclusion and expansion | `internal/jobs/acme_schedule.go`, `TestAutomaticACMERenewalDailyPersisted`; CAS/stored authority/busy audit scheduler tests | Unit/store covered; scheduler-to-Pebble timed firing is not the new test, which dispatches renewal directly |
 | F16 configurable directories/email/environment, separate sealed accounts and persistent budgets | Config loading, `acme.NewPersisted`, account/policy tests; new Pebble uses nondefault local directory with default staging arg | Covered at component seams; new local config is injected, not TOML-launched production daemon |
-| Startup/recovery and browser | `TestTLSQueueStartupReopensOriginalACMEJob` passed in prior race run, but full v2 startup/browser sibling work is explicitly pending; manifest marks browser/assets not run | Open hard integration gate, not resolved by Pebble |
+| Startup/recovery and browser | Original v2 startup sibling and both real-backend browser commits integrated; exact-HEAD logs recorded separately | Final combined CI/race/browser/assets acceptance is required; older manifests do not establish it |
 
 ## Remaining categories
 
 ### Executable safe gaps and defects
 
-1. Fix and regression-test missing canonical wildcard argument through RPC admission. This audit does not edit core source.
-2. Integrate pending sibling startup/browser fixes and run browser/assets acceptance against that final committed combined source. Current evidence cannot approve a future SHA.
+1. Canonical wildcard refusal is fixed with dispatch and worker regression tests.
+2. Startup/browser siblings are integrated. Final exact-SHA evidence is stored in `/root/.hermes/cache/scratch/final-combined-evidence-20261031/`; inspect its manifest for executed outcomes.
 3. Additional safe coverage can join F18 scheduler firing to real Pebble and test the combined per-verb audit/concurrency matrix. Existing separate component passes must not be described as those combined scenarios.
 4. Run the pinned Ubuntu nginx 1.24 compatibility path in an equally confined lab when a suitable image/tool is available. Current real lab tests nginx 1.29.5 and emits accepted legacy-http2 deprecation warnings.
 
@@ -53,4 +53,4 @@ Public CA requests were not authorized or attempted. Any final external staging/
 
 ## Reproduction
 
-`tools/pebble_nginx_lab.py` expects the recorded pinned nginx image and the real Pebble executable extracted from `ghcr.io/letsencrypt/pebble@sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199` at the evidence directory's `pebble` path. It compiles a CGO-free test with the existing Go toolchain, generates an ephemeral localhost API certificate, verifies isolation before/after execution and verifies owned-container absence after teardown. The API certificate is a local trust anchor only; issued site certs come from Pebble. Original startup/ownership harness failures remain in commands.log and are not product defects.
+`tools/pebble_nginx_lab.py` expects the recorded pinned nginx image and the real Pebble executable extracted from `ghcr.io/letsencrypt/pebble@sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199` selected through `NOVAPANEL_PEBBLE_BINARY`. It compiles a CGO-free test with the existing Go toolchain, generates an ephemeral localhost API certificate, verifies isolation before/after execution and verifies owned-container absence after teardown. The API certificate is a local trust anchor only; issued site certs come from Pebble. Original startup/ownership harness failures remain in commands.log and are not product defects.

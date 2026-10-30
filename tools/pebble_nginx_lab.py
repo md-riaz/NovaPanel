@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Run production ACME jobs with real Pebble and nginx, loopback-only."""
-import hashlib,json,os,subprocess
+import hashlib,json,os,subprocess,tempfile,uuid
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
-E=Path('/root/.hermes/cache/scratch/phase3-pebble-40cbb3-evidence')
-NAME='novapanel-pebble-40cbb3-acceptance'
+E=Path(tempfile.mkdtemp(prefix='phase3-pebble-',dir=os.environ['TMPDIR']))
+NAME='novapanel-pebble-'+uuid.uuid4().hex[:12]
+PEBBLE=Path(os.environ['NOVAPANEL_PEBBLE_BINARY'])
 IMAGE='nginx@sha256:1d13701a5f9f3fb01aaa88cef2344d65b6b5bf6b7d9fa4cf0dca557a8d7702ba'
 def run(*args,check=True,**kw):
  p=subprocess.run(args,cwd=ROOT,capture_output=True,**kw)
@@ -23,11 +24,9 @@ def inspect(stage):
 created=False
 try:
  sha=run('git','rev-parse','HEAD').stdout.decode().strip()
- base='40cbb3bc4d508e7fc83dad299799ed8dca2884cf'
- run('git','diff','--exit-code',base,'HEAD','--','.',':(exclude)tests/integration/pebble_test.go',':(exclude)tools/pebble_nginx_lab.py',':(exclude)docs/phase3-acceptance-map.md')
  run('git','diff','--exit-code','HEAD')
  (E/'source.tar').write_bytes(run('git','archive','--format=tar',sha).stdout)
- run('gofmt','-w','tests/integration/pebble_test.go')
+ (E/'pebble').write_bytes(PEBBLE.read_bytes())
  run('go','test','-c','-o',str(E/'acceptance.test'),'./tests/integration',env=dict(os.environ,CGO_ENABLED='0'))
  run('openssl','req','-x509','-newkey','rsa:2048','-nodes','-keyout',str(E/'server.key'),'-out',str(E/'server.pem'),'-days','2','-subj','/CN=localhost','-addext','subjectAltName=DNS:localhost,IP:127.0.0.1')
  conf={'pebble':{'listenAddress':'127.0.0.1:14000','managementListenAddress':'127.0.0.1:15000','certificate':'/tmp/server.pem','privateKey':'/tmp/server.key','httpPort':8080,'tlsPort':8443,'externalAccountBindingRequired':False,'retryAfter':{'authz':1,'order':1},'profiles':{'default':{'description':'isolated acceptance','validityPeriod':518400}}}}
@@ -45,6 +44,8 @@ try:
  inspect('after')
  (E/'manifest.json').write_text(json.dumps({'sha':sha,'base_source_archive_sha256':hashlib.sha256((E/'source.tar').read_bytes()).hexdigest(),'acceptance_binary_sha256':hashlib.sha256((E/'acceptance.test').read_bytes()).hexdigest(),'pebble_image':'ghcr.io/letsencrypt/pebble@sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199','exit':p.returncode,'network':'none; loopback only; HTTP01 validation port override 8080','scope':'no host mounts, services, public CA or ports; test-only additions to pinned source'},indent=2))
  print(p.stdout.decode()+p.stderr.decode());assert p.returncode==0
+ assert run('git','rev-parse','HEAD').stdout.decode().strip()==sha
+ run('git','diff','--exit-code','HEAD')
 finally:
  if created:
   run('docker','cp',NAME+':/tmp/pebble.log',str(E/'pebble.log'),check=False)
