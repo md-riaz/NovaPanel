@@ -17,7 +17,10 @@ func (s *Store) SetPendingMFA(ctx context.Context, userID, sealed string) error 
 	if sealed == "" {
 		return ErrAuthInvalid
 	}
-	return conflictUnlessChanged(s.db.ExecContext(ctx, "UPDATE users SET totp_pending=?,totp_pending_at=?,updated=? WHERE id=? AND totp_secret IS NULL AND disabled=0", sealed, s.clock.Now(), s.clock.Now(), userID))
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		now := s.clock.Now()
+		return conflictUnlessChanged(tx.ExecContext(ctx, "UPDATE users SET totp_pending=?,totp_pending_at=?,updated=? WHERE id=? AND totp_secret IS NULL AND disabled=0", sealed, now, now, userID))
+	})
 }
 func consumeStep(ctx context.Context, tx *sql.Tx, userID string, step, now int64) error {
 	current := now / 30000
