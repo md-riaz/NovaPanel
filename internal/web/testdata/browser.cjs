@@ -80,5 +80,11 @@ function totp(secret) {
    fs.writeFileSync(process.env.NOVAPANEL_BROWSER_ARTIFACTS+'/report.json',JSON.stringify({engine:'Chromium',evidence,consoleErrors:errors},null,2));
   }
   console.log(JSON.stringify({engine:'Chromium',evidence,consoleErrors:errors},null,2));
+ } catch (error) {
+  if (process.env.NOVAPANEL_BROWSER_ARTIFACTS) {
+   fs.mkdirSync(process.env.NOVAPANEL_BROWSER_ARTIFACTS,{recursive:true});
+   fs.writeFileSync(process.env.NOVAPANEL_BROWSER_ARTIFACTS+'/failure.json',JSON.stringify({engine:'Chromium',evidence,error:'Browser acceptance assertion failed; see test output',consoleErrors:errors},null,2));
+  }
+  throw error;
  } finally { await browser.close(); }
 })().catch(e=>{console.error(e);process.exitCode=1;});
