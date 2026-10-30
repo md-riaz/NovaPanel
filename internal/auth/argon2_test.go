@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
-	"golang.org/x/crypto/argon2"
 	"strings"
 	"testing"
 )
@@ -21,7 +20,8 @@ func TestPasswordPHC(t *testing.T) {
 		t.Fatal("wrong password")
 	}
 	salt := bytes.Repeat([]byte{42}, 16)
-	weak := fmt.Sprintf("$argon2id$v=19$m=8192,t=1,p=1$%s$%s", base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(argon2.IDKey([]byte("known"), salt, 1, 8192, 1, 32)))
+	// Expected hash independently computed with libargon2 argon2id_hash_raw.
+	weak := fmt.Sprintf("$argon2id$v=19$m=8192,t=1,p=1$%s$yj601DUth0a4EptCqIumdHhvbbS9VSmIznW3AoXb2n4", base64.RawStdEncoding.EncodeToString(salt))
 	if ok, rehash := Verify("known", weak); !ok || !rehash {
 		t.Fatal(ok, rehash)
 	}
