@@ -224,6 +224,9 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	if err != nil {
 		return errorReply(err)
 	}
+	if req.Verb == "job.claim" {
+		event.Detail["stage"] = "claim"
+	}
 	return OK(data)
 }
 func errorReply(err error) Reply {

@@ -56,7 +56,7 @@ func scheduleSet(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	}
 	row, e := a.Scheduler.Set(ctx, jobs.ScheduleRequest{ID: x.ID, Verb: x.Verb, Args: x.Args, Cron: x.Cron, Enabled: x.Enabled})
 	if e != nil {
-		return nil, e
+		return nil, missingJob(e)
 	}
 	return map[string]string{"id": row.ID}, nil
 }

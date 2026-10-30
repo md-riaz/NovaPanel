@@ -11,7 +11,6 @@ import (
 	"novapanel/internal/store"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestSlowDispatchCapturesBoundaryIdentity(t *testing.T) {
@@ -55,5 +54,4 @@ func TestSlowDispatchCapturesBoundaryIdentity(t *testing.T) {
 			t.Fatalf("authority: %+v", j)
 		}
 	}
-	_ = time.Second
 }
