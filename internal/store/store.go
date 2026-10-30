@@ -10,23 +10,32 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"golang.org/x/sys/unix"
-	_ "modernc.org/sqlite"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sys/unix"
+	_ "modernc.org/sqlite"
 )
 
 //go:embed migrations/*
 var migrations embed.FS
 
 type Store struct {
-	db        *sql.DB
-	lock      *os.File
-	closeOnce sync.Once
-	closeErr  error
+	db           *sql.DB
+	lock         *os.File
+	closeOnce    sync.Once
+	closeErr     error
+	mu           sync.Mutex
+	closing      bool
+	dbClosed     bool
+	transactions map[*transaction]struct{}
 }
+
+type transaction struct{ cancel context.CancelFunc }
 
 func Open(path string) (*Store, error) {
 	var lock *os.File
@@ -56,35 +65,91 @@ func Open(path string) (*Store, error) {
 		}
 	}
 
-	db, e := sql.Open("sqlite", path)
+	// Driver pragmas apply to every connection, including pool replacements.
+	// Escape literal filesystem paths so '?' and '#' cannot become URI options.
+	dsn := ":memory:"
+	if path != ":memory:" {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			release()
+			return nil, err
+		}
+		dsn = (&url.URL{Scheme: "file", Path: absolute}).String()
+	}
+	options := url.Values{"_pragma": {"busy_timeout(5000)", "foreign_keys(ON)", "journal_mode(WAL)"}}
+	db, e := sql.Open("sqlite", dsn+"?"+options.Encode())
 	if e != nil {
 		release()
 		return nil, e
 	}
 	db.SetMaxOpenConns(1)
-	s := &Store{db: db, lock: lock}
+	s := &Store{db: db, lock: lock, transactions: make(map[*transaction]struct{})}
 	fail := func(e error) (*Store, error) { s.Close(); return nil, e }
-	for _, q := range []string{"PRAGMA journal_mode=WAL", "PRAGMA foreign_keys=ON", "PRAGMA busy_timeout=5000"} {
-		if _, e = db.Exec(q); e != nil {
-			return fail(e)
-		}
-	}
+	// Migration opens the first configured connection.
 	if e = s.migrate(); e != nil {
 		return fail(e)
 	}
 	return s, nil
 }
+
+// Close rejects new work and cancels active transactions without waiting for
+// arbitrary callback code. The lifetime lock stays held until every Tx callback
+// has returned and its transaction has committed or rolled back. Callers must
+// eventually return from callbacks, even when using context.Background().
 func (s *Store) Close() error {
 	s.closeOnce.Do(func() {
-		s.closeErr = s.db.Close()
-		if s.lock != nil {
-			s.closeErr = errors.Join(s.closeErr, s.lock.Close())
+		s.mu.Lock()
+		s.closing = true
+		for tx := range s.transactions {
+			tx.cancel()
 		}
+		s.mu.Unlock()
+		err := s.db.Close()
+		s.mu.Lock()
+		s.closeErr = errors.Join(s.closeErr, err)
+		s.dbClosed = true
+		s.releaseLock()
+		s.mu.Unlock()
 	})
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.closeErr
 }
+
+// releaseLock requires mu. database/sql.Close alone does not drain transactions.
+func (s *Store) releaseLock() {
+	if s.dbClosed && len(s.transactions) == 0 && s.lock != nil {
+		s.closeErr = errors.Join(s.closeErr, s.lock.Close())
+		s.lock = nil
+	}
+}
+
 func (s *Store) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
-	tx, e := s.db.BeginTx(ctx, nil)
+	ctx, cancel := context.WithCancel(ctx)
+	t := &transaction{cancel: cancel}
+	s.mu.Lock()
+	if s.closing {
+		s.mu.Unlock()
+		cancel()
+		return errors.New("store closed")
+	}
+	s.transactions[t] = struct{}{}
+	s.mu.Unlock()
+	defer func() {
+		cancel()
+		s.mu.Lock()
+		delete(s.transactions, t)
+		s.releaseLock()
+		s.mu.Unlock()
+	}()
+	// Own the connection so Close also waits for database/sql's asynchronous
+	// context-cancellation rollback before the lifetime lock can be released.
+	conn, e := s.db.Conn(ctx)
+	if e != nil {
+		return e
+	}
+	defer conn.Close()
+	tx, e := conn.BeginTx(ctx, nil)
 	if e != nil {
 		return e
 	}

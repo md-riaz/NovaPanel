@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"time"
 )
 
 type Job struct {
@@ -209,10 +210,16 @@ func insertClaim(ctx context.Context, db execer, v JobClaim) error {
 	return e
 }
 func (s *Store) PublishClaim(ctx context.Context, id string, nonce, ciphertext []byte) error {
+	return s.PublishClaimAt(ctx, id, nonce, ciphertext, time.Now().UnixMilli())
+}
+
+// PublishClaimAt uses the caller's clock in Unix milliseconds, as ConsumeClaim
+// does. At the expiry boundary the claim is already expired.
+func (s *Store) PublishClaimAt(ctx context.Context, id string, nonce, ciphertext []byte, now int64) error {
 	if len(nonce) == 0 || len(ciphertext) == 0 {
 		return errors.New("empty sealed claim")
 	}
-	r, e := s.db.ExecContext(ctx, "UPDATE job_claims SET nonce=?,ciphertext=? WHERE job_id=? AND claimed=0 AND length(ciphertext)=0", nonce, ciphertext, id)
+	r, e := s.db.ExecContext(ctx, "UPDATE job_claims SET nonce=?,ciphertext=? WHERE job_id=? AND claimed=0 AND length(ciphertext)=0 AND expires>?", nonce, ciphertext, id, now)
 	return affected(r, e)
 }
 func (s *Store) ConsumeClaim(ctx context.Context, id, hash, owner string, now int64) (v JobClaim, e error) {

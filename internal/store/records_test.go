@@ -52,7 +52,7 @@ func TestJobLifecycleClaimsRecovery(t *testing.T) {
 	if _, e = s.ConsumeClaim(ctx, j.ID, "hash", j.CreatedBy, 5); !errors.Is(e, sql.ErrNoRows) {
 		t.Fatal("unpublished", e)
 	}
-	if e = s.PublishClaim(ctx, j.ID, []byte("nonce"), []byte("sealed")); e != nil {
+	if e = s.PublishClaimAt(ctx, j.ID, []byte("nonce"), []byte("sealed"), 5); e != nil {
 		t.Fatal(e)
 	}
 	for _, x := range []struct {
