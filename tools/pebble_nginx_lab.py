@@ -43,6 +43,12 @@ try:
  p=run('docker','exec','-e','NOVAPANEL_REAL_NGINX=1','-e','NOVAPANEL_PEBBLE=1','-e','SSL_CERT_FILE=/tmp/server.pem','-w','/tmp/tests/integration',NAME,'/tmp/acceptance.test','-test.run',os.environ.get('NOVAPANEL_PEBBLE_TEST','^TestRealPebbleNginxJobs$'),'-test.v','-test.timeout=240s',check=False)
  (E/'acceptance.log').write_bytes(p.stdout+p.stderr)
  run('docker','cp',NAME+':/tmp/pebble.log',str(E/'pebble.log'))
+ if p.returncode == 0 and os.environ.get('NOVAPANEL_PEBBLE_TEST') == '^TestRealPebbleSchedulerMutationAcceptance$':
+  import re
+  text=(E/'pebble.log').read_text()
+  assert len(re.findall(r'Added order ',text)) == 4, 'duplicate or missing CA order'
+  assert len(re.findall(r'Issued certificate serial ',text)) == 4, 'duplicate or missing issuance'
+  assert re.findall(r'There are now (\d+) accounts',text) == ['1','2'], 'environment account provenance'
  inspect('after')
  (E/'manifest.json').write_text(json.dumps({'sha':sha,'base_source_archive_sha256':hashlib.sha256((E/'source.tar').read_bytes()).hexdigest(),'acceptance_binary_sha256':hashlib.sha256((E/'acceptance.test').read_bytes()).hexdigest(),'pebble_image':'ghcr.io/letsencrypt/pebble@sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199','exit':p.returncode,'network':'none; loopback only; HTTP01 validation port override 8080','scope':'no host mounts, services, public CA or ports; test-only additions to pinned source'},indent=2))
  print(p.stdout.decode()+p.stderr.decode());assert p.returncode==0

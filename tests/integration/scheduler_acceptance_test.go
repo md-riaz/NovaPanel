@@ -413,6 +413,15 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 			t.Fatalf("%s audit enqueue=%d exec=%d", job.Verb, en, ex)
 		}
 	}
+	autoSuccess := 0
+	for _, ev := range events {
+		if ev.Verb == "ssl.auto_set" && ev.Outcome == "ok" && ev.Role == "owner" && ev.Actor == "untrusted-label" {
+			autoSuccess++
+		}
+	}
+	if autoSuccess == 0 {
+		t.Fatal("missing synchronous auto_set success audit")
+	}
 	for _, verb := range verbs {
 		n := 0
 		for _, ev := range events {
