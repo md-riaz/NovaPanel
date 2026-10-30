@@ -22,6 +22,21 @@ type Event struct {
 	Actor, Role, Verb, ObjectKey, Outcome, Code string
 	Detail                                      map[string]any
 }
+
+func (ev Event) validate() error {
+	if ev.Outcome != "ok" && ev.Outcome != "refused" && ev.Outcome != "error" {
+		return errors.New("invalid audit outcome")
+	}
+	if stage, ok := ev.Detail["stage"]; ok {
+		switch stage {
+		case "authz", "enqueue", "exec", "claim":
+		default:
+			return errors.New("invalid audit stage")
+		}
+	}
+	return nil
+}
+
 type Sink interface {
 	Write([]byte) (int, error)
 	Sync() error
@@ -90,15 +105,8 @@ func (l *Log) Record(ev Event) error {
 		return l.err
 	}
 	fail := func(e error) error { l.err = e; return e }
-	if ev.Outcome != "ok" && ev.Outcome != "refused" && ev.Outcome != "error" {
-		return fail(errors.New("invalid audit outcome"))
-	}
-	if stage, ok := ev.Detail["stage"]; ok {
-		switch stage {
-		case "authz", "enqueue", "exec", "claim":
-		default:
-			return fail(errors.New("invalid audit stage"))
-		}
+	if e := ev.validate(); e != nil {
+		return fail(e)
 	}
 	eid, e := id.New()
 	if e != nil {
@@ -161,10 +169,10 @@ func (l *Log) replay(f *os.File) error {
 		}
 		var v struct {
 			ID        string          `json:"id"`
-			TS        int64           `json:"ts"`
-			Actor     string          `json:"actor"`
+			TS        *int64          `json:"ts"`
+			Actor     *string         `json:"actor"`
 			Role      string          `json:"role"`
-			Verb      string          `json:"verb"`
+			Verb      *string         `json:"verb"`
 			ObjectKey string          `json:"object_key"`
 			Outcome   string          `json:"outcome"`
 			Code      string          `json:"code"`
@@ -173,10 +181,19 @@ func (l *Log) replay(f *os.File) error {
 		if e = json.Unmarshal(line, &v); e != nil {
 			return e
 		}
-		if v.ID == "" || (v.Outcome != "ok" && v.Outcome != "refused" && v.Outcome != "error") {
+		if !id.Valid(v.ID) || v.TS == nil || v.Actor == nil || v.Verb == nil {
 			return errors.New("invalid audit record")
 		}
-		if e = l.s.ReplayEvent(context.Background(), store.Event{ID: v.ID, TS: v.TS, Actor: v.Actor, Role: v.Role, Verb: v.Verb, ObjectKey: v.ObjectKey, Outcome: v.Outcome, Code: v.Code, Detail: v.Detail}); e != nil {
+		var detail map[string]any
+		if len(v.Detail) != 0 {
+			if e = json.Unmarshal(v.Detail, &detail); e != nil {
+				return e
+			}
+		}
+		if e = (Event{Outcome: v.Outcome, Detail: detail}).validate(); e != nil {
+			return e
+		}
+		if e = l.s.ReplayEvent(context.Background(), store.Event{ID: v.ID, TS: *v.TS, Actor: *v.Actor, Role: v.Role, Verb: *v.Verb, ObjectKey: v.ObjectKey, Outcome: v.Outcome, Code: v.Code, Detail: v.Detail}); e != nil {
 			return e
 		}
 	}
