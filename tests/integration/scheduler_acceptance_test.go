@@ -506,7 +506,7 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 16 || count() != 17 {
+	if len(all) != 17 || count() != 18 {
 		t.Fatalf("matrix size success=%d total=%d", len(all), count())
 	}
 	all = append(all, failed)
