@@ -160,8 +160,12 @@ func (s *Store) ListJobs(ctx context.Context, f JobFilter) ([]Job, error) {
 	}
 	return out, rows.Err()
 }
+
+// UpdateJob clears sealed inputs in the same write as a terminal transition.
+// An interrupted failure is operational retry state and keeps its input.
 func (s *Store) UpdateJob(ctx context.Context, j Job) error {
-	r, e := s.db.ExecContext(ctx, `UPDATE jobs SET state=?,step=?,progress=?,result_json=?,error=?,code=?,updated=?,finished=? WHERE id=?`, j.State, j.Step, j.Progress, nullableJSON(j.Result), j.Error, j.Code, j.Updated, j.Finished, j.ID)
+	terminal := j.State == "done" || (j.State == "failed" && j.Code != "interrupted")
+	r, e := s.db.ExecContext(ctx, `UPDATE jobs SET args_json=CASE WHEN ? AND json_valid(args_json) THEN CASE WHEN json_extract(args_json,'$._sealed_job_input')=1 THEN '{}' ELSE args_json END ELSE args_json END,state=?,step=?,progress=?,result_json=?,error=?,code=?,updated=?,finished=? WHERE id=?`, terminal, j.State, j.Step, j.Progress, nullableJSON(j.Result), j.Error, j.Code, j.Updated, j.Finished, j.ID)
 	return affected(r, e)
 }
 func (s *Store) RecoverJobs(ctx context.Context, now int64) error {
