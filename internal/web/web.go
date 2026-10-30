@@ -132,7 +132,7 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 			s.options.OriginViolation()
 		}
 		if !s.options.LogOnlyOrigin {
-			http.Error(w, "Cross-site request refused", 403)
+			http.Error(w, "Cross-site request refused", http.StatusForbidden)
 			return
 		}
 	}
@@ -143,7 +143,7 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 	}
 	c, e := s.options.Dial()
 	if e != nil {
-		http.Error(w, "Agent unavailable", 503)
+		http.Error(w, "Agent unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	defer c.Close()
@@ -161,7 +161,7 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 		session, _ := data["session"].(string)
 		v.CSRF, _ = data["csrf_token"].(string)
 		if session == "" || v.CSRF == "" {
-			http.Error(w, "Invalid agent reply", 502)
+			http.Error(w, "Invalid agent reply", http.StatusBadGateway)
 			return
 		}
 		setCookie(w, session, false)
@@ -180,13 +180,13 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 	v.User, _ = data["user"].(string)
 	v.Role, _ = data["role"].(string)
 	if v.CSRF == "" || (v.Role != "owner" && v.Role != "admin" && v.Role != "read_only") {
-		http.Error(w, "Invalid agent identity", 502)
+		http.Error(w, "Invalid agent identity", http.StatusBadGateway)
 		return
 	}
 	if r.Method != "GET" {
 		values := r.Header.Values("X-CSRF-Token")
 		if len(values) != 1 || values[0] == "" || subtle.ConstantTimeCompare([]byte(values[0]), []byte(v.CSRF)) != 1 {
-			http.Error(w, "Invalid CSRF token", 403)
+			http.Error(w, "Invalid CSRF token", http.StatusForbidden)
 			return
 		}
 		contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
@@ -216,13 +216,13 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 		case "session.logout":
 			setCookie(w, "", true)
 			w.Header().Set("HX-Redirect", "/login")
-			http.Redirect(w, r, "/login", 303)
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		case "session.reauth":
 			session, _ := data["session"].(string)
 			csrf, _ := data["csrf_token"].(string)
 			if session == "" || csrf == "" {
-				http.Error(w, "Invalid agent reply", 502)
+				http.Error(w, "Invalid agent reply", http.StatusBadGateway)
 				return
 			}
 			setCookie(w, session, false)
@@ -281,12 +281,12 @@ func call(w http.ResponseWriter, r *http.Request, c RPCClient, verb string, args
 	}
 	raw, e := json.Marshal(reply.Data)
 	if e != nil {
-		http.Error(w, "Invalid agent reply", 502)
+		http.Error(w, "Invalid agent reply", http.StatusBadGateway)
 		return nil, false
 	}
 	var data map[string]any
 	if json.Unmarshal(raw, &data) != nil || data == nil {
-		http.Error(w, "Invalid agent reply", 502)
+		http.Error(w, "Invalid agent reply", http.StatusBadGateway)
 		return nil, false
 	}
 	return data, true
