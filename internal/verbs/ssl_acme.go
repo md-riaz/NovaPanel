@@ -3,10 +3,9 @@ package verbs
 import (
 	"context"
 	"encoding/json"
-	"io"
+	"errors"
 	"net/http"
 	"novapanel/internal/acme"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -121,7 +120,12 @@ func sslRenewExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 
 type acmeExecutor struct{ a *agent.Agent }
 
-func (x acmeExecutor) execute(ctx context.Context, j *jobs.Job, verb string, transport *http.Client) error {
+func (x acmeExecutor) execute(ctx context.Context, j *jobs.Job, verb string, transport *http.Client) (result error) {
+	defer func() {
+		if errors.Is(result, store.ErrACMERateLimited) {
+			result = rpc.Errf("rate_limited", "ACME issuance rate limited")
+		}
+	}()
 	a := x.a
 	s := sslACMEState{a.Store, a.Cfg.TLSDir, a.Now}
 	durable, e := a.Store.GetJob(ctx, j.ID)
@@ -134,7 +138,7 @@ func (x acmeExecutor) execute(ctx context.Context, j *jobs.Job, verb string, tra
 	j.Args = durable.Args
 	if durable.Step == "tls_committed" {
 		j.Step = durable.Step
-		j.Result = json.RawMessage(`{}`)
+		j.Result = append(json.RawMessage(nil), durable.Result...)
 		return nil
 	}
 	var v sslACMEArgs
@@ -173,15 +177,7 @@ func (x acmeExecutor) execute(ctx context.Context, j *jobs.Job, verb string, tra
 		if verb == "ssl.issue" {
 			return client.Issue(ctx, names, root)
 		}
-		if _, err = certs.Load(a.Cfg.TLSDir, primary, names, time.UnixMilli(a.Now())); err != nil {
-			return nil, err
-		}
-		f, err := os.Open(filepath.Join(a.Cfg.TLSDir, primary, "current", "fullchain.pem"))
-		if err != nil {
-			return nil, err
-		}
-		defer f.Close()
-		previous, err := io.ReadAll(io.LimitReader(f, certs.MaxCertificateBytes+1))
+		previous, err := certs.LoadRenewalSource(a.Cfg.TLSDir, primary, time.UnixMilli(a.Now()))
 		if err != nil {
 			return nil, err
 		}

@@ -302,7 +302,7 @@ func errorReply(err error) Reply {
 }
 func validCode(code string) bool {
 	switch code {
-	case "unknown_verb", "bad_request", "invalid_argument", "unauthenticated", "forbidden", "not_found", "conflict", "precondition_failed", "locked", "deadline_exceeded", "agent_error", "interrupted", "unsupported":
+	case "unknown_verb", "bad_request", "invalid_argument", "unauthenticated", "forbidden", "not_found", "conflict", "precondition_failed", "locked", "deadline_exceeded", "agent_error", "interrupted", "unsupported", "rate_limited":
 		return true
 	}
 	return false

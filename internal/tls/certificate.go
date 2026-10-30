@@ -59,6 +59,10 @@ func validDomain(s string) bool { return (&validate.V{}).Hostname(s) == nil }
 // Validate requires SAN coverage for every persisted domain. It does not impose a
 // public CA trust policy on manually supplied certificates.
 func Validate(certPEM, keyPEM []byte, domains []string, now time.Time) (*Certificate, error) {
+	return validatePair(certPEM, keyPEM, domains, now, false)
+}
+
+func validatePair(certPEM, keyPEM []byte, domains []string, now time.Time, renewal bool) (*Certificate, error) {
 	if len(certPEM) == 0 || len(certPEM) > MaxCertificateBytes || len(keyPEM) == 0 || len(keyPEM) > MaxKeyBytes || len(domains) == 0 || len(domains) > MaxDomains {
 		return nil, invalid()
 	}
@@ -76,7 +80,7 @@ func Validate(certPEM, keyPEM []byte, domains []string, now time.Time) (*Certifi
 		if err != nil {
 			return nil, invalid()
 		}
-		if now.Before(cert.NotBefore) || !now.Before(cert.NotAfter) {
+		if now.Before(cert.NotBefore) || (!renewal && !now.Before(cert.NotAfter)) {
 			return nil, invalid()
 		}
 		chain = append(chain, cert)

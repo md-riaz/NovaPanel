@@ -48,8 +48,13 @@ func (s *Store) CommitTLS(ctx context.Context, siteID, jobID, verb string, stagi
 		if _, err = tx.ExecContext(ctx, "UPDATE domains SET cert_state='issued',cert_staging=?,cert_not_after=? WHERE site_id=?", staging, expiry, siteID); err != nil {
 			return err
 		}
-		result := json.RawMessage(`{}`)
-		if verb == "ssl.upload" {
+		result, err := json.Marshal(struct {
+			NotAfter int64 `json:"not_after"`
+		}{expiry})
+		if err != nil {
+			return err
+		}
+		if verb == "ssl.upload" || verb == "ssl.issue" {
 			rows, e := tx.QueryContext(ctx, "SELECT fqdn FROM domains WHERE site_id=? ORDER BY is_primary DESC, fqdn", siteID)
 			if e != nil {
 				return e

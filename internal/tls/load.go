@@ -13,6 +13,21 @@ import (
 // Load reads one installed version and validates its pair against current domains
 // and time. A pointer swap cannot mix certificate and key from different versions.
 func Load(root, primary string, domains []string, now time.Time) (*Certificate, error) {
+	return loadPair(root, primary, domains, now, false)
+}
+
+// LoadRenewalSource validates the retained pair, including its key and primary
+// identity, but permits expiry. Only public PEM escapes, never serving state.
+func LoadRenewalSource(root, primary string, now time.Time) ([]byte, error) {
+	c, err := loadPair(root, primary, []string{primary}, now, true)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(c.keyPEM)
+	return append([]byte(nil), c.certPEM...), nil
+}
+
+func loadPair(root, primary string, domains []string, now time.Time, renewal bool) (*Certificate, error) {
 	if !validDomain(primary) || !filepath.IsAbs(root) || filepath.Clean(root) != root {
 		return nil, invalid()
 	}
@@ -57,7 +72,7 @@ func Load(root, primary string, domains []string, now time.Time) (*Certificate, 
 		return nil, err
 	}
 	defer clear(key)
-	return Validate(cert, key, domains, now)
+	return validatePair(cert, key, domains, now, renewal)
 }
 
 func readPairFile(root *os.Root, name string, limit int64) ([]byte, error) {
