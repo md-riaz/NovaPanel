@@ -30,7 +30,11 @@ func TestSafeDaemonHelper(t *testing.T) {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, unix.SIGTERM)
 	defer stop()
-	if e := serve(ctx, agent.NewWithDependencies(cfg, safeRunner{}, &validate.V{})); e != nil {
+	a := agent.NewWithDependencies(cfg, safeRunner{}, &validate.V{})
+	if os.Getenv("NOVAPANEL_SAFE_CONSOLE") == "1" {
+		configureConsoleFixture(t, a)
+	}
+	if e := serve(ctx, a); e != nil {
 		t.Fatal(e)
 	}
 }
