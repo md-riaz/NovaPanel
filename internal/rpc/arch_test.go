@@ -34,7 +34,7 @@ func TestRegisteredVerbs(t *testing.T) {
 	if len(rpc.Registry) == 0 {
 		t.Fatal("empty built registry: seed verbs were not imported")
 	}
-	expected := []string{"ping", "agent.info", "service.status", "service.restart", "job.status", "job.list", "job.claim", "reconcile", "schedule.list", "schedule.set", "schedule.enable", "schedule.disable", "session.start", "session.login", "session.logout", "session.whoami", "session.reauth"}
+	expected := []string{"ping", "agent.info", "service.status", "service.restart", "job.status", "job.list", "job.claim", "reconcile", "schedule.list", "schedule.set", "schedule.enable", "schedule.disable", "session.start", "session.login", "session.logout", "session.whoami", "session.reauth", "mfa.enroll", "mfa.confirm", "mfa.disable"}
 	if len(rpc.Registry) != len(expected) {
 		t.Fatalf("Implemented verb allowlist mismatch: %d", len(rpc.Registry))
 	}

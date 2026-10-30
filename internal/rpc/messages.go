@@ -207,7 +207,7 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 		r.Data = map[string]bool{"reauth_required": true}
 		return r
 	}
-	if req.Verb == "session.start" || req.Verb == "session.login" || req.Verb == "session.reauth" {
+	if req.Verb == "session.start" || req.Verb == "session.login" || req.Verb == "session.reauth" || req.Verb == "mfa.confirm" || req.Verb == "mfa.disable" {
 		s.authMu.Lock()
 		if s.authRates == nil {
 			s.authRates = make(map[uint32]authRate)
