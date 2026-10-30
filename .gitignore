@@ -19,3 +19,6 @@ node_modules/
 /storage/
 /.phpunit.cache/
 /composer.lock
+
+# Claude Code local session state (agent worktrees, caches) — never committed
+/.claude/
