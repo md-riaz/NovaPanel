@@ -33,12 +33,14 @@ try:
  (E/'pebble.json').write_text(json.dumps(conf,indent=2))
  run('docker','create','--name',NAME,'--label','novapanel.lab='+NAME,'--user','65534:65534','--cap-drop','ALL','--security-opt','no-new-privileges:true','--memory','512m','--memory-swap','512m','--cpus','1','--pids-limit','64','--network','none','--add-host','demo.test:127.0.0.1','--add-host','alias.test:127.0.0.1','--entrypoint','/bin/sh',IMAGE,'-c','sleep 600');created=True
  inspect('before');run('docker','start',NAME)
+ run('docker','cp',str(E/'source.tar'),NAME+':/tmp/source.tar')
+ run('docker','exec',NAME,'tar','-xf','/tmp/source.tar','-C','/tmp')
  for name in ['pebble','pebble.json','server.pem','server.key','acceptance.test']:
   (E/name).chmod(0o755 if name in ['pebble','acceptance.test'] else 0o644)
   run('docker','cp',str(E/name),NAME+':/tmp/'+name)
  run('docker','exec','-d','-e','PEBBLE_VA_NOSLEEP=1','-e','PEBBLE_AUTHZREUSE=0',NAME,'/bin/sh','-c','exec /tmp/pebble -config /tmp/pebble.json > /tmp/pebble.log 2>&1')
  run('docker','exec',NAME,'/bin/sh','-c','for i in $(seq 1 40); do wget -q --no-check-certificate -O /tmp/directory.json https://127.0.0.1:14000/dir && exit 0; sleep 0.25; done; exit 1')
- p=run('docker','exec','-e','NOVAPANEL_REAL_NGINX=1','-e','NOVAPANEL_PEBBLE=1','-e','SSL_CERT_FILE=/tmp/server.pem',NAME,'/tmp/acceptance.test','-test.run','^TestRealPebbleNginxJobs$','-test.v','-test.timeout=240s',check=False)
+ p=run('docker','exec','-e','NOVAPANEL_REAL_NGINX=1','-e','NOVAPANEL_PEBBLE=1','-e','SSL_CERT_FILE=/tmp/server.pem','-w','/tmp/tests/integration',NAME,'/tmp/acceptance.test','-test.run','^TestRealPebbleNginxJobs$','-test.v','-test.timeout=240s',check=False)
  (E/'acceptance.log').write_bytes(p.stdout+p.stderr)
  run('docker','cp',NAME+':/tmp/pebble.log',str(E/'pebble.log'))
  inspect('after')
