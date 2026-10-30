@@ -41,6 +41,8 @@ type Verb struct {
 	ObjectKey            func(any) string
 	Run                  func(context.Context, *agent.Agent, any) (any, error)
 	Exec                 func(context.Context, *agent.Agent, *jobs.Job) error
+	ValidateRecovery     func(context.Context, *agent.Agent, *jobs.Job) error
+	Recover              func(context.Context, *agent.Agent, *jobs.Job) error
 }
 
 var Registry = map[string]Verb{}
@@ -269,6 +271,15 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 		pre.Outcome = "ok"
 		if err := s.DurableAudit(pre); err != nil {
 			return Err("agent_error", "Durable audit unavailable")
+		}
+	}
+	if mutation && s.Agent.Store != nil {
+		pending, err := s.Agent.Store.TLSIntent(ctx)
+		if err != nil {
+			return errorReply(err)
+		}
+		if len(pending) > 0 {
+			return Err("precondition_failed", "Unresolved TLS publication")
 		}
 	}
 	event.Detail["stage"] = "exec"

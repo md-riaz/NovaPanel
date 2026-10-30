@@ -37,6 +37,8 @@ type Queue struct {
 	mu      sync.Mutex
 	runner  func(context.Context, *Job) error
 	running bool
+	startup func(context.Context) (*Job, error)
+	resume  func(context.Context, *Job) error
 	wake    chan struct{}
 	locks   keyedLock
 }

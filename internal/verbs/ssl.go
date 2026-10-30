@@ -45,7 +45,7 @@ func (v *sslAutoArgs) Validate() error {
 func init() {
 	rpc.Register(rpc.Verb{Name: "ssl.status", MinRole: rpc.ReadOnly, ReadOnly: true, Scope: "sites:read", NewArgs: func() any { return &siteIDArgs{} }, Run: sslStatus})
 	rpc.Register(rpc.Verb{Name: "ssl.auto_set", MinRole: rpc.Admin, Scope: "sites:write", NewArgs: func() any { return &sslAutoArgs{} }, Run: sslAutoSet})
-	rpc.Register(rpc.Verb{Name: "ssl.upload", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, MFA: true, NewArgs: func() any { return &sslUploadArgs{} }, ObjectKey: func(v any) string { return "site:" + v.(*sslUploadArgs).SiteID }, Run: sslUpload, Exec: sslUploadExec})
+	rpc.Register(rpc.Verb{Name: "ssl.upload", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, MFA: true, NewArgs: func() any { return &sslUploadArgs{} }, ObjectKey: func(v any) string { return "site:" + v.(*sslUploadArgs).SiteID }, Run: sslUpload, Exec: sslUploadExec, ValidateRecovery: func(ctx context.Context, a *agent.Agent, j *jobs.Job) error { return (tlsStartup{a}).validate(ctx, j) }, Recover: func(ctx context.Context, a *agent.Agent, j *jobs.Job) error { return (tlsStartup{a}).resume(ctx, j) }})
 }
 
 type sslState struct{ store *store.Store }

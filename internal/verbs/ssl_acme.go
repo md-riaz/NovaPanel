@@ -24,8 +24,8 @@ type sslACMEArgs struct {
 
 func (v *sslACMEArgs) Validate() error { return (&siteIDArgs{v.SiteID}).Validate() }
 func init() {
-	rpc.Register(rpc.Verb{Name: "ssl.issue", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, Effectful: true, NewArgs: func() any { return &sslACMEArgs{} }, ObjectKey: func(v any) string { return "site:" + v.(*sslACMEArgs).SiteID }, Run: sslIssue, Exec: sslIssueExec})
-	rpc.Register(rpc.Verb{Name: "ssl.renew", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, Effectful: true, NewArgs: func() any { return &sslACMEArgs{} }, ObjectKey: func(v any) string { return "site:" + v.(*sslACMEArgs).SiteID }, Run: sslRenew, Exec: sslRenewExec})
+	rpc.Register(rpc.Verb{Name: "ssl.issue", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, Effectful: true, NewArgs: func() any { return &sslACMEArgs{} }, ObjectKey: func(v any) string { return "site:" + v.(*sslACMEArgs).SiteID }, Run: sslIssue, Exec: sslIssueExec, ValidateRecovery: func(ctx context.Context, a *agent.Agent, j *jobs.Job) error { return (tlsStartup{a}).validate(ctx, j) }, Recover: func(ctx context.Context, a *agent.Agent, j *jobs.Job) error { return (tlsStartup{a}).resume(ctx, j) }})
+	rpc.Register(rpc.Verb{Name: "ssl.renew", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, Effectful: true, NewArgs: func() any { return &sslACMEArgs{} }, ObjectKey: func(v any) string { return "site:" + v.(*sslACMEArgs).SiteID }, Run: sslRenew, Exec: sslRenewExec, ValidateRecovery: func(ctx context.Context, a *agent.Agent, j *jobs.Job) error { return (tlsStartup{a}).validate(ctx, j) }, Recover: func(ctx context.Context, a *agent.Agent, j *jobs.Job) error { return (tlsStartup{a}).resume(ctx, j) }})
 }
 func sslIssue(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	return (sslACMEState{a.Store, a.Cfg.TLSDir, a.Now}).admit(ctx, a.Jobs, args.(*sslACMEArgs), a.Cfg.ACMEUseStaging, a.Cfg.ACMEEmail, "ssl.issue")

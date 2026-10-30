@@ -4,12 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"novapanel/internal/jobs"
 	"slices"
 )
 
 // ExecuteJob authorizes only durable authority, never a live session or argument label.
 func (s *Server) ExecuteJob(ctx context.Context, j *jobs.Job) error {
+	return s.executeJob(ctx, j, false)
+}
+
+func (s *Server) executeJob(ctx context.Context, j *jobs.Job, recovery bool) error {
 	v, ok := s.Registry[j.Verb]
 	if !ok || !v.Slow || v.Exec == nil || v.Module != "" {
 		return Errf("unsupported", "Job verb unavailable")
@@ -44,6 +49,12 @@ func (s *Server) ExecuteJob(ctx context.Context, j *jobs.Job) error {
 			return Errf("forbidden", "Stored job binding mismatch")
 		}
 		if durable.Step == "tls_committed" {
+			if recovery {
+				if v.ValidateRecovery == nil {
+					return Errf("forbidden", "Recovery unavailable")
+				}
+				return v.ValidateRecovery(ctx, s.Agent, j)
+			}
 			return v.Exec(ctx, s.Agent, j)
 		}
 		raw, err = s.Agent.Jobs.OpenInput(j)
@@ -55,7 +66,7 @@ func (s *Server) ExecuteJob(ctx context.Context, j *jobs.Job) error {
 	args := v.NewArgs()
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
-	if d.Decode(args) != nil {
+	if d.Decode(args) != nil || d.Decode(new(any)) != io.EOF {
 		return Errf("bad_request", "Invalid stored arguments")
 	}
 	if validator, ok := args.(interface{ Validate() error }); ok {
@@ -68,6 +79,12 @@ func (s *Server) ExecuteJob(ctx context.Context, j *jobs.Job) error {
 	}
 	if j.Effectful != v.Effectful {
 		return Errf("forbidden", "Stored effect class mismatch")
+	}
+	if recovery {
+		if v.ValidateRecovery == nil || v.Recover == nil {
+			return Errf("forbidden", "Recovery unavailable")
+		}
+		return v.ValidateRecovery(ctx, s.Agent, j)
 	}
 	return v.Exec(ctx, s.Agent, j)
 }
@@ -103,6 +120,7 @@ func (s *Server) ConfigureJobs() {
 	a := s.Agent
 	a.Jobs = jobs.NewQueue(a.Store, a.Secret, a.Audit)
 	a.Jobs.SetRunner(s.ExecuteJob)
+	a.Jobs.SetStartupRecovery(s.prepareTLSRecovery, s.resumeTLSRecovery)
 	policies := map[string]jobs.SchedulePolicy{}
 	for _, name := range []string{"reconcile"} {
 		v, ok := s.Registry[name]
