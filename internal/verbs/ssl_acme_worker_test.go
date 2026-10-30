@@ -109,7 +109,11 @@ func newACMEWorkerFixture(t *testing.T) *acmeWorkerFixture {
 func (f *acmeWorkerFixture) run(t *testing.T, verb string) jobs.Job {
 	t.Helper()
 	ctx := context.Background()
-	reply := f.server.Dispatch(rpc.WithCaller(ctx, rpc.RootCaller(0)), rpc.Request{Verb: verb, Args: json.RawMessage(fmt.Sprintf(`{"site_id":%q,"staging":true}`, f.sid))})
+	args := fmt.Sprintf(`{"site_id":%q,"staging":true}`, f.sid)
+	if verb == "ssl.renew" {
+		args = fmt.Sprintf(`{"site_id":%q}`, f.sid)
+	}
+	reply := f.server.Dispatch(rpc.WithCaller(ctx, rpc.RootCaller(0)), rpc.Request{Verb: verb, Args: json.RawMessage(args)})
 	if !reply.OK {
 		t.Fatal(reply)
 	}

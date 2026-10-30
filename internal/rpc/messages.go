@@ -38,11 +38,14 @@ type Verb struct {
 	Internal             bool
 	MaxDeadlineMs        int
 	NewArgs              func() any
-	ObjectKey            func(any) string
-	Run                  func(context.Context, *agent.Agent, any) (any, error)
-	Exec                 func(context.Context, *agent.Agent, *jobs.Job) error
-	ValidateRecovery     func(context.Context, *agent.Agent, *jobs.Job) error
-	Recover              func(context.Context, *agent.Agent, *jobs.Job) error
+	// Durable jobs may carry trusted fields that public admission must reject.
+	NewJobArgs       func() any
+	JobObjectKey     func(any) string
+	ObjectKey        func(any) string
+	Run              func(context.Context, *agent.Agent, any) (any, error)
+	Exec             func(context.Context, *agent.Agent, *jobs.Job) error
+	ValidateRecovery func(context.Context, *agent.Agent, *jobs.Job) error
+	Recover          func(context.Context, *agent.Agent, *jobs.Job) error
 }
 
 var Registry = map[string]Verb{}

@@ -69,7 +69,11 @@ func TestACMEIssueRenewPublication(t *testing.T) {
 	server := rpc.NewServer(a)
 	server.ConfigureJobs()
 	run := func(verb string) *jobs.Job {
-		res := server.Dispatch(rpc.WithCaller(ctx, rpc.RootCaller(0)), rpc.Request{Verb: verb, Args: json.RawMessage(`{"site_id":"` + sid + `","staging":true}`)})
+		args := json.RawMessage(`{"site_id":"` + sid + `","staging":true}`)
+		if verb == "ssl.renew" {
+			args = json.RawMessage(`{"site_id":"` + sid + `"}`)
+		}
+		res := server.Dispatch(rpc.WithCaller(ctx, rpc.RootCaller(0)), rpc.Request{Verb: verb, Args: args})
 		if !res.OK {
 			t.Fatal(res)
 		}
@@ -119,8 +123,8 @@ func TestACMEIssueRenewPublication(t *testing.T) {
 	if !noop.OK {
 		t.Fatal(noop)
 	}
-	if _, ok := noop.Data.(jobs.EnqueueResult); ok {
-		t.Fatal("valid issue enqueued")
+	if _, ok := noop.Data.(jobs.EnqueueResult); !ok {
+		t.Fatal("valid issue omitted job envelope")
 	}
 	if err = (acmeExecutor{a}).execute(ctx, j, "ssl.issue", f.server.Client()); err == nil {
 		t.Fatal("terminal job accepted")

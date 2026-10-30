@@ -78,6 +78,16 @@ redirect.add{site_id, source, target, code:301|302}     → job → {redirect_id
 redirect.remove{redirect_id}                            → job → {}
 ```
 
+### ACME renewal environment
+`ssl.renew` accepts only `site_id`. Admission records the installed primary certificate's
+persisted staging/production provenance in trusted durable job arguments, never the
+current global issuance default. Installed domain metadata must agree; uncertified new
+aliases do not establish provenance. Missing installed certificate input or conflicting
+provenance fails with `precondition_failed`. The worker rechecks this binding, including
+for scheduler-owned renewals, and refuses environment changes rather than switching CAs.
+Successful no-op admission still returns the normal job/claim envelope; its worker writes
+the canonical terminal result without contacting the CA.
+
 ### Primary promotion amendment
 `site.update.primary_domain_id` names an existing domain ULID belonging to the site, not a new FQDN.
 The registry remains admin, `sites:write`, slow, non-effectful, with `site:<site_id>` locking.

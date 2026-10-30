@@ -63,7 +63,11 @@ func (s *Server) executeJob(ctx context.Context, j *jobs.Job, recovery bool) err
 		}
 		defer clear(raw)
 	}
-	args := v.NewArgs()
+	newArgs, objectKey := v.NewArgs, v.ObjectKey
+	if v.NewJobArgs != nil {
+		newArgs, objectKey = v.NewJobArgs, v.JobObjectKey
+	}
+	args := newArgs()
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
 	if d.Decode(args) != nil || d.Decode(new(any)) != io.EOF {
@@ -74,7 +78,7 @@ func (s *Server) executeJob(ctx context.Context, j *jobs.Job, recovery bool) err
 			return e
 		}
 	}
-	if v.ObjectKey != nil && v.ObjectKey(args) != j.ObjectKey {
+	if objectKey != nil && objectKey(args) != j.ObjectKey {
 		return Errf("forbidden", "Stored object key mismatch")
 	}
 	if j.Effectful != v.Effectful {

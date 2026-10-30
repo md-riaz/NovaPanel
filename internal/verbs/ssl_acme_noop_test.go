@@ -35,7 +35,11 @@ func TestACMEQueuedCanonicalNoop(t *testing.T) {
 			}()
 			ids := []string{}
 			for i := 0; i < 2; i++ {
-				r := f.server.Dispatch(rpc.WithCaller(ctx, rpc.RootCaller(0)), rpc.Request{Verb: verb, Args: json.RawMessage(fmt.Sprintf(`{"site_id":%q,"staging":true}`, f.sid))})
+				args := fmt.Sprintf(`{"site_id":%q,"staging":true}`, f.sid)
+				if verb == "ssl.renew" {
+					args = fmt.Sprintf(`{"site_id":%q}`, f.sid)
+				}
+				r := f.server.Dispatch(rpc.WithCaller(ctx, rpc.RootCaller(0)), rpc.Request{Verb: verb, Args: json.RawMessage(args)})
 				if !r.OK {
 					t.Fatal(r)
 				}

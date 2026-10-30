@@ -48,12 +48,19 @@ func TestACMEAdmissionAndFailClosedExecution(t *testing.T) {
 			t.Fatalf("wrong policy %+v", verb)
 		}
 		args := json.RawMessage(`{"site_id":"` + sid + `","staging":true}`)
+		if name == "ssl.renew" {
+			args = json.RawMessage(`{"site_id":"` + sid + `"}`)
+		}
 		denied := server.Dispatch(rpc.WithCaller(ctx, rpc.Caller{Role: "read_only"}), rpc.Request{Verb: name, Args: args})
 		if denied.Code != "forbidden" {
 			t.Fatal(denied)
 		}
 		prod := server.Dispatch(rpc.WithCaller(ctx, rpc.RootCaller(0)), rpc.Request{Verb: name, Args: json.RawMessage(`{"site_id":"` + sid + `","staging":false}`)})
-		if prod.Code != "precondition_failed" {
+		wantProd := "precondition_failed"
+		if name == "ssl.renew" {
+			wantProd = "bad_request"
+		}
+		if prod.Code != wantProd {
 			t.Fatal(prod)
 		}
 		r := server.Dispatch(rpc.WithCaller(ctx, rpc.RootCaller(0)), rpc.Request{Verb: name, Args: args})
