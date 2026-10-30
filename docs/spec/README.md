@@ -28,6 +28,27 @@ those decisions into buildable, verifiable units of work.
    the tables, and note it in the PR. Only a choice that would change a contract, an invariant, a
    schema, or a verb's attributes must come back to the head. (Do not treat an unpinned micro-detail
    as a blocker; a contradiction with a fixed contract **is** a blocker — raise it.)
+6. **Source-of-truth precedence (read this before you copy any value).** The Phase-1 review surfaced a
+   recurring class of bug: a value restated in a phase's prose had drifted from the canonical source.
+   To prevent it, obey this precedence — the **canonical file wins over any phase prose**, always:
+   - a verb's **Role / ReadOnly / Scope / Slow / Effectful / MFA / ObjectKey** → `01-rpc-and-verbs.md`
+   - a verb's **args / reply shape** (snake_case field names, envelopes like `{jobs,next}`) → `03-verb-shapes.md`
+   - an **error `code`** on the wire → the **F3 catalog** in `00-foundations.md` (never invent a code;
+     if the one you want isn't listed, raise it — do not ship an unlisted code)
+   - a **table / column / migration** → `02-data-model.md`
+   - a **cross-cutting contract** (audit order, effectful class, claim lifecycle, config-render loop,
+     validation, session/authz) → the named **F-section** in `00-foundations.md`
+
+   A phase spec's prose is a **guide, not a second source of truth**: when it names a role, code, shape,
+   or column, treat that as a pointer to the canonical file and **verify against the file**. If the two
+   disagree, the canonical file governs and you **raise the drift** (the head fixes the prose) — you do
+   **not** implement the prose value.
+7. **Pre-flight contract check (run before coding, and again before you open the PR).** For every verb
+   you touch: ☐ its attributes match `01`; ☐ its args/reply match `03` exactly (snake_case, documented
+   envelope); ☐ every `code` you return is in the F3 catalog; ☐ every table/column matches `02`; ☐ each
+   cross-cutting rule is **cited from its `00` F-section, not paraphrased**. A mismatch is a blocker you
+   raise, not a judgment call. (This check is what would have caught all four Phase-1 reconciliations up
+   front.)
 
 ## The non-negotiable invariants (every phase, no exceptions)
 
