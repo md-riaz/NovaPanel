@@ -25,6 +25,13 @@ func (s *Store) UpdateSite(ctx context.Context, id string, p SitePatch) error {
 		return ErrSiteInvalid
 	}
 	return s.Tx(ctx, func(tx *sql.Tx) error {
+		var intents int
+		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM settings WHERE key=?", tlsIntentKey).Scan(&intents); err != nil {
+			return err
+		}
+		if intents != 0 {
+			return ErrSitePrecondition
+		}
 		if p.PrimaryDomainID != nil {
 			var status, source string
 			var force bool

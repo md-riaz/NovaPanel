@@ -199,7 +199,10 @@ func (m siteMutationState) primaryTarget(ctx context.Context, sid string, target
 	}
 	for _, d := range ds {
 		if d.IsPrimary && d.ID != *target && site.CertSource != "none" {
-			return rpc.Errf("precondition_failed", "TLS primary promotion requires a re-key recovery journal")
+			names, primary := sslNames(ds)
+			if _, e := certs.Load(m.a.Cfg.TLSDir, primary, names, time.UnixMilli(m.a.Now())); e != nil {
+				return rpc.Errf("precondition_failed", "A valid full-domain covering certificate is required")
+			}
 		}
 	}
 	return nil
@@ -227,6 +230,50 @@ func siteUpdateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	}
 	if e := v.Validate(); e != nil {
 		return e
+	}
+	if v.PrimaryDomainID != nil {
+		durable, e := a.Store.GetJob(ctx, j.ID)
+		if e != nil {
+			return e
+		}
+		if durable.Verb != "site.update" || durable.ObjectKey != "site:"+v.SiteID {
+			return rpc.Errf("precondition_failed", "Site job binding changed")
+		}
+		if durable.Step == "tls_committed" {
+			j.Step = durable.Step
+			j.Result = durable.Result
+			return nil
+		}
+		raw, e := a.Store.TLSIntent(ctx)
+		if e != nil {
+			return e
+		}
+		if len(raw) > 0 {
+			return (sslPublication{a}).publication(ctx, v.SiteID, j, false, nil, &v)
+		}
+		site, e := a.Store.SiteByID(ctx, v.SiteID)
+		if e != nil {
+			return e
+		}
+		ds, e := a.Store.ListDomains(ctx, v.SiteID)
+		if e != nil {
+			return e
+		}
+		for _, d := range ds {
+			if d.IsPrimary && d.ID != *v.PrimaryDomainID && site.CertSource != "none" {
+				return (sslPublication{a}).publication(ctx, v.SiteID, j, false, nil, &v)
+			}
+			if d.IsPrimary && d.ID == *v.PrimaryDomainID && v.Maintenance == nil && v.ForceHTTPS == nil && v.HSTSMaxAge == nil {
+				if _, e := (siteMutationState{a}).mutableSite(ctx, v.SiteID); e != nil {
+					return e
+				}
+				if e := (siteMutationState{a}).primaryTarget(ctx, v.SiteID, v.PrimaryDomainID); e != nil {
+					return e
+				}
+				j.Result = json.RawMessage(`{}`)
+				return nil
+			}
+		}
 	}
 	if _, e := (siteMutationState{a}).mutableSite(ctx, v.SiteID); e != nil {
 		return e
