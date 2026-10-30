@@ -74,6 +74,7 @@ Guardrails      — the "nevers" specific to this phase (plus the global invaria
 | `01-rpc-and-verbs.md` | The canonical v1 verb table — every verb's Role/ReadOnly/Scope/Slow/Effectful/MFA/ObjectKey; naming reconciliations | **drafted** |
 | `02-data-model.md` | Complete SQLite DDL for every table (per phase), ULID/migrations/integrity test | **drafted** |
 | `03-verb-shapes.md` | The args struct + reply shape for every v1 verb (complements 01's attributes) | **drafted** |
+| `05-adr.md` | Architecture Decision Records (ADR-0001…0016): the *why*, cost, and rejected alternatives behind each binding decision; D1–D9 map onto these | **drafted** |
 | `06-test-strategy.md` | Unit vs integration tiers, CI seams (injectable geteuid/exec, pebble for ACME), negative arch tests | **drafted** |
 | `packaging-reference.md` | Concrete systemd units, tmpfiles, sysusers (the former "session notes") | **drafted** |
 | `phases/phase-0.md` | Foundation: Go workspace, PHP freeze, RPC registry + codec, CI + supply-chain gates, arch tests | **drafted** |

@@ -342,9 +342,33 @@ panic, via a deferred `recover()` on the one dispatch path).
 
 ```
 events(id, ts, actor, role, verb, object_key, outcome, code, detail_json)
-outcome ∈ { ok, refused, error }
+outcome ∈ { ok, refused, error }                       -- fixed set; never extended
+Record(Event) error                                    -- fail-closed: see sinks below
 ```
 
+- **Signature is `Record(Event) error`** (decided — the earlier error-less prose is superseded).
+  Audit is invariant 7: a privileged **mutation** must not be reported complete if its record could
+  not be durably written. Reads are not gated.
+- **Outcome stays `{ok, refused, error}`** — never add new outcome values for auth/queue phases.
+  Where it matters, the **stage** goes in `detail_json` as `detail.stage ∈ {authz, enqueue, exec,
+  claim}`. So an authorization refusal is `outcome=refused, detail.stage=authz`; a worker failure is
+  `outcome=error, detail.stage=exec`.
+- **Required events:** a pre-authorization **refusal** event for any denied attempt (so denials are on
+  the record, not just successes — aaPanel/BHPanel log only post-auth actions; we log the refusal too),
+  and a **final outcome** event. A slow verb records **enqueue** (`ok`, stage=enqueue) at `Run` and the
+  worker's **terminal** event (`ok`/`error`, stage=exec) at the end, correlated by `job_id` in detail.
+- **Dual-sink ordering (decided): file append **first**, then the `events` row.** The `chattr +a` file
+  is the tamper-proof source of truth; if the two ever diverge, the file wins. The two are **not
+  atomic** and we do not promise they are: a crash between them can leave a **file-only** event (never
+  a DB-only one). On agent start, `internal/audit` **reconciles** unmatched file lines into `events`
+  (roll-forward, consistent with F6). This is the ISPConfig lesson inverted — its DB-only audit could
+  be rewritten by a DB compromise; ours cannot.
+- **Sticky fail-closed health.** If **either** durable sink fails, the audit subsystem enters a sticky
+  `unhealthy` state that **gates further mutating verbs** (they return `code="agent_error"`,
+  `detail.stage=authz`) until an operator clears it; reads continue. A refusal/error response that
+  arrives **after** an effect already happened does **not** undo the effect — audit records the effect
+  and the failing stage; effect reversal is the verb's concern under the effectful rules (F6), not
+  audit's.
 - File-backed append-only log (`/var/log/novapanel/audit.log`, `chattr +a`, root-owned) **in addition
   to** the `events` table, so a DB compromise cannot rewrite history. `/var/log/novapanel` is made by
   the installer and re-made by the agent if missing; **no `LogsDirectory=`** in the unit (systemd
@@ -571,6 +595,33 @@ schedulable verbs** (`ssl.renew`, `backup.create`, `backup.verify`, `update.chec
 site-`cron`) — never `backup.restore`/`firewall.apply`/`site.delete`/etc. The scheduler goroutine and
 `schedule.*` verbs are a **Phase-1 deliverable** (core infra), consumed by later phases.
 
+**Calendar grammar (Phase-1, decided).** The agent-internal scheduler accepts a **restricted UTC
+subset**, not full systemd `OnCalendar`: the aliases `minutely`/`hourly`/`daily`/`weekly`/`monthly`/
+`yearly`, or `[weekday ]*-*-* HH:MM:SS UTC` where weekday ∈ `Mon Tue Wed Thu Fri Sat Sun`, each of
+`HH`/`MM`/`SS` is two digits in range **or** `*`. `weekly` = Monday 00:00:00 UTC; `monthly`/`yearly` =
+first day at 00:00:00 UTC. Lists, ranges, steps, concrete dates, other time zones and cron expressions
+are **rejected with a clear `invalid` error** — the parser must not silently accept and mis-fire
+(BHPanel's cron strings are passed to the OS and under-validated; we validate at the sink, invariant 4).
+This governs the **internal `schedules` table only**. The later **site-level `cron.*`** verbs (Phase 5)
+promise real systemd `OnCalendar` timers and are a **separate surface** — they are translated to
+systemd timer units, never back-fitted onto this subset. Do not claim full `OnCalendar` for Phase 1.
+
+**Atomic firing (decided).** A tick that decides a row is due performs **one typed store transaction**,
+`EnqueueScheduledJob`, that: (a) **compare-and-swaps** `next_run` guarded by the value just read (a
+concurrent or duplicated tick that lost the race is a no-op — no double-fire), (b) inserts the `queued`
+job row with the owner's persisted authority (below), (c) reserves the `job_claims` row if the verb
+mints a secret, and (d) updates `last_run`/`state_json` — all or nothing. This closes the
+cadence-advanced-but-not-enqueued crash window. Audit's **file append stays outside the SQL tx** and is
+ordered per F11 (DB commit, then file). **Busy object:** if the row's `object_key` has a running job,
+the tick **skips** this occurrence and still advances `next_run` (no pile-up, no retry of the skipped
+occurrence — the next occurrence is the retry); this matches the ISPConfig anti-pattern we avoid, where
+overlapping cron runs stack and wedge.
+
+**Scheduler authority is persisted** (not re-derived from a live session that may be gone at fire time):
+`schedules` stores the owner's `actor`, `role`, `scopes_json`, and `automation` (migration `0002`,
+02-data-model), and `EnqueueScheduledJob` copies them onto the job row so the firing authorizes and
+audits from stored authority — never from a session lookup that a logout/expiry could have removed.
+
 ## F19. Show-once secret claim (F6 detail)
 
 A slow verb that mints a secret (DB/admin password) writes it **sealed** into `job_claims`
@@ -580,3 +631,16 @@ the one-time `claim` token (`EnqueueResult.ClaimToken`, F15). The caller later c
 returns it exactly once. The secret is never in `jobs.result_json`, `job_events`, audit, or any log.
 For the public API, the `202` body includes the `claim` so a token caller can retrieve its secret; an
 idempotent replay returns the same (still-unclaimed) `claim` or `410`-style `not_found` once claimed.
+
+**Lifecycle (decided).**
+- **TTL is anchored at secret publication** — the moment `Exec` commits the `job_claims` row — not at
+  enqueue (the secret does not exist until `Exec` runs). **Expiry is evaluated at actual DB
+  publication/read**, inside the SQL critical section, so a blocked connection cannot publish or hand
+  back a claim that is already expired; a connection wait before the write re-evaluates against the
+  DB's clock.
+- **Clock injection stays internal.** Test the clock through the store's constructed `Clock` (F15);
+  **do not export** a `PublishClaimAt(…, now)` as a public store contract — the public surface is
+  `PublishClaim`/`job.claim` only.
+- **Owner-bound, one-shot.** `job.claim` requires the caller to be the job's `created_by` owner (F4
+  job-ownership exception) **and** within TTL; the row is deleted on first successful read or on
+  expiry. Nothing about the secret survives in `jobs.result_json`, `job_events`, `events`, or any log.
