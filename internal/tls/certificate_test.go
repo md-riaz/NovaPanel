@@ -45,6 +45,9 @@ func TestSealedUpload(t *testing.T) {
 	if _, err = OpenUpload(s, sealed, []string{"example.test"}, testNow); err == nil {
 		t.Fatal("tamper accepted")
 	}
+	if strings.Contains(fmt.Sprintf("%#v", opened), "keyPEM") {
+		t.Fatal("debug format exposes private fields")
+	}
 	if strings.Contains(fmt.Sprintf("%+v", opened), "PRIVATE KEY") {
 		t.Fatal("formatted secret")
 	}

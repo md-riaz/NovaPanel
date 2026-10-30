@@ -23,7 +23,8 @@ type Certificate struct {
 	certPEM, keyPEM []byte
 }
 
-func (c *Certificate) String() string { return "TLS certificate (key redacted)" }
+func (c *Certificate) GoString() string { return c.String() }
+func (c *Certificate) String() string   { return "TLS certificate (key redacted)" }
 func (c *Certificate) Covers(domain string) bool {
 	return c != nil && c.leaf != nil && validDomain(domain) && c.leaf.VerifyHostname(domain) == nil
 }
