@@ -34,6 +34,8 @@ type Config struct {
 	UpdateManifestURL    string `toml:"update_manifest_url"`
 	RateLimitRPS         int    `toml:"rate_limit_rps"`
 	RateLimitBurst       int    `toml:"rate_limit_burst"`
+	AnonMintRPS          int    `toml:"anon_mint_rps"`
+	AnonMintBurst        int    `toml:"anon_mint_burst"`
 	LoginMaxAttempts     int    `toml:"login_max_attempts"`
 	LoginWindowSec       int    `toml:"login_window_sec"`
 	TOTPMaxAttempts      int    `toml:"totp_max_attempts"`
@@ -49,7 +51,7 @@ type Config struct {
 func Defaults() Config {
 	return Config{
 		SocketPath: "/run/novapanel/agent.sock", DBPath: "/var/lib/novapanel/panel.db", SealKeyPath: "/var/lib/novapanel/seal.key", LogDir: "/var/log/novapanel", WebUser: "novapanel", ACMEWebroot: "/var/www/acme", SitesRoot: "/srv/sites", TLSDir: "/etc/novapanel/tls",
-		ACMEDirectoryProd: "https://acme-v02.api.letsencrypt.org/directory", ACMEDirectoryStaging: "https://acme-staging-v02.api.letsencrypt.org/directory", SSHPort: 22, FirewallWindowMin: 15, UpdateManifestURL: "https://releases.example/novapanel/stable/manifest.json", RateLimitRPS: 5, RateLimitBurst: 20, LoginMaxAttempts: 5, LoginWindowSec: 900, TOTPMaxAttempts: 5, WebhookBodyMaxKB: 512, ReauthWindowSec: 300, IdleSec: 600, AbsSec: 43200, DeadlineDefaultMs: 120000,
+		ACMEDirectoryProd: "https://acme-v02.api.letsencrypt.org/directory", ACMEDirectoryStaging: "https://acme-staging-v02.api.letsencrypt.org/directory", SSHPort: 22, FirewallWindowMin: 15, UpdateManifestURL: "https://releases.example/novapanel/stable/manifest.json", RateLimitRPS: 5, RateLimitBurst: 20, AnonMintRPS: 20, AnonMintBurst: 100, LoginMaxAttempts: 5, LoginWindowSec: 900, TOTPMaxAttempts: 5, WebhookBodyMaxKB: 512, ReauthWindowSec: 300, IdleSec: 600, AbsSec: 43200, DeadlineDefaultMs: 120000,
 	}
 }
 

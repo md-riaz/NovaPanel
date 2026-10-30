@@ -10,6 +10,8 @@ import (
 
 func TestSessionStartReusesAnonymousWithoutTouchOrMintCharge(t *testing.T) {
 	s, c, call := sessionHarness(t)
+	s.Agent.Cfg.AnonMintRPS = 1
+	s.Agent.Cfg.AnonMintBurst = 10
 	first := sessionData(t, call("session.start", "", `{}`))
 	token := first["session"].(string)
 	sid := strings.Split(token, "_")[1]
@@ -30,10 +32,10 @@ func TestSessionStartReusesAnonymousWithoutTouchOrMintCharge(t *testing.T) {
 	if !reflect.DeepEqual(before, after) {
 		t.Fatal("anonymous reuse touched row")
 	}
-	for i := 0; i < 9; i++ {
+	for i := 0; i < 10; i++ {
 		sessionData(t, call("session.start", "", `{}`))
 	}
-	if r := call("session.start", "", `{}`); r.Code != "forbidden" {
+	if r := call("session.start", "", `{}`); r.Code != "rate_limited" {
 		t.Fatalf("fresh mint budget %+v", r)
 	}
 }
