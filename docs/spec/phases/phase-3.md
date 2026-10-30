@@ -154,6 +154,33 @@ post-reload request probe is the real safety net.
   renewal window is a no-op (does not re-hit ACME) — the effectful-verb test in place of "run twice =
   no change".
 
+### Resolved contract details (Phase-3 rulings)
+- **Reads are synchronous (01 wins).** `site.list`/`site.get`/`ssl.status`/`php.list` are sync per 01;
+  the "reads are slow" phrase in earlier prose is wrong — do not enqueue reads.
+- **Site lifecycle** is the new `sites.status ∈ {creating, active, failed, deleting}` (02). `site.create`'s
+  `Run` persists `status='creating'`; the worker flips it to `active` on success or **`failed`** on
+  error (a `failed` site is retry-able via `site.create` ensure-semantics or removable via `site.delete`);
+  `site.delete` sets `deleting`. `site.list`/`get` return `status` (already in the 03 shape).
+- **Lock keys** per F6: `site.create` → `site:<name>`; all other site/domain/redirect/ssl verbs →
+  `site:<site_id>` resolved before enqueue.
+- **`ssl.upload` key handling** per F6 "secret job input": the agent **seals `cert_pem`+`key_pem` before
+  the job row is written**; `args_json` holds only the sealed blob; plaintext never lands in
+  jobs/audit/events/web.
+- **domain.add on a forced-HTTPS site** always adds the domain row, but the new FQDN is **not
+  force-HTTPS-served until a cert covers it** (`domains.cert_state`): a `letsencrypt` site enqueues a
+  cert expansion covering the full domain set; a `manual` cert that cannot auto-expand leaves the new
+  domain at `cert_state='none'` (served HTTP; force-HTTPS applies per-covered-domain) until a covering
+  cert is uploaded. `ssl.status` reports per-domain coverage.
+- **domain.remove** of the **primary** domain → `precondition_failed` unless another domain is first
+  promoted to primary (`site.update`); removing the **last** domain → `precondition_failed` (a site
+  keeps ≥1 domain). On a primary change the TLS directory re-keys to the new primary FQDN.
+- **site.delete scope.** Retry-safe ensure-absent order: (1) remove the nginx config + reload (stop
+  serving), (2) remove certs (files + `domains` cert state), (3) if `purge_files` remove the docroot/home
+  **and** the site Unix user, else **keep** the files and the user dormant, (4) delete `redirects`/
+  `domains`/`sites` rows last. Certs are always removed (regenerable). **Phase-4 DB rows are out of
+  Phase-3 scope** — when Phase 4 lands it extends `site.delete` to handle associated databases (refuse
+  or cascade per a flag); a Phase-3 `site.delete` does not touch DB rows (none exist yet).
+
 ## External refs (gathered — verified values to honor)
 - **The 502 cause:** FPM socket default owner is the FPM run-user (site user), mode 0660 → nginx
   can't `connect()` → EACCES → 502. Fix is `listen.owner`/`listen.group` = **nginx user** (Phase 4
