@@ -59,7 +59,7 @@ func (q *Queue) record(j Job, outcome, code, stage string) error {
 	if e := q.audit.Healthy(); e != nil {
 		return e
 	}
-	return q.audit.Record(audit.Event{Principal: audit.JobPrincipal(j.CreatedBy, j.Role), Actor: j.Actor, Role: j.Role, Verb: j.Verb, ObjectKey: j.ObjectKey, Outcome: outcome, Code: code, Detail: map[string]any{"job_id": j.ID, "stage": stage}})
+	return q.audit.Record(audit.Event{Principal: audit.JobPrincipal(j.CreatedBy, j.Role, j.Scopes), Actor: j.Actor, Role: j.Role, Verb: j.Verb, ObjectKey: j.ObjectKey, Outcome: outcome, Code: code, Detail: map[string]any{"job_id": j.ID, "stage": stage}})
 }
 func (q *Queue) Enqueue(ctx context.Context, verb string, args any, objectKey string) (EnqueueResult, error) {
 	return q.enqueue(ctx, verb, args, objectKey, false)

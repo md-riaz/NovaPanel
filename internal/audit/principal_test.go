@@ -8,6 +8,28 @@ import (
 	"testing"
 )
 
+func TestJobPrincipal(t *testing.T) {
+	for _, tc := range []struct {
+		name, createdBy, role string
+		scopes                []string
+		want                  Principal
+	}{
+		{"legacy-token", "token-id", "", []string{"system:write"}, Principal{Kind: "token", TokenID: "token-id"}},
+		{"explicit-token", "token-id", "token", nil, Principal{Kind: "token", TokenID: "token-id"}},
+		{"user", "session-id", "admin", nil, Principal{Kind: "user", SessionID: "session-id"}},
+		{"user-scopes-do-not-imply-token", "session-id", "admin", []string{"system:write"}, Principal{Kind: "user", SessionID: "session-id"}},
+		{"root-precedence", "local-root", "token", []string{"*"}, Principal{Kind: "local-root"}},
+		{"legacy-root-precedence", "local-root", "", []string{"*"}, Principal{Kind: "local-root"}},
+		{"missing-identity", "", "token", []string{"*"}, Principal{Kind: "unresolved"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := JobPrincipal(tc.createdBy, tc.role, tc.scopes); got != tc.want {
+				t.Fatalf("principal %+v want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPrincipalPreservesOnlyTrustedIDs(t *testing.T) {
 	s, err := store.Open(filepath.Join(t.TempDir(), "db"))
 	if err != nil {

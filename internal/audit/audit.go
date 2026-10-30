@@ -27,14 +27,14 @@ type Principal struct {
 }
 
 // JobPrincipal projects only the authority preserved by the existing job schema.
-func JobPrincipal(createdBy, role string) Principal {
+func JobPrincipal(createdBy, role string, scopes []string) Principal {
 	if createdBy == "local-root" {
 		return Principal{Kind: "local-root"}
 	}
 	if createdBy == "" {
 		return Principal{Kind: "unresolved"}
 	}
-	if role == "token" {
+	if role == "token" || (role == "" && len(scopes) > 0) {
 		return Principal{Kind: "token", TokenID: createdBy}
 	}
 	return Principal{Kind: "user", SessionID: createdBy}
