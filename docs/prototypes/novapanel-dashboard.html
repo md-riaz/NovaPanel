@@ -311,7 +311,7 @@ textarea.input{resize:vertical;min-height:40px;line-height:1.4}
 /* responsive */
 @media (max-width:920px){
   .app{grid-template-columns:1fr}
-  .sidebar{position:fixed;top:0;left:0;bottom:0;width:276px;transform:translateX(-100%);transition:transform .22s;box-shadow:var(--shadow)}
+  .sidebar{position:fixed;top:0;left:0;bottom:0;width:276px;transform:translateX(-100%);transition:transform .22s;box-shadow:var(--shadow);z-index:80}
   .sidebar.show{transform:none}
   .hamburger{display:grid}
   .cards-4{grid-template-columns:repeat(2,1fr)} .cards-3{grid-template-columns:1fr} .span-2{grid-column:auto}
