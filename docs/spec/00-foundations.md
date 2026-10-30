@@ -189,10 +189,12 @@ mfa_at}` where `kind ∈ {anon, user, token}`.
   is **not** a cookie. `panel-web` injects it into pages and validates the `X-CSRF-Token` header against
   the session's value (constant-time) on every mutating request. It rotates with the session id.
   Because panel-web holds no session state, it **re-fetches the expected value per request** from the
-  agent: a `kind=user`/`token` session reads it via **`session.whoami`**; an **`anon`** session (the
-  pre-login POST, where whoami is non-public) reads it via the **idempotent `session.start`** above.
-  The agent **never** receives or compares a CSRF header — there is no CSRF field in the F2 envelope;
-  the web tier owns the compare, the agent owns the token's value and storage.
+  agent: a `kind=user` (browser) session reads it via **`session.whoami`**; an **`anon`** session (the
+  pre-login POST, where whoami is non-public) reads it via the **idempotent `session.start`** above. An
+  API **`kind=token`** request carries no ambient cookie and bears its token directly, so it is **not**
+  CSRF-protected and re-fetches no CSRF token (`whoami` is not token-reachable anyway — 01). The agent
+  **never** receives or compares a CSRF header — there is no CSRF field in the F2 envelope; the web tier
+  owns the compare, the agent owns the token's value and storage.
 - **Timeouts:** idle **10 min**, absolute **12 h** (high-value panel), both enforced agent-side from
   `last_seen`/`created`; revocation = row delete. *(Supersedes any earlier "30 min" default.)*
 - **Idempotency** for the public API lives in an agent `idempotency` table keyed by

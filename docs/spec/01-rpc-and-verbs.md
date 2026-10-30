@@ -26,7 +26,7 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 | `ping` | ✓ | — | ✓ | — | | | | returns version |
 | `agent.info` | | O | ✓ | — | | | | build/version/uptime |
 | `session.login` | ✓ | — | | — | | | | rotates anon→user |
-| `session.start` | ✓ | — | | — | | | | **idempotent get-or-create** anon session + csrf (pre-login bootstrap): live anon presented → returns it unchanged; none → mints (rate-limited per peer); authed → `precondition_failed` (F3). Serves the anon pre-login CSRF re-fetch (F4) |
+| `session.start` | ✓ | — | | — | | | | **idempotent get-or-create** anon session + csrf (pre-login bootstrap): live anon presented → returns it unchanged; none → mints (rate-limited per peer; exhausted → `forbidden`); authed → `precondition_failed` (F3). Serves the anon pre-login CSRF re-fetch (F4) |
 | `session.reauth` | | RO | | — | | | | **self-service**; sets mfa_at; rotates id + csrf |
 | `session.logout` | | RO | | — | | | | **self-service** |
 | `session.whoami` | | RO | ✓ | — | | | | returns role+csrf_token |
