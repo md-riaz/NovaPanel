@@ -180,6 +180,34 @@ ALTER TABLE schedules ADD COLUMN owner_id    TEXT;                        -- cre
 > `job.claim` key ownership off it; a uid-0 local caller is the reserved sentinel `local-root`
 > (no `sessions` row), which can never equal a real session id.
 
+### Migration `0003_mfa.sql` (Phase 2, forward-only)
+
+Phase-2 MFA needs persistent TOTP replay prevention and a slot for an **un-confirmed** enrollment,
+added without touching any shipped migration. `users.totp_secret` keeps its meaning (**NULL = not
+enrolled**); the pending secret lives in a separate sealed column, so a half-enrolled user is still
+"not enrolled" until `mfa.confirm`.
+
+```sql
+-- TOTP replay set: a time-step accepted within its window is never re-accepted (survives restart). F4/phase-2.
+CREATE TABLE mfa_used (
+  user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  step_counter INTEGER NOT NULL,        -- the TOTP time-step that was consumed
+  used_at      INTEGER NOT NULL,
+  PRIMARY KEY (user_id, step_counter)
+);
+-- pending enrollment held between mfa.enroll and mfa.confirm; sealed (F12); bounded expiry.
+ALTER TABLE users ADD COLUMN totp_pending    TEXT;     -- sealed; NULL = no enrollment in progress
+ALTER TABLE users ADD COLUMN totp_pending_at INTEGER;  -- enrollment start (ms); expired pending is treated as absent
+```
+
+- **`mfa.enroll`** seals the new secret into `totp_pending` (+`totp_pending_at`), replacing any prior
+  **unconfirmed** pending; it **never** overwrites an active `totp_secret` (enroll on an already-enrolled
+  user is refused — `mfa.disable` first). **`mfa.confirm`** verifies a TOTP against `totp_pending`, then
+  **atomically** moves it into `totp_secret` and clears both pending columns. An expired `totp_pending`
+  is treated as absent.
+- `mfa_used` rows are pruned beyond the accepted skew window. Both `totp_secret` and `totp_pending` are
+  agent-sealed (F12).
+
 ## Phase 3 — sites, domains, certs
 
 ```sql

@@ -17,8 +17,9 @@ the `NewArgs` struct exactly as listed and validates fields (F9) before `Run`.
 
 ## session / mfa / user (Phase 2)
 ```
+session.start{}                                        → {session, csrf_token}   # public pre-login bootstrap; mints an anon session (rate-limited per peer)
 session.login{user, password, totp?:string}            → {session, role, csrf_token, mfa:bool}
-session.reauth{totp}                                    → {mfa_at}
+session.reauth{totp}                                    → {session, csrf_token, mfa_at}   # rotates the session id + csrf (F4); web replaces its cookie/header
 session.logout{}                                        → {}
 session.whoami{}                                        → {user, role, csrf_token, mfa_at, scopes?}
 mfa.enroll{}                                            → {otpauth_uri}        # shown once

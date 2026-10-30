@@ -26,11 +26,12 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 | `ping` | ✓ | — | ✓ | — | | | | returns version |
 | `agent.info` | | O | ✓ | — | | | | build/version/uptime |
 | `session.login` | ✓ | — | | — | | | | rotates anon→user |
-| `session.reauth` | | RO | | — | | | | sets mfa_at; rotates id |
-| `session.logout` | | RO | | — | | | | |
+| `session.start` | ✓ | — | | — | | | | mints an `anon` session + csrf (pre-login bootstrap); rate-limited per peer |
+| `session.reauth` | | RO | | — | | | | **self-service**; sets mfa_at; rotates id + csrf |
+| `session.logout` | | RO | | — | | | | **self-service** |
 | `session.whoami` | | RO | ✓ | — | | | | returns role+csrf_token |
-| `mfa.enroll` / `mfa.confirm` | | RO | | — | | | | returns otpauth URI once |
-| `mfa.disable` | | RO | | — | | | ✓ | |
+| `mfa.enroll` / `mfa.confirm` | | RO | | — | | | | **self-service**; returns otpauth URI once |
+| `mfa.disable` | | RO | | — | | | ✓ | **self-service** |
 | `tokens.create` | | A | | — | | | ✓ | automation grant needs step-up |
 | `tokens.list` / `tokens.revoke` | | A | list:✓ | — | | | | |
 | `system.status` / `system.metrics` | | RO | ✓ | system:read | | | | cpu/mem/disk/uptime |

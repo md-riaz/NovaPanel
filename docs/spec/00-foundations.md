@@ -143,14 +143,23 @@ mfa_at}` where `kind ∈ {anon, user, token}`.
 
 - **Pre-login anonymous session.** The first page visit mints an `anon` session (no user, role below
   `read_only`, carries a `csrf_token`). It exists so the login form has a CSRF token and so login can
-  **rotate** to a fresh session id (fixation defense). Only `session.login` and read of public assets
-  are allowed under an `anon` session.
+  **rotate** to a fresh session id (fixation defense). The stateless web tier mints it through the
+  **public `session.start` verb** (01 / 03), which returns `{session, csrf_token}`; it is rate-limited
+  per peer and short-lived. Only `session.start`, `session.login`, and read of public assets are
+  allowed under an `anon` session.
 - **Login** (`session.login{user, password, totp?}`): agent verifies (Argon2id; TOTP if enrolled),
   **mints a new session id** (the anon one is deleted — this is the "rotate on login"), stores
   `kind=user`, sets `mfa_at = now` iff a TOTP/backup code was verified, returns the token. `panel-web`
   stores it in a `__Host-` cookie and presents it as `session`.
 - **Roles:** `owner` > `admin` > `read_only`. Each verb declares a **minimum role** (F13);
   `read_only` may call only verbs flagged `ReadOnly`. **No tenants, packages, or resellers.**
+- **Self-service verbs (decided).** `session.reauth`, `session.logout`, `mfa.enroll`, `mfa.confirm`,
+  `mfa.disable` act only on the **caller's own** session/user and are authorized for any authenticated
+  `kind=user` session at or above `read_only` — an explicit, narrow exception to the "read_only may
+  call only `ReadOnly` verbs" rule. They never permit acting on another user (no target user_id; they
+  resolve the subject from the session), and they stay **not token-reachable** (scope —). The arch
+  test exercises a `read_only` user performing each on its own account and being refused any cross-user
+  effect. This resolves the dispatcher's over-broad rejection of read_only self-lifecycle calls.
 - **Token sessions (API).** An API token is `npat_<id>_<secret>`; the agent looks the row up by `<id>`
   (O(1)), Argon2id-verifies `<secret>`, and treats it as a `kind=token` session carrying **scopes**
   (not a role beyond what its scopes imply). `panel-web` passes the bare `npat_…` as `session`; the
