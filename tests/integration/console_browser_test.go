@@ -9,7 +9,6 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
-	"fmt"
 	"math/big"
 	"net"
 	"net/http"
@@ -253,5 +252,5 @@ os.execve('./panel-web',['./panel-web'],os.environ)`)
 			t.Fatalf("missing durable %s MFA refusal", verb)
 		}
 	}
-	t.Log(fmt.Sprintf("Verified actual SQLite completed jobs=%d, deletion and secret-free durable audit", len(jobs)))
+	t.Logf("Verified actual SQLite completed jobs=%d, deletion and secret-free durable audit", len(jobs))
 }
