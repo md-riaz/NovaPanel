@@ -108,7 +108,7 @@ func sslUploadExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	}
 	if durable.Step == "tls_committed" {
 		j.Step = durable.Step
-		j.Result = json.RawMessage(`{}`)
+		j.Result = append(json.RawMessage(nil), durable.Result...)
 		return nil
 	}
 	raw, err := a.Jobs.OpenInput(j)

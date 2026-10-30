@@ -17,7 +17,7 @@ The trusted internal checkpoint is the singleton settings key `tls:publication:v
 2. Stage the pair and persist the checkpoint before Publish. A crash after Stage but before checkpoint can leave an unreferenced owner-only version directory, but cannot change current.
 3. Publish, load validated installed TLS state, force nginx validation/reload even if config bytes match, then probe HTTP/ACME and HTTPS against the exact installed leaf. Production uses StateProbe on fixed loopback ports 80/443, including private-CA/manual certificate support.
 4. On failure, restore the certificate pointer BEFORE restoring config or recovery reload. Preserve first-install absence. Do not attempt reload when pointer/config recovery fails. Retain intent and sealed input as interrupted recovery state on unresolved failure or panic.
-5. After probe and durable LKG write, one SQLite transaction writes manual source/domain expiry metadata, `jobs.step='tls_committed'`, public result `{}`, and deletes the exact intent. A committed replay returns without opening secrets or reloading. The normal queue owns terminal audit/event/state and sealed-input cleanup. The marker remains through terminal publication.
+5. After probe and durable LKG write, one SQLite transaction writes manual source/domain expiry metadata, `jobs.step='tls_committed'`, public result `{fqdns,not_after}` for uploads, and deletes the exact intent. A committed replay returns without opening secrets or reloading. The normal queue owns terminal audit/event/state and sealed-input cleanup. The marker remains through terminal publication.
 
 This is a recoverable protocol, NOT an atomic filesystem/SQLite transaction. Files and affected nginx directories are synced. Both certificate versions remain retained.
 

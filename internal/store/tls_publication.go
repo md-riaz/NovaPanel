@@ -48,7 +48,35 @@ func (s *Store) CommitTLS(ctx context.Context, siteID, jobID, verb string, stagi
 		if _, err = tx.ExecContext(ctx, "UPDATE domains SET cert_state='issued',cert_staging=?,cert_not_after=? WHERE site_id=?", staging, expiry, siteID); err != nil {
 			return err
 		}
-		r, err = tx.ExecContext(ctx, "UPDATE jobs SET step='tls_committed',result_json='{}' WHERE id=? AND verb=? AND object_key=? AND state='running'", jobID, verb, "site:"+siteID)
+		result := json.RawMessage(`{}`)
+		if verb == "ssl.upload" {
+			rows, e := tx.QueryContext(ctx, "SELECT fqdn FROM domains WHERE site_id=? ORDER BY is_primary DESC, fqdn", siteID)
+			if e != nil {
+				return e
+			}
+			names := []string{}
+			for rows.Next() {
+				var name string
+				if e = rows.Scan(&name); e != nil {
+					rows.Close()
+					return e
+				}
+				names = append(names, name)
+			}
+			e = rows.Err()
+			rows.Close()
+			if e != nil {
+				return e
+			}
+			result, err = json.Marshal(struct {
+				FQDNs    []string `json:"fqdns"`
+				NotAfter int64    `json:"not_after"`
+			}{names, expiry})
+			if err != nil {
+				return err
+			}
+		}
+		r, err = tx.ExecContext(ctx, "UPDATE jobs SET step='tls_committed',result_json=? WHERE id=? AND verb=? AND object_key=? AND state='running'", string(result), jobID, verb, "site:"+siteID)
 		if err = affected(r, err); err != nil {
 			return err
 		}

@@ -229,7 +229,14 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	}
 	ctx = WithCaller(ctx, caller)
 	ctx = context.WithValue(ctx, presentedSessionKey{}, req.Session)
-	ctx = jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: callerIdentity(caller), Actor: caller.Actor, Role: caller.Role, Scopes: caller.Scopes, Automation: caller.Automation, Effectful: v.Effectful})
+	// Job authority is an admission snapshot, not a dependency on a live session.
+	role, scopes := caller.Role, []string(nil)
+	authorized := v.MFA
+	if caller.Kind == "token" || caller.Role == "token" {
+		role, scopes = "token", caller.Scopes
+		authorized = caller.Automation
+	}
+	ctx = jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: callerIdentity(caller), Actor: caller.Actor, Role: role, Scopes: scopes, Automation: authorized, Effectful: v.Effectful})
 	args := v.NewArgs()
 	d := json.NewDecoder(bytes.NewReader(req.Args))
 	d.DisallowUnknownFields()

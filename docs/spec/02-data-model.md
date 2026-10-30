@@ -163,10 +163,20 @@ the scope/automation snapshot so an effectful job resumed after a crash and an o
 (F19) authorize from **stored** authority, not a session that may be gone. `schedules` gains the owner's
 authority so a firing (F18 `EnqueueScheduledJob`) runs as the stored owner without a live session.
 
+**Worker admission clarification.** No schema migration is added. For directly dispatched jobs,
+`role='token'` identifies a token and `scopes_json` contains its scopes; user/local-root jobs retain
+the resolved role and empty scopes. Legacy token snapshots with an empty role and nonempty scopes
+remain scope-checked. `jobs.automation` snapshots successful MFA admission: for tokens it is only
+the token automation grant; for user/local-root it is set only after dispatch passes that verb's
+fresh-MFA gate. The worker requires this snapshot for MFA verbs and never rechecks a live session.
+This does not confer an automation grant on the user's session or schedules. Old MFA user jobs
+with a false snapshot fail closed and must be submitted again. Schedules keep their existing
+explicit automation-grant requirement.
+
 ```sql
 -- jobs: persist the full authority snapshot captured at the agent boundary (F4/F6/F8 ruling)
 ALTER TABLE jobs      ADD COLUMN scopes_json TEXT NOT NULL DEFAULT '[]'; -- token scopes at enqueue ([] for user/local-root)
-ALTER TABLE jobs      ADD COLUMN automation  INTEGER NOT NULL DEFAULT 0; -- 1 iff an automation-grant token enqueued it
+ALTER TABLE jobs      ADD COLUMN automation  INTEGER NOT NULL DEFAULT 0; -- MFA admission snapshot (see below)
 
 -- schedules: the stored owner the scheduler fires as (never re-derived from a live session — F18)
 ALTER TABLE schedules ADD COLUMN actor       TEXT NOT NULL DEFAULT 'scheduler@local';

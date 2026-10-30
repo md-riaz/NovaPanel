@@ -111,13 +111,20 @@ func TestSSLUploadSealedAndPublished(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = rpc.Registry["ssl.upload"].Exec(ctx, a, &j); err != nil {
+	if err = server.ExecuteJob(ctx, &j); err != nil {
 		t.Fatal(err)
 	}
 	if j.Step != "tls_committed" {
 		t.Fatal(j.Step)
 	}
-	if err = rpc.Registry["ssl.upload"].Exec(ctx, a, &j); err != nil {
+	var result struct {
+		FQDNs    []string `json:"fqdns"`
+		NotAfter int64    `json:"not_after"`
+	}
+	if err = json.Unmarshal(j.Result, &result); err != nil || len(result.FQDNs) != 1 || result.FQDNs[0] != "demo.test" || result.NotAfter != template.NotAfter.Truncate(time.Second).UnixMilli() {
+		t.Fatalf("upload result: %s %v", j.Result, err)
+	}
+	if err = server.ExecuteJob(ctx, &j); err != nil {
 		t.Fatal(err)
 	}
 	j.State = "done"

@@ -61,7 +61,7 @@ func (s sslPublication) publishCertificate(ctx context.Context, siteID string, j
 		}
 		if durable.Step == "tls_committed" {
 			j.Step = durable.Step
-			j.Result = json.RawMessage(`{}`)
+			j.Result = append(json.RawMessage(nil), durable.Result...)
 			return nil
 		}
 		var replay *tlsIntent
@@ -177,8 +177,12 @@ func (s sslPublication) publishCertificate(ctx context.Context, siteID string, j
 			if err := a.Store.CommitTLS(ctx, siteID, j.ID, j.Verb, staging, certificate.NotAfter.UnixMilli(), raw); err != nil {
 				return err
 			}
+			durable, err = a.Store.GetJob(ctx, j.ID)
+			if err != nil {
+				return err
+			}
 			j.Step = "tls_committed"
-			j.Result = json.RawMessage(`{}`)
+			j.Result = append(json.RawMessage(nil), durable.Result...)
 			return nil
 		})
 	})

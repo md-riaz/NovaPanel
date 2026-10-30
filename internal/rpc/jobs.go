@@ -17,21 +17,43 @@ func (s *Server) ExecuteJob(ctx context.Context, j *jobs.Job) error {
 	if j.CreatedBy == "" {
 		return Errf("forbidden", "Job identity required")
 	}
-	if len(j.Scopes) > 0 && j.CreatedBy != "local-root" {
-		if v.Scope == "" || (!slices.Contains(j.Scopes, v.Scope) && !slices.Contains(j.Scopes, "*")) {
+	if j.Role == "token" || (j.Role == "" && len(j.Scopes) > 0) {
+		if j.CreatedBy == "local-root" || v.Scope == "" || (!slices.Contains(j.Scopes, v.Scope) && !slices.Contains(j.Scopes, "*")) {
 			return Errf("forbidden", "Stored scope denied")
 		}
 	} else {
+		if len(j.Scopes) != 0 && j.CreatedBy != "local-root" {
+			return Errf("forbidden", "Stored authority kind mismatch")
+		}
 		rank, ok := map[string]Role{"read_only": ReadOnly, "admin": Admin, "owner": Owner}[j.Role]
 		if !ok || (rank < v.MinRole && !(rank == ReadOnly && v.ReadOnly)) || (rank == ReadOnly && !v.ReadOnly) {
 			return Errf("forbidden", "Stored role denied")
 		}
 	}
 	if v.MFA && !j.Automation {
-		return Errf("forbidden", "Stored automation grant required")
+		return Errf("forbidden", "Stored MFA admission required")
+	}
+	raw := j.Args
+	if j.Verb == "ssl.upload" {
+		// A committed publication replays its durable result without reopening input.
+		durable, err := s.Agent.Store.GetJob(ctx, j.ID)
+		if err != nil {
+			return err
+		}
+		if durable.Verb != j.Verb || durable.ObjectKey != j.ObjectKey || j.Effectful != v.Effectful {
+			return Errf("forbidden", "Stored job binding mismatch")
+		}
+		if durable.Step == "tls_committed" {
+			return v.Exec(ctx, s.Agent, j)
+		}
+		raw, err = s.Agent.Jobs.OpenInput(j)
+		if err != nil {
+			return Errf("bad_request", "Invalid sealed arguments")
+		}
+		defer clear(raw)
 	}
 	args := v.NewArgs()
-	d := json.NewDecoder(bytes.NewReader(j.Args))
+	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
 	if d.Decode(args) != nil {
 		return Errf("bad_request", "Invalid stored arguments")

@@ -300,6 +300,11 @@ object_key = the resource a job serializes on (see the site rule below)
 - `reconcile{scope?}` re-renders derived config from the DB and reloads; heals drift and
   half-created state. Config files are **derived artifacts**, never parsed back into the DB.
 
+**Durable MFA admission.** Dispatch snapshots a successful MFA gate in the existing job authority
+columns as specified in 02's worker admission clarification. User/local-root admission is distinct
+from a token automation grant; the worker never requires an expired or rotated session to remain
+live. This changes no schedule automation policy and adds no migration.
+
 **Executor binding (how a slow verb runs).** A slow verb's `Verb.Run` (F13) **validates args,
 generates any new id, persists the row (e.g. a `sites` row in `state='creating'`), writes that id into
 the job's `args_json`, and enqueues** (returning `{job}`); the **worker** calls the same verb's

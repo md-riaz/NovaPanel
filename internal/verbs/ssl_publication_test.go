@@ -127,7 +127,7 @@ func TestSSLPublicationFailuresAndRestart(t *testing.T) {
 				}
 				if replacement {
 					j, _, _ := enqueue(1)
-					if err = rpc.Registry["ssl.upload"].Exec(ctx, a, &j); err != nil {
+					if err = server.ExecuteJob(ctx, &j); err != nil {
 						t.Fatal(err)
 					}
 					j.State = "done"
@@ -194,7 +194,7 @@ func TestSSLPublicationFailuresAndRestart(t *testing.T) {
 								panicked = true
 							}
 						}()
-						err = rpc.Registry["ssl.upload"].Exec(execCtx, a, &j)
+						err = server.ExecuteJob(execCtx, &j)
 					}()
 					if failure == "crash" && (panicked || err == nil) {
 						t.Fatal("panic did not preserve recovery input")
@@ -252,7 +252,7 @@ func TestSSLPublicationFailuresAndRestart(t *testing.T) {
 				r.fail = ""
 				r.observe = nil
 				a.Nginx.Probe = func(context.Context, nginx.Desired) error { return nil }
-				if e = rpc.Registry["ssl.upload"].Exec(ctx, a, &j); e != nil {
+				if e = server.ExecuteJob(ctx, &j); e != nil {
 					t.Fatal(e)
 				}
 				if failure == "committed" && r.calls != before {
@@ -282,7 +282,7 @@ func TestSSLPublicationFailuresAndRestart(t *testing.T) {
 					t.Fatal(e)
 				}
 				stored, e := st.GetJob(ctx, j.ID)
-				if e != nil || string(stored.Args) != "{}" || string(stored.Result) != "{}" {
+				if e != nil || string(stored.Args) != "{}" || !strings.Contains(string(stored.Result), `"fqdns":["demo.test"]`) || !strings.Contains(string(stored.Result), `"not_after":`) {
 					t.Fatal("terminal secrets/result")
 				}
 			})
