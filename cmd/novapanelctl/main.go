@@ -29,7 +29,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			return fmt.Errorf("service verb requires one unit")
 		}
 		unit := f.Arg(1)
-		if !strings.Contains(unit, ".") {
+		if !strings.HasSuffix(unit, ".service") {
 			unit += ".service"
 		}
 		callArgs = struct {

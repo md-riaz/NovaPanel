@@ -12,6 +12,22 @@ import (
 )
 
 func TestCtlServiceUnit(t *testing.T) {
+	for _, verb := range []string{"service.status", "service.restart"} {
+		for _, tc := range []struct{ unit, want string }{
+			{"nginx", "nginx.service"},
+			{"nginx.service", "nginx.service"},
+			{"php8.3-fpm", "php8.3-fpm.service"},
+			{"php8.3-fpm.service", "php8.3-fpm.service"},
+		} {
+			t.Run(verb+"/"+tc.unit, func(t *testing.T) {
+				testCtlServiceUnit(t, verb, tc.unit, tc.want)
+			})
+		}
+	}
+}
+
+func testCtlServiceUnit(t *testing.T, verb, unit, want string) {
+	t.Helper()
 	l, e := net.Listen("unix", filepath.Join(t.TempDir(), "agent.sock"))
 	if e != nil {
 		t.Fatal(e)
@@ -48,7 +64,7 @@ func TestCtlServiceUnit(t *testing.T) {
 		done <- rpc.Encode(c, r)
 	}()
 	var out bytes.Buffer
-	if e = run(context.Background(), []string{"-socket", l.Addr().String(), "service.status", "nginx"}, &out); e != nil {
+	if e = run(context.Background(), []string{"-socket", l.Addr().String(), verb, unit}, &out); e != nil {
 		t.Fatal(e)
 	}
 	if e = <-done; e != nil {
@@ -60,7 +76,7 @@ func TestCtlServiceUnit(t *testing.T) {
 			Unit string `json:"unit"`
 		} `json:"data"`
 	}
-	if e = json.Unmarshal(out.Bytes(), &r); e != nil || !r.OK || r.Data.Unit != "nginx.service" {
+	if e = json.Unmarshal(out.Bytes(), &r); e != nil || !r.OK || r.Data.Unit != want {
 		t.Fatalf("%s %v", out.String(), e)
 	}
 }

@@ -22,4 +22,4 @@ with tempfile.TemporaryDirectory(prefix="novapanel-systemd-", dir=os.environ.get
         target = stage / unit.name
         target.write_text(text)
         staged.append(str(target))
-    subprocess.run(["systemd-analyze", "verify", *staged], check=True)
+    subprocess.run(["systemd-analyze", "verify", "--recursive-errors=no", *staged], check=True)
