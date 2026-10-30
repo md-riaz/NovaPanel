@@ -11,6 +11,7 @@ import (
 	"novapanel/internal/jobs"
 	"novapanel/internal/rpcerr"
 	"slices"
+	"sync"
 	"time"
 )
 
@@ -66,7 +67,13 @@ type AuditFunc func(AuditEvent)
 
 func (f AuditFunc) Record(e AuditEvent) { f(e) }
 
+type authRate struct {
+	start int64
+	count int
+}
 type Server struct {
+	authMu            sync.Mutex
+	authRates         map[uint32]authRate
 	Agent             *agent.Agent
 	WebUID            uint32
 	Registry          map[string]Verb
@@ -78,6 +85,9 @@ type Server struct {
 
 func NewServer(a *agent.Agent) *Server {
 	s := &Server{Agent: a, WebUID: ^uint32(0), Registry: Registry, Sessions: closedSessions{}, Audit: AuditFunc(func(AuditEvent) {}), DefaultDeadlineMs: 120000}
+	if a.Store != nil {
+		s.Sessions = storedSessions{a: a}
+	}
 	if a.Audit != nil {
 		s.DurableAudit = func(e AuditEvent) error {
 			return a.Audit.Record(audit.Event{Actor: e.Actor, Role: e.Role, Verb: e.Verb, ObjectKey: e.ObjectKey, Outcome: e.Outcome, Code: e.Code, Detail: e.Detail})
@@ -196,6 +206,26 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 		r := Err("forbidden", "Reauthentication required")
 		r.Data = map[string]bool{"reauth_required": true}
 		return r
+	}
+	if req.Verb == "session.start" || req.Verb == "session.login" || req.Verb == "session.reauth" {
+		s.authMu.Lock()
+		if s.authRates == nil {
+			s.authRates = make(map[uint32]authRate)
+		}
+		now := s.Agent.Now()
+		r := s.authRates[caller.Peer]
+		if now < r.start || now-r.start >= 60000 {
+			r = authRate{start: now}
+		}
+		allowed := r.count < 10
+		if allowed {
+			r.count++
+			s.authRates[caller.Peer] = r
+		}
+		s.authMu.Unlock()
+		if !allowed {
+			return Err("forbidden", "Authentication rate limit exceeded")
+		}
 	}
 	caller.Actor = req.Actor
 	if caller.Actor == "" && caller.Role == "owner" && caller.Peer == 0 {

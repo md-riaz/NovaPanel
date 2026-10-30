@@ -36,7 +36,7 @@ func RootCaller(uid uint32) Caller {
 	return Caller{Role: "owner", Actor: "root@local", Scopes: []string{"*"}, MFAat: time.Now().UnixMilli(), Peer: 0}
 }
 
-// SessionResolver will resolve agent-minted identities in Phase 2. Unknown tokens fail closed.
+// SessionResolver resolves agent-minted identities; unknown tokens fail closed.
 type SessionResolver interface {
 	Resolve(context.Context, string) (Caller, error)
 }
