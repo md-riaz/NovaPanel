@@ -2,6 +2,7 @@ package verbs_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"novapanel/internal/agent"
@@ -13,6 +14,7 @@ import (
 	"novapanel/internal/store"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -119,6 +121,16 @@ func TestQueuedSiteCreate(t *testing.T) {
 				if site.Status != "failed" || j.State != "failed" {
 					t.Fatalf("%+v %+v", site, j)
 				}
+				fail = false
+				r = call(`{"name":"demo","type":"static","primary_domain":"demo.test"}`)
+				if !r.OK {
+					t.Fatal(r)
+				}
+				j = wait(r.Data.(jobs.EnqueueResult).Job.ID)
+				site, e = st.SiteByID(ctx, site.ID)
+				if e != nil || site.Status != "active" || j.State != "done" {
+					t.Fatalf("failed creation did not roll forward: %+v %+v %v", site, j, e)
+				}
 				return
 			}
 			if site.Status != "active" || j.State != "done" || string(j.Result) != `{"site_id":"`+site.ID+`"}` {
@@ -135,6 +147,82 @@ func TestQueuedSiteCreate(t *testing.T) {
 			}
 			if _, e = os.Stat(filepath.Join(root, "nginx", "sites-available", "demo.conf.lkg")); e != nil {
 				t.Fatal(e)
+			}
+			for _, state := range []string{"maintenance", "redirect", "tls"} {
+				t.Run("active_retry_"+state, func(t *testing.T) {
+					if err := st.SetSiteStatus(ctx, site.ID, "active"); err != nil {
+						t.Fatal(err)
+					}
+					no := false
+					if err := st.UpdateSite(ctx, site.ID, store.SitePatch{Maintenance: &no}); err != nil {
+						t.Fatal(err)
+					}
+					if err := st.RemoveRedirect(ctx, "redirect"); err != nil {
+						t.Fatal(err)
+					}
+					switch state {
+					case "maintenance":
+						yes := true
+						e = st.UpdateSite(ctx, site.ID, store.SitePatch{Maintenance: &yes})
+					case "redirect":
+						_, e = st.AddRedirect(ctx, store.Redirect{ID: "redirect", SiteID: site.ID, Source: "/old", Target: "/new", Code: 301})
+					case "tls":
+						e = st.Tx(ctx, func(tx *sql.Tx) error {
+							if _, err := tx.ExecContext(ctx, "UPDATE sites SET cert_source='manual',force_https=1,hsts_max_age=300 WHERE id=?", site.ID); err != nil {
+								return err
+							}
+							_, err := tx.ExecContext(ctx, "UPDATE domains SET cert_state='issued' WHERE site_id=?", site.ID)
+							return err
+						})
+					}
+					if e != nil {
+						t.Fatal(e)
+					}
+					before, err := st.SiteByID(ctx, site.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					domains, err := st.ListDomains(ctx, site.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					redirects, err := st.ListRedirects(ctx, site.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					config, err := os.ReadFile(filepath.Join(root, "nginx", "sites-available", "demo.conf"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					firstProvisioned := provisioned
+					r := call(`{"name":"demo","type":"static","primary_domain":"demo.test"}`)
+					if !r.OK {
+						t.Fatal(r)
+					}
+					j := wait(r.Data.(jobs.EnqueueResult).Job.ID)
+					after, err := st.SiteByID(ctx, site.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if j.State != "done" || string(j.Result) != `{"site_id":"`+site.ID+`"}` || !reflect.DeepEqual(before, after) {
+						t.Fatalf("active create retry changed desired state: before=%+v after=%+v job=%+v", before, after, j)
+					}
+					afterDomains, err := st.ListDomains(ctx, site.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					afterRedirects, err := st.ListRedirects(ctx, site.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					afterConfig, err := os.ReadFile(filepath.Join(root, "nginx", "sites-available", "demo.conf"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(domains, afterDomains) || !reflect.DeepEqual(redirects, afterRedirects) || string(config) != string(afterConfig) || commands.calls != first || provisioned != firstProvisioned {
+						t.Fatal("active create retry changed resources")
+					}
+				})
 			}
 		})
 	}

@@ -278,14 +278,14 @@ func redirectAddExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if _, e := (siteMutationState{a}).mutableSite(ctx, v.SiteID); e != nil {
 		return e
 	}
-	_, e := a.Store.AddRedirect(ctx, store.Redirect{ID: v.RedirectID, SiteID: v.SiteID, Source: v.Source, Target: v.Target, Code: v.Code})
+	r, e := a.Store.AddRedirect(ctx, store.Redirect{ID: v.RedirectID, SiteID: v.SiteID, Source: v.Source, Target: v.Target, Code: v.Code})
 	if e != nil {
 		return siteError(e)
 	}
 	if e = (siteMutationState{a}).applySite(ctx, v.SiteID, j); e != nil {
 		return e
 	}
-	j.Result, e = json.Marshal(map[string]string{"redirect_id": v.RedirectID})
+	j.Result, e = json.Marshal(map[string]string{"redirect_id": r.ID})
 	return e
 }
 func redirectRemove(ctx context.Context, a *agent.Agent, args any) (any, error) {

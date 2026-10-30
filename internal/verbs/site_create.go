@@ -88,6 +88,11 @@ func siteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 	if site.Name != v.Name || site.Type != "static" || site.Docroot != filepath.Join(a.Cfg.SitesRoot, v.Name, "public") || site.Status == "deleting" {
 		return rpc.Errf("precondition_failed", "Site state changed")
 	}
+	// Active sites already completed creation; later desired state belongs to its own verbs.
+	if site.Status == "active" {
+		j.Result, e = json.Marshal(map[string]string{"site_id": site.ID})
+		return e
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			err = rpc.Errf("agent_error", "Site creation failed")

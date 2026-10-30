@@ -100,6 +100,23 @@ func TestSiteMetadataMutations(t *testing.T) {
 	if _, e = s.RedirectByID(ctx, r.ID); e != nil {
 		t.Fatal(e)
 	}
+	retry := r
+	retry.ID = "retry"
+	if got, e := s.AddRedirect(ctx, retry); e != nil || got != r {
+		t.Fatalf("fresh redirect ensure: %+v %v", got, e)
+	}
+	for _, conflict := range []Redirect{
+		{ID: "other", SiteID: site.ID, Source: r.Source, Target: "/different", Code: r.Code},
+		{ID: "other", SiteID: site.ID, Source: r.Source, Target: r.Target, Code: 302},
+		{ID: r.ID, SiteID: site.ID, Source: "/different", Target: r.Target, Code: r.Code},
+	} {
+		if _, e := s.AddRedirect(ctx, conflict); !errors.Is(e, ErrSiteConflict) {
+			t.Fatalf("redirect conflict accepted: %+v %v", conflict, e)
+		}
+	}
+	if rows, e := s.ListRedirects(ctx, site.ID); e != nil || len(rows) != 1 || rows[0] != r {
+		t.Fatalf("redirect state changed: %+v %v", rows, e)
+	}
 	if e = s.RemoveRedirect(ctx, r.ID); e != nil {
 		t.Fatal(e)
 	}

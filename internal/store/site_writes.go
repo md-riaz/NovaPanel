@@ -117,6 +117,17 @@ func (s *Store) AddRedirect(ctx context.Context, v Redirect) (out Redirect, err 
 		if status == "deleting" {
 			return ErrSitePrecondition
 		}
+		old, e = scanRedirect(tx.QueryRowContext(ctx, "SELECT "+redirectColumns+" FROM redirects WHERE site_id=? AND source=?", v.SiteID, v.Source))
+		if e == nil {
+			if old.Target != v.Target || old.Code != v.Code {
+				return ErrSiteConflict
+			}
+			out = old
+			return nil
+		}
+		if !errors.Is(e, sql.ErrNoRows) {
+			return e
+		}
 		_, e = tx.ExecContext(ctx, "INSERT INTO redirects(id,site_id,source,target,code) VALUES(?,?,?,?,?)", v.ID, v.SiteID, v.Source, v.Target, v.Code)
 		out = v
 		return siteWriteError(e)

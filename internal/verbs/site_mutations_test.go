@@ -108,6 +108,15 @@ func TestSiteMutations(t *testing.T) {
 	if !contains(string(bytes), "return 301 \"/new\";") {
 		t.Fatalf("redirect not rendered %s", bytes)
 	}
+	firstCalls := commands.calls
+	retried := exec("redirect.add", map[string]any{"site_id": sid, "source": "/old", "target": "/new", "code": 301})
+	if string(retried.Result) != string(j.Result) || commands.calls != firstCalls {
+		t.Fatalf("fresh redirect retry changed result or reloaded: %s / %s", retried.Result, j.Result)
+	}
+	rs, err := st.ListRedirects(ctx, sid)
+	if err != nil || len(rs) != 1 || rs[0].ID != redirect.ID {
+		t.Fatalf("redirect retry persisted duplicates: %+v %v", rs, err)
+	}
 	exec("redirect.remove", map[string]any{"redirect_id": redirect.ID})
 	if r := call("site.update", map[string]any{"site_id": sid, "force_https": true}); r.Code != "precondition_failed" {
 		t.Fatalf("TLS gate %+v", r)
