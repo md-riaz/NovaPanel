@@ -17,6 +17,7 @@ type consoleRPC struct {
 	created  bool
 	polls    int
 	uploaded bool
+	promoted bool
 }
 
 func (c *consoleRPC) Close() error { return nil }
@@ -35,6 +36,9 @@ func (c *consoleRPC) Call(_ context.Context, verb string, args any, _ string) (r
 		data["sites"] = rows
 	case "site.get":
 		data = map[string]any{"site": map[string]any{"name": "demo", "type": "static", "status": "active"}, "domains": []any{map[string]any{"id": "DOMAIN", "fqdn": "example.test", "is_primary": true, "cert_state": "none"}}}
+	case "site.update":
+		c.promoted = args.(map[string]any)["primary_domain_id"] == "DOMAIN"
+		data["job"] = map[string]any{"id": "JOB", "verb": verb, "state": "queued"}
 	case "ssl.status":
 		data = map[string]any{"source": "none", "force_https": false, "domains": []any{map[string]any{"fqdn": "example.test", "cert_state": "none"}}}
 	case "ssl.renew":
@@ -77,7 +81,7 @@ func TestBrowserConsoleContract(t *testing.T) {
 	}
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
-	if !fixture.created || fixture.polls == 0 || !fixture.uploaded {
+	if !fixture.created || fixture.polls == 0 || !fixture.uploaded || !fixture.promoted {
 		t.Fatalf("fixture create=%v polls=%d upload=%v", fixture.created, fixture.polls, fixture.uploaded)
 	}
 }

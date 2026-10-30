@@ -17,16 +17,20 @@ import (
 )
 
 type siteUpdateArgs struct {
-	SiteID      string  `json:"site_id"`
-	PHPVersion  *string `json:"php_version,omitempty"`
-	ForceHTTPS  *bool   `json:"force_https,omitempty"`
-	HSTSMaxAge  *int64  `json:"hsts_max_age,omitempty"`
-	Maintenance *bool   `json:"maintenance,omitempty"`
+	SiteID          string  `json:"site_id"`
+	PrimaryDomainID *string `json:"primary_domain_id,omitempty"`
+	PHPVersion      *string `json:"php_version,omitempty"`
+	ForceHTTPS      *bool   `json:"force_https,omitempty"`
+	HSTSMaxAge      *int64  `json:"hsts_max_age,omitempty"`
+	Maintenance     *bool   `json:"maintenance,omitempty"`
 }
 
 func (v *siteUpdateArgs) Validate() error {
 	if e := (&siteIDArgs{v.SiteID}).Validate(); e != nil {
 		return e
+	}
+	if v.PrimaryDomainID != nil && !id.Valid(*v.PrimaryDomainID) {
+		return rpc.Errf("invalid_argument", "Invalid primary domain ID")
 	}
 	if v.PHPVersion != nil {
 		return rpc.Errf("unsupported", "Only static sites are available")
@@ -125,6 +129,28 @@ func (m siteMutationState) mutableSite(ctx context.Context, sid string) (store.S
 	}
 	return s, nil
 }
+func (m siteMutationState) primaryTarget(ctx context.Context, sid string, target *string) error {
+	if target == nil {
+		return nil
+	}
+	ds, err := m.a.Store.ListDomains(ctx, sid)
+	if err != nil {
+		return err
+	}
+	primaries, found := 0, false
+	for _, d := range ds {
+		if d.IsPrimary {
+			primaries++
+		}
+		if d.ID == *target {
+			found = true
+		}
+	}
+	if len(ds) == 0 || primaries != 1 || !found {
+		return rpc.Errf("precondition_failed", "Primary domain must be an existing same-site domain with exactly one current primary")
+	}
+	return nil
+}
 func siteUpdate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*siteUpdateArgs)
 	if _, e := (siteMutationState{a}).mutableSite(ctx, v.SiteID); e != nil {
@@ -135,6 +161,9 @@ func siteUpdate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	}
 	if v.ForceHTTPS != nil && *v.ForceHTTPS || v.HSTSMaxAge != nil && *v.HSTSMaxAge != 0 {
 		return nil, rpc.Errf("precondition_failed", "A valid installed certificate is required")
+	}
+	if e := (siteMutationState{a}).primaryTarget(ctx, v.SiteID, v.PrimaryDomainID); e != nil {
+		return nil, e
 	}
 	return a.Jobs.Enqueue(ctx, "site.update", v, "site:"+v.SiteID)
 }
@@ -152,7 +181,13 @@ func siteUpdateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if v.ForceHTTPS != nil && *v.ForceHTTPS || v.HSTSMaxAge != nil && *v.HSTSMaxAge != 0 {
 		return rpc.Errf("precondition_failed", "A valid installed certificate is required")
 	}
-	if e := a.Store.UpdateSite(ctx, v.SiteID, store.SitePatch{Maintenance: v.Maintenance, ForceHTTPS: v.ForceHTTPS, HSTSMaxAge: v.HSTSMaxAge}); e != nil {
+	if v.HSTSMaxAge != nil && j.Role != "owner" {
+		return rpc.Errf("forbidden", "Only an owner may set HSTS")
+	}
+	if e := (siteMutationState{a}).primaryTarget(ctx, v.SiteID, v.PrimaryDomainID); e != nil {
+		return e
+	}
+	if e := a.Store.UpdateSite(ctx, v.SiteID, store.SitePatch{PrimaryDomainID: v.PrimaryDomainID, Maintenance: v.Maintenance, ForceHTTPS: v.ForceHTTPS, HSTSMaxAge: v.HSTSMaxAge}); e != nil {
 		return siteError(e)
 	}
 	return (siteMutationState{a}).applySite(ctx, v.SiteID, j)

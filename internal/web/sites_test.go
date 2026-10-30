@@ -14,6 +14,7 @@ func TestConsoleMutationsCanonicalArgs(t *testing.T) {
 		want             map[string]any
 	}{
 		{"/sites/create", "name=demo&type=static&primary_domain=example.test&evil=ignore", "site.create", map[string]any{"name": "demo", "type": "static", "primary_domain": "example.test"}},
+		{"/sites/SITE/update", "primary_domain_id=DOMAIN", "site.update", map[string]any{"site_id": "SITE", "primary_domain_id": "DOMAIN"}},
 		{"/sites/SITE/update", "maintenance=false", "site.update", map[string]any{"site_id": "SITE", "maintenance": false}},
 		{"/sites/SITE/delete", "purge_files=true", "site.delete", map[string]any{"site_id": "SITE", "purge_files": true}},
 		{"/sites/SITE/domains/add", "fqdn=www.example.test", "domain.add", map[string]any{"site_id": "SITE", "fqdn": "www.example.test"}},

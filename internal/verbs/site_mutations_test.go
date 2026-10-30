@@ -95,7 +95,31 @@ func TestSiteMutations(t *testing.T) {
 	if r := call("domain.remove", map[string]any{"domain_id": did}); r.Code != "precondition_failed" {
 		t.Fatalf("primary removal %+v", r)
 	}
+	// Promotion uses the existing queued update contract and retains both domains.
+	exec("site.update", map[string]any{"site_id": sid, "primary_domain_id": added.ID})
+	promoted, _ := st.DomainByID(ctx, added.ID)
+	if !promoted.IsPrimary {
+		t.Fatal("promotion not persisted")
+	}
+	if r := call("domain.remove", map[string]any{"domain_id": added.ID}); r.Code != "precondition_failed" {
+		t.Fatalf("new primary removal %+v", r)
+	}
+	for _, target := range []string{"bad", "01ARZ3NDEKTSV4RRFFQ69G5FAV"} {
+		r := call("site.update", map[string]any{"site_id": sid, "primary_domain_id": target})
+		if r.OK {
+			t.Fatalf("invalid target admitted: %+v", r)
+		}
+	}
+	exec("site.update", map[string]any{"site_id": sid, "primary_domain_id": did})
+	pending := call("site.update", map[string]any{"site_id": sid, "primary_domain_id": added.ID})
+	if !pending.OK {
+		t.Fatalf("promotion admission %+v", pending)
+	}
 	exec("domain.remove", map[string]any{"domain_id": added.ID})
+	pj := jobs.Job(pending.Data.(jobs.EnqueueResult).Job)
+	if e := rpc.Registry["site.update"].Exec(ctx, a, &pj); e == nil {
+		t.Fatal("removed target accepted at execution")
+	}
 	j = exec("redirect.add", map[string]any{"site_id": sid, "source": "/old", "target": "/new", "code": 301})
 	var redirect struct {
 		ID string `json:"redirect_id"`

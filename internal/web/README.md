@@ -52,7 +52,7 @@ NOVAPANEL_BROWSER_NODE="$(command -v node)" \
 go test ./internal/web/testdata/browser -run TestBrowserConsoleContract -count=1 -v
 ```
 
-This is real Chromium against a fake RPC backend, not real site provisioning or ACME acceptance. It exercises create, job polling, refreshed listing, domain and SSL navigation, an unknown-verb refusal, MFA upload refusal, secret/storage guards, mobile width and JavaScript errors. The canonical API currently has no redirect enumeration, primary-domain promotion argument, or auto-renew read field; the console explains those gaps rather than inventing fields or local state.
+This is real Chromium against a fake RPC backend, not real site provisioning or ACME acceptance. It exercises create, job polling, refreshed listing, domain and SSL navigation, an unknown-verb refusal, MFA upload refusal, secret/storage guards, mobile width and JavaScript errors. The canonical primary-domain amendment adds an existing-domain select through site.update. Promotion is HTTP-only; TLS promotion remains fail-closed pending coordinated certificate re-key publication. Redirect enumeration and the auto-renew read field still need separate contract decisions; the console does not invent them.
 
 ## Assets
 

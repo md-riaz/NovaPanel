@@ -129,6 +129,12 @@ func consoleArgs(verb, site string, r *http.Request) (map[string]any, error) {
 			args["name"] = name
 		}
 	case "site.update":
+		if value, ok := r.PostForm["primary_domain_id"]; ok {
+			if len(value) != 1 || value[0] == "" {
+				return nil, fmt.Errorf("primary domain ID required")
+			}
+			args["primary_domain_id"] = value[0]
+		}
 		for _, name := range []string{"maintenance", "force_https"} {
 			if err := boolean(name, true); err != nil {
 				return nil, err

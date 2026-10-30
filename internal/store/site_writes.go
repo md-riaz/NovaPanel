@@ -13,9 +13,9 @@ var (
 )
 
 type SitePatch struct {
-	PHPVersion, ConfigHash           *string
-	ForceHTTPS, Maintenance, SSLAuto *bool
-	HSTSMaxAge                       *int64
+	PHPVersion, ConfigHash, PrimaryDomainID *string
+	ForceHTTPS, Maintenance, SSLAuto        *bool
+	HSTSMaxAge                              *int64
 }
 
 // UpdateSite stores desired metadata. Certificate validity is checked at the
@@ -25,6 +25,32 @@ func (s *Store) UpdateSite(ctx context.Context, id string, p SitePatch) error {
 		return ErrSiteInvalid
 	}
 	return s.Tx(ctx, func(tx *sql.Tx) error {
+		if p.PrimaryDomainID != nil {
+			var status, source string
+			var force bool
+			var hsts int64
+			if err := tx.QueryRowContext(ctx, "SELECT status,cert_source,force_https,hsts_max_age FROM sites WHERE id=?", id).Scan(&status, &source, &force, &hsts); err != nil {
+				return err
+			}
+			var count, primaries, targets, covered int
+			if err := tx.QueryRowContext(ctx, "SELECT count(*),COALESCE(sum(is_primary),0),COALESCE(sum(id=?),0),COALESCE(sum(cert_state!='none'),0) FROM domains WHERE site_id=?", *p.PrimaryDomainID, id).Scan(&count, &primaries, &targets, &covered); err != nil {
+				return err
+			}
+			if status != "active" || count < 1 || primaries != 1 || targets != 1 || source != "none" || force || hsts != 0 || covered != 0 {
+				return ErrSitePrecondition
+			}
+			var primary string
+			if err := tx.QueryRowContext(ctx, "SELECT id FROM domains WHERE site_id=? AND is_primary=1", id).Scan(&primary); err != nil {
+				return err
+			}
+			if primary != *p.PrimaryDomainID {
+				if _, err := tx.ExecContext(ctx, "UPDATE domains SET is_primary=(id=?) WHERE site_id=?", *p.PrimaryDomainID, id); err != nil {
+					return err
+				}
+			} else if p.PHPVersion == nil && p.ConfigHash == nil && p.ForceHTTPS == nil && p.Maintenance == nil && p.SSLAuto == nil && p.HSTSMaxAge == nil {
+				return nil
+			}
+		}
 		r, e := tx.ExecContext(ctx, `UPDATE sites SET php_version=COALESCE(?,php_version),config_hash=COALESCE(?,config_hash),force_https=COALESCE(?,force_https),maintenance=COALESCE(?,maintenance),ssl_auto=COALESCE(?,ssl_auto),hsts_max_age=COALESCE(?,hsts_max_age),updated=? WHERE id=?`, p.PHPVersion, p.ConfigHash, p.ForceHTTPS, p.Maintenance, p.SSLAuto, p.HSTSMaxAge, s.clock.Now(), id)
 		return siteChanged(r, e)
 	})
