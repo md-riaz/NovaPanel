@@ -76,8 +76,8 @@ GRANT SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,ALTER,INDEX,CREATE TEMPORARY TABLE
 
 ### WordPress install (reference — fixed argv, run as the site user)
 ```
-wp core download --version=<v> --path=/srv/sites/{{site}}/public        # refuse if docroot non-empty
-wp core verify-checksums --version=<v>                                   # fail install on mismatch; NEVER --insecure
+wp core download --version=<v> --path=/srv/sites/{{site}}/public        # refuse if docroot non-empty → precondition_failed
+wp core verify-checksums --version=<v>                                   # mismatch → agent_error (tampered); NEVER --insecure
 wp config create --dbname={{db}} --dbuser={{dbuser}} --dbpass=<pw> \
     --dbhost=127.0.0.1 --dbprefix=wp_ --dbcharset=utf8mb4 --path=...     # salts unique per site
 wp core install --url=https://{{domain}} --title=... --admin_user=... \

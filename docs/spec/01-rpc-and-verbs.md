@@ -107,7 +107,11 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 the socket from a **uid-authenticated** peer, i.e. the web uid, with an internal verb flag — not a
 payload marker): `tokens.verify`, `deploy.hook`, `deploy.hook_create`/`list`/`delete`. These still
 have `Registry` entries (invariant 3) with `Public=false, Scope="", Internal=true`; the arch test
-counts them as registered, and the dispatcher refuses them unless the connection is the web peer.
+counts them as registered, and the dispatcher refuses them unless the connection is the web peer. An
+internal verb that acts on a **user-visible resource additionally enforces the forwarded session's
+role** where its phase assigns one: `deploy.hook_create`/`list`/`delete` require the carried session to
+be **≥ admin** (phase-8) on top of the web-peer gate; `tokens.verify` and `deploy.hook` are pure
+peer-gated plumbing (no user session).
 
 **HTTP status for the pass-2 codes:** `interrupted` → 409; `unsupported` → 501.
 

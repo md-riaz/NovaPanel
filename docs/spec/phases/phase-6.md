@@ -103,12 +103,16 @@ recoverable out-of-band** — never store the only copy inside the repo they unl
   ESTABLISHED rule so it would prove nothing). `firewall.apply` returns a one-time **confirm nonce**
   (in `pending_id`'s reply); the panel serves the confirm UI/endpoint with `Cache-Control: no-store`
   and `Connection: close`, so the client must open a **new request** to submit `firewall.confirm`. A
-  successful fresh confirm within N minutes (default **15**) is sufficient evidence the panel is still
+  successful fresh confirm within N minutes (default **`Cfg.firewall_window_min`**, 15) is sufficient
+  evidence the panel is still
   reachable (the actual safety goal); if the change broke access, no confirm arrives and the transient
   unit reverts. We do not claim to verify a specific new *TCP* connection — only that a fresh
   authenticated request completed. The **never-removable SSH
-  rule** (port from config, source any unless the admin pins one) is re-asserted `prepend`/`insert 1`
-  on every apply.
+  rule** (port from **`Cfg.ssh_port`**, source any unless the admin pins one) is re-asserted
+  `prepend`/`insert 1` on every apply. Any `firewall:write` caller (admin+, or an automation-grant
+  token) may `firewall.confirm`/`revert` the **single** armed pending — `firewall.apply` returns
+  `conflict` if one is already armed, so there is never ambiguity about which; an unknown or expired
+  `pending_id` → `not_found`; every confirm/revert is audited with its actor.
 
 **MariaDB restore swap (no RENAME DATABASE).** Steps: (1) take a **pre-restore safety dump** of the
 live DB to the panel repo first (so the current state is always recoverable); (2) create a **scratch
@@ -133,7 +137,7 @@ the panel repo using the out-of-band password → restore panel.db → ACME keys
 
 **D2 update protocol (folded in so this phase stands alone).** `update.check` fetches a channel
 **`manifest.json` + `manifest.json.sig`**; the agent **verifies the ed25519 signature with a public
-key compiled into the binary BEFORE parsing**, refuses a `version` **≤ installed** (anti-rollback),
+key compiled into the binary BEFORE parsing** (a bad signature → `invalid_argument`), refuses a `version` **≤ installed** (anti-rollback → `precondition_failed`),
 and checks each artifact's sha256 + size against the signed manifest. `update.apply` (owner, MFA,
 effectful) downloads the artifact, **unpacks defensively** (tar-slip: reject abs/`..`/non-regular/
 outside-top), swaps the binary, and restarts via systemd; a failed post-restart health check rolls
