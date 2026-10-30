@@ -16,8 +16,12 @@ make test
 ```
 
 `make ci` also requires `staticcheck` and `govulncheck`. The optional
-`make integration` gate runs real binaries on a scratch socket and requires root
-in a disposable environment. It does not install or start host services.
+`make integration` gate runs the real CLI and web binaries against a test-only daemon
+that shares the production lifecycle with an injected command runner. All persistent
+paths stay in scratch; real socket permissions, peer credentials, jobs and shutdown
+are exercised. Root is required for socket ownership and peer UID probes. Run it in
+a disposable environment. It never runs real `chattr` or service commands and does
+not replace final VM acceptance for append-only enforcement and live services.
 
 The implementation contract is [Phase 0](docs/spec/phases/phase-0.md), with
 shared contracts in [foundations](docs/spec/00-foundations.md).
