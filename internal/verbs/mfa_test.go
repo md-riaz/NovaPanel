@@ -16,6 +16,8 @@ import (
 
 func TestMFAEnrollmentLifecycle(t *testing.T) {
 	s, c, call := sessionHarness(t)
+	// This lifecycle intentionally exercises six proofs in one window.
+	s.Agent.Cfg.TOTPMaxAttempts = 6
 	s.Agent.Secret, _ = secret.New(make([]byte, 32))
 	anon := sessionData(t, call("session.start", "", `{}`))["session"].(string)
 	token := sessionData(t, call("session.login", anon, `{"user":"reader","password":"correct password"}`))["session"].(string)

@@ -295,6 +295,35 @@ func TestLoginRejectsAlreadyAuthenticatedSession(t *testing.T) {
 	}
 	sessionData(t, call("session.whoami", token, `{}`))
 }
+func TestConfiguredAuthenticationBudgets(t *testing.T) {
+	s, c, call := sessionHarness(t)
+	s.Agent.Cfg.LoginMaxAttempts = 2
+	s.Agent.Cfg.LoginWindowSec = 900
+	s.Agent.Cfg.TOTPMaxAttempts = 1
+	anon := sessionData(t, call("session.start", "", `{}`))["session"].(string)
+	for i := 0; i < 2; i++ {
+		if r := call("session.login", anon, `{"user":"reader","password":"wrong"}`); r.Code != "unauthenticated" {
+			t.Fatalf("early limit %+v", r)
+		}
+	}
+	if r := call("session.login", anon, `{"user":"reader","password":"correct password"}`); r.Code != "forbidden" {
+		t.Fatalf("configured budget ignored %+v", r)
+	}
+	c.now += 60000
+	if r := call("session.login", anon, `{"user":"reader","password":"wrong"}`); r.Code != "forbidden" {
+		t.Fatalf("configured window ignored %+v", r)
+	}
+	c.now += 840000
+	anon = sessionData(t, call("session.start", "", `{}`))["session"].(string)
+	token := sessionData(t, call("session.login", anon, `{"user":"reader","password":"correct password"}`))["session"].(string)
+	if r := call("mfa.confirm", token, `{"totp":"invalid"}`); r.Code != "unauthenticated" {
+		t.Fatalf("first proof %+v", r)
+	}
+	if r := call("mfa.confirm", token, `{"totp":"invalid"}`); r.Code != "forbidden" {
+		t.Fatalf("configured MFA budget ignored %+v", r)
+	}
+}
+
 func TestDurableAuditFailurePreventsSessionMint(t *testing.T) {
 	s, _, call := sessionHarness(t)
 	s.DurableAudit = func(rpc.AuditEvent) error { return context.Canceled }

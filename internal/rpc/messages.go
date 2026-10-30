@@ -73,7 +73,7 @@ type authRate struct {
 }
 type Server struct {
 	authMu            sync.Mutex
-	authRates         map[uint32]authRate
+	authRates         map[uint32][3]authRate
 	Agent             *agent.Agent
 	WebUID            uint32
 	Registry          map[string]Verb
@@ -207,25 +207,8 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 		r.Data = map[string]bool{"reauth_required": true}
 		return r
 	}
-	if req.Verb == "session.start" || req.Verb == "session.login" || req.Verb == "session.reauth" || req.Verb == "mfa.confirm" || req.Verb == "mfa.disable" {
-		s.authMu.Lock()
-		if s.authRates == nil {
-			s.authRates = make(map[uint32]authRate)
-		}
-		now := s.Agent.Now()
-		r := s.authRates[caller.Peer]
-		if now < r.start || now-r.start >= 60000 {
-			r = authRate{start: now}
-		}
-		allowed := r.count < 10
-		if allowed {
-			r.count++
-			s.authRates[caller.Peer] = r
-		}
-		s.authMu.Unlock()
-		if !allowed {
-			return Err("forbidden", "Authentication rate limit exceeded")
-		}
+	if !s.allowAuthentication(caller.Peer, req.Verb, req.Args) {
+		return Err("forbidden", "Authentication rate limit exceeded")
 	}
 	caller.Actor = req.Actor
 	if caller.Actor == "" && caller.Role == "owner" && caller.Peer == 0 {
