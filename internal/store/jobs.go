@@ -61,10 +61,10 @@ func (s *Store) CreateJob(ctx context.Context, j Job) error { return insertJob(c
 
 // CreateJobWithClaim publishes the queued job and hashed token in one transaction.
 func (s *Store) CreateJobWithClaim(ctx context.Context, j Job, c JobClaim) error {
-	if c.JobID != j.ID {
-		return errors.New("claim job mismatch")
-	}
 	return s.Tx(ctx, func(tx *sql.Tx) error {
+		if c.JobID != j.ID {
+			return errors.New("claim job mismatch")
+		}
 		if e := insertJob(ctx, tx, j); e != nil {
 			return e
 		}
@@ -219,10 +219,10 @@ func insertClaim(ctx context.Context, db execer, v JobClaim) error {
 const ClaimTTLMillis int64 = 5 * 60 * 1000
 
 func (s *Store) PublishClaim(ctx context.Context, id string, nonce, ciphertext []byte) error {
-	if len(nonce) == 0 || len(ciphertext) == 0 {
-		return errors.New("empty sealed claim")
-	}
 	return s.Tx(ctx, func(tx *sql.Tx) error {
+		if len(nonce) == 0 || len(ciphertext) == 0 {
+			return errors.New("empty sealed claim")
+		}
 		// Acquire the write lock before reading the clock; pool/SQLite waits cannot age this timestamp.
 		if _, e := tx.ExecContext(ctx, "UPDATE job_claims SET claimed=claimed WHERE job_id=?", id); e != nil {
 			return e
