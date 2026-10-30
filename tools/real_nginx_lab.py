@@ -9,7 +9,11 @@ import tempfile
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
-IMAGE = "nginx@sha256:1d13701a5f9f3fb01aaa88cef2344d65b6b5bf6b7d9fa4cf0dca557a8d7702ba"
+IMAGES = {
+    "modern": "nginx@sha256:1d13701a5f9f3fb01aaa88cef2344d65b6b5bf6b7d9fa4cf0dca557a8d7702ba",
+    "1.24": "nginx@sha256:77e5d4a6ad906c5d3793764085706577fa705b1dc6f244ea0241c4b5e2155385",
+}
+IMAGE = IMAGES[os.environ.get("NOVAPANEL_NGINX_IMAGE", "modern")]
 EVIDENCE = Path(tempfile.mkdtemp(prefix="phase3-realnginx-", dir=os.environ["TMPDIR"]))
 NAME = "novapanel-realnginx-" + uuid.uuid4().hex[:12]
 
@@ -54,15 +58,17 @@ try:
         "--memory", "512m", "--memory-swap", "512m", "--cpus", "1", "--pids-limit", "64",
         "--network", "none", "--entrypoint", "/bin/sh", IMAGE, "-c", "sleep 300")
     created = True
+    (EVIDENCE / "image.json").write_bytes(run("docker", "image", "inspect", IMAGE).stdout)
     inspect("before")
     run("docker", "start", NAME)
     run("docker", "cp", str(EVIDENCE / "source.tar"), NAME + ":/tmp/source.tar")
     run("docker", "cp", str(EVIDENCE / "acceptance.test"), NAME + ":/tmp/acceptance.test")
+    run("docker", "exec", NAME, "tar", "-xf", "/tmp/source.tar", "-C", "/tmp")
     digest = hashlib.sha256((EVIDENCE / "acceptance.test").read_bytes()).hexdigest()
     actual = run("docker", "exec", NAME, "sha256sum", "/tmp/acceptance.test").stdout.decode().split()[0]
     assert actual == digest
     (EVIDENCE / "binary-sha256.txt").write_text(digest + "\n")
-    result = run("docker", "exec", "-e", "NOVAPANEL_REAL_NGINX=1", NAME,
+    result = run("docker", "exec", "-e", "NOVAPANEL_REAL_NGINX=1", "-w", "/tmp/tests/integration", NAME,
                  "/tmp/acceptance.test", "-test.run", "^TestRealNginx", "-test.v", "-test.count=3", check=False)
     (EVIDENCE / "acceptance.log").write_bytes(result.stdout + result.stderr)
     inspect("after")

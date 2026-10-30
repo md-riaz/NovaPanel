@@ -39,6 +39,7 @@ type nginxLab struct {
 	root    string
 	reloads int
 	invalid bool
+	modern  bool
 }
 
 func (l *nginxLab) command(args ...string) ([]byte, []byte, int, error) {
@@ -98,15 +99,32 @@ func newNginxLab(t *testing.T) (*nginxLab, *nginx.Applier) {
 		t.Fatal(e)
 	}
 	l := &nginxLab{t: t, root: root}
+	_, version, code, err := (runner.Real{}).Run(context.Background(), platform.Nginx, []string{"-v"}, runner.RunOpts{})
+	if err != nil || code != 0 {
+		t.Fatalf("nginx version: %s %v", version, err)
+	}
+	var major, minor, patch int
+	if _, err = fmt.Sscanf(strings.TrimSpace(string(version)), "nginx version: nginx/%d.%d.%d", &major, &minor, &patch); err != nil {
+		t.Fatal(err)
+	}
+	l.modern = major > 1 || major == 1 && (minor > 25 || minor == 25 && patch >= 1)
+	t.Logf("%s modern_http2=%v", strings.TrimSpace(string(version)), l.modern)
 	for _, dir := range []string{"sites-available", "sites-enabled", "public", "acme/.well-known/acme-challenge", "maintenance", "tls"} {
 		if e = os.MkdirAll(root+"/"+dir, 0700); e != nil {
 			t.Fatal(e)
 		}
 	}
-	for name, data := range map[string]string{"public/index.html": "phase3-real-nginx", "maintenance/maintenance.html": "maintenance-lab", "acme/.well-known/acme-challenge/token": "token.authorization", "active.conf": ""} {
+	for name, data := range map[string]string{"public/index.html": "phase3-real-nginx", "acme/.well-known/acme-challenge/token": "token.authorization", "active.conf": ""} {
 		if e = os.WriteFile(root+"/"+name, []byte(data), 0600); e != nil {
 			t.Fatal(e)
 		}
+	}
+	page, err := os.ReadFile("../../packaging/rootfs/var/www/novapanel/maintenance.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(root+"/maintenance/maintenance.html", page, 0644); err != nil {
+		t.Fatal(err)
 	}
 	conf := "worker_processes 1; pid " + root + "/nginx.pid; error_log " + root + "/error.log notice; events { worker_connections 64; } http { access_log " + root + "/access.log; client_body_temp_path " + root + "/body; proxy_temp_path " + root + "/proxy; fastcgi_temp_path " + root + "/fastcgi; uwsgi_temp_path " + root + "/uwsgi; scgi_temp_path " + root + "/scgi; include " + root + "/active.conf; }"
 	if e = os.WriteFile(root+"/nginx.conf", []byte(conf), 0600); e != nil {
@@ -171,7 +189,7 @@ func labGet(t *testing.T, path string, want int, body string) {
 func TestRealNginxRenderPublishRollback(t *testing.T) {
 	l, a := newNginxLab(t)
 	ctx := context.Background()
-	d := nginx.Desired{Name: "demo", Domains: []string{"demo.test", "alias.test"}, Docroot: l.root + "/public", ACMERoot: l.root + "/acme", ModernHTTP2: true}
+	d := nginx.Desired{Name: "demo", Domains: []string{"demo.test", "alias.test"}, Docroot: l.root + "/public", ACMERoot: l.root + "/acme", ModernHTTP2: l.modern}
 	apply := func() {
 		t.Helper()
 		if e := a.Apply(ctx, d); e != nil {
@@ -195,6 +213,11 @@ func TestRealNginxRenderPublishRollback(t *testing.T) {
 	}
 	d.TLS = state
 	apply()
+	active, err := os.ReadFile(l.root + "/active.conf")
+	if err != nil || strings.Contains(string(active), "http2 on;") != l.modern || strings.Contains(string(active), "listen 8443 ssl http2;") == l.modern {
+		t.Fatalf("wrong HTTP2 shape: %v\n%s", err, active)
+	}
+	t.Logf("validated HTTP2 shape modern=%v", l.modern)
 	labGet(t, "/", 200, "")
 	d.ForceHTTPS = true
 	d.HSTSMaxAge = 300
@@ -208,7 +231,7 @@ func TestRealNginxRenderPublishRollback(t *testing.T) {
 	d.ForceHTTPS = false
 	d.HSTSMaxAge = 0
 	apply()
-	labGet(t, "/", 503, "maintenance-lab")
+	labGet(t, "/", 503, "Site under maintenance")
 	labGet(t, "/.well-known/acme-challenge/token", 200, "token.authorization")
 	d.Maintenance = false
 	apply()
