@@ -2,8 +2,10 @@ package verbs
 
 import (
 	"context"
+	"encoding/json"
 	"novapanel/internal/agent"
 	"novapanel/internal/exec"
+	"novapanel/internal/jobs"
 	"novapanel/internal/platform"
 	"novapanel/internal/rpc"
 	"novapanel/internal/validate"
@@ -32,7 +34,35 @@ type serviceStatusReply struct {
 }
 
 func init() {
+	rpc.Register(rpc.Verb{Name: "service.restart", MinRole: rpc.Admin, Scope: "system:write", Slow: true, Effectful: true, NewArgs: func() any { return &unitArgs{} }, ObjectKey: func(args any) string { return "service:" + args.(*unitArgs).Unit }, Run: serviceRestart, Exec: serviceRestartExec})
 	rpc.Register(rpc.Verb{Name: "service.status", MinRole: rpc.ReadOnly, ReadOnly: true, Scope: "system:read", NewArgs: func() any { return &unitArgs{} }, Run: serviceStatus})
+}
+func serviceRestart(ctx context.Context, a *agent.Agent, args any) (any, error) {
+	return a.Jobs.Enqueue(ctx, "service.restart", args, "service:"+args.(*unitArgs).Unit)
+}
+func serviceRestartExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
+	var args unitArgs
+	if e := json.Unmarshal(j.Args, &args); e != nil {
+		return rpc.Errf("bad_request", "Invalid restart arguments")
+	}
+	if e := args.Validate(); e != nil {
+		return e
+	}
+	_, _, code, e := a.Exec.Run(ctx, platform.Systemctl, []string{"restart", args.Unit}, exec.RunOpts{})
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if e != nil {
+		return e
+	}
+	if code != 0 {
+		return rpc.Errf("agent_error", "Cannot restart service")
+	}
+	j.Result, e = json.Marshal(struct {
+		Unit        string `json:"unit"`
+		RestartedAt int64  `json:"restarted_at"`
+	}{args.Unit, a.Now()})
+	return e
 }
 func serviceStatus(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	unit := args.(*unitArgs).Unit
