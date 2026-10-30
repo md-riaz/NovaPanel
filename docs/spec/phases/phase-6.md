@@ -159,10 +159,14 @@ plan; v1 ships single-manifest verify + anti-rollback.)
   (no JSON re-canonicalization). `manifest.json.sig` is the 64-byte Ed25519 signature **base64-encoded**
   (RFC 4648, padded; trim surrounding whitespace before decode). Verify `ed25519.Verify(pub,
   manifestBytes, sig)` **before** any JSON parse; failure → `invalid_argument`.
-- **Trust anchor:** the 32-byte Ed25519 **public key is a compile-time constant** (`internal/update`);
-  the updater **never** accepts a key from the manifest or any downloaded content. Rotation ships a
-  **new binary** (signed by the current key) carrying the next key — no in-band key swap. Tests inject a
-  test key through a seam; the production constant is the release signer's key.
+- **Trust anchor:** the 32-byte Ed25519 **public key is injected at release-build time** (ldflags `-X`
+  or a release-pipeline-generated file in `internal/update`) — **never a production literal committed to
+  source**. An **unset key fails closed**: a dev/CI build with no injected key **refuses all updates**
+  (`unsupported`), so an unsigned build can't be hijacked by a forged update. The updater **never**
+  accepts a key from the manifest or any downloaded content. Rotation ships a **new binary** (signed by
+  the current key) carrying the next key — no in-band key swap. Tests inject a test key through the same
+  seam; the **production key comes from the release signer's key custody (project owner)**, not the
+  source tree.
 - **Manifest schema:** `{ "version":"<semver>", "security_fix"?:bool, "notes"?:string, "artifacts":[ {
   "os","arch","filename","sha256":"<hex>","size":<bytes>,"url":"<https>" } ] }`. The agent selects the
   artifact matching `runtime.GOOS`/`GOARCH` (no match → `unsupported`); integrity comes from the
