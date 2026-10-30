@@ -38,6 +38,22 @@ go test ./internal/web/testdata/browser -run TestBrowserAuthentication -count=1 
 
 The idempotent `session.start` implementation is integrated. Real Chromium acceptance passes anonymous reload and login against the actual dispatcher. The QR payload uses `data-enrollment`, not `data-uri`: html/template classifies the latter as a navigation URL and filters the `otpauth` scheme.
 
+## Phase 3 console
+
+`/sites` lists agent state and creates static sites. Site detail keeps domains, structured redirects, maintenance and deletion separate from `/sites/{id}/ssl`. Mutations send only canonical fields; queued jobs poll `job.status` until terminal state. Agent refusals remain visible, including MFA step-up. Uploaded PEM is cleared after HTMX encodes the request and on page exit, never echoed or retained for retry.
+
+HTMX history caching is disabled globally to prevent sensitive HTML from entering browser storage. The vendored HTMX still unconditionally initializes `sessionStorage['htmx-current-path-for-history']` from `location.pathname + location.search`, even when `historyEnabled` is false. The console has no secret-bearing query parameters. Chromium acceptance verifies the exact non-secret value `/sites/SITE/ssl`, empty localStorage, no other sessionStorage keys, and no PEM, tokens, CSRF, enrollment URI or cached HTML. This is route bookkeeping, not saved page content.
+
+Run the console browser check with the same scratch Playwright dependencies:
+
+```sh
+NODE_PATH=/path/to/scratch/node_modules \
+NOVAPANEL_BROWSER_NODE="$(command -v node)" \
+go test ./internal/web/testdata/browser -run TestBrowserConsoleContract -count=1 -v
+```
+
+This is real Chromium against a fake RPC backend, not real site provisioning or ACME acceptance. It exercises create, job polling, refreshed listing, domain and SSL navigation, an unknown-verb refusal, MFA upload refusal, secret/storage guards, mobile width and JavaScript errors. The canonical API currently has no redirect enumeration, primary-domain promotion argument, or auto-renew read field; the console explains those gaps rather than inventing fields or local state.
+
 ## Assets
 
 - `assets/htmx.min.js` is self-hosted HTMX. Its license is `assets/htmx.LICENSE`.
