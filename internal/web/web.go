@@ -111,6 +111,16 @@ func setCookie(w http.ResponseWriter, value string, remove bool) {
 	}
 	http.SetCookie(w, c)
 }
+
+// HTMX only processes HX-Redirect on non-3xx responses.
+func redirect(w http.ResponseWriter, r *http.Request, target string) {
+	w.Header().Set("HX-Redirect", target)
+	if r.Header.Get("HX-Request") == "true" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
+}
 func render(w http.ResponseWriter, status int, v view) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
@@ -225,8 +235,7 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 		switch rt.verb {
 		case "session.logout":
 			setCookie(w, "", true)
-			w.Header().Set("HX-Redirect", "/login")
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			redirect(w, r, "/login")
 			return
 		case "session.login", "session.reauth":
 			session, _ := data["session"].(string)
@@ -237,8 +246,7 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 			}
 			setCookie(w, session, false)
 			if rt.verb == "session.login" {
-				w.Header().Set("HX-Redirect", "/")
-				http.Redirect(w, r, "/", http.StatusSeeOther)
+				redirect(w, r, "/")
 				return
 			}
 			v.CSRF = csrf
