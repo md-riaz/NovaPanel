@@ -1,0 +1,325 @@
+# 02 — Data model (agent-owned SQLite)
+
+Complete DDL for the control-plane DB (`/var/lib/novapanel/panel.db`, `0700 root`, D9). This is the
+source of truth for every table a phase references. Conventions (F5): WAL; `PRAGMA foreign_keys=ON`;
+**IDs are ULID strings** (`internal/id`, crockford base32); **timestamps are INTEGER unix-millis UTC**;
+money/none. Migrations are forward-only SQL under `internal/store/migrations/NNNN_name.sql`, embedded
+with `go:embed`, applied in a transaction, recorded in `schema_migrations`. A migration is **never
+edited after it ships**; a test hashes each migration file and fails the build if a shipped hash
+changed (integrity) or if applying `0001..N` to a fresh DB errors.
+
+Tables are grouped by the phase that introduces them; a later phase's `ALTER`/new table ships as a new
+migration. `0001_init.sql` creates the Phase-1 core (identity, jobs, audit, secrets, settings).
+
+## Phase 1 — core
+
+```sql
+CREATE TABLE schema_migrations (
+  version   TEXT PRIMARY KEY,         -- "0001", applied in order
+  hash      TEXT NOT NULL,            -- sha256 of the file at apply time (integrity)
+  applied_at INTEGER NOT NULL
+);
+
+CREATE TABLE users (
+  id            TEXT PRIMARY KEY,     -- ULID
+  username      TEXT NOT NULL UNIQUE,
+  email         TEXT NOT NULL,
+  pw_phc        TEXT NOT NULL,        -- argon2id PHC string (F15/phase-2)
+  role          TEXT NOT NULL CHECK (role IN ('owner','admin','read_only')),
+  totp_secret   TEXT,                 -- sealed (F12); NULL = MFA not enrolled
+  disabled      INTEGER NOT NULL DEFAULT 0,
+  created       INTEGER NOT NULL,
+  updated       INTEGER NOT NULL
+);
+
+CREATE TABLE backup_codes (            -- MFA recovery (phase-2)
+  id        TEXT PRIMARY KEY,
+  user_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_phc  TEXT NOT NULL,            -- argon2id hash of a single-use code
+  used_at   INTEGER
+);
+
+CREATE TABLE sessions (
+  id            TEXT PRIMARY KEY,     -- ULID; the opaque token is this id + a secret, hashed below
+  token_hash    TEXT NOT NULL,        -- sha256 of the session secret (sessions are high-entropy; no argon2 needed)
+  kind          TEXT NOT NULL CHECK (kind IN ('anon','user','token')),
+  user_id       TEXT REFERENCES users(id) ON DELETE CASCADE,
+  role          TEXT,                 -- resolved role for a user session
+  csrf_token    TEXT NOT NULL,        -- synchronizer CSRF token (F4); not a cookie
+  mfa_at        INTEGER,              -- last TOTP verification (F4 reauth window)
+  created       INTEGER NOT NULL,
+  last_seen     INTEGER NOT NULL,
+  idle_deadline INTEGER NOT NULL,
+  abs_deadline  INTEGER NOT NULL
+);
+CREATE INDEX idx_sessions_user ON sessions(user_id);
+
+CREATE TABLE jobs (
+  id         TEXT PRIMARY KEY,
+  verb       TEXT NOT NULL,
+  args_json  TEXT NOT NULL,
+  object_key TEXT NOT NULL,
+  effectful  INTEGER NOT NULL DEFAULT 0, -- from Verb.Effectful at enqueue; recoverRunning reads it w/o the Registry
+  actor      TEXT NOT NULL,             -- caller audit label at enqueue (job-side audit)
+  role       TEXT,                      -- caller role at enqueue
+  created_by TEXT,                      -- session/token id that created the job (owner may read/claim its own job)
+  state      TEXT NOT NULL CHECK (state IN ('queued','running','done','failed')),
+  step       TEXT NOT NULL DEFAULT '',
+  attempts   INTEGER NOT NULL DEFAULT 0,
+  progress   REAL NOT NULL DEFAULT 0,
+  result_json TEXT,                   -- non-secret result only (F6)
+  error      TEXT,
+  code       TEXT,                    -- F3 code on failure
+  created    INTEGER NOT NULL,
+  updated    INTEGER NOT NULL,
+  finished   INTEGER
+);
+CREATE INDEX idx_jobs_state ON jobs(state, created);
+CREATE INDEX idx_jobs_object ON jobs(object_key);
+
+CREATE TABLE job_events (
+  id      TEXT PRIMARY KEY,
+  job_id  TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  ts      INTEGER NOT NULL,
+  msg     TEXT NOT NULL
+);
+CREATE INDEX idx_job_events_job ON job_events(job_id, ts);
+
+CREATE TABLE job_claims (              -- show-once secret delivery (F6 claim)
+  job_id     TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+  claim_hash TEXT NOT NULL,           -- sha256 of the one-time claim token
+  nonce      BLOB NOT NULL,           -- the secret is sealed (F12) at rest here
+  ciphertext BLOB NOT NULL,
+  expires    INTEGER NOT NULL,        -- short TTL; row deleted on claim or expiry
+  claimed    INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE schedules (               -- the agent's internal scheduler (F18)
+  id        TEXT PRIMARY KEY,
+  verb      TEXT NOT NULL,            -- the verb to enqueue
+  args_json TEXT NOT NULL,
+  cron      TEXT NOT NULL,            -- OnCalendar-style spec
+  state_json TEXT NOT NULL DEFAULT '{}', -- e.g. the rolling read-data-subset n
+  next_run  INTEGER NOT NULL,
+  enabled   INTEGER NOT NULL DEFAULT 1,
+  last_run  INTEGER
+);
+
+CREATE TABLE events (                  -- audit (F11); mirror of the append-only file
+  id         TEXT PRIMARY KEY,
+  ts         INTEGER NOT NULL,
+  actor      TEXT NOT NULL,
+  role       TEXT,
+  verb       TEXT NOT NULL,
+  object_key TEXT,
+  outcome    TEXT NOT NULL CHECK (outcome IN ('ok','refused','error')),
+  code       TEXT,
+  detail_json TEXT                     -- redacted (F12) before write
+);
+CREATE INDEX idx_events_ts ON events(ts);
+
+CREATE TABLE secrets (                 -- F12 sealed blobs
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL UNIQUE,
+  nonce      BLOB NOT NULL,
+  ciphertext BLOB NOT NULL,
+  created    INTEGER NOT NULL
+);
+
+CREATE TABLE settings ( key TEXT PRIMARY KEY, value_json TEXT NOT NULL );
+```
+
+## Phase 2 — API tokens
+
+```sql
+CREATE TABLE api_tokens (
+  id         TEXT PRIMARY KEY,        -- the <id> embedded in npat_<id>_<secret>
+  name       TEXT NOT NULL,
+  secret_phc TEXT NOT NULL,           -- argon2id hash of <secret>
+  scopes     TEXT NOT NULL,           -- JSON array of scope strings (F4 / 01-rpc-and-verbs)
+  automation INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL REFERENCES users(id),
+  created    INTEGER NOT NULL,
+  expires    INTEGER,                 -- NULL = no expiry
+  revoked    INTEGER NOT NULL DEFAULT 0,
+  last_used  INTEGER
+);
+
+CREATE TABLE idempotency (             -- F4 (public API)
+  id          TEXT PRIMARY KEY,        -- sha256(token_id || ':' || key)
+  job_id      TEXT REFERENCES jobs(id),-- set for async (202+job) mutations
+  result_json TEXT,                    -- set for sync mutations (no job)
+  payload_hash TEXT NOT NULL,          -- sha256(method || path || body); replay w/ a different hash → 409
+  created     INTEGER NOT NULL         -- TTL enforced on read (default 24h)
+);
+```
+
+## Phase 3 — sites, domains, certs
+
+```sql
+CREATE TABLE sites (
+  id           TEXT PRIMARY KEY,
+  name         TEXT NOT NULL UNIQUE,  -- ^[a-z][a-z0-9-]{1,30}$ ; == the unix user name
+  type         TEXT NOT NULL CHECK (type IN ('static','php','wordpress')),
+  stack_driver TEXT NOT NULL DEFAULT 'nginx',
+  docroot      TEXT NOT NULL,         -- /srv/sites/<name>/public
+  php_version  TEXT,                  -- NULL for static
+  force_https  INTEGER NOT NULL DEFAULT 0,
+  hsts_max_age INTEGER NOT NULL DEFAULT 0,  -- 0 = no HSTS; set by site.update (owner), only served in render state 3
+  cert_source  TEXT NOT NULL DEFAULT 'none' CHECK (cert_source IN ('none','letsencrypt','manual')),
+  ssl_auto     INTEGER NOT NULL DEFAULT 1,  -- Let's Encrypt auto-renew; always ignored for a manual cert
+  maintenance  INTEGER NOT NULL DEFAULT 0,
+  config_hash  TEXT,                  -- hash of the last rendered nginx config (skip-reload compare)
+  created      INTEGER NOT NULL,
+  updated      INTEGER NOT NULL
+);
+
+CREATE TABLE domains (
+  id         TEXT PRIMARY KEY,
+  site_id    TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  fqdn       TEXT NOT NULL UNIQUE,
+  is_primary INTEGER NOT NULL DEFAULT 0,
+  cert_state TEXT NOT NULL DEFAULT 'none' CHECK (cert_state IN ('none','issued','expired')),
+  cert_staging INTEGER NOT NULL DEFAULT 0,  -- 1 = cert is from the ACME staging CA → NOT valid for force-HTTPS
+  cert_not_after INTEGER,
+  created    INTEGER NOT NULL
+);
+CREATE INDEX idx_domains_site ON domains(site_id);
+
+CREATE TABLE redirects (
+  id       TEXT PRIMARY KEY,
+  site_id  TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  source   TEXT NOT NULL,            -- path or host
+  target   TEXT NOT NULL,
+  code     INTEGER NOT NULL CHECK (code IN (301,302))
+);
+```
+ACME account key + registration are stored in `secrets` (name `acme:account`). TLS cert/key live on
+disk under `tls_dir/<fqdn>/` (versioned dir + symlink swap, B-D9), not in the DB.
+
+## Phase 4 — databases
+
+```sql
+CREATE TABLE databases (
+  id        TEXT PRIMARY KEY,
+  site_id   TEXT REFERENCES sites(id) ON DELETE SET NULL,
+  name      TEXT NOT NULL UNIQUE,    -- ^[a-z][a-z0-9_]{1,46}$ (generated)
+  engine    TEXT NOT NULL DEFAULT 'mariadb',
+  created   INTEGER NOT NULL
+);
+CREATE TABLE db_users (
+  id        TEXT PRIMARY KEY,
+  db_id     TEXT NOT NULL REFERENCES databases(id) ON DELETE CASCADE,
+  username  TEXT NOT NULL UNIQUE,    -- bound to '...'@'127.0.0.1'
+  host      TEXT NOT NULL DEFAULT '127.0.0.1',
+  created   INTEGER NOT NULL
+);
+```
+DB-user passwords are **not** stored (show-once via the F6 claim; the app keeps them in its own
+`wp-config.php`). The MariaDB admin path uses `unix_socket` (no stored admin password).
+
+## Phase 5 — deploys, cron, ssh
+
+```sql
+CREATE TABLE deploys (
+  id        TEXT PRIMARY KEY,
+  site_id   TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  repo_url  TEXT NOT NULL,
+  branch    TEXT NOT NULL,
+  sha       TEXT,                    -- the pinned, deployed commit
+  state     TEXT NOT NULL,
+  created   INTEGER NOT NULL
+);
+CREATE TABLE cron_jobs (
+  id        TEXT PRIMARY KEY,
+  site_id   TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  schedule  TEXT NOT NULL,          -- OnCalendar form
+  argv_json TEXT NOT NULL,          -- validated argv array
+  unit_name TEXT NOT NULL,          -- novapanel-cron-<site>-<id>
+  enabled   INTEGER NOT NULL DEFAULT 1,
+  created   INTEGER NOT NULL
+);
+```
+A per-site deploy key is stored sealed (`secrets` name `deploy:<site_id>`). SSH public keys live in
+the site user's `authorized_keys` on disk, not the DB.
+
+## Phase 6 — backups, firewall
+
+```sql
+CREATE TABLE repos (
+  id        TEXT PRIMARY KEY,
+  name      TEXT NOT NULL UNIQUE,
+  kind      TEXT NOT NULL CHECK (kind IN ('local','sftp','s3')),  -- B2 via s3-compat endpoint
+  role      TEXT NOT NULL DEFAULT 'site' CHECK (role IN ('site','panel')), -- exactly one 'panel' repo (self-backup)
+  location  TEXT NOT NULL,          -- restic repo string
+  retention_json TEXT NOT NULL DEFAULT '{"keep_daily":7,"keep_weekly":4,"keep_monthly":6}',
+  created   INTEGER NOT NULL
+);  -- repo password + object-store/sftp creds stored sealed (secrets names repo:<id>:password / repo:<id>:s3 / repo:<id>:sftp)
+CREATE TABLE webhook_deliveries (    -- replay seen-set for deploy.hook (B-D1); pruned past the window
+  id        TEXT PRIMARY KEY,        -- hook_id || ':' || signature
+  seen_at   INTEGER NOT NULL
+);
+CREATE TABLE backups (
+  id          TEXT PRIMARY KEY,
+  repo_id     TEXT NOT NULL REFERENCES repos(id),
+  target_kind TEXT NOT NULL CHECK (target_kind IN ('site','db','panel')),
+  target_ref  TEXT NOT NULL,
+  snapshot_id TEXT,                 -- restic snapshot id
+  bytes       INTEGER,
+  state       TEXT NOT NULL,
+  created     INTEGER NOT NULL
+);
+CREATE TABLE fw_pending (            -- an armed firewall change awaiting confirm (B-D7)
+  id          TEXT PRIMARY KEY,
+  snapshot_path TEXT NOT NULL,      -- captured ruleset to revert to
+  revert_unit TEXT NOT NULL,        -- the transient systemd timer unit name
+  deadline    INTEGER NOT NULL,
+  confirmed   INTEGER NOT NULL DEFAULT 0
+);
+```
+
+## Phase 7 — integrations (DNS)
+
+```sql
+CREATE TABLE integrations (
+  id        TEXT PRIMARY KEY,
+  kind      TEXT NOT NULL,          -- 'cloudflare'
+  name      TEXT NOT NULL,
+  config_json TEXT NOT NULL,        -- non-secret (zone ids, etc.)
+  created   INTEGER NOT NULL
+);  -- provider API token stored sealed (secrets name integration:<id>:token)
+CREATE TABLE dns_zones (
+  id            TEXT PRIMARY KEY,
+  integration_id TEXT NOT NULL REFERENCES integrations(id) ON DELETE CASCADE,
+  zone          TEXT NOT NULL,
+  provider_zone_id TEXT NOT NULL
+);
+```
+
+## Phase 8 — webhooks
+
+```sql
+CREATE TABLE webhooks (
+  id        TEXT PRIMARY KEY,       -- the <hook_id> in the public URL
+  site_id   TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  branch    TEXT NOT NULL,
+  created   INTEGER NOT NULL
+);  -- per-hook HMAC secret stored sealed (secrets name webhook:<id>)
+```
+
+## Phase 9 — modules
+
+```sql
+CREATE TABLE module_state (
+  name      TEXT PRIMARY KEY,       -- 'ols', 'mail', 'powerdns', 'ftp', 'docker'
+  enabled   INTEGER NOT NULL DEFAULT 0,
+  config_json TEXT NOT NULL DEFAULT '{}',
+  updated   INTEGER NOT NULL
+);
+```
+
+## Migration integrity test (A6)
+
+A unit test (runs in CI, no root): applies `0001..N` to a fresh in-memory/temp DB and asserts success;
+recomputes each file's sha256 and compares to `schema_migrations.hash` fixtures committed alongside, so
+editing a shipped migration fails the build. New schema always arrives as a new `NNNN_*.sql`.
