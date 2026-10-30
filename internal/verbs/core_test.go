@@ -15,7 +15,7 @@ func TestSeedVerbs(t *testing.T) {
 	}
 	s := rpc.NewServer(agent.New())
 	for _, verb := range []string{"ping", "agent.info"} {
-		r := s.Dispatch(rpc.WithCaller(context.Background(), rpc.RootCaller(0)), rpc.Request{ID: "id", Verb: verb, Args: json.RawMessage(`{}`)})
+		r := s.Dispatch(rpc.WithCaller(context.Background(), rpc.RootCaller(0)), rpc.Request{ID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Verb: verb, Args: json.RawMessage(`{}`)})
 		if !r.OK {
 			t.Fatalf("%s: %+v", verb, r)
 		}

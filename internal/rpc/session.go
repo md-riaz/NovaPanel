@@ -6,6 +6,7 @@ import (
 )
 
 type Caller struct {
+	Kind                 string
 	Session, Actor, Role string
 	Scopes               []string
 	UserID               string

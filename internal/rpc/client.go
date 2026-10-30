@@ -6,9 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"strconv"
+	"novapanel/internal/id"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -17,8 +16,6 @@ type Client struct {
 	scanner *bufio.Scanner
 	mu      sync.Mutex
 }
-
-var requestCounter atomic.Uint64
 
 func Dial(socket string) (*Client, error) {
 	c, err := net.Dial("unix", socket)
@@ -45,7 +42,11 @@ func (c *Client) Call(ctx context.Context, verb string, args any, session string
 	if !object(raw) {
 		return reply, fmt.Errorf("object args required")
 	}
-	req := Request{ID: strconv.FormatUint(requestCounter.Add(1), 10), Verb: verb, Args: raw, Session: session}
+	requestID, err := id.New()
+	if err != nil {
+		return reply, err
+	}
+	req := Request{ID: requestID, Verb: verb, Args: raw, Session: session}
 	if deadline, ok := ctx.Deadline(); ok {
 		ms := time.Until(deadline).Milliseconds()
 		if ms < 1 {

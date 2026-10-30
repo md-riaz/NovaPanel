@@ -8,7 +8,9 @@ import (
 	"net"
 	"novapanel/internal/agent"
 	"novapanel/internal/config"
+	"novapanel/internal/exec"
 	"novapanel/internal/rpc"
+	"novapanel/internal/validate"
 	_ "novapanel/internal/verbs"
 	"os"
 	"os/signal"
@@ -86,7 +88,7 @@ func run(args []string) error {
 		return err
 	}
 	defer l.Close()
-	a := agent.New()
+	a := agent.NewWithDependencies(cfg, exec.Real{}, &validate.V{})
 	s := rpc.NewServer(a)
 	s.WebUID = cfg.WebUID
 	s.DefaultDeadlineMs = cfg.DeadlineDefaultMs

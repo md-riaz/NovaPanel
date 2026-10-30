@@ -7,7 +7,9 @@ import (
 	"errors"
 	"log"
 	"novapanel/internal/agent"
+	"novapanel/internal/jobs"
 	"novapanel/internal/rpcerr"
+	"slices"
 	"time"
 )
 
@@ -36,6 +38,7 @@ type Verb struct {
 	NewArgs              func() any
 	ObjectKey            func(any) string
 	Run                  func(context.Context, *agent.Agent, any) (any, error)
+	Exec                 func(context.Context, *agent.Agent, *jobs.Job) error
 }
 
 var Registry = map[string]Verb{}
@@ -43,6 +46,9 @@ var Registry = map[string]Verb{}
 func Register(v Verb) {
 	if v.Name == "" || v.NewArgs == nil || v.Run == nil {
 		panic("incomplete verb registration")
+	}
+	if v.Slow != (v.Exec != nil) || (v.Effectful && !v.Slow) {
+		panic("inconsistent slow/effectful handler registration")
 	}
 	if _, ok := Registry[v.Name]; ok {
 		panic("duplicate verb: " + v.Name)
@@ -93,10 +99,15 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	if !ok {
 		return Err("unknown_verb", "Unknown verb")
 	}
+	// Phase 0 has no modules, queue or durable audit prerequisites. Never
+	// invoke a future handler merely because it was added to the registry.
+	if v.Module != "" || v.Slow || v.Effectful {
+		return Err("unsupported", "Unavailable in this phase")
+	}
 	if !object(req.Args) {
 		return Err("bad_request", "Object args required")
 	}
-	if caller.Role == "" && req.Session != "" {
+	if caller.Role == "" && caller.Kind == "" && req.Session != "" {
 		resolver := s.Sessions
 		if resolver == nil {
 			resolver = closedSessions{}
@@ -112,7 +123,11 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	if v.Internal && (caller.Peer != s.WebUID || caller.Peer == 0) {
 		return Err("forbidden", "Forbidden")
 	}
-	if !v.Public {
+	if caller.Kind == "token" || caller.Role == "token" {
+		if v.Internal || v.Scope == "" || (!slices.Contains(caller.Scopes, v.Scope) && !slices.Contains(caller.Scopes, "*")) {
+			return Err("forbidden", "Forbidden")
+		}
+	} else if !v.Public {
 		if caller.Role == "" {
 			return Err("unauthenticated", "Authentication required")
 		}

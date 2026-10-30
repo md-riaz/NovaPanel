@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"novapanel/internal/id"
 )
 
 const MaxRequestBytes = 1 << 20
@@ -39,8 +40,8 @@ func DecodeLine(line []byte) (Request, error) {
 	if err := json.Unmarshal(line, &req); err != nil {
 		return req, err
 	}
-	if req.Verb == "" || !object(req.Args) {
-		return req, errors.New("verb and object args required")
+	if !id.Valid(req.ID) || req.Verb == "" || !object(req.Args) {
+		return req, errors.New("ULID, verb and object args required")
 	}
 	return req, nil
 }

@@ -8,13 +8,13 @@ import (
 )
 
 func TestDecodeLine(t *testing.T) {
-	for _, s := range []string{"", "null", "[]", `{}`, `{"verb":"ping"}`, `{"verb":"ping","args":[]}`, `{"verb":"ping","args":null}`, `{"verb":"ping","args":{}} {}`, strings.Repeat("x", MaxRequestBytes+1)} {
+	for _, s := range []string{"", "null", "[]", `{}`, `{"id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","verb":"ping"}`, `{"id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","verb":"ping","args":[]}`, `{"id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","verb":"ping","args":null}`, `{"id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","verb":"ping","args":{}} {}`, strings.Repeat("x", MaxRequestBytes+1)} {
 		if _, err := DecodeLine([]byte(s)); err == nil {
 			t.Errorf("accepted invalid frame %.80q", s)
 		}
 	}
-	req, err := DecodeLine([]byte(`{"id":"abc","verb":"ping","args":{}}`))
-	if err != nil || req.ID != "abc" || req.Verb != "ping" {
+	req, err := DecodeLine([]byte(`{"id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","verb":"ping","args":{}}`))
+	if err != nil || req.ID != "01ARZ3NDEKTSV4RRFFQ69G5FAV" || req.Verb != "ping" {
 		t.Fatalf("decode: %+v %v", req, err)
 	}
 }
@@ -22,7 +22,7 @@ func TestEncodeBoundedReply(t *testing.T) {
 	for _, data := range []any{map[string]string{"version": "test"}, strings.Repeat("x", MaxReplyBytes), make(chan int)} {
 		var b bytes.Buffer
 		r := OK(data)
-		r.ID = "abc"
+		r.ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
 		if err := Encode(&b, r); err != nil {
 			t.Fatal(err)
 		}
@@ -33,7 +33,7 @@ func TestEncodeBoundedReply(t *testing.T) {
 		if err := json.Unmarshal(bytes.TrimSpace(b.Bytes()), &got); err != nil {
 			t.Fatal(err)
 		}
-		if got.ID != "abc" {
+		if got.ID != "01ARZ3NDEKTSV4RRFFQ69G5FAV" {
 			t.Fatal("lost id")
 		}
 		if _, ok := data.(map[string]string); !ok && (got.OK || got.Code != "agent_error") {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	runner "novapanel/internal/exec"
+	"novapanel/internal/id"
 )
 
 func TestScratchAgent(t *testing.T) {
@@ -95,10 +96,11 @@ func TestScratchAgent(t *testing.T) {
 			t.Fatalf("root %s: exit=%d %s", verb, exit, text)
 		}
 		var reply struct {
+			ID   string
 			OK   bool
 			Data json.RawMessage
 		}
-		if err := json.Unmarshal([]byte(text), &reply); err != nil || !reply.OK || len(reply.Data) == 0 {
+		if err := json.Unmarshal([]byte(text), &reply); err != nil || !reply.OK || !id.Valid(reply.ID) || len(reply.Data) == 0 {
 			t.Fatalf("root %s invalid reply: %s", verb, text)
 		}
 	}
@@ -116,7 +118,7 @@ s=socket.socket(socket.AF_UNIX); s.settimeout(3)
 s.connect("agent.sock")
 print("CONNECTED", flush=True)
 try:
- s.sendall((json.dumps({"id":"probe","verb":verb,"args":{},"actor":"owner"})+"\n").encode())
+ s.sendall((json.dumps({"id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","verb":verb,"args":{},"actor":"owner"})+"\n").encode())
  data=s.recv(4096)
  print(data.decode() if data else "PEER_CLOSED")
 except (ConnectionResetError,BrokenPipeError): print("PEER_CLOSED")

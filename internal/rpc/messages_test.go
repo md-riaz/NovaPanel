@@ -26,10 +26,10 @@ func TestDispatchAuthorityAndTypedArgs(t *testing.T) {
 	s.Registry = map[string]Verb{"owner": {Name: "owner", MinRole: Owner, ReadOnly: true, NewArgs: func() any { return &checkedArgs{} }, Run: func(ctx context.Context, _ *agent.Agent, args any) (any, error) {
 		return args.(*checkedArgs).Value, nil
 	}}}
-	req := Request{ID: "echo", Verb: "owner", Args: json.RawMessage(`{"value":"yes"}`), Actor: "owner"}
+	req := Request{ID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Verb: "owner", Args: json.RawMessage(`{"value":"yes"}`), Actor: "owner"}
 	for _, caller := range []Caller{{Peer: 1001}, {Peer: 1001, Role: "read_only"}, {Peer: 1001, Role: "admin"}} {
 		got := s.Dispatch(WithCaller(context.Background(), caller), req)
-		if got.OK || got.ID != "echo" {
+		if got.OK || got.ID != req.ID {
 			t.Fatalf("authority bypass: %+v", got)
 		}
 	}
@@ -51,7 +51,7 @@ func TestDispatchDeadlinesErrorsAndAudit(t *testing.T) {
 	var events []AuditEvent
 	s.Audit = AuditFunc(func(ev AuditEvent) { events = append(events, ev) })
 	s.Registry = map[string]Verb{"test": {Name: "test", Public: true, MaxDeadlineMs: 10, NewArgs: func() any { return &struct{}{} }, Run: func(ctx context.Context, _ *agent.Agent, _ any) (any, error) { <-ctx.Done(); return nil, ctx.Err() }}}
-	req := Request{ID: "x", Verb: "test", Actor: "audit-only", Args: json.RawMessage(`{}`), DeadlineMs: 99999}
+	req := Request{ID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Verb: "test", Actor: "audit-only", Args: json.RawMessage(`{}`), DeadlineMs: 99999}
 	start := time.Now()
 	got := s.Dispatch(context.Background(), req)
 	if got.Code != "deadline_exceeded" || time.Since(start) > time.Second {

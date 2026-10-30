@@ -15,7 +15,7 @@ import (
 )
 
 func TestStrictNDJSON(t *testing.T) {
-	for _, frame := range []string{`{"verb":"ping","args":{}}`, `{"verb":"ping","args":{},"args":[]}` + "\n"} {
+	for _, frame := range []string{`{"id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","verb":"ping","args":{}}`, `{"id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","verb":"ping","args":{},"args":[]}` + "\n", `{"verb":"ping","args":{}}` + "\n", `{"id":"1","verb":"ping","args":{}}` + "\n"} {
 		s := NewServer(agent.New())
 		s.WebUID = uint32(os.Geteuid())
 		s.Registry = map[string]Verb{"ping": {Name: "ping", Public: true, NewArgs: func() any { return &struct{}{} }, Run: func(context.Context, *agent.Agent, any) (any, error) { return "pong", nil }}}

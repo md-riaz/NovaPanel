@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"novapanel/internal/agent"
+	"novapanel/internal/id"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +14,7 @@ import (
 )
 
 func TestServerFramingAndPeerGate(t *testing.T) {
-	for _, frame := range []string{`{"id":"one","verb":"ping","args":{}}` + "\n", "broken\n", strings.Repeat("x", MaxRequestBytes+1) + "\n"} {
+	for _, frame := range []string{`{"id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","verb":"ping","args":{}}` + "\n", "broken\n", strings.Repeat("x", MaxRequestBytes+1) + "\n"} {
 		s := NewServer(agent.New())
 		s.WebUID = uint32(os.Geteuid())
 		s.Registry = map[string]Verb{"ping": {Name: "ping", Public: true, NewArgs: func() any { return &struct{}{} }, Run: func(context.Context, *agent.Agent, any) (any, error) { return "pong", nil }}}
@@ -27,11 +28,11 @@ func TestServerFramingAndPeerGate(t *testing.T) {
 			t.Fatal(err)
 		}
 		_ = c.SetDeadline(time.Now().Add(time.Second))
-		_, _ = c.Write([]byte(frame + `{"id":"two","verb":"ping","args":{}}` + "\n"))
+		_, _ = c.Write([]byte(frame + `{"id":"01ARZ3NDEKTSV4RRFFQ69G5FAW","verb":"ping","args":{}}` + "\n"))
 		var r Reply
 		err = json.NewDecoder(c).Decode(&r)
 		if strings.HasPrefix(frame, `{"id"`) {
-			if err != nil || r.ID != "one" || !r.OK {
+			if err != nil || r.ID != "01ARZ3NDEKTSV4RRFFQ69G5FAV" || !r.OK {
 				t.Fatalf("reply %+v %v", r, err)
 			}
 		} else if err == nil {
@@ -61,7 +62,7 @@ func TestClientRoundTripAndCodedFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	if r, err := c.Call(context.Background(), "ping", struct{}{}, ""); err != nil || !r.OK || r.ID == "" {
+	if r, err := c.Call(context.Background(), "ping", struct{}{}, ""); err != nil || !r.OK || !id.Valid(r.ID) {
 		t.Fatalf("call %+v %v", r, err)
 	}
 	if r, err := c.Call(context.Background(), "missing", struct{}{}, ""); err == nil || r.Code != "unknown_verb" {
