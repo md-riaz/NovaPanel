@@ -413,7 +413,7 @@ Record(Event) error                                    -- fail-closed: see sinks
   Audit is invariant 7: a privileged **mutation** must not be reported complete if its record could
   not be durably written. Reads are not gated.
 - **Outcome stays `{ok, refused, error}`** — never add new outcome values for auth/queue phases.
-  Where it matters, the **stage** goes in `detail_json` as `detail.stage ∈ {authz, enqueue, exec,
+  Where it matters, the **stage** goes in `detail_json` as `detail.stage ∈ {authz, resolve, enqueue, exec,
   claim}`. So an authorization refusal is `outcome=refused, detail.stage=authz`; a worker failure is
   `outcome=error, detail.stage=exec`.
 - **Required events:** a pre-authorization **refusal** event for any denied attempt (so denials are on
