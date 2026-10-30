@@ -207,6 +207,15 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 	if err != nil || cadence.Cron != "daily" || cadence.NextRun <= clock.now {
 		t.Fatal("daily cadence", cadence, err)
 	}
+	budget := func() string {
+		t.Helper()
+		raw, e := st.Setting(ctx, "acme:policy:staging:domain:demo.test")
+		if e != nil {
+			t.Fatal(e)
+		}
+		return string(raw)
+	}
+	budgetBefore := budget()
 	// Full store/audit/server/queue restart, not just scheduler reconstruction.
 	stop()
 	if err = log.Close(); err != nil {
@@ -237,6 +246,9 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 	}
 	if l.reloads != before {
 		t.Fatal("no-op issue reloaded")
+	}
+	if budget() != budgetBefore {
+		t.Fatal("restart/no-op consumed CA rate budget")
 	}
 	// Both environment slots point only to loopback Pebble. False is explicit and
 	// persisted; it must not silently fall back to the staging default.
@@ -350,6 +362,15 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 	if _, err = st.SiteByID(ctx, sid); err != sql.ErrNoRows {
 		t.Fatal("delete did not remove site", err)
 	}
+	// Refused attempts for every implemented mutation use trusted incoming role,
+	// never the caller-controlled actor label as authority.
+	verbs := []string{"site.create", "site.update", "site.delete", "domain.add", "domain.remove", "redirect.add", "redirect.remove", "ssl.issue", "ssl.renew", "ssl.upload", "ssl.auto_set"}
+	for _, verb := range verbs {
+		r := server.Dispatch(rpc.WithCaller(ctx, rpc.Caller{Role: "read_only", Session: "acceptance-reader", Peer: 1234}), rpc.Request{Verb: verb, Actor: "owner", Args: json.RawMessage(`{}`)})
+		if r.OK || r.Code != "forbidden" {
+			t.Fatalf("%s role refusal %+v", verb, r)
+		}
+	}
 	// Every queued mutation has exactly one durable enqueue and terminal event.
 	events, err := st.ListEvents(ctx, 1000, "")
 	if err != nil {
@@ -375,6 +396,52 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 		}
 		if en != 1 || ex != 1 {
 			t.Fatalf("%s audit enqueue=%d exec=%d", job.Verb, en, ex)
+		}
+	}
+	for _, verb := range verbs {
+		n := 0
+		for _, ev := range events {
+			var d map[string]any
+			json.Unmarshal(ev.Detail, &d)
+			if ev.Verb == verb && ev.Actor == "owner" && ev.Role == "read_only" && ev.Outcome == "refused" && ev.Code == "forbidden" && d["stage"] == "authz" {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Fatalf("%s refusal audit count=%d", verb, n)
+		}
+	}
+	file, err := os.ReadFile(l.root + "/audit.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimSpace(file), []byte("\n"))
+	if len(lines) != len(events) {
+		t.Fatal("file/SQLite audit count mismatch")
+	}
+	for _, line := range lines {
+		var v struct {
+			ID      string          `json:"id"`
+			Actor   string          `json:"actor"`
+			Role    string          `json:"role"`
+			Verb    string          `json:"verb"`
+			Outcome string          `json:"outcome"`
+			Detail  json.RawMessage `json:"detail"`
+		}
+		if err := json.Unmarshal(line, &v); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, ev := range events {
+			if ev.ID == v.ID {
+				found = true
+				if ev.Actor != v.Actor || ev.Role != v.Role || ev.Verb != v.Verb || ev.Outcome != v.Outcome || !bytes.Equal(ev.Detail, v.Detail) {
+					t.Fatal("audit mirror differs")
+				}
+			}
+		}
+		if !found {
+			t.Fatal("file-only audit event")
 		}
 	}
 	for _, path := range []string{"panel.db", "panel.db-wal", "audit.log"} {
