@@ -159,6 +159,8 @@ func TestRealSessionTimeoutAndForgery(t *testing.T) {
 }
 func TestRealMFAReauthRotationAndReplay(t *testing.T) {
 	s, c, call := sessionHarness(t)
+	s.Agent.Cfg.IdleSec = 71
+	s.Agent.Cfg.AbsSec = 193
 	ctx := context.Background()
 	a := s.Agent
 	seal, e := secret.New(make([]byte, 32))
@@ -219,10 +221,19 @@ func TestRealMFAReauthRotationAndReplay(t *testing.T) {
 	if r := call("session.reauth", token, string(proof)); r.Code != "unauthenticated" {
 		t.Fatalf("replay %+v", r)
 	}
+	before, e := a.Store.GetSession(ctx, strings.Split(token, "_")[1])
+	if e != nil {
+		t.Fatal(e)
+	}
+	c.now += 1000
 	reauth := sessionData(t, call("session.reauth", token, `{"totp":"backup-proofa"}`))
 	fresh := reauth["session"].(string)
 	if fresh == token || reauth["csrf_token"] == login["csrf_token"] || reauth["mfa_at"] != float64(c.now) {
 		t.Fatalf("rotation %+v", reauth)
+	}
+	rotated, e := a.Store.GetSession(ctx, strings.Split(fresh, "_")[1])
+	if e != nil || rotated.IdleDeadline != c.now+71000 || rotated.AbsDeadline != before.AbsDeadline {
+		t.Fatal("reauth must use configured idle without extending absolute lifetime")
 	}
 	if r := call("session.whoami", token, `{}`); r.Code != "unauthenticated" {
 		t.Fatalf("old %+v", r)

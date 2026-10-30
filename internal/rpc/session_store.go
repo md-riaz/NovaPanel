@@ -70,7 +70,11 @@ func (r storedSessions) resolve(ctx context.Context, token string, touch bool) (
 		c.MFAat = *s.MFAAt
 	}
 	if touch {
-		if _, e = r.a.Store.TouchSession(ctx, s.ID, h, 600000); e != nil {
+		idleMS := int64(r.a.Cfg.IdleSec) * 1000
+		if s.Kind == "anon" {
+			idleMS = 600000
+		}
+		if _, e = r.a.Store.TouchSession(ctx, s.ID, h, idleMS); e != nil {
 			return deny()
 		}
 	}

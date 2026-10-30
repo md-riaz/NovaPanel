@@ -35,7 +35,7 @@ func init() {
 	rpc.Register(rpc.Verb{Name: "session.reauth", MinRole: rpc.ReadOnly, NewArgs: func() any { return &reauthArgs{} }, Run: sessionReauth})
 }
 func authFailure() error { return rpc.Errf("unauthenticated", "Authentication required") }
-func randomSession(now int64) (store.Session, string, error) {
+func randomSession(now, idleMS, absMS int64) (store.Session, string, error) {
 	sid, e := id.New()
 	if e != nil {
 		return store.Session{}, "", e
@@ -47,7 +47,7 @@ func randomSession(now int64) (store.Session, string, error) {
 	secret := hex.EncodeToString(b[:32])
 	csrf := hex.EncodeToString(b[32:])
 	digest := sha256.Sum256([]byte(secret))
-	return store.Session{ID: sid, TokenHash: hex.EncodeToString(digest[:]), Kind: "anon", CSRFToken: csrf, IdleDeadline: now + 600000, AbsDeadline: now + 43200000}, "nps_" + sid + "_" + secret, nil
+	return store.Session{ID: sid, TokenHash: hex.EncodeToString(digest[:]), Kind: "anon", CSRFToken: csrf, IdleDeadline: now + min(idleMS, absMS), AbsDeadline: now + absMS}, "nps_" + sid + "_" + secret, nil
 }
 func sessionStart(ctx context.Context, a *agent.Agent, _ any) (any, error) {
 	if a.Store == nil {
@@ -63,11 +63,10 @@ func sessionStart(ctx context.Context, a *agent.Agent, _ any) (any, error) {
 			CSRF    string `json:"csrf_token"`
 		}{rpc.PresentedSession(ctx), row.CSRFToken}, nil
 	}
-	row, token, e := randomSession(a.Now())
+	row, token, e := randomSession(a.Now(), 600000, 600000)
 	if e != nil {
 		return nil, e
 	}
-	row.AbsDeadline = row.IdleDeadline
 	if e = a.Store.CreateSession(ctx, row); e != nil {
 		return nil, e
 	}
@@ -130,7 +129,7 @@ func sessionLogin(ctx context.Context, a *agent.Agent, v any) (any, error) {
 			return nil, rpc.Errf("agent_error", "Password hashing unavailable")
 		}
 	}
-	row, token, e := randomSession(a.Now())
+	row, token, e := randomSession(a.Now(), int64(a.Cfg.IdleSec)*1000, int64(a.Cfg.AbsSec)*1000)
 	if e != nil {
 		return nil, e
 	}
@@ -249,7 +248,7 @@ func sessionReauth(ctx context.Context, a *agent.Agent, v any) (any, error) {
 	if e != nil {
 		return nil, e
 	}
-	row, token, e := randomSession(a.Now())
+	row, token, e := randomSession(a.Now(), int64(a.Cfg.IdleSec)*1000, int64(a.Cfg.AbsSec)*1000)
 	if e != nil {
 		return nil, e
 	}

@@ -2,6 +2,7 @@ package verbs_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"github.com/pquerna/otp/totp"
 	"net/url"
@@ -49,6 +50,26 @@ func TestMFAEnrollmentLifecycle(t *testing.T) {
 	u, _ = s.Agent.Store.UserByID(context.Background(), u.ID)
 	if u.TOTPSecret == nil || u.TOTPPending != nil {
 		t.Fatal("not promoted")
+	}
+	var raw string
+	var pending sql.NullString
+	if e = s.Agent.Store.Tx(context.Background(), func(tx *sql.Tx) error {
+		// Gate 4 reads the stored columns without going through the user mapper.
+		return tx.QueryRow("SELECT totp_secret,totp_pending FROM users WHERE id=?", u.ID).Scan(&raw, &pending)
+	}); e != nil {
+		t.Fatal("read raw MFA columns failed")
+	}
+	if key == "" || strings.Contains(raw, key) || pending.Valid {
+		t.Fatal("active MFA must be ciphertext with pending cleared")
+	}
+	var sealed secret.Sealed
+	if e = json.Unmarshal([]byte(raw), &sealed); e != nil || len(sealed.Nonce) == 0 || len(sealed.Ciphertext) == 0 {
+		t.Fatal("active MFA column is not a sealed value")
+	}
+	plain, err := s.Agent.Secret.Open(sealed)
+	defer clear(plain)
+	if err != nil || string(plain) != key {
+		t.Fatal("active MFA ciphertext does not round-trip")
 	}
 	stored, _ := s.Agent.Store.ListBackupCodes(context.Background(), u.ID)
 	if ok, _ := auth.Verify(codes[0].(string), stored[0].CodePHC); !ok { // IDs need not sort in issuance order.
