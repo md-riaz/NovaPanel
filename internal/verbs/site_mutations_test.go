@@ -2,6 +2,7 @@ package verbs_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"novapanel/internal/agent"
 	"novapanel/internal/audit"
@@ -114,6 +115,30 @@ func TestSiteMutations(t *testing.T) {
 	pending := call("site.update", map[string]any{"site_id": sid, "primary_domain_id": added.ID})
 	if !pending.OK {
 		t.Fatalf("promotion admission %+v", pending)
+	}
+	// A TLS transition after enqueue must refuse execution without changing primary.
+	if err = st.Tx(ctx, func(tx *sql.Tx) error {
+		_, e := tx.ExecContext(ctx, "UPDATE sites SET cert_source='manual' WHERE id=?", sid)
+		return e
+	}); err != nil {
+		t.Fatal(err)
+	}
+	blocked := jobs.Job(pending.Data.(jobs.EnqueueResult).Job)
+	if e := rpc.Registry["site.update"].Exec(ctx, a, &blocked); e == nil {
+		t.Fatal("TLS promotion executed")
+	}
+	if r := call("site.update", map[string]any{"site_id": sid, "primary_domain_id": added.ID}); r.Code != "precondition_failed" {
+		t.Fatalf("TLS promotion admitted %+v", r)
+	}
+	original, _ := st.DomainByID(ctx, did)
+	if !original.IsPrimary {
+		t.Fatal("TLS refusal changed primary")
+	}
+	if err = st.Tx(ctx, func(tx *sql.Tx) error {
+		_, e := tx.ExecContext(ctx, "UPDATE sites SET cert_source='none' WHERE id=?", sid)
+		return e
+	}); err != nil {
+		t.Fatal(err)
 	}
 	exec("domain.remove", map[string]any{"domain_id": added.ID})
 	pj := jobs.Job(pending.Data.(jobs.EnqueueResult).Job)
