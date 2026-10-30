@@ -38,7 +38,7 @@ Phase 0. Reads: `00-foundations.md` F1, F5, F6, F7, F10, F11, F13.
    (`validate.UnitName`, allowlist of manageable units), returns structured status
    `{unit, active:bool, enabled:bool, state:string}` (03). Exercised end-to-end **via `novapanelctl`**
    (local, peer-gated — there is no web auth until Phase 2, so the skeleton does **not** go through
-   `panel-web` yet). Per 01 `service.status` is `MinRole=admin, ReadOnly✓, scope system:read`;
+   `panel-web` yet). Per 01 `service.status` is `MinRole=read_only, ReadOnly✓, scope system:read`;
    `novapanelctl` runs as **root (uid 0)** and the peer gate gives it the **in-memory synthetic owner
    Caller** (F1/F4) — no `sessions` row. `service.restart{unit}` is the **first slow + effectful verb**
    (job queue) to exercise F6.
@@ -56,8 +56,10 @@ Phase 0. Reads: `00-foundations.md` F1, F5, F6, F7, F10, F11, F13.
   `Registry[j.Verb].Exec(ctx, a, j)`), so `internal/jobs` never imports `rpc`/`verbs` (F14). There is
   **no `type Step`** — the worker step is `Verb.Exec` (F13). `recoverRunning` reads `jobs.effectful`
   (idempotent → requeue; effectful → `failed`/`interrupted`).
-- **`internal/audit/audit.go`** — `Record(ev Event)`; opens the append-only file once; the dispatch
-  path calls it in a `defer` that also catches panics → `outcome:"error", code:"agent_error"`.
+- **`internal/audit/audit.go`** — `Record(ev Event) error` (F11 — file append first, then the `events`
+  row; returns an error so a mutation fails closed when the record can't be written); opens the
+  append-only file once; the dispatch path calls it in a `defer` that also catches panics →
+  `outcome:"error", code:"agent_error"`.
 - **`internal/secret/secret.go`** — `Seal([]byte) (Sealed, error)`, `Open(Sealed) ([]byte, error)`;
   key load from `/var/lib/novapanel/seal.key` (generate `0600` if absent at install).
 - **`internal/verbs/service.go`** — `service.status` (read-only), `service.restart` (slow, MinRole
