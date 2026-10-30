@@ -34,8 +34,14 @@ func TestRegisteredVerbs(t *testing.T) {
 	if len(rpc.Registry) == 0 {
 		t.Fatal("empty built registry: seed verbs were not imported")
 	}
-	if len(rpc.Registry) != 2 {
-		t.Fatalf("Phase 0 must have exactly two seed verbs, got %d", len(rpc.Registry))
+	expected := []string{"ping", "agent.info", "service.status"}
+	if len(rpc.Registry) != len(expected) {
+		t.Fatalf("Phase 1 allowlist mismatch: %d", len(rpc.Registry))
+	}
+	for _, name := range expected {
+		if _, ok := rpc.Registry[name]; !ok {
+			t.Fatalf("missing verb %s", name)
+		}
 	}
 	names := map[string]bool{}
 	for name, verb := range rpc.Registry {

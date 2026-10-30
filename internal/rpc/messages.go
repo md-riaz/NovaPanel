@@ -56,7 +56,10 @@ func Register(v Verb) {
 	Registry[v.Name] = v
 }
 
-type AuditEvent struct{ Actor, Role, Verb, ObjectKey, Outcome, Code string }
+type AuditEvent struct {
+	Actor, Role, Verb, ObjectKey, Outcome, Code string
+	Detail                                      map[string]any
+}
 type AuditSink interface{ Record(AuditEvent) }
 type AuditFunc func(AuditEvent)
 
@@ -68,6 +71,7 @@ type Server struct {
 	Registry          map[string]Verb
 	Sessions          SessionResolver
 	Audit             AuditSink
+	DurableAudit      func(AuditEvent) error
 	DefaultDeadlineMs int
 }
 
@@ -76,7 +80,8 @@ func NewServer(a *agent.Agent) *Server {
 }
 func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	caller := CallerFrom(ctx)
-	event := AuditEvent{Actor: req.Actor, Role: caller.Role, Verb: req.Verb}
+	event := AuditEvent{Actor: req.Actor, Role: caller.Role, Verb: req.Verb, Detail: map[string]any{"stage": "authz"}}
+	mutation := false
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("rpc: dispatch panic: %v", r)
@@ -91,6 +96,12 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 				event.Outcome = "error"
 			}
 		}
+		if s.DurableAudit != nil {
+			if err := s.DurableAudit(event); err != nil && mutation {
+				reply = Err("agent_error", "Durable audit unavailable")
+				reply.ID = req.ID
+			}
+		}
 		if s.Audit != nil {
 			s.Audit.Record(event)
 		}
@@ -99,6 +110,7 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	if !ok {
 		return Err("unknown_verb", "Unknown verb")
 	}
+	mutation = !v.ReadOnly
 	// Phase 0 has no modules, queue or durable audit prerequisites. Never
 	// invoke a future handler merely because it was added to the registry.
 	if v.Module != "" || v.Slow || v.Effectful {
@@ -173,6 +185,14 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(ms)*time.Millisecond)
 	defer cancel()
+	if mutation && s.DurableAudit != nil {
+		pre := event
+		pre.Outcome = "ok"
+		if err := s.DurableAudit(pre); err != nil {
+			return Err("agent_error", "Durable audit unavailable")
+		}
+	}
+	event.Detail["stage"] = "exec"
 	data, err := v.Run(ctx, s.Agent, args)
 	if ctx.Err() != nil {
 		return Err("deadline_exceeded", "Deadline exceeded")

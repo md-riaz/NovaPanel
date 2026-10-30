@@ -10,9 +10,7 @@ import (
 )
 
 func TestSeedVerbs(t *testing.T) {
-	if len(rpc.Registry) != 2 {
-		t.Fatalf("want exactly seed verbs, got %d", len(rpc.Registry))
-	}
+	// The complete phase allowlist is enforced by TestRegisteredVerbs.
 	s := rpc.NewServer(agent.New())
 	for _, verb := range []string{"ping", "agent.info"} {
 		r := s.Dispatch(rpc.WithCaller(context.Background(), rpc.RootCaller(0)), rpc.Request{ID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Verb: verb, Args: json.RawMessage(`{}`)})
