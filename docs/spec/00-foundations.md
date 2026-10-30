@@ -510,7 +510,7 @@ func CallerFrom(ctx context.Context) Caller
 type CodedError struct{ Code, Msg string }       // func Errf(code, msg string, a ...any) *CodedError
 
 // audit (F11) — called in a defer on the one dispatch path
-func (*Log) Record(ev Event)                            // writes events row + append-only file
+func (*Log) Record(ev Event) error                      // file append first, then events row (F11); err = fail-closed
 type Event struct{ Actor, Role, Verb, ObjectKey, Outcome, Code string; Detail map[string]any }
 
 // secret (F12)
@@ -600,7 +600,7 @@ subset**, not full systemd `OnCalendar`: the aliases `minutely`/`hourly`/`daily`
 `yearly`, or `[weekday ]*-*-* HH:MM:SS UTC` where weekday ∈ `Mon Tue Wed Thu Fri Sat Sun`, each of
 `HH`/`MM`/`SS` is two digits in range **or** `*`. `weekly` = Monday 00:00:00 UTC; `monthly`/`yearly` =
 first day at 00:00:00 UTC. Lists, ranges, steps, concrete dates, other time zones and cron expressions
-are **rejected with a clear `invalid` error** — the parser must not silently accept and mis-fire
+are **rejected with the `invalid_argument` code** (F3) — the parser must not silently accept and mis-fire
 (BHPanel's cron strings are passed to the OS and under-validated; we validate at the sink, invariant 4).
 This governs the **internal `schedules` table only**. The later **site-level `cron.*`** verbs (Phase 5)
 promise real systemd `OnCalendar` timers and are a **separate surface** — they are translated to
@@ -611,8 +611,11 @@ systemd timer units, never back-fitted onto this subset. Do not claim full `OnCa
 concurrent or duplicated tick that lost the race is a no-op — no double-fire), (b) inserts the `queued`
 job row with the owner's persisted authority (below), (c) reserves the `job_claims` row if the verb
 mints a secret, and (d) updates `last_run`/`state_json` — all or nothing. This closes the
-cadence-advanced-but-not-enqueued crash window. Audit's **file append stays outside the SQL tx** and is
-ordered per F11 (DB commit, then file). **Busy object:** if the row's `object_key` has a running job,
+cadence-advanced-but-not-enqueued crash window. The **audit record stays outside this scheduled-job
+transaction**: the job transaction commits first, then the audit record is written in F11 order —
+**file append first, then the `events` row** (the job tx and the audit write are two separate writes;
+do not fold the `events` row into the job tx, and never let it precede its file record). **Busy object:**
+if the row's `object_key` has a running job,
 the tick **skips** this occurrence and still advances `next_run` (no pile-up, no retry of the skipped
 occurrence — the next occurrence is the retry); this matches the ISPConfig anti-pattern we avoid, where
 overlapping cron runs stack and wedge.
