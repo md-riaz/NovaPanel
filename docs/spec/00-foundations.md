@@ -464,6 +464,26 @@ Record(Event) error                                    -- fail-closed: see sinks
   the installer and re-made by the agent if missing; **no `LogsDirectory=`** in the unit (systemd
   re-chowns an ExecDirectory on every start and fails against `chattr +a` — BHPanel incident).
 - Secrets are redacted before an event is written (F12 redaction helper).
+- **Resolved audit identity projection (ADR-0009).** New dispatch records carry
+  `detail.principal`, independent of the untrusted `actor` label. Its `kind` is `user`, `anon`,
+  `token`, `local-root`, or `unresolved`. Successful session resolution supplies `session_id`
+  and, for authenticated users, `user_id`; PAT resolution supplies only `token_id` because the
+  resolver does not provide a resolved user identity for PATs. These are agent-resolved row IDs, never the presented credential, token
+  secret, hash, sealed input or private bytes. Local root uses `{kind:"local-root"}`. Missing or
+  failed resolution uses `{kind:"unresolved"}` without deriving identity from actor or input IDs.
+  Capture occurs after session resolution and before argument decoding, authorization refusals
+  and execution; malformed arguments retain a successfully resolved principal. Unknown or
+  unavailable verbs rejected before resolution explicitly remain unresolved.
+  Admission and dispatch completion preserve the incoming principal, not a newly minted identity.
+  Queue enqueue and terminal execution records project existing durable `jobs.created_by` and
+  `role`: local-root sentinel, token ID for stored token authority, otherwise user session ID.
+  The existing job snapshot has no user ID column, so queued records omit `user_id` rather than
+  inventing one or consulting an expired/revoked live session. Correlate their `job_id` to the
+  dispatch records for the full admission identity. This projection uses existing `detail_json`;
+  no migration or DDL change is authorized or needed. Old replayed records remain unchanged.
+  Typed trusted principal fields bypass only key-name redaction for `token_id`; their string
+  values still undergo secret-shape redaction, and arbitrary detail retains normal redaction.
+  File-first mirroring/replay, sticky failure gates and actor-label semantics are unchanged.
 - **Phase-3 object attribution clarification.** Authorization precedes resource lookups, including
   lookups used for audit attribution. Before authorization, `detail.stage='authz'` identifies a
   refusal; `object_key` may identify only a validated resource ID supplied in the request

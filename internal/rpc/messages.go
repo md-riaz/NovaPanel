@@ -66,6 +66,7 @@ func Register(v Verb) {
 }
 
 type AuditEvent struct {
+	Principal                                   audit.Principal
 	Actor, Role, Verb, ObjectKey, Outcome, Code string
 	Detail                                      map[string]any
 }
@@ -97,14 +98,14 @@ func NewServer(a *agent.Agent) *Server {
 	}
 	if a.Audit != nil {
 		s.DurableAudit = func(e AuditEvent) error {
-			return a.Audit.Record(audit.Event{Actor: e.Actor, Role: e.Role, Verb: e.Verb, ObjectKey: e.ObjectKey, Outcome: e.Outcome, Code: e.Code, Detail: e.Detail})
+			return a.Audit.Record(audit.Event{Principal: e.Principal, Actor: e.Actor, Role: e.Role, Verb: e.Verb, ObjectKey: e.ObjectKey, Outcome: e.Outcome, Code: e.Code, Detail: e.Detail})
 		}
 	}
 	return s
 }
 func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	caller := CallerFrom(ctx)
-	event := AuditEvent{Actor: req.Actor, Role: caller.Role, Verb: req.Verb, Detail: map[string]any{"stage": "authz"}}
+	event := AuditEvent{Principal: callerPrincipal(caller), Actor: req.Actor, Role: caller.Role, Verb: req.Verb, Detail: map[string]any{"stage": "authz"}}
 	mutation := false
 	defer func() {
 		if r := recover(); r != nil {
@@ -145,9 +146,6 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	if v.Module != "" || (v.Effectful && !v.Slow) || (v.Slow && s.Agent.Jobs == nil) {
 		return Err("unsupported", "Unavailable in this phase")
 	}
-	if !object(req.Args) {
-		return Err("bad_request", "Object args required")
-	}
 	event.ObjectKey = requestObjectKey(req)
 	if caller.Role == "" && caller.Kind == "" && req.Session != "" {
 		resolver := s.Sessions
@@ -170,7 +168,11 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 		resolved.Peer = caller.Peer
 		caller = resolved
 	}
+	event.Principal = callerPrincipal(caller)
 	event.Role = caller.Role
+	if !object(req.Args) {
+		return Err("bad_request", "Object args required")
+	}
 	if req.Verb == "session.start" && (caller.Kind == "user" || caller.Kind == "token" || caller.Role != "") {
 		return Err("precondition_failed", "Anonymous session required")
 	}

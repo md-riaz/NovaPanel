@@ -11,6 +11,16 @@ import (
 	"novapanel/internal/store"
 )
 
+func expectedPrincipal(c rpc.Caller) map[string]any {
+	if c.Kind == "user" {
+		return map[string]any{"kind": "user", "user_id": c.UserID, "session_id": c.Session}
+	}
+	if c.Role == "owner" && c.Peer == 0 {
+		return map[string]any{"kind": "local-root"}
+	}
+	return map[string]any{"kind": "unresolved"}
+}
+
 func TestPhase3AuditObjectAttribution(t *testing.T) {
 	const sid = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
 	const did = "01ARZ3NDEKTSV4RRFFQ69G5FAW"
@@ -80,7 +90,7 @@ func TestPhase3AuditObjectAttribution(t *testing.T) {
 							outcome = "error"
 						}
 					}
-					if ev["actor"] != "untrusted-audit-label" || ev["role"] != caller.Role || ev["verb"] != tc.verb || ev["object_key"] != key || ev["code"] != wantCode || ev["outcome"] != outcome || !reflect.DeepEqual(ev["detail"], map[string]any{"stage": stages[i]}) {
+					if ev["actor"] != "untrusted-audit-label" || ev["role"] != caller.Role || ev["verb"] != tc.verb || ev["object_key"] != key || ev["code"] != wantCode || ev["outcome"] != outcome || !reflect.DeepEqual(ev["detail"], map[string]any{"stage": stages[i], "principal": expectedPrincipal(caller)}) {
 						t.Fatalf("wrong attribution: %+v", ev)
 					}
 					found := false
@@ -102,7 +112,7 @@ func TestPhase3AuditObjectAttribution(t *testing.T) {
 				}
 			}
 			check(rpc.Caller{Peer: 1001}, "unauthenticated", tc.requestKey, "authz")
-			check(rpc.Caller{Peer: 1001, Role: "read_only", Kind: "user"}, "forbidden", tc.requestKey, "authz")
+			check(rpc.Caller{Peer: 1001, Role: "read_only", Kind: "user", UserID: "trusted-user", Session: "trusted-session"}, "forbidden", tc.requestKey, "authz")
 			root := rpc.RootCaller(0)
 			root.MFAat = h.clock.now
 			// Inject only the public handler failure, retaining registry authorization and resolution.

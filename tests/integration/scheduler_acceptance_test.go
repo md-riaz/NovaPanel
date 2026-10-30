@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -27,6 +28,16 @@ func (c *acceptanceClock) Now() int64 { return c.now }
 
 // The only provisioning substitution is scratch directory creation. No host user
 // operations are permitted in this nonroot lab; nginx, queue and ACME are real.
+func acceptancePrincipal(c rpc.Caller) map[string]any {
+	if c.Kind == "token" {
+		return map[string]any{"kind": "token", "token_id": c.Session}
+	}
+	if c.Kind == "user" {
+		return map[string]any{"kind": "user", "session_id": c.Session, "user_id": c.UserID}
+	}
+	return map[string]any{"kind": "local-root"}
+}
+
 func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 	if os.Getenv("NOVAPANEL_PEBBLE") != "1" {
 		t.Skip("confined Pebble lab only")
@@ -158,7 +169,7 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 			if _, queued := detail["job_id"]; queued {
 				continue
 			}
-			if ev.Verb != verb || ev.ObjectKey != wantKey || ev.Actor != "untrusted-label" || ev.Role != caller.Role || ev.Outcome != "ok" || ev.Code != "" || len(detail) != 1 {
+			if ev.Verb != verb || ev.ObjectKey != wantKey || ev.Actor != "untrusted-label" || ev.Role != caller.Role || ev.Outcome != "ok" || ev.Code != "" || len(detail) != 2 || !reflect.DeepEqual(detail["principal"], acceptancePrincipal(caller)) {
 				t.Fatalf("%s dispatch audit binding differs", verb)
 			}
 			stage, _ := detail["stage"].(string)
@@ -481,7 +492,7 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 	// Refusals use only validated request IDs, never a persisted parent lookup.
 	verbs := []string{"site.create", "site.update", "site.delete", "domain.add", "domain.remove", "redirect.add", "redirect.remove", "ssl.issue", "ssl.renew", "ssl.upload", "ssl.auto_set"}
 	refusalCallers := []rpc.Caller{
-		{Role: "read_only", Session: "acceptance-reader", Peer: 1234},
+		{Kind: "user", UserID: "acceptance-reader-user", Role: "read_only", Session: "acceptance-reader", Peer: 1234},
 		{Kind: "token", Role: "owner", Session: "acceptance-unscoped-token", Peer: 1234},
 	}
 	beforeRefusals := count()
@@ -527,7 +538,15 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 			if job.ID == failed.ID && d["stage"] == "exec" {
 				outcome, code = "error", "agent_error"
 			}
-			if ev.Verb != job.Verb || ev.ObjectKey != job.ObjectKey || ev.Role != job.Role || ev.Actor != job.Actor || ev.Outcome != outcome || ev.Code != code || len(d) != 2 {
+			if ev.Verb != job.Verb || ev.ObjectKey != job.ObjectKey || ev.Role != job.Role || ev.Actor != job.Actor || ev.Outcome != outcome || ev.Code != code || len(d) != 3 || !reflect.DeepEqual(d["principal"], func() map[string]any {
+				if job.CreatedBy == "local-root" {
+					return map[string]any{"kind": "local-root"}
+				}
+				if job.Role == "token" {
+					return map[string]any{"kind": "token", "token_id": job.CreatedBy}
+				}
+				return map[string]any{"kind": "user", "session_id": job.CreatedBy}
+			}()) {
 				t.Fatalf("audit binding/code/detail differs for %s stage=%v", job.Verb, d["stage"])
 			}
 			if d["stage"] == "enqueue" {
@@ -552,7 +571,7 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 		if err := json.Unmarshal(ev.Detail, &d); err != nil {
 			t.Fatal(err)
 		}
-		if ev.ObjectKey != key || ev.Outcome != "ok" || ev.Code != "" || ev.Role != "owner" || len(d) != 1 {
+		if ev.ObjectKey != key || ev.Outcome != "ok" || ev.Code != "" || ev.Role != "owner" || len(d) != 2 || !reflect.DeepEqual(d["principal"], map[string]any{"kind": "local-root"}) {
 			t.Fatal("synchronous auto_set audit differs")
 		}
 		stage, _ := d["stage"].(string)
@@ -577,7 +596,7 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 				if verb == "site.create" || verb == "domain.remove" || verb == "redirect.remove" {
 					wantRefusalKey = ""
 				}
-				if ev.Role != incoming.Role || ev.ObjectKey != wantRefusalKey || ev.Outcome != "refused" || ev.Code != "forbidden" || d["stage"] != "authz" || len(d) != 1 {
+				if ev.Role != incoming.Role || ev.ObjectKey != wantRefusalKey || ev.Outcome != "refused" || ev.Code != "forbidden" || d["stage"] != "authz" || len(d) != 2 || !reflect.DeepEqual(d["principal"], acceptancePrincipal(incoming)) {
 					t.Fatalf("%s refusal binding/stage differs", verb)
 				}
 				n++
