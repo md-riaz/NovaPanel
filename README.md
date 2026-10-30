@@ -31,5 +31,5 @@ Those instructions apply only to that revision, not this Go branch. In particula
 
 ## License
 
-See [LICENSE](LICENSE). This status update does not change the existing license;
-any proprietary licensing decision requires separate authorization.
+This branch does not include a license file. This status update does not grant
+or change licensing terms; any licensing decision requires separate authorization.

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -62,34 +64,45 @@ func TestScratchAgent(t *testing.T) {
 		err  error
 	}
 	done := make(chan result, 1)
-	go func() {
-		out, stderr, exit, err := (runner.Real{}).Run(ctx, filepath.Join(scratch, "panel-agent"), []string{"--config", config}, runner.RunOpts{Dir: scratch, Env: os.Environ()})
-		done <- result{string(out) + string(stderr), exit, err}
-	}()
+	start := func() {
+		go func() {
+			out, stderr, exit, err := (runner.Real{}).Run(ctx, filepath.Join(scratch, "panel-agent"), []string{"--config", config}, runner.RunOpts{Dir: scratch, Env: os.Environ()})
+			done <- result{string(out) + string(stderr), exit, err}
+		}()
+	}
+	start()
+	running := true
 	defer func() {
 		cancel()
+		if !running {
+			return
+		}
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
 			t.Error("agent did not stop")
 		}
 	}()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if _, err := os.Stat(socket); err == nil {
-			break
+	waitSocket := func() {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			if _, err := os.Stat(socket); err == nil {
+				break
+			}
+			select {
+			case r := <-done:
+				done <- r
+				t.Fatalf("agent stopped before socket: %+v", r)
+			default:
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("socket startup timed out")
+			}
+			time.Sleep(20 * time.Millisecond)
 		}
-		select {
-		case r := <-done:
-			done <- r
-			t.Fatalf("agent stopped before socket: %+v", r)
-		default:
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("socket startup timed out")
-		}
-		time.Sleep(20 * time.Millisecond)
 	}
+	waitSocket()
 	for _, verb := range []string{"ping", "agent.info"} {
 		text, exit := run(filepath.Join(scratch, "novapanelctl"), []string{"--socket", socket, verb}, runner.RunOpts{Dir: scratch, Env: os.Environ()})
 		if exit != 0 {
@@ -132,4 +145,48 @@ except (ConnectionResetError,BrokenPipeError): print("PEER_CLOSED")
 		}
 	}
 	t.Log("real binaries: root ping/info accepted; root web refused; web ping accepted and owner info denied; disallowed uid connected through filesystem then rejected by SO_PEERCRED")
+	stop := func() {
+		t.Helper()
+		// Identify only the process serving our scratch socket, not a host service.
+		conn, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: socket, Net: "unix"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := conn.SyscallConn()
+		if err != nil {
+			conn.Close()
+			t.Fatal(err)
+		}
+		var cred *syscall.Ucred
+		var credErr error
+		err = raw.Control(func(fd uintptr) {
+			cred, credErr = syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
+		})
+		conn.Close()
+		if err != nil || credErr != nil {
+			t.Fatalf("agent peer credentials: %v %v", err, credErr)
+		}
+		if err := syscall.Kill(int(cred.Pid), syscall.SIGTERM); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case r := <-done:
+			running = false
+			_, statErr := os.Lstat(socket)
+			if r.err != nil || r.exit != 0 || !os.IsNotExist(statErr) {
+				t.Fatalf("SIGTERM must exit cleanly and remove socket: exit=%d err=%v socket_err=%v output=%s", r.exit, r.err, statErr, r.text)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("SIGTERM shutdown timed out")
+		}
+	}
+	stop()
+	start()
+	running = true
+	waitSocket()
+	if text, exit := run(filepath.Join(scratch, "novapanelctl"), []string{"--socket", socket, "ping"}, runner.RunOpts{Dir: scratch, Env: os.Environ()}); exit != 0 {
+		t.Fatalf("restarted agent ping: exit=%d %s", exit, text)
+	}
+	stop()
+	t.Log("SIGTERM: clean exit and socket removal; restart on the same path accepted ping and stopped cleanly")
 }

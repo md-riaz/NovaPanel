@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"net"
 	"novapanel/internal/agent"
 	"novapanel/internal/config"
@@ -93,7 +94,7 @@ func run(args []string) error {
 	s.WebUID = cfg.WebUID
 	s.DefaultDeadlineMs = cfg.DeadlineDefaultMs
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt)
+	signal.Notify(sig, os.Interrupt, unix.SIGTERM)
 	defer signal.Stop(sig)
 	done := make(chan struct{})
 	defer close(done)
