@@ -81,8 +81,23 @@ func TestACMEIssueRenewPublication(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
+		if verb == "ssl.renew" {
+			a.Nginx.Probe = func(context.Context, nginx.Desired) error { panic("simulated process interruption") }
+			if e = (acmeExecutor{a}).execute(ctx, &j, verb, f.server.Client()); e == nil {
+				t.Fatal("crash not reported")
+			}
+			pending, e := st.TLSIntent(ctx)
+			if e != nil || len(pending) == 0 {
+				t.Fatalf("lost recovery intent %v", e)
+			}
+			a.Nginx.Probe = func(context.Context, nginx.Desired) error { return nil }
+		}
 		if e = (acmeExecutor{a}).execute(ctx, &j, verb, f.server.Client()); e != nil {
 			t.Fatal(e)
+		}
+		beforeReplay := r.reloads
+		if e = (acmeExecutor{a}).execute(ctx, &j, verb, f.server.Client()); e != nil || r.reloads != beforeReplay {
+			t.Fatalf("committed replay reloaded: %v", e)
 		}
 		j.State = "done"
 		if e = st.UpdateJob(ctx, j); e != nil {
@@ -112,7 +127,7 @@ func TestACMEIssueRenewPublication(t *testing.T) {
 	}
 	run("ssl.renew")
 	second, _ := os.Readlink(filepath.Join(a.Cfg.TLSDir, "example.test/current"))
-	if first == second || r.reloads != 2 {
+	if first == second || r.reloads != 4 {
 		t.Fatalf("publication first=%s second=%s reloads=%d", first, second, r.reloads)
 	}
 	f.mu.Lock()
