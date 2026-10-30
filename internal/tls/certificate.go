@@ -23,14 +23,37 @@ type Certificate struct {
 	certPEM, keyPEM []byte
 }
 
-func (c *Certificate) GoString() string { return c.String() }
-func (c *Certificate) String() string   { return "TLS certificate (key redacted)" }
+func (c Certificate) GoString() string { return c.String() }
+func (c Certificate) String() string   { return "TLS certificate (key redacted)" }
 func (c *Certificate) Covers(domain string) bool {
 	return c != nil && c.leaf != nil && validDomain(domain) && c.leaf.VerifyHostname(domain) == nil
 }
 func invalid() error {
 	return rpcerr.Errf("invalid_argument", "Invalid TLS certificate or private key")
 }
+
+// pem.Decode searches past malformed blocks; decode only the first block.
+func decodePEMBlock(data []byte) (*pem.Block, []byte) {
+	data = bytes.TrimLeft(data, " \t\r\n")
+	end := bytes.Index(data, []byte("-----END "))
+	if end < 0 {
+		return nil, nil
+	}
+	lineEnd := bytes.IndexByte(data[end:], '\n')
+	cut := len(data)
+	if lineEnd >= 0 {
+		cut = end + lineEnd + 1
+	}
+	if bytes.Count(data[:cut], []byte("-----BEGIN ")) != 1 {
+		return nil, nil
+	}
+	block, tail := pem.Decode(data[:cut])
+	if block == nil || len(bytes.TrimSpace(tail)) != 0 {
+		return nil, nil
+	}
+	return block, data[cut:]
+}
+
 func validDomain(s string) bool { return (&validate.V{}).Hostname(s) == nil }
 
 // Validate requires SAN coverage for every persisted domain. It does not impose a
@@ -45,7 +68,7 @@ func Validate(certPEM, keyPEM []byte, domains []string, now time.Time) (*Certifi
 		if !bytes.HasPrefix(bytes.TrimSpace(rest), []byte("-----BEGIN CERTIFICATE-----")) {
 			return nil, invalid()
 		}
-		block, tail := pem.Decode(rest)
+		block, tail := decodePEMBlock(rest)
 		if block == nil || block.Type != "CERTIFICATE" || len(block.Headers) != 0 || len(chain) >= 16 {
 			return nil, invalid()
 		}
@@ -62,7 +85,7 @@ func Validate(certPEM, keyPEM []byte, domains []string, now time.Time) (*Certifi
 	if len(chain) == 0 {
 		return nil, invalid()
 	}
-	block, tail := pem.Decode(keyPEM)
+	block, tail := decodePEMBlock(keyPEM)
 	if block == nil || len(block.Headers) != 0 || len(bytes.TrimSpace(tail)) != 0 || !bytes.HasPrefix(bytes.TrimSpace(keyPEM), []byte("-----BEGIN "+block.Type+"-----")) {
 		return nil, invalid()
 	}
