@@ -72,6 +72,24 @@ Phases 0–1 (RPC, store, audit, secret seal). Reads: `00-foundations.md` F4, F1
 - **Sec-Fetch-Site** ships behind a config flag defaulting to **enforce** for non-safe methods (with
   Origin/Referer fallback); the "log-only first" note is an ops rollout aid, and the gate test sets
   enforce.
+- **Rate-limit & lockout policy (decided — this is security policy, not implementer discretion).**
+  Agent-side, over F16's numbers. Two budgets, both rolling over **`login_window_sec` (900 s)** — TOTP
+  **shares** `login_window_sec`; no new config key:
+  1. **Password-login budget** — `login_max_attempts` (5) keyed **per username** (plus a per-peer
+     throttle so an unknown user still can't be used to enumerate/DoS).
+  2. **Second-factor budget** — `totp_max_attempts` (5) keyed **per `user_id`** and **shared across
+     every verb that verifies a second factor**: `session.login` (its `totp` arg), `session.reauth`,
+     `mfa.confirm` (against `totp_pending`), `mfa.disable`, and **backup-code** verification. One budget
+     per user so a different entry point cannot multiply the allowance (no 5-per-verb bypass).
+  - **Only failed verification consumes a budget; a successful verification resets that account's
+    budget to zero.** (Admitting an attempt for verification is not itself a charge — the charge is the
+    failure.)
+  - **Exhaustion is uniform, not an oracle.** A budget-exhausted attempt returns the **same** auth
+    failure as a wrong credential (`unauthenticated` for login; the normal MFA-gate response for a
+    second factor) — the agent does **not** emit a distinct "locked out" code and there is **no new F3
+    code**. The web tier's token bucket (`rate_limit_rps`/`rate_limit_burst`) is a separate transport
+    throttle and remains the only `429` path. Every attempt (admitted, failed, or budget-refused) is
+    still audited (F11).
 
 ## External refs (gathered — verified values to honor)
 - **Argon2id:** OWASP minimum **m=19456 KiB, t=2, p=1** (memory already in KiB — pass `19456`, don't

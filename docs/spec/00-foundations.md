@@ -154,7 +154,7 @@ mfa_at}` where `kind ∈ {anon, user, token}`.
   header compare (whoami is non-public, so the anon flow needs this symmetric read path; see CSRF-token
   storage below). When no valid `anon` session is presented (absent / expired / malformed) it **mints**
   a fresh anon row (rate-limited per peer). An **authenticated** (`kind=user`/`token`) session presented
-  to `session.start` returns `code:"failed_precondition"` — that session's CSRF is read via `whoami`,
+  to `session.start` returns `code:"precondition_failed"` (F3) — that session's CSRF is read via `whoami`,
   not here. The idempotent return does **not** extend the anon session's absolute lifetime; once it
   expires the next `session.start` mints anew.
 - **Login** (`session.login{user, password, totp?}`): agent verifies (Argon2id; TOTP if enrolled),
@@ -392,6 +392,28 @@ Record(Event) error                                    -- fail-closed: see sinks
   arrives **after** an effect already happened does **not** undo the effect — audit records the effect
   and the failing stage; effect reversal is the verb's concern under the effectful rules (F6), not
   audit's.
+- **Show-once reply exception (bounded, decided).** Two synchronous verbs return a secret that exists
+  **only** in their reply — `mfa.confirm → {backup_codes}` and `tokens.create → {token}` (backup codes
+  and the PAT are stored **hash-only**; there is no second read). When such a verb's **effect has
+  already durably committed** and only the **completion (final-outcome) audit write** then fails, the
+  agent **returns the committed show-once reply** instead of overwriting it with `agent_error`, **and**
+  still enters the sticky `unhealthy` state that gates all subsequent mutating verbs. Suppressing the
+  reply cannot un-commit the effect (effects are never reversed here, per the bullet above); it would
+  only orphan an **unrecoverable, unusable** credential — and the recovery actions (`mfa.disable`,
+  `tokens.revoke`/recreate) are themselves mutations blocked by the same sticky gate, so suppression is
+  strictly worse. This mirrors the bounded `job.claim` precedent: an already-consumed successful reply
+  is preserved while sticky gating is retained. The exception is **narrow** — it covers **only** a
+  completion-audit failure **after** an irreversible secret-bearing effect has committed. A
+  **pre-authorization / attempt** audit failure, or any audit failure **before** the effect commits,
+  **fails closed as normal** (no secret minted, `agent_error`, retry safe). It applies whether the
+  **file append** or the **events row** failed: file-append failure loses the completion record (the
+  pre-auth attempt event and the committed DB state remain; reconcile cannot recover an unwritten line),
+  events-row failure keeps the tamper-proof file record (reconciled on restart) — either way the reply
+  is returned and the gate engages. The show-once reply **shape is unchanged**; the degraded state is
+  surfaced out-of-band (the next mutation returns `agent_error, detail.stage=authz`, plus the audit
+  log), never inside the secret reply. Regression: for both verbs, inject a completion-audit failure on
+  each sink → the secret reply is returned, the committed effect is present, an attempt event exists,
+  the agent is sticky-`unhealthy`, and the next mutating verb is gated.
 - File-backed append-only log (`/var/log/novapanel/audit.log`, `chattr +a`, root-owned) **in addition
   to** the `events` table, so a DB compromise cannot rewrite history. `/var/log/novapanel` is made by
   the installer and re-made by the agent if missing; **no `LogsDirectory=`** in the unit (systemd
