@@ -154,6 +154,32 @@ CREATE TABLE idempotency (             -- F4 (public API)
 );
 ```
 
+### Migration `0002_schedule_authority.sql` (Phase 1, forward-only)
+
+`0001_init.sql` ships **byte-for-byte immutable** (the integrity test above enforces it); persisted
+authority for the scheduler and for restart-safe job re-authorization lands as a **new** migration,
+never a retrofit of `0001`. `jobs` already carries `effectful`, `actor`, `role`, `created_by`; this adds
+the scope/automation snapshot so an effectful job resumed after a crash and an owner-bound claim check
+(F19) authorize from **stored** authority, not a session that may be gone. `schedules` gains the owner's
+authority so a firing (F18 `EnqueueScheduledJob`) runs as the stored owner without a live session.
+
+```sql
+-- jobs: persist the full authority snapshot captured at the agent boundary (F4/F6/F8 ruling)
+ALTER TABLE jobs      ADD COLUMN scopes_json TEXT NOT NULL DEFAULT '[]'; -- token scopes at enqueue ([] for user/local-root)
+ALTER TABLE jobs      ADD COLUMN automation  INTEGER NOT NULL DEFAULT 0; -- 1 iff an automation-grant token enqueued it
+
+-- schedules: the stored owner the scheduler fires as (never re-derived from a live session — F18)
+ALTER TABLE schedules ADD COLUMN actor       TEXT NOT NULL DEFAULT 'scheduler@local';
+ALTER TABLE schedules ADD COLUMN role        TEXT;                        -- owner role at schedule.set
+ALTER TABLE schedules ADD COLUMN scopes_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE schedules ADD COLUMN automation  INTEGER NOT NULL DEFAULT 0;  -- 1 iff owner holds an automation grant
+ALTER TABLE schedules ADD COLUMN owner_id    TEXT;                        -- created_by session/token id (NULL = system-seeded)
+```
+
+> `created_by` is the caller's **session/token id** (F4), never a `users.id` — the worker and
+> `job.claim` key ownership off it; a uid-0 local caller is the reserved sentinel `local-root`
+> (no `sessions` row), which can never equal a real session id.
+
 ## Phase 3 — sites, domains, certs
 
 ```sql
