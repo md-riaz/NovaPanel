@@ -1,0 +1,309 @@
+// Package web is a stateless renderer. Session authority stays in the agent (F4).
+package web
+
+import (
+	"context"
+	"crypto/subtle"
+	"embed"
+	"encoding/json"
+	"fmt"
+	"html/template"
+	"io/fs"
+	"mime"
+	"net/http"
+	"net/url"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+	"novapanel/internal/rpc"
+)
+
+const CookieName = "__Host-novapanel"
+
+//go:embed templates/*.html assets/*
+var files embed.FS
+var pages = template.Must(template.ParseFS(files, "templates/*.html"))
+
+type RPCClient interface {
+	Call(context.Context, string, any, string) (rpc.Reply, error)
+	Close() error
+}
+type Options struct {
+	Origin string
+	Dial   func() (RPCClient, error)
+	// LogOnlyOrigin never disables synchronizer-token validation.
+	LogOnlyOrigin   bool
+	OriginViolation func()
+}
+type server struct {
+	options Options
+	origin  string
+}
+type view struct {
+	Page, CSRF, User, Role, Message, URI string
+	Codes                                []string
+	Status, Metrics                      any
+}
+
+func New(o Options) (http.Handler, error) {
+	u, e := url.Parse(o.Origin)
+	if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || o.Dial == nil {
+		return nil, fmt.Errorf("valid HTTPS origin and RPC dialer required")
+	}
+	s := &server{o, "https://" + u.Host}
+	r := chi.NewRouter()
+	assets, _ := fs.Sub(files, "assets")
+	r.HandleFunc("/assets/*", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		name := strings.TrimPrefix(r.URL.Path, "/assets/")
+		data, err := fs.ReadFile(assets, name)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		switch name {
+		case "app.css":
+			w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		case "app.js", "htmx.min.js", "qrcode.js":
+			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		default:
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(data)
+	})
+	for _, rt := range routes {
+		route := rt
+		r.MethodFunc(route.method, route.path, func(w http.ResponseWriter, r *http.Request) { s.serve(w, r, route) })
+	}
+	return headers(r), nil
+}
+
+type route struct{ method, path, auth, verb string }
+
+// All routes declare a policy; unknown paths/methods never reach RPC.
+var routes = []route{
+	{"GET", "/", "user", ""}, {"GET", "/login", "bootstrap", ""}, {"POST", "/login", "anonymous-blocked", "session.login"},
+	{"POST", "/logout", "user", "session.logout"}, {"GET", "/reauth", "user", ""}, {"POST", "/reauth", "user", "session.reauth"},
+	{"GET", "/mfa", "user", ""}, {"POST", "/mfa/enroll", "user", "mfa.enroll"}, {"POST", "/mfa/confirm", "user", "mfa.confirm"}, {"POST", "/mfa/disable", "user", "mfa.disable"},
+}
+
+func headers(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+		h.Set("Strict-Transport-Security", "max-age=31536000")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		h.Set("Cache-Control", "no-store")
+		next.ServeHTTP(w, r)
+	})
+}
+func setCookie(w http.ResponseWriter, value string, remove bool) {
+	c := &http.Cookie{Name: CookieName, Value: value, Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode}
+	if remove {
+		c.MaxAge = -1
+	}
+	http.SetCookie(w, c)
+}
+func render(w http.ResponseWriter, status int, v view) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = pages.ExecuteTemplate(w, "page", v)
+}
+func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
+	count := 0
+	for _, cookie := range r.Cookies() {
+		if cookie.Name == CookieName {
+			count++
+		}
+	}
+	if count > 1 {
+		http.Error(w, "Ambiguous session cookie", 400)
+		return
+	}
+	if r.Method != "GET" && !s.sameOrigin(r) {
+		if s.options.OriginViolation != nil {
+			s.options.OriginViolation()
+		}
+		if !s.options.LogOnlyOrigin {
+			http.Error(w, "Cross-site request refused", 403)
+			return
+		}
+	}
+	if rt.auth == "anonymous-blocked" {
+		// Contract gap raised in PR75 #6521129631: no approved anon CSRF retrieval RPC.
+		http.Error(w, "Login unavailable pending anonymous CSRF contract resolution", http.StatusServiceUnavailable)
+		return
+	}
+	c, e := s.options.Dial()
+	if e != nil {
+		http.Error(w, "Agent unavailable", 503)
+		return
+	}
+	defer c.Close()
+	token := ""
+	if cookie, e := r.Cookie(CookieName); e == nil {
+		token = cookie.Value
+	}
+	v := view{Page: rt.path}
+	if rt.auth == "bootstrap" {
+		// Never call non-public whoami for an anonymous cookie. A login GET starts anew.
+		data, ok := call(w, r, c, "session.start", map[string]any{}, "")
+		if !ok {
+			return
+		}
+		session, _ := data["session"].(string)
+		v.CSRF, _ = data["csrf_token"].(string)
+		if session == "" || v.CSRF == "" {
+			http.Error(w, "Invalid agent reply", 502)
+			return
+		}
+		setCookie(w, session, false)
+		render(w, 200, v)
+		return
+	}
+	if token == "" {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	data, ok := call(w, r, c, "session.whoami", map[string]any{}, token)
+	if !ok {
+		return
+	}
+	v.CSRF, _ = data["csrf_token"].(string)
+	v.User, _ = data["user"].(string)
+	v.Role, _ = data["role"].(string)
+	if v.CSRF == "" || (v.Role != "owner" && v.Role != "admin" && v.Role != "read_only") {
+		http.Error(w, "Invalid agent identity", 502)
+		return
+	}
+	if r.Method != "GET" {
+		values := r.Header.Values("X-CSRF-Token")
+		if len(values) != 1 || values[0] == "" || subtle.ConstantTimeCompare([]byte(values[0]), []byte(v.CSRF)) != 1 {
+			http.Error(w, "Invalid CSRF token", 403)
+			return
+		}
+		contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err != nil || contentType != "application/x-www-form-urlencoded" {
+			http.Error(w, "Form content type required", http.StatusUnsupportedMediaType)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+		if e := r.ParseForm(); e != nil {
+			http.Error(w, "Invalid form", 400)
+			return
+		}
+		args := map[string]any{}
+		if rt.verb == "session.reauth" || rt.verb == "mfa.confirm" || rt.verb == "mfa.disable" {
+			code := r.PostForm.Get("totp")
+			if code == "" || len(code) > 128 {
+				http.Error(w, "Authenticator or backup code required", 400)
+				return
+			}
+			args["totp"] = code
+		}
+		data, ok = call(w, r, c, rt.verb, args, token)
+		if !ok {
+			return
+		}
+		switch rt.verb {
+		case "session.logout":
+			setCookie(w, "", true)
+			w.Header().Set("HX-Redirect", "/login")
+			http.Redirect(w, r, "/login", 303)
+			return
+		case "session.reauth":
+			session, _ := data["session"].(string)
+			csrf, _ := data["csrf_token"].(string)
+			if session == "" || csrf == "" {
+				http.Error(w, "Invalid agent reply", 502)
+				return
+			}
+			setCookie(w, session, false)
+			v.CSRF = csrf
+			v.Message = "Session reauthenticated"
+		case "mfa.enroll":
+			v.URI, _ = data["otpauth_uri"].(string)
+			v.Page = "/mfa"
+		case "mfa.confirm":
+			raw, _ := json.Marshal(data["backup_codes"])
+			_ = json.Unmarshal(raw, &v.Codes)
+			v.Page = "/mfa"
+		case "mfa.disable":
+			v.Message = "MFA disabled"
+			v.Page = "/mfa"
+		}
+	}
+	if rt.path == "/" {
+		v.Status = readDashboard(r, c, "system.status", token)
+		v.Metrics = readDashboard(r, c, "system.metrics", token)
+	}
+	render(w, 200, v)
+}
+func readDashboard(r *http.Request, c RPCClient, verb, token string) any {
+	reply, e := c.Call(r.Context(), verb, map[string]any{}, token)
+	if e != nil || !reply.OK {
+		return "Unavailable in this phase"
+	}
+	return reply.Data
+}
+func call(w http.ResponseWriter, r *http.Request, c RPCClient, verb string, args any, token string) (map[string]any, bool) {
+	reply, e := c.Call(r.Context(), verb, args, token)
+	if e != nil || !reply.OK {
+		data, _ := reply.Data.(map[string]any)
+		if hint, _ := data["reauth_required"].(bool); hint {
+			render(w, 403, view{Page: "/reauth-required", Message: "Reauthentication required"})
+			return nil, false
+		}
+		status := http.StatusBadGateway
+		switch reply.Code {
+		case "unauthenticated":
+			status = 401
+		case "forbidden":
+			status = 403
+		case "bad_request", "invalid_argument":
+			status = 400
+		case "conflict", "precondition_failed":
+			status = 409
+		case "unsupported":
+			status = http.StatusNotImplemented
+		case "interrupted":
+			status = http.StatusConflict
+		}
+		http.Error(w, http.StatusText(status), status)
+		return nil, false
+	}
+	raw, e := json.Marshal(reply.Data)
+	if e != nil {
+		http.Error(w, "Invalid agent reply", 502)
+		return nil, false
+	}
+	var data map[string]any
+	if json.Unmarshal(raw, &data) != nil || data == nil {
+		http.Error(w, "Invalid agent reply", 502)
+		return nil, false
+	}
+	return data, true
+}
+func (s *server) sameOrigin(r *http.Request) bool {
+	fetch := r.Header.Get("Sec-Fetch-Site")
+	if fetch != "" && fetch != "same-origin" && fetch != "none" {
+		return false
+	}
+	if origin := r.Header.Get("Origin"); origin != "" {
+		return origin == s.origin
+	}
+	if ref := r.Header.Get("Referer"); ref != "" {
+		u, e := url.Parse(ref)
+		return e == nil && u.User == nil && u.Scheme+"://"+u.Host == s.origin
+	}
+	return fetch == "same-origin" || fetch == "none"
+}
+
+// No session, CSRF, credential or show-once secret is retained between requests.
