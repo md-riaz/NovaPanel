@@ -219,5 +219,39 @@ os.execve('./panel-web',['./panel-web'],os.environ)`)
 			t.Fatal("audit secret leak")
 		}
 	}
+	events, err := st.ListEvents(ctx, 1000, "")
+	must(err)
+	mirrored := map[string]store.Event{}
+	for _, event := range events {
+		mirrored[event.ID] = event
+	}
+	stages := map[string]int{}
+	for _, line := range strings.Split(strings.TrimSpace(string(audit)), "\n") {
+		var event struct {
+			ID      string `json:"id"`
+			Verb    string `json:"verb"`
+			Outcome string `json:"outcome"`
+			Detail  struct {
+				Stage string `json:"stage"`
+			} `json:"detail"`
+		}
+		must(json.Unmarshal([]byte(line), &event))
+		durable, ok := mirrored[event.ID]
+		if !ok || durable.Verb != event.Verb || durable.Outcome != event.Outcome {
+			t.Fatal("audit file/SQLite mirror mismatch")
+		}
+		stages[event.Verb+":"+event.Detail.Stage+":"+event.Outcome]++
+	}
+	for _, verb := range []string{"ssl.upload", "site.delete"} {
+		for stage, want := range map[string]int{"enqueue": 1, "exec": 2} {
+			// Dispatch completion and worker completion both use exec.
+			if stages[verb+":"+stage+":ok"] != want {
+				t.Fatalf("missing durable %s %s success; stages=%v", verb, stage, stages)
+			}
+		}
+		if stages[verb+":authz:refused"] != 1 {
+			t.Fatalf("missing durable %s MFA refusal", verb)
+		}
+	}
 	t.Log(fmt.Sprintf("Verified actual SQLite completed jobs=%d, deletion and secret-free durable audit", len(jobs)))
 }
