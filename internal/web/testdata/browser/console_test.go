@@ -35,12 +35,12 @@ func (c *consoleRPC) Call(_ context.Context, verb string, args any, _ string) (r
 		}
 		data["sites"] = rows
 	case "site.get":
-		data = map[string]any{"site": map[string]any{"name": "demo", "type": "static", "status": "active"}, "domains": []any{map[string]any{"id": "DOMAIN", "fqdn": "example.test", "is_primary": true, "cert_state": "none"}}}
+		data = map[string]any{"site": map[string]any{"name": "demo", "type": "static", "status": "active"}, "redirects": []any{map[string]any{"id": "REDIRECT", "source": "/old", "target": "/new", "code": 301}}, "domains": []any{map[string]any{"id": "DOMAIN", "fqdn": "example.test", "is_primary": true, "cert_state": "none"}}}
 	case "site.update":
 		c.promoted = args.(map[string]any)["primary_domain_id"] == "DOMAIN"
 		data["job"] = map[string]any{"id": "JOB", "verb": verb, "state": "queued"}
 	case "ssl.status":
-		data = map[string]any{"source": "none", "force_https": false, "domains": []any{map[string]any{"fqdn": "example.test", "cert_state": "none"}}}
+		data = map[string]any{"source": "none", "ssl_auto": false, "force_https": false, "domains": []any{map[string]any{"fqdn": "example.test", "cert_state": "none"}}}
 	case "ssl.renew":
 		return rpc.Reply{Code: "unknown_verb", Error: "not implemented"}, nil
 	case "ssl.upload":

@@ -173,7 +173,8 @@ func sslStatus(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	}
 	return struct {
 		Source     string            `json:"source"`
+		SSLAuto    bool              `json:"ssl_auto"`
 		ForceHTTPS bool              `json:"force_https"`
 		Domains    []sslDomainStatus `json:"domains"`
-	}{site.CertSource, site.ForceHTTPS, out}, nil
+	}{site.CertSource, site.SSLAuto, site.ForceHTTPS, out}, nil
 }

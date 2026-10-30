@@ -33,6 +33,9 @@ func TestConsoleMutationsCanonicalArgs(t *testing.T) {
 				if v == "session.whoami" {
 					return rpc.Reply{OK: true, Data: map[string]any{"role": "admin", "csrf_token": "expected"}}, nil
 				}
+				if v == "ssl.status" {
+					return rpc.Reply{OK: true, Data: map[string]any{"source": "none", "ssl_auto": false, "force_https": false, "domains": []any{}}}, nil
+				}
 				if v == "ssl.auto_set" {
 					return rpc.Reply{OK: true, Data: map[string]any{}}, nil
 				}
@@ -43,7 +46,14 @@ func TestConsoleMutationsCanonicalArgs(t *testing.T) {
 			if w.Code != 202 && !(tc.verb == "ssl.auto_set" && w.Code == 200) {
 				t.Fatalf("%d %s", w.Code, w.Body.String())
 			}
-			if len(f.rpcCalls) != 2 || f.rpcCalls[1].verb != tc.verb || !reflect.DeepEqual(f.rpcCalls[1].args, tc.want) {
+			wantCalls := 2
+			if tc.verb == "ssl.auto_set" {
+				wantCalls = 3
+				if !strings.Contains(w.Body.String(), "Auto-renew: false") || f.rpcCalls[2].verb != "ssl.status" {
+					t.Fatalf("persisted preference not refreshed: %s %+v", w.Body.String(), f.rpcCalls)
+				}
+			}
+			if len(f.rpcCalls) != wantCalls || f.rpcCalls[1].verb != tc.verb || !reflect.DeepEqual(f.rpcCalls[1].args, tc.want) {
 				t.Fatalf("calls %+v want %+v", f.rpcCalls, tc.want)
 			}
 			if strings.Contains(w.Body.String(), "PRIVATE") || strings.Contains(w.Body.String(), "CERT") {

@@ -204,7 +204,7 @@ func TestSSLStatusAndAutoSet(t *testing.T) {
 		t.Fatalf("status: %+v", r)
 	}
 	data := sessionData(t, r)
-	if data["source"] != "none" || data["force_https"] != false || len(data["domains"].([]any)) != 1 {
+	if data["source"] != "none" || data["ssl_auto"] != true || data["force_https"] != false || len(data["domains"].([]any)) != 1 {
 		t.Fatal(data)
 	}
 	for name, slow := range map[string]bool{"ssl.upload": true, "ssl.status": false, "ssl.auto_set": false} {
@@ -229,6 +229,10 @@ func TestSSLStatusAndAutoSet(t *testing.T) {
 	site, err := st.SiteByID(ctx, sid)
 	if err != nil || site.SSLAuto || site.CertSource != "none" {
 		t.Fatalf("%+v %v", site, err)
+	}
+	r = server.Dispatch(rpc.WithCaller(ctx, rpc.Caller{Role: "read_only"}), rpc.Request{Verb: "ssl.status", Args: args})
+	if data := sessionData(t, r); data["ssl_auto"] != false {
+		t.Fatalf("persisted auto-renew preference: %+v", data)
 	}
 	av = v.NewArgs()
 	json.Unmarshal([]byte(`{"site_id":"`+sid+`"}`), av)

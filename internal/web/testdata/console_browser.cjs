@@ -22,11 +22,14 @@ for (const value of ['-----BEGIN PRIVATE KEY-----','<main data-csrf="expected">s
  await page.getByRole('link',{name:'Return to sites and refresh state'}).click();
  await page.getByRole('link',{name:'demo',exact:true}).click();
  await page.getByRole('heading',{name:'Domains',exact:true}).waitFor();
+ await page.getByText('/old → /new · 301 · ID: REDIRECT', {exact:true}).waitFor();
  await page.locator('[name=primary_domain_id]').selectOption('DOMAIN');
  await page.getByRole('button',{name:'Promote existing domain',exact:true}).click();
  await page.getByText('Job completed.',{exact:true}).waitFor();
  await page.goto(origin+'/sites/SITE');
  await page.getByRole('link',{name:'SSL',exact:true}).click();
+ await page.getByText('Certificate source: none · Auto-renew: false · Force HTTPS: false',{exact:true}).waitFor();
+ assert.equal(await page.locator('[name=enabled]').inputValue(),'false');
  await page.locator('form[action$="/ssl/renew"] button').click();
  await page.getByRole('status').filter({hasText:'unknown_verb'}).waitFor();
  await page.goto(origin+'/sites/SITE/ssl');

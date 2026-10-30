@@ -68,7 +68,11 @@ func (s *server) console(w http.ResponseWriter, r *http.Request, c RPCClient, rt
 	if r.Method == "POST" {
 		if rt.verb == "ssl.auto_set" {
 			v.Message = "Auto-renew setting saved. Manual certificates are never auto-renewed."
-			cv.Section = "saved"
+			cv.Data, ok = call(w, r, c, "ssl.status", map[string]any{"site_id": cv.SiteID}, token)
+			if !ok {
+				return
+			}
+			cv.Section = "ssl.status"
 		} else {
 			job, valid := data["job"].(map[string]any)
 			if !valid || job["id"] == nil || job["state"] == nil {
