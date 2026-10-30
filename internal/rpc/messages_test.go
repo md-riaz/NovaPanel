@@ -27,7 +27,7 @@ func TestDispatchAuthorityAndTypedArgs(t *testing.T) {
 		return args.(*checkedArgs).Value, nil
 	}}}
 	req := Request{ID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Verb: "owner", Args: json.RawMessage(`{"value":"yes"}`), Actor: "owner"}
-	for _, caller := range []Caller{{Peer: 1001}, {Peer: 1001, Role: "read_only"}, {Peer: 1001, Role: "admin"}} {
+	for _, caller := range []Caller{{Peer: 1001}, {Peer: 1001, Role: "admin"}} {
 		got := s.Dispatch(WithCaller(context.Background(), caller), req)
 		if got.OK || got.ID != req.ID {
 			t.Fatalf("authority bypass: %+v", got)

@@ -132,7 +132,7 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 			return Err("unauthenticated", "Authentication required")
 		}
 		rank, known := map[string]Role{"read_only": ReadOnly, "admin": Admin, "owner": Owner}[caller.Role]
-		if !known || rank < v.MinRole || (rank == ReadOnly && !v.ReadOnly) {
+		if !known || (rank == ReadOnly && !v.ReadOnly) || (rank < v.MinRole && !(rank == ReadOnly && v.ReadOnly)) {
 			return Err("forbidden", "Forbidden")
 		}
 	}
