@@ -101,7 +101,7 @@ func Validate(certPEM, keyPEM []byte, domains []string, now time.Time) (*Certifi
 	if leaf.IsCA {
 		return nil, invalid()
 	}
-	if len(leaf.ExtKeyUsage) > 0 {
+	if len(leaf.ExtKeyUsage) > 0 || len(leaf.UnknownExtKeyUsage) > 0 {
 		server := false
 		for _, u := range leaf.ExtKeyUsage {
 			if u == x509.ExtKeyUsageServerAuth || u == x509.ExtKeyUsageAny {
