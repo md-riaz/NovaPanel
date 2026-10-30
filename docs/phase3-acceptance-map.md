@@ -2,7 +2,31 @@
 
 Reviewed initial production source: `40cbb3bc4d508e7fc83dad299799ed8dca2884cf`. The final integration adds the committed v2 startup recovery and real-backend browser siblings, fixes canonical wildcard refusal, and reruns exact-HEAD acceptance. Historical evidence below remains attributed to its original SHA, not to the final combined source. This is not whole-phase approval.
 
-## Evidence and limits
+## Latest combined acceptance
+
+The release-candidate rerun is recorded in
+`/root/.hermes/cache/scratch/phase3-release-acceptance-evidence-20261031/manifest.json`.
+Use that manifest's exact SHA, not historical source SHAs below. The combined
+safe gates include CI, uncached race JSON, injected root integration, real Chromium
+auth and backend console, assets, packaging/staging, both pinned nginx versions
+with three repetitions each, and both genuine Pebble scenarios.
+
+The scheduler scenario now joins deterministic scheduler ticks and persisted
+SQLite restart to the production queue, lego and real nginx/Pebble HTTP01.
+It asserts exactly four orders/certificates and two environment accounts, 16
+successful jobs, one intentionally failed nginx validation job, same-site
+serialization, audit mirrors/refusals, disabled/manual daily exclusion, budget
+stability and SAN expansion. `ssl.auto_set` remains synchronous. See
+[scheduler details](evidence/phase3-scheduler-audit/README.md) for exact scope;
+that checked-in evidence is historical, not a substitute for the combined rerun.
+
+The pinned nginx 1.24 compatibility path is now exercised alongside modern nginx.
+Both remain nonroot Alpine containers with adapted ports, not Ubuntu/systemd or
+production-port acceptance. Older rows below describe the original review and
+must be read with these superseding results. Privileged VM and public CA limits
+remain unchanged. Whole-phase approval is not granted by these local gates.
+
+## Historical evidence and limits
 
 - Existing exact-source evidence: `/root/.hermes/cache/scratch/acme-canonical-final-evidence/manifest.json`, `ci.log`, `race.jsonl`, `integration.log`.
 - Independently parsed race output contains 290 unique top-level test passes, 388 unique subtest passes and 24 passing packages, no failures. Three opt-in integration cases were skipped in that run. Those are not 678 independent top-level tests.
