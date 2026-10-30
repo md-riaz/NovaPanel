@@ -99,9 +99,67 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 	open()
 	start()
 	defer func() { stop(); log.Close(); st.Close() }()
+	caller := rpc.RootCaller(0)
 	dispatch := func(verb string, args any) rpc.Reply {
-		raw, _ := json.Marshal(args)
-		return server.Dispatch(rpc.WithCaller(ctx, rpc.RootCaller(0)), rpc.Request{Verb: verb, Args: raw, Actor: "untrusted-label"})
+		t.Helper()
+		raw, err := json.Marshal(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before, err := st.ListEvents(ctx, 1000, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := map[string]bool{}
+		for _, ev := range before {
+			ids[ev.ID] = true
+		}
+		reply := server.Dispatch(rpc.WithCaller(ctx, caller), rpc.Request{Verb: verb, Args: raw, Actor: "untrusted-label"})
+		if !reply.OK {
+			t.Fatalf("%s dispatch failed code=%s", verb, reply.Code)
+		}
+		var target map[string]any
+		if err := json.Unmarshal(raw, &target); err != nil {
+			t.Fatal(err)
+		}
+		// Dispatch records the pre-handler key. Child handlers resolve the
+		// parent later; the queue events must use the resolved site ID instead.
+		wantKey := ""
+		switch verb {
+		case "site.create":
+			wantKey = "site:" + target["name"].(string)
+		case "domain.remove", "redirect.remove":
+			wantKey = "site:"
+		case "ssl.auto_set":
+		default:
+			wantKey = "site:" + target["site_id"].(string)
+		}
+		after, err := st.ListEvents(ctx, 1000, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		stages := map[string]int{}
+		for _, ev := range after {
+			if ids[ev.ID] {
+				continue
+			}
+			var detail map[string]any
+			if err := json.Unmarshal(ev.Detail, &detail); err != nil {
+				t.Fatal(err)
+			}
+			if _, queued := detail["job_id"]; queued {
+				continue
+			}
+			if ev.Verb != verb || ev.ObjectKey != wantKey || ev.Actor != "untrusted-label" || ev.Role != caller.Role || ev.Outcome != "ok" || ev.Code != "" || len(detail) != 1 {
+				t.Fatalf("%s dispatch audit binding differs", verb)
+			}
+			stage, _ := detail["stage"].(string)
+			stages[stage]++
+		}
+		if len(stages) != 2 || stages["authz"] != 1 || stages["exec"] != 1 {
+			t.Fatalf("%s dispatch stage counts differ: %v", verb, stages)
+		}
+		return reply
 	}
 	wait := func(j jobs.Job) jobs.Job {
 		t.Helper()
@@ -133,8 +191,12 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s not queued", verb)
 		}
-		if en.Job.ObjectKey != key || en.Job.CreatedBy != "local-root" || en.Job.Role != "owner" {
-			t.Fatalf("binding %+v", en.Job)
+		wantRole, wantOwner := caller.Role, "local-root"
+		if caller.Kind == "token" {
+			wantRole, wantOwner = "token", caller.Session
+		}
+		if en.Job.Verb != verb || en.Job.ObjectKey != key || en.Job.CreatedBy != wantOwner || en.Job.Role != wantRole || en.Job.Actor != "untrusted-label" {
+			t.Fatalf("job authority/target binding differs for %s", verb)
 		}
 		all = append(all, en.Job)
 		return en.Job
@@ -150,7 +212,13 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 	sid := created.SiteID
 	key := "site:" + sid
 	args := map[string]any{"site_id": sid}
-	run("site.update", map[string]any{"site_id": sid, "maintenance": false}, key)
+	// A token's incoming role label is not its stored worker authority.
+	caller = rpc.Caller{Kind: "token", Role: "owner", Session: "acceptance-token", Scopes: []string{"sites:write"}, Peer: 1234}
+	tokenJob := run("site.update", map[string]any{"site_id": sid, "maintenance": false}, key)
+	if len(tokenJob.Scopes) != 1 || tokenJob.Scopes[0] != "sites:write" || tokenJob.Automation {
+		t.Fatal("token authority snapshot differs")
+	}
+	caller = rpc.RootCaller(0)
 	run("ssl.issue", args, key)
 	first, err := os.Readlink(a.Cfg.TLSDir + "/demo.test/current")
 	if err != nil {
@@ -402,30 +470,58 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 	if _, err = st.SiteByID(ctx, sid); err != sql.ErrNoRows {
 		t.Fatal("delete did not remove site", err)
 	}
-	// Refused attempts for every implemented mutation use trusted incoming role,
-	// never the caller-controlled actor label as authority.
+	// Refusals precede typed decoding/target lookup, so object_key is exactly
+	// empty, even for well-formed target arguments. Do not invent a resolved key.
 	verbs := []string{"site.create", "site.update", "site.delete", "domain.add", "domain.remove", "redirect.add", "redirect.remove", "ssl.issue", "ssl.renew", "ssl.upload", "ssl.auto_set"}
-	for _, verb := range verbs {
-		r := server.Dispatch(rpc.WithCaller(ctx, rpc.Caller{Role: "read_only", Session: "acceptance-reader", Peer: 1234}), rpc.Request{Verb: verb, Actor: "owner", Args: json.RawMessage(`{}`)})
-		if r.OK || r.Code != "forbidden" {
-			t.Fatalf("%s role refusal %+v", verb, r)
+	refusalCallers := []rpc.Caller{
+		{Role: "read_only", Session: "acceptance-reader", Peer: 1234},
+		{Kind: "token", Role: "owner", Session: "acceptance-unscoped-token", Peer: 1234},
+	}
+	beforeRefusals := count()
+	for i, incoming := range refusalCallers {
+		for _, verb := range verbs {
+			raw, err := json.Marshal(map[string]any{"site_id": sid, "key_pem": string(kp)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			actor := []string{"owner", "token-owner npat_acceptance_canary"}[i]
+			r := server.Dispatch(rpc.WithCaller(ctx, incoming), rpc.Request{Verb: verb, Actor: actor, Args: raw})
+			if r.OK || r.Code != "forbidden" {
+				t.Fatalf("%s role refusal code=%s", verb, r.Code)
+			}
 		}
+	}
+	if count() != beforeRefusals {
+		t.Fatal("authorization refusal enqueued a job")
 	}
 	// Every queued mutation has exactly one durable enqueue and terminal event.
 	events, err := st.ListEvents(ctx, 1000, "")
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(all) != 16 || count() != 17 {
+		t.Fatalf("matrix size success=%d total=%d", len(all), count())
+	}
+	all = append(all, failed)
 	for _, job := range all {
-		en, ex := 0, 0
+		persisted, err := st.GetJob(ctx, job.ID)
+		if err != nil || persisted.Verb != job.Verb || persisted.ObjectKey != job.ObjectKey || persisted.Actor != job.Actor || persisted.Role != job.Role || persisted.CreatedBy != job.CreatedBy || bytes.Contains(persisted.Args, []byte("-----BEGIN")) {
+			t.Fatalf("persisted job binding/plaintext differs for %s", job.Verb)
+		}
+		en, ex, correlated := 0, 0, 0
 		for _, ev := range events {
 			var d map[string]any
 			json.Unmarshal(ev.Detail, &d)
 			if d["job_id"] != job.ID {
 				continue
 			}
-			if ev.Verb != job.Verb || ev.ObjectKey != job.ObjectKey || ev.Role != job.Role || ev.Actor != job.Actor || ev.Outcome != "ok" {
-				t.Fatalf("audit mismatch %+v", ev)
+			correlated++
+			outcome, code := "ok", ""
+			if job.ID == failed.ID && d["stage"] == "exec" {
+				outcome, code = "error", "agent_error"
+			}
+			if ev.Verb != job.Verb || ev.ObjectKey != job.ObjectKey || ev.Role != job.Role || ev.Actor != job.Actor || ev.Outcome != outcome || ev.Code != code || len(d) != 2 {
+				t.Fatalf("audit binding/code/detail differs for %s stage=%v", job.Verb, d["stage"])
 			}
 			if d["stage"] == "enqueue" {
 				en++
@@ -434,41 +530,50 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 				ex++
 			}
 		}
-		if en != 1 || ex != 1 {
+		if en != 1 || ex != 1 || correlated != 2 {
 			t.Fatalf("%s audit enqueue=%d exec=%d", job.Verb, en, ex)
 		}
 	}
-	failureEvents := 0
+	// Three synchronous preference changes each have an attempt and completion,
+	// neither correlated to a queue job.
+	autoStages := map[string]int{}
 	for _, ev := range events {
+		if ev.Verb != "ssl.auto_set" || ev.Actor != "untrusted-label" {
+			continue
+		}
 		var d map[string]any
-		json.Unmarshal(ev.Detail, &d)
-		if d["job_id"] == failed.ID && d["stage"] == "exec" && ev.Outcome == "error" && ev.Code == "agent_error" && ev.Actor == failed.Actor && ev.Role == failed.Role {
-			failureEvents++
+		if err := json.Unmarshal(ev.Detail, &d); err != nil {
+			t.Fatal(err)
 		}
-	}
-	if failureEvents != 1 {
-		t.Fatal("missing terminal failure audit", failureEvents)
-	}
-	autoSuccess := 0
-	for _, ev := range events {
-		if ev.Verb == "ssl.auto_set" && ev.Outcome == "ok" && ev.Role == "owner" && ev.Actor == "untrusted-label" {
-			autoSuccess++
+		if ev.ObjectKey != "" || ev.Outcome != "ok" || ev.Code != "" || ev.Role != "owner" || len(d) != 1 {
+			t.Fatal("synchronous auto_set audit differs")
 		}
+		stage, _ := d["stage"].(string)
+		autoStages[stage]++
 	}
-	if autoSuccess == 0 {
-		t.Fatal("missing synchronous auto_set success audit")
+	if len(autoStages) != 2 || autoStages["authz"] != 3 || autoStages["exec"] != 3 {
+		t.Fatal("synchronous auto_set stage counts differ", autoStages)
 	}
-	for _, verb := range verbs {
-		n := 0
-		for _, ev := range events {
-			var d map[string]any
-			json.Unmarshal(ev.Detail, &d)
-			if ev.Verb == verb && ev.Actor == "owner" && ev.Role == "read_only" && ev.Outcome == "refused" && ev.Code == "forbidden" && d["stage"] == "authz" {
+	for i, incoming := range refusalCallers {
+		actor := []string{"owner", "token-owner [REDACTED]"}[i]
+		for _, verb := range verbs {
+			n := 0
+			for _, ev := range events {
+				if ev.Verb != verb || ev.Actor != actor {
+					continue
+				}
+				var d map[string]any
+				if err := json.Unmarshal(ev.Detail, &d); err != nil {
+					t.Fatal(err)
+				}
+				if ev.Role != incoming.Role || ev.ObjectKey != "" || ev.Outcome != "refused" || ev.Code != "forbidden" || d["stage"] != "authz" || len(d) != 1 {
+					t.Fatalf("%s refusal binding/stage differs", verb)
+				}
 				n++
 			}
-		}
-		if n != 1 {
-			t.Fatalf("%s refusal audit count=%d", verb, n)
+			if n != 1 {
+				t.Fatalf("%s refusal audit count=%d", verb, n)
+			}
 		}
 	}
 	file, err := os.ReadFile(l.root + "/audit.log")
@@ -479,23 +584,31 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 	if len(lines) != len(events) {
 		t.Fatal("file/SQLite audit count mismatch")
 	}
+	seen := map[string]bool{}
 	for _, line := range lines {
 		var v struct {
-			ID      string          `json:"id"`
-			Actor   string          `json:"actor"`
-			Role    string          `json:"role"`
-			Verb    string          `json:"verb"`
-			Outcome string          `json:"outcome"`
-			Detail  json.RawMessage `json:"detail"`
+			ID        string          `json:"id"`
+			TS        int64           `json:"ts"`
+			Actor     string          `json:"actor"`
+			Role      string          `json:"role"`
+			Verb      string          `json:"verb"`
+			ObjectKey string          `json:"object_key"`
+			Outcome   string          `json:"outcome"`
+			Code      string          `json:"code"`
+			Detail    json.RawMessage `json:"detail"`
 		}
 		if err := json.Unmarshal(line, &v); err != nil {
 			t.Fatal(err)
 		}
+		if seen[v.ID] || v.ID == "" {
+			t.Fatal("duplicate/empty audit mirror ID")
+		}
+		seen[v.ID] = true
 		found := false
 		for _, ev := range events {
 			if ev.ID == v.ID {
 				found = true
-				if ev.Actor != v.Actor || ev.Role != v.Role || ev.Verb != v.Verb || ev.Outcome != v.Outcome || !bytes.Equal(ev.Detail, v.Detail) {
+				if ev.TS != v.TS || ev.Actor != v.Actor || ev.Role != v.Role || ev.Verb != v.Verb || ev.ObjectKey != v.ObjectKey || ev.Outcome != v.Outcome || ev.Code != v.Code || !bytes.Equal(ev.Detail, v.Detail) {
 					t.Fatal("audit mirror differs")
 				}
 			}
@@ -512,9 +625,9 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		if bytes.Contains(data, cp) || bytes.Contains(data, kp) || bytes.Contains(data, []byte("-----BEGIN")) {
+		if bytes.Contains(data, cp) || bytes.Contains(data, kp) || bytes.Contains(data, []byte("-----BEGIN")) || bytes.Contains(data, []byte("npat_acceptance_canary")) {
 			t.Fatal("PEM persisted in", path)
 		}
 	}
-	t.Logf("real queue mutation matrix verified %d jobs; scheduler cadence, restart, SAN expansion, sealed upload and manual exclusion passed", len(all))
+	t.Logf("real queue mutation matrix verified %d successful jobs and one intentional failure; exact correlation, refusal, mirror and redaction checks passed", len(all)-1)
 }
