@@ -21,10 +21,24 @@ type Applier struct {
 	Root   string
 	Runner runner.Runner
 	Probe  func(context.Context, Desired) error
+	Now    func() time.Time
 	mu     sync.Mutex
 }
 
 func (a *Applier) Apply(ctx context.Context, d Desired) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if d.TLS != nil {
+		now := time.Now()
+		if a.Now != nil {
+			now = a.Now()
+		}
+		state, err := LoadTLS(d.TLS.root, d.TLS.primary, d.TLS.staging, now)
+		if err != nil {
+			return err
+		}
+		d.TLS = state
+	}
 	b, e := Render(d)
 	if e != nil {
 		return e
@@ -32,8 +46,6 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 	if a.Runner == nil || a.Probe == nil {
 		return rpcerr.Errf("agent_error", "Nginx apply dependencies unavailable")
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	resolved, e := filepath.EvalSymlinks(a.Root)
 	if e != nil {
 		return e
@@ -92,7 +104,7 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 	if goodErr != nil && !os.IsNotExist(goodErr) {
 		return goodErr
 	}
-	if exists && hadLink && goodErr == nil && bytes.Equal(old, b) && bytes.Equal(good, b) {
+	if !d.ForceReload && exists && hadLink && goodErr == nil && bytes.Equal(old, b) && bytes.Equal(good, b) {
 		return nil
 	}
 	// Only a successful reload and probe promote bytes to last-known-good.
