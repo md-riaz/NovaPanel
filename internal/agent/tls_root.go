@@ -21,8 +21,14 @@ func prepareTLSRoot(path string) error {
 	defer func() { parent.Close() }()
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	for i, part := range parts {
-		if err := unix.Mkdirat(int(parent.Fd()), part, 0700); err != nil && err != unix.EEXIST {
-			return err
+		leaf := i == len(parts)-1
+		mode := uint32(0755) // Shared config ancestors must remain traversable by panel-web.
+		if leaf {
+			mode = 0700
+		}
+		mkdirErr := unix.Mkdirat(int(parent.Fd()), part, mode)
+		if mkdirErr != nil && mkdirErr != unix.EEXIST {
+			return mkdirErr
 		}
 		fd, err := unix.Openat(int(parent.Fd()), part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		if err != nil {
@@ -35,7 +41,18 @@ func prepareTLSRoot(path string) error {
 		if err := unix.Fstat(fd, &st); err != nil {
 			return err
 		}
-		leaf := i == len(parts)-1
+		if mkdirErr == nil {
+			// Set exact modes despite the service umask, only on directories we created.
+			if st.Uid != uint32(os.Geteuid()) {
+				return fmt.Errorf("new TLS directory has unexpected owner: %s", part)
+			}
+			if err := unix.Fchmod(fd, mode); err != nil {
+				return err
+			}
+			if err := unix.Fstat(fd, &st); err != nil {
+				return err
+			}
+		}
 		if leaf {
 			if st.Uid != uint32(os.Geteuid()) || st.Mode&07777 != 0700 {
 				return fmt.Errorf("TLS root must be agent-owned and private: %s", path)
