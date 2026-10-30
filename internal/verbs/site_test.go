@@ -50,6 +50,9 @@ func TestSiteReadProjection(t *testing.T) {
 	if got["site"].(map[string]any)["status"] != "creating" || got["cert"].(map[string]any)["state"] != "none" || len(got["domains"].([]any)) != 1 {
 		t.Fatal(got)
 	}
+	if redirects, ok := got["redirects"].([]any); !ok || len(redirects) != 0 {
+		t.Fatalf("redirects must be an empty array: %+v", got)
+	}
 	missing, _ := id.New()
 	if r := call("site.get", `{"site_id":"`+missing+`"}`); r.Code != "not_found" {
 		t.Fatal(r)

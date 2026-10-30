@@ -64,14 +64,14 @@ site.create{name?, type:'static'|'php'|'wordpress', primary_domain, php_version?
 site.update{site_id, primary_domain_id?:string, php_version?, force_https?:bool, hsts_max_age?:int, maintenance?:bool} → job → {}
 site.delete{site_id, purge_files?:bool}                 → job → {}      # MFA; removes user/docroot/certs/DB rows per flags
 site.list{}                                            → {sites:[{id,name,type,primary_domain,status,php_version}]}
-site.get{site_id}                                       → {site:{…}, domains:[…], cert:{state,not_after}}
+site.get{site_id}                                       → {site:{…}, domains:[…], redirects:[{id,source,target,code}], cert:{state,not_after}}
 domain.add{site_id, fqdn}                               → job → {domain_id}
 domain.remove{domain_id}                                → job → {}
 ssl.issue{site_id, staging?:bool, wildcard?:bool}       → job → {fqdns:[string], not_after}
 ssl.renew{site_id}                                      → job → {not_after}
 ssl.upload{site_id, cert_pem, key_pem}                  → job → {fqdns:[string], not_after}  # MFA; validates key↔cert + dates
 ssl.auto_set{site_id, enabled:bool}                     → {}        # Let's Encrypt auto-renew on/off
-ssl.status{site_id}                                     → {source:'letsencrypt'|'manual'|'none', force_https:bool, domains:[{fqdn,cert_state,not_after}]}
+ssl.status{site_id}                                     → {source:'letsencrypt'|'manual'|'none', ssl_auto:bool, force_https:bool, domains:[{fqdn,cert_state,not_after}]}
 php.set{site_id, version, limits?:{memory_mb?,upload_mb?,max_exec_sec?}} → job → {}
 php.list{}                                              → {versions:[string], default}
 redirect.add{site_id, source, target, code:301|302}     → job → {redirect_id}   # source/target validated (F9)

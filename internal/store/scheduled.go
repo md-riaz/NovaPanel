@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 )
 
 // EnqueueScheduledJob atomically advances cadence and publishes work, or skips a
@@ -23,8 +24,21 @@ func (s *Store) EnqueueScheduledJob(ctx context.Context, scheduleID string, expe
 		if e != nil {
 			return e
 		}
+		if strings.HasPrefix(scheduleID, "acme:auto:") {
+			var eligible bool
+			if e = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sites s JOIN domains d ON d.site_id=s.id AND d.is_primary=1 WHERE s.id=? AND s.status='active' AND s.cert_source='letsencrypt' AND s.ssl_auto=1 AND (d.cert_not_after<=? OR (s.force_https=1 AND EXISTS(SELECT 1 FROM domains a WHERE a.site_id=s.id AND a.cert_state='none'))))`, strings.TrimPrefix(scheduleID, "acme:auto:"), now+30*24*60*60*1000).Scan(&eligible); e != nil {
+				return e
+			}
+			if !eligible {
+				return nil
+			}
+		}
 		var busy int
-		if e = tx.QueryRowContext(ctx, "SELECT count(*) FROM jobs WHERE object_key=? AND state='running'", j.ObjectKey).Scan(&busy); e != nil {
+		query := "SELECT count(*) FROM jobs WHERE object_key=? AND state='running'"
+		if strings.HasPrefix(scheduleID, "acme:auto:") {
+			query = "SELECT count(*) FROM jobs WHERE object_key=? AND (state='running' OR (verb IN ('ssl.issue','ssl.renew') AND state='queued'))"
+		}
+		if e = tx.QueryRowContext(ctx, query, j.ObjectKey).Scan(&busy); e != nil {
 			return e
 		}
 		if busy > 0 {

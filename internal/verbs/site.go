@@ -29,6 +29,13 @@ type siteSummary struct {
 	Status        string  `json:"status"`
 	PHPVersion    *string `json:"php_version"`
 }
+type siteRedirect struct {
+	ID     string `json:"id"`
+	Source string `json:"source"`
+	Target string `json:"target"`
+	Code   int    `json:"code"`
+}
+
 type siteDomain struct {
 	ID          string `json:"id"`
 	FQDN        string `json:"fqdn"`
@@ -90,11 +97,20 @@ func siteGet(ctx context.Context, a *agent.Agent, args any) (any, error) {
 			cert.NotAfter = d.CertNotAfter
 		}
 	}
+	rs, e := a.Store.ListRedirects(ctx, v.ID)
+	if e != nil {
+		return nil, e
+	}
+	redirects := []siteRedirect{}
+	for _, r := range rs {
+		redirects = append(redirects, siteRedirect{r.ID, r.Source, r.Target, r.Code})
+	}
 	return struct {
-		Site    siteSummary  `json:"site"`
-		Domains []siteDomain `json:"domains"`
-		Cert    any          `json:"cert"`
-	}{summarizeSite(v, domains), out, cert}, nil
+		Site      siteSummary    `json:"site"`
+		Domains   []siteDomain   `json:"domains"`
+		Redirects []siteRedirect `json:"redirects"`
+		Cert      any            `json:"cert"`
+	}{summarizeSite(v, domains), out, redirects, cert}, nil
 }
 func siteError(e error) error {
 	switch {
