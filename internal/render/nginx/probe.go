@@ -25,7 +25,7 @@ func HTTPProbe(endpoint string) func(context.Context, Desired) error {
 					return e
 				}
 				res.Body.Close()
-				if res.StatusCode >= 500 || path != "/" && res.StatusCode != 200 && res.StatusCode != 404 {
+				if res.StatusCode >= 500 && !(d.Maintenance && path == "/" && res.StatusCode == 503) || path != "/" && res.StatusCode != 200 && res.StatusCode != 404 {
 					return rpcerr.Errf("agent_error", "Nginx health probe failed")
 				}
 			}

@@ -10,13 +10,19 @@ import (
 	"text/template"
 )
 
+type Redirect struct {
+	Source, Target string
+	Code           int
+}
 type Desired struct {
+	Maintenance       bool
+	Redirects         []Redirect
 	Name              string
 	Domains           []string
 	Docroot, ACMERoot string
 }
 
-var httpTemplate = template.Must(template.New("http").Parse(`server {
+var httpTemplate = template.Must(template.New("http").Funcs(template.FuncMap{"pathSource": func(s string) bool { return strings.HasPrefix(s, "/") }}).Parse(`server {
     listen 80;
     listen [::]:80;
     server_name {{range .Domains}}{{.}} {{end}};
@@ -27,7 +33,11 @@ var httpTemplate = template.Must(template.New("http").Parse(`server {
         default_type "text/plain";
         try_files $uri =404;
     }
-    location / { try_files $uri $uri/ =404; }
+    {{range .Redirects}}{{if pathSource .Source}}location = "{{.Source}}" { return {{.Code}} "{{.Target}}"; }
+    {{end}}{{end}}location / {
+        {{range .Redirects}}{{if not (pathSource .Source)}}if ($host = "{{.Source}}") { return {{.Code}} "{{.Target}}"; }
+        {{end}}{{end}}{{if .Maintenance}}return 503;{{else}}try_files $uri $uri/ =404;{{end}}
+    }
     location ~ /\. { deny all; }
     add_header X-Content-Type-Options nosniff always;
     add_header X-Frame-Options SAMEORIGIN always;
@@ -58,6 +68,19 @@ func Render(d Desired) ([]byte, error) {
 				return nil, rpcerr.Errf("invalid_argument", "Invalid nginx path")
 			}
 		}
+	}
+	seen := map[string]bool{}
+	for _, r := range d.Redirects {
+		if e := v.RedirectSource(r.Source); e != nil {
+			return nil, e
+		}
+		if e := v.RedirectTarget(r.Target); e != nil {
+			return nil, e
+		}
+		if (r.Code != 301 && r.Code != 302) || seen[r.Source] {
+			return nil, rpcerr.Errf("invalid_argument", "Invalid or duplicate redirect")
+		}
+		seen[r.Source] = true
 	}
 	var b bytes.Buffer
 	if e := httpTemplate.Execute(&b, d); e != nil {
