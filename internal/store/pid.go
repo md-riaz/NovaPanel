@@ -84,11 +84,8 @@ func writePID(path string) error {
 		pid := int(pid64)
 		e = unix.Kill(pid, 0)
 		if e == nil || errors.Is(e, unix.EPERM) {
-			// Legacy PID-only files retain the existing conservative liveness policy.
-			if len(fields) == 1 {
-				return errors.New("pidfile owner still alive (legacy pidfile has no process identity)")
-			}
-			if fields[1] == boot {
+			// Legacy records lack identity; the held DB lock authorizes recovery.
+			if len(fields) == 3 && fields[1] == boot {
 				ownerStart, err := processStart(pid)
 				if err != nil && !os.IsNotExist(err) {
 					return err

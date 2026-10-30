@@ -11,6 +11,7 @@ import (
 	"novapanel/internal/jobs"
 	"novapanel/internal/rpcerr"
 	"slices"
+	"sync"
 	"time"
 )
 
@@ -66,7 +67,13 @@ type AuditFunc func(AuditEvent)
 
 func (f AuditFunc) Record(e AuditEvent) { f(e) }
 
+type authRate struct {
+	start int64
+	count int
+}
 type Server struct {
+	authMu            sync.Mutex
+	authRates         map[uint32][3]authRate
 	Agent             *agent.Agent
 	WebUID            uint32
 	Registry          map[string]Verb
@@ -78,6 +85,9 @@ type Server struct {
 
 func NewServer(a *agent.Agent) *Server {
 	s := &Server{Agent: a, WebUID: ^uint32(0), Registry: Registry, Sessions: closedSessions{}, Audit: AuditFunc(func(AuditEvent) {}), DefaultDeadlineMs: 120000}
+	if a.Store != nil {
+		s.Sessions = storedSessions{a: a}
+	}
 	if a.Audit != nil {
 		s.DurableAudit = func(e AuditEvent) error {
 			return a.Audit.Record(audit.Event{Actor: e.Actor, Role: e.Role, Verb: e.Verb, ObjectKey: e.ObjectKey, Outcome: e.Outcome, Code: e.Code, Detail: e.Detail})
@@ -107,8 +117,9 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 			if err := s.DurableAudit(event); err != nil {
 				// Never log reply data, claim tokens, or sink errors here.
 				log.Print("rpc: completion audit unavailable")
-				// A successful claim has already destroyed its one-shot secret row.
-				if mutation && !(req.Verb == "job.claim" && reply.OK) {
+				// These successful replies follow committed, unrecoverable secret effects.
+				preserve := reply.OK && (req.Verb == "job.claim" || req.Verb == "mfa.confirm" || req.Verb == "tokens.create")
+				if mutation && !preserve {
 					reply = Err("agent_error", "Durable audit unavailable")
 					reply.ID = req.ID
 				}
@@ -135,14 +146,37 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 		if resolver == nil {
 			resolver = closedSessions{}
 		}
-		resolved, err := resolver.Resolve(ctx, req.Session)
+		var resolved Caller
+		var err error
+		if stored, ok := resolver.(storedSessions); ok && req.Verb == "session.start" {
+			resolved, err = stored.resolve(ctx, req.Session, false)
+		} else {
+			resolved, err = resolver.Resolve(ctx, req.Session)
+		}
 		if err != nil {
-			return Err("unauthenticated", "Authentication required")
+			if req.Verb != "session.start" {
+				return Err("unauthenticated", "Authentication required")
+			}
+			resolved = Caller{}
 		}
 		resolved.Peer = caller.Peer
 		caller = resolved
 	}
 	event.Role = caller.Role
+	if req.Verb == "session.start" && (caller.Kind == "user" || caller.Kind == "token" || caller.Role != "") {
+		return Err("precondition_failed", "Anonymous session required")
+	}
+	if caller.Kind == "anon" && req.Verb != "session.start" && req.Verb != "session.login" {
+		return Err("unauthenticated", "Authentication required")
+	}
+	selfService := false
+	switch req.Verb {
+	case "session.reauth", "session.logout", "mfa.enroll", "mfa.confirm", "mfa.disable":
+		if caller.Kind != "user" || caller.UserID == "" || caller.Session == "" {
+			return Err("forbidden", "User session required")
+		}
+		selfService = true
+	}
 	if v.Internal && (caller.Peer != s.WebUID || caller.Peer == 0) {
 		return Err("forbidden", "Forbidden")
 	}
@@ -172,20 +206,29 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 			return Err("unauthenticated", "Authentication required")
 		}
 		rank, known := map[string]Role{"read_only": ReadOnly, "admin": Admin, "owner": Owner}[caller.Role]
-		if !known || (rank == ReadOnly && !v.ReadOnly) || (rank < v.MinRole && !(rank == ReadOnly && v.ReadOnly)) {
+		if !known || (rank == ReadOnly && !v.ReadOnly && !selfService) || (rank < v.MinRole && !(rank == ReadOnly && v.ReadOnly)) {
 			return Err("forbidden", "Forbidden")
 		}
 	}
-	if v.MFA && !((caller.Kind == "token" || caller.Role == "token") && caller.Automation) && (caller.Kind == "token" || caller.Role == "token" || (caller.Kind != "user" && callerIdentity(caller) != "local-root") || caller.MFAat <= 0 || s.Agent.Now()-caller.MFAat > 300000) {
+	reauthWindow := s.Agent.Cfg.ReauthWindowSec
+	if reauthWindow <= 0 {
+		reauthWindow = 300
+	}
+	now := s.Agent.Now()
+	if v.MFA && !((caller.Kind == "token" || caller.Role == "token") && caller.Automation) && (caller.Kind == "token" || caller.Role == "token" || (caller.Kind != "user" && callerIdentity(caller) != "local-root") || caller.MFAat <= 0 || caller.MFAat > now || now-caller.MFAat > int64(reauthWindow)*1000) {
 		r := Err("forbidden", "Reauthentication required")
 		r.Data = map[string]bool{"reauth_required": true}
 		return r
+	}
+	if !(req.Verb == "session.start" && caller.Kind == "anon") && !s.allowAuthentication(caller.Peer, req.Verb, req.Args) {
+		return Err("forbidden", "Authentication rate limit exceeded")
 	}
 	caller.Actor = req.Actor
 	if caller.Actor == "" && caller.Role == "owner" && caller.Peer == 0 {
 		caller.Actor = "root@local"
 	}
 	ctx = WithCaller(ctx, caller)
+	ctx = context.WithValue(ctx, presentedSessionKey{}, req.Session)
 	ctx = jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: callerIdentity(caller), Actor: caller.Actor, Role: caller.Role, Scopes: caller.Scopes, Automation: caller.Automation, Effectful: v.Effectful})
 	args := v.NewArgs()
 	d := json.NewDecoder(bytes.NewReader(req.Args))

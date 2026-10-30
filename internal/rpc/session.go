@@ -15,6 +15,13 @@ type Caller struct {
 	Peer                 uint32
 }
 type callerKey struct{}
+type presentedSessionKey struct{}
+
+// PresentedSession returns the transport credential, never an authorization input.
+func PresentedSession(ctx context.Context) string {
+	v, _ := ctx.Value(presentedSessionKey{}).(string)
+	return v
+}
 
 func WithCaller(ctx context.Context, c Caller) context.Context {
 	return context.WithValue(ctx, callerKey{}, c)
@@ -36,7 +43,7 @@ func RootCaller(uid uint32) Caller {
 	return Caller{Role: "owner", Actor: "root@local", Scopes: []string{"*"}, MFAat: time.Now().UnixMilli(), Peer: 0}
 }
 
-// SessionResolver will resolve agent-minted identities in Phase 2. Unknown tokens fail closed.
+// SessionResolver resolves agent-minted identities; unknown tokens fail closed.
 type SessionResolver interface {
 	Resolve(context.Context, string) (Caller, error)
 }
