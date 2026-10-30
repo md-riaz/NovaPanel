@@ -99,5 +99,5 @@ func NextCalendar(expr string, afterMS int64) (int64, error) {
 	return 0, badCalendar()
 }
 func badCalendar() error {
-	return rpcerr.Errf("invalid", "unsupported restricted UTC calendar expression")
+	return rpcerr.Errf("invalid_argument", "unsupported restricted UTC calendar expression")
 }

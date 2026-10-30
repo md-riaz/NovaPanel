@@ -29,13 +29,13 @@ func TestCalendarAliasesAndWeekday(t *testing.T) {
 		})
 	}
 }
-func TestCalendarRejectsUnsupportedWithInvalid(t *testing.T) {
+func TestCalendarRejectsUnsupportedWithInvalidArgument(t *testing.T) {
 	for _, expr := range []string{"* * * * *", "tomorrow", "*-*-* 25:00:00 UTC", "*-*-* 12:60:00 UTC", "*-*-* 12:00:60 UTC", "*-*-* 1:00:00 UTC", "*-*-* +1:00:00 UTC", "*-*-* 12:00:00", "*-*-* 12:00:00 Europe/London", "Mon..Fri *-*-* 00:00:00 UTC", "Mon,Tue *-*-* 00:00:00 UTC", "*-*-* */2:00:00 UTC", "2026-10-30 00:00:00 UTC", "daily UTC"} {
 		t.Run(expr, func(t *testing.T) {
 			_, err := NextCalendar(expr, 0)
 			var ce *rpcerr.CodedError
-			if !errors.As(err, &ce) || ce.Code != "invalid" {
-				t.Fatalf("want invalid, got %v", err)
+			if !errors.As(err, &ce) || ce.Code != "invalid_argument" {
+				t.Fatalf("want invalid_argument, got %v", err)
 			}
 		})
 	}
