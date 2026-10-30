@@ -68,6 +68,9 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 		a.Cfg.ACMEDirectoryProd = "https://localhost:14000/dir"
 		a.Cfg.ACMEEmail = "lab@example.test"
 		a.ProvisionSite = func(_ context.Context, name string) error {
+			if err := os.MkdirAll(filepath.Join(a.Cfg.ACMEWebroot, name), 0755); err != nil {
+				return err
+			}
 			path := filepath.Join(a.Cfg.SitesRoot, name, "public")
 			if err := os.MkdirAll(path, 0700); err != nil {
 				return err
