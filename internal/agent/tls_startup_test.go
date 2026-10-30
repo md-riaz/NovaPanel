@@ -26,6 +26,7 @@ func startupConfig(t *testing.T) config.Config {
 	c.SealKeyPath = filepath.Join(d, "state", "seal.key")
 	c.LogDir = filepath.Join(d, "log")
 	c.SocketPath = filepath.Join(d, "run", "agent.sock")
+	c.SitesRoot = filepath.Join(d, "sites")
 	c.ACMEWebroot = filepath.Join(d, "acme")
 	c.TLSDir = filepath.Join(d, "configured", "tls")
 	return c

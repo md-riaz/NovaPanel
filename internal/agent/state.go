@@ -23,7 +23,7 @@ func (a *Agent) OpenState(ctx context.Context) (func() error, error) {
 	for _, d := range []struct {
 		p string
 		m os.FileMode
-	}{{filepath.Dir(a.Cfg.DBPath), 0700}, {filepath.Dir(a.Cfg.SealKeyPath), 0700}, {a.Cfg.LogDir, 0750}, {filepath.Dir(a.Cfg.SocketPath), 0755}, {a.Cfg.ACMEWebroot, 0755}} {
+	}{{filepath.Dir(a.Cfg.DBPath), 0700}, {filepath.Dir(a.Cfg.SealKeyPath), 0700}, {a.Cfg.LogDir, 0750}, {filepath.Dir(a.Cfg.SocketPath), 0755}, {a.Cfg.ACMEWebroot, 0755}, {a.Cfg.SitesRoot, 0755}} {
 		// Reject writable or foreign-owned ancestors too, not only the final directory.
 		for p := d.p; ; p = filepath.Dir(p) {
 			var st unix.Stat_t

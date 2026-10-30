@@ -32,6 +32,7 @@ func TestStateRejectsWritableDirectory(t *testing.T) {
 	cfg.SealKeyPath = filepath.Join(d, "state", "seal.key")
 	cfg.LogDir = filepath.Join(d, "logs")
 	cfg.SocketPath = filepath.Join(d, "run", "agent.sock")
+	cfg.SitesRoot = filepath.Join(d, "sites")
 	cfg.ACMEWebroot = filepath.Join(d, "acme")
 	cfg.TLSDir = filepath.Join(d, "tls")
 	if e := os.MkdirAll(filepath.Dir(cfg.DBPath), 0700); e != nil {
@@ -56,6 +57,7 @@ func TestStateStartup(t *testing.T) {
 			cfg.SealKeyPath = filepath.Join(d, "state", "seal.key")
 			cfg.LogDir = filepath.Join(d, "logs")
 			cfg.SocketPath = filepath.Join(d, "run", "agent.sock")
+			cfg.SitesRoot = filepath.Join(d, "sites")
 			cfg.ACMEWebroot = filepath.Join(d, "acme")
 			cfg.TLSDir = filepath.Join(d, "tls")
 			r := &startupRunner{fail: fail}
