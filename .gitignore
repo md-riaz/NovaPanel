@@ -1,49 +1,15 @@
-# Composer
-/vendor/
-composer.lock
-
-# Storage
-/storage/logs/*
-/storage/cache/*
-/storage/uploads/*
-/storage/terminal/pids/*
-/storage/terminal/logs/*
-!/storage/logs/.gitkeep
-!/storage/cache/.gitkeep
-!/storage/uploads/.gitkeep
-!/storage/terminal/pids/.gitkeep
-!/storage/terminal/logs/.gitkeep
-
-# Database
-/storage/*.db
-/storage/*.db.*
-/storage/*.sqlite
-/storage/*.sqlite.*
-
-# Environment
+/bin/
+/coverage.out
+*.test
+__pycache__/
 .env
 .env.local
-.env.php
-
-# IDE
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
-
-# OS
 .DS_Store
 Thumbs.db
-
-# Temporary files
-/tmp/
-*.tmp
-
-# Node.js
 node_modules/
-package-lock.json
-
-# Testing
-.phpunit.cache/
-.phpunit.result.cache
+*.tmp
