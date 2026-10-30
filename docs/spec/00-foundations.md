@@ -147,6 +147,16 @@ mfa_at}` where `kind ∈ {anon, user, token}`.
   **public `session.start` verb** (01 / 03), which returns `{session, csrf_token}`; it is rate-limited
   per peer and short-lived. Only `session.start`, `session.login`, and read of public assets are
   allowed under an `anon` session.
+  **`session.start` is idempotent get-or-create.** When the F2 envelope presents a **live `anon`
+  session**, `session.start` returns that **same** `{session, csrf_token}` unchanged — no new row, no
+  rotation, and not counted against the per-peer mint rate limit — so the stateless web tier can
+  **re-fetch the anon session's expected `csrf_token` on the login POST** to do its constant-time
+  header compare (whoami is non-public, so the anon flow needs this symmetric read path; see CSRF-token
+  storage below). When no valid `anon` session is presented (absent / expired / malformed) it **mints**
+  a fresh anon row (rate-limited per peer). An **authenticated** (`kind=user`/`token`) session presented
+  to `session.start` returns `code:"precondition_failed"` (F3) — that session's CSRF is read via `whoami`,
+  not here. The idempotent return does **not** extend the anon session's absolute lifetime; once it
+  expires the next `session.start` mints anew.
 - **Login** (`session.login{user, password, totp?}`): agent verifies (Argon2id; TOTP if enrolled),
   **mints a new session id** (the anon one is deleted — this is the "rotate on login"), stores
   `kind=user`, sets `mfa_at = now` iff a TOTP/backup code was verified, returns the token. `panel-web`
@@ -175,10 +185,14 @@ mfa_at}` where `kind ∈ {anon, user, token}`.
   carries an **automation grant** (`api_tokens.automation = true`), which `tokens.create` issues only
   from a stepped-up (`mfa_at` fresh) `user` session; such tokens are exempt from the TOTP-recency
   check but still scope-checked.
-- **CSRF token storage.** The synchronizer CSRF token lives in the **session row** (`csrf_token`,
-  returned by `session.whoami`); it is **not** a cookie. `panel-web` injects it into pages and
-  validates the `X-CSRF-Token` header against the session's value (constant-time). It rotates with the
-  session id.
+- **CSRF token storage.** The synchronizer CSRF token lives in the **session row** (`csrf_token`); it
+  is **not** a cookie. `panel-web` injects it into pages and validates the `X-CSRF-Token` header against
+  the session's value (constant-time) on every mutating request. It rotates with the session id.
+  Because panel-web holds no session state, it **re-fetches the expected value per request** from the
+  agent: a `kind=user`/`token` session reads it via **`session.whoami`**; an **`anon`** session (the
+  pre-login POST, where whoami is non-public) reads it via the **idempotent `session.start`** above.
+  The agent **never** receives or compares a CSRF header — there is no CSRF field in the F2 envelope;
+  the web tier owns the compare, the agent owns the token's value and storage.
 - **Timeouts:** idle **10 min**, absolute **12 h** (high-value panel), both enforced agent-side from
   `last_seen`/`created`; revocation = row delete. *(Supersedes any earlier "30 min" default.)*
 - **Idempotency** for the public API lives in an agent `idempotency` table keyed by
@@ -378,6 +392,28 @@ Record(Event) error                                    -- fail-closed: see sinks
   arrives **after** an effect already happened does **not** undo the effect — audit records the effect
   and the failing stage; effect reversal is the verb's concern under the effectful rules (F6), not
   audit's.
+- **Show-once reply exception (bounded, decided).** Two synchronous verbs return a secret that exists
+  **only** in their reply — `mfa.confirm → {backup_codes}` and `tokens.create → {token}` (backup codes
+  and the PAT are stored **hash-only**; there is no second read). When such a verb's **effect has
+  already durably committed** and only the **completion (final-outcome) audit write** then fails, the
+  agent **returns the committed show-once reply** instead of overwriting it with `agent_error`, **and**
+  still enters the sticky `unhealthy` state that gates all subsequent mutating verbs. Suppressing the
+  reply cannot un-commit the effect (effects are never reversed here, per the bullet above); it would
+  only orphan an **unrecoverable, unusable** credential — and the recovery actions (`mfa.disable`,
+  `tokens.revoke`/recreate) are themselves mutations blocked by the same sticky gate, so suppression is
+  strictly worse. This mirrors the bounded `job.claim` precedent: an already-consumed successful reply
+  is preserved while sticky gating is retained. The exception is **narrow** — it covers **only** a
+  completion-audit failure **after** an irreversible secret-bearing effect has committed. A
+  **pre-authorization / attempt** audit failure, or any audit failure **before** the effect commits,
+  **fails closed as normal** (no secret minted, `agent_error`, retry safe). It applies whether the
+  **file append** or the **events row** failed: file-append failure loses the completion record (the
+  pre-auth attempt event and the committed DB state remain; reconcile cannot recover an unwritten line),
+  events-row failure keeps the tamper-proof file record (reconciled on restart) — either way the reply
+  is returned and the gate engages. The show-once reply **shape is unchanged**; the degraded state is
+  surfaced out-of-band (the next mutation returns `agent_error, detail.stage=authz`, plus the audit
+  log), never inside the secret reply. Regression: for both verbs, inject a completion-audit failure on
+  each sink → the secret reply is returned, the committed effect is present, an attempt event exists,
+  the agent is sticky-`unhealthy`, and the next mutating verb is gated.
 - File-backed append-only log (`/var/log/novapanel/audit.log`, `chattr +a`, root-owned) **in addition
   to** the `events` table, so a DB compromise cannot rewrite history. `/var/log/novapanel` is made by
   the installer and re-made by the agent if missing; **no `LogsDirectory=`** in the unit (systemd
