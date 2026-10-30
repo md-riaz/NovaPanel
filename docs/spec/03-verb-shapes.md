@@ -118,8 +118,8 @@ moves it into place as the site user. (Large archives/extract run as jobs.)
 
 ## backups / firewall (Phase 6)
 ```
-repo.create{name, kind:'local'|'sftp'|'s3', location, creds?:{…}} → job → {repo_id}  + claim(password)   # Slow (restic init); creds sealed
-repo.list{}                                            → {repos:[{id,name,kind,location}]}
+repo.create{name, kind:'local'|'sftp'|'s3', location, role?:'site'|'panel', creds?:{…}} → job → {repo_id}  + claim(password)   # Slow (restic init); creds sealed; one panel repo max (else conflict)
+repo.list{}                                            → {repos:[{id,name,kind,location,role}]}
 repo.delete{repo_id}                                    → {}       # MFA
 backup.create{repo_id, target_kind:'site'|'db'|'panel', target_ref} → job → {snapshot_id}
 backup.list{repo_id?, target_ref?}                      → {backups:[{id,snapshot_id,target_kind,target_ref,bytes,created}]}
