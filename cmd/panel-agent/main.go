@@ -21,7 +21,7 @@ import (
 var geteuid = os.Geteuid
 
 func listenSocket(path string, gid uint32) (*net.UnixListener, error) {
-	// Refuse stale sockets too. Never unlink a path that another agent may own.
+	// Refuse existing paths here; recovery requires serve's lifetime reservations.
 	if _, err := os.Lstat(path); err == nil {
 		return nil, fmt.Errorf("socket path already exists: %s", path)
 	} else if !os.IsNotExist(err) {
@@ -97,12 +97,23 @@ func serve(ctx context.Context, a *agent.Agent) (err error) {
 		return err
 	}
 	var socketPath string
+	var releaseSocket func() error
 	defer func() {
 		err = errors.Join(err, cleanup())
 		if socketPath != "" {
 			err = errors.Join(err, os.Remove(socketPath))
 		}
+		if releaseSocket != nil {
+			err = errors.Join(err, releaseSocket())
+		}
 	}()
+	releaseSocket, err = reserveSocket(a.Cfg.SocketPath)
+	if err != nil {
+		return err
+	}
+	if err = recoverSocket(a.Cfg.SocketPath); err != nil {
+		return err
+	}
 	s := rpc.NewServer(a)
 	s.WebUID = a.Cfg.WebUID
 	s.DefaultDeadlineMs = a.Cfg.DeadlineDefaultMs
@@ -124,15 +135,29 @@ func serve(ctx context.Context, a *agent.Agent) (err error) {
 	go func() { serving <- s.ServeContext(ctx, l) }()
 	served := false
 	consumed := 0
-	select {
-	case err = <-results:
-		consumed++
-	case err = <-serving:
-		served = true
-		if errors.Is(err, net.ErrClosed) || errors.Is(err, context.Canceled) {
-			err = nil
+running:
+	for {
+		select {
+		case e := <-results:
+			consumed++
+			// A worker may stop on sticky audit failure; reads must remain available.
+			if health := a.Audit.Healthy(); health != nil && errors.Is(e, health) {
+				continue
+			}
+			err = e
+			if ctx.Err() != nil && errors.Is(e, context.Canceled) {
+				err = nil
+			}
+			break running
+		case err = <-serving:
+			served = true
+			if errors.Is(err, net.ErrClosed) || errors.Is(err, context.Canceled) {
+				err = nil
+			}
+			break running
+		case <-ctx.Done():
+			break running
 		}
-	case <-ctx.Done():
 	}
 	cancel()
 	if !served {
@@ -141,12 +166,11 @@ func serve(ctx context.Context, a *agent.Agent) (err error) {
 	for consumed < 2 {
 		e := <-results
 		if e != nil && !errors.Is(e, context.Canceled) {
-			err = errors.Join(err, e)
+			if health := a.Audit.Healthy(); health == nil || !errors.Is(e, health) {
+				err = errors.Join(err, e)
+			}
 		}
 		consumed++
-	}
-	if errors.Is(err, context.Canceled) {
-		return nil
 	}
 	return err
 }

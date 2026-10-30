@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"novapanel/internal/id"
 	"novapanel/internal/rpcerr"
 	"novapanel/internal/store"
@@ -207,7 +208,13 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			return nil
 		}
 		if e := s.Tick(ctx); e != nil {
-			return e
+			if ctx.Err() != nil {
+				return nil
+			}
+			if health := s.q.healthy(); health == nil || !errors.Is(e, health) {
+				return e
+			}
+			// Sticky audit failure pauses mutations, not read RPC or cancellation.
 		}
 		select {
 		case <-ctx.Done():
