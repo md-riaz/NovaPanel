@@ -121,9 +121,10 @@ Full detail in `vpspanel-plan-amendments.md`. We downloaded and read BHPanel's r
   (MFA), API tokens (npat_, scopes), Updates (signed/anti-rollback), Audit log; live **Jobs drawer**
   (async 202+poll), create-site **wizard**, show-once **secret** modal. Light + dark, responsive,
   verified in the viewer (no console errors).
-- **Every UI action is labelled with the canonical RPC verb it maps to** (`⌁ php.set`, `ssl.issue`,
-  `backup.restore`, `firewall.apply`, …) so the prototype is a 1:1 wiring map to the agent verb set in
-  `spec/01-rpc-and-verbs.md` — this is the visual contract Phase 2/3 wire against.
+- **Labels are plain and human** (for non-technical owners): "PHP version & limits · Choose the PHP
+  version, memory limit and upload size", "Domains & TLS · issue or renew SSL certificates", "Reset
+  password", etc. — **no RPC-verb jargon in the UI**. The verb↔screen mapping lives in
+  `spec/01-rpc-and-verbs.md` (the wiring contract for devs), not on screen.
 
 ---
 

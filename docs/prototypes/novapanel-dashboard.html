@@ -171,12 +171,6 @@ svg{display:block}
 .badge.info{background:var(--info-weak);color:var(--info)}
 .badge.accent{background:var(--accent-weak);color:var(--accent)}
 .tag{font-size:11px;font-weight:700;padding:2px 7px;border-radius:6px;background:var(--surface-2);color:var(--muted);border:1px solid var(--border)}
-.verb{font-family:var(--mono);font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:6px;
-  background:var(--accent-weak);color:var(--accent);white-space:nowrap;letter-spacing:-.01em}
-.verb::before{content:"⌁ ";opacity:.6}
-.btn .verb{background:rgba(127,127,127,.16)}
-.btn-primary .verb{background:rgba(255,255,255,.22);color:var(--accent-ink)}
-.head-actions .verb{align-self:center}
 
 /* tables */
 .tbl-wrap{overflow-x:auto}
@@ -520,7 +514,7 @@ function vDashboard(){
 
   <div class="page-head"><div><h1>Server overview</h1><p>${server.fqdn} · ${server.os} · up ${server.uptime}</p></div>
     <div class="head-actions"><button class="btn btn-sm" onclick="openJobs()">${ic("activity")}Jobs</button>
-      <button class="btn btn-primary btn-sm" onclick="wizard()">${ic("plus")}New website <span class="verb">site.create</span></button></div></div>
+      <button class="btn btn-primary btn-sm" onclick="wizard()">${ic("plus")}New website</button></div></div>
 
   <div class="grid cards-4" style="margin-bottom:16px">
     <div class="card tile"><span class="lbl">${ic("globe")}Websites</span><span class="val tnum">${sites.length}</span>
@@ -569,10 +563,7 @@ function vDashboard(){
         <div class="lt"><div class="a mono">${a.verb} <span style="color:var(--faint)">· ${esc(a.actor)}</span></div><div class="b">${esc(a.code)}</div></div>
         <span class="lx">${a.when}</span></div>`).join("")}</div>
     </div>
-  </div>
-  <p style="margin:18px 2px 0;color:var(--faint);font-size:12px;font-weight:600">
-    Every action shows the RPC verb it maps to — e.g. <span class="verb">php.set</span>,
-    <span class="verb">ssl.issue</span>, <span class="verb">backup.restore</span> — so the UI maps 1:1 to the agent's typed verbs.</p>`;
+  </div>`;
 }
 
 function vWebsites(){
@@ -592,17 +583,16 @@ function vWebsites(){
        <span class="btn btn-sm btn-ghost">Manage ${ic("chevr","ic")}</span></div>
    </div>`).join("");
   return `<div class="page-head"><div><h1>Websites</h1><p>${sites.length} sites on this server · Nginx + per-site PHP-FPM</p></div>
-    <div class="head-actions"><button class="btn btn-primary" onclick="wizard()">${ic("plus")}New website <span class="verb">site.create</span></button></div></div>
+    <div class="head-actions"><button class="btn btn-primary" onclick="wizard()">${ic("plus")}New website</button></div></div>
     <div id="siteGrid" class="site-grid">${cards}</div>`;
 }
 
 function vSite(id){
   const s=siteBy(id); if(!s)return `<div class="empty">Site not found.</div>`;
   const tabs=["Overview","Domains & TLS","Database","Deploy","Files","Cron","Logs"];
-  const manage=(t,icn,d,act,verb)=>`<div class="card"><div class="card-pad flex col" style="gap:10px;align-items:flex-start">
+  const manage=(t,icn,d,act)=>`<div class="card"><div class="card-pad flex col" style="gap:10px;align-items:flex-start">
      <div class="flex" style="gap:10px;width:100%"><span class="li" style="width:34px;height:34px;border-radius:9px;display:grid;place-items:center;background:var(--accent-weak);color:var(--accent);flex:none">${ic(icn)}</span>
-       <div style="min-width:0"><div style="font-weight:800">${t}</div><div style="font-size:12px;color:var(--muted)">${d}</div></div>
-       <span class="verb mla" style="align-self:flex-start" title="RPC verb this maps to">${verb}</span></div>
+       <div style="min-width:0"><div style="font-weight:800">${t}</div><div style="font-size:12px;color:var(--muted)">${d}</div></div></div>
      <button class="btn btn-sm btn-ghost mla">${act} ${ic("chevr","ic")}</button></div></div>`;
   return `
   <div class="page-head"><div class="flex" style="gap:14px">${fav(s.domain)}
@@ -610,18 +600,18 @@ function vSite(id){
       <p>${typeLabel(s.type)} · PHP ${s.php||"—"} · ${s.size} · ${s.visits}</p></div></div>
     <div class="head-actions">${certBadge(s)}
       <button class="btn btn-sm" onclick="toast('Opened file manager (demo)')">${ic("file")}Files</button>
-      <button class="btn btn-sm btn-ghost" onclick="toast('Restart queued (demo)')">${ic("refresh")}Restart PHP <span class="verb">service.restart</span></button></div></div>
+      <button class="btn btn-sm btn-ghost" onclick="toast('Restart queued (demo)')">${ic("refresh")}Restart PHP</button></div></div>
 
   <div class="tabs">${tabs.map((t,i)=>`<button class="tab ${i===0?'active':''}" onclick="siteTab(this,${i})">${t}</button>`).join("")}</div>
 
   ${s.cert==="none"?`<div class="notice warn" style="margin-bottom:16px">${ic("warn")}
     <div class="nt"><div class="nh">No TLS certificate yet — serving over HTTP only</div>
       <div class="nb">Force-HTTPS is disabled until a valid certificate is installed. Issue a Let's Encrypt certificate (HTTP-01) to enable it.</div></div>
-    <button class="btn btn-sm btn-primary mla" style="align-self:center" onclick="toast('ACME HTTP-01 issuance queued (demo)')">Issue certificate <span class="verb">ssl.issue</span></button></div>`:""}
+    <button class="btn btn-sm btn-primary mla" style="align-self:center" onclick="toast('ACME HTTP-01 issuance queued (demo)')">Issue certificate</button></div>`:""}
   ${s.cert==="expiring"?`<div class="notice crit" style="margin-bottom:16px">${ic("warn")}
     <div class="nt"><div class="nh">Certificate expires in ${s.certDays} days</div>
       <div class="nb">Auto-renewal runs daily within the 30-day window. You can renew now if needed.</div></div>
-    <button class="btn btn-sm mla" style="align-self:center" onclick="toast('Renewal job queued (demo)')">Renew now <span class="verb">ssl.renew</span></button></div>`:""}
+    <button class="btn btn-sm mla" style="align-self:center" onclick="toast('Renewal job queued (demo)')">Renew now</button></div>`:""}
   ${s.status==="maint"?`<div class="notice info" style="margin-bottom:16px">${ic("cog")}
     <div class="nt"><div class="nh">Maintenance mode is on</div><div class="nb">Visitors see a 503 maintenance page. The ACME challenge path stays reachable.</div></div>
     <label class="flex mla" style="align-self:center;gap:8px;font-weight:700;font-size:12.5px">On <span class="sw on" onclick="this.classList.toggle('on')"></span></label></div>`:""}
@@ -637,24 +627,24 @@ function vSite(id){
   </div>
 
   <div class="grid cards-2">
-    ${manage("Domains &amp; TLS","globe","Add domains, issue / renew certificates, force HTTPS","Manage","domain.add · ssl.issue")}
-    ${manage("PHP version &amp; limits","cpu","Set the PHP version, memory limit, upload size","Configure","php.set")}
-    ${manage("Git deploy","git",s.deploy?`${s.deploy.repo} · pinned SHA`:"Connect a repository","Deploy","deploy.run")}
-    ${manage("Backups","save","Per-site snapshots, verify, restore","View","backup.create · restore")}
-    ${manage("File manager","file","Browse "+s.size+" in the docroot (sandboxed)","Browse","files.list")}
-    ${manage("Scheduled jobs","clock","Per-site cron as systemd timers","Edit","cron.create")}
+    ${manage("Domains &amp; TLS","globe","Add domains, issue or renew SSL certificates, force HTTPS","Manage")}
+    ${manage("PHP version &amp; limits","cpu","Choose the PHP version, memory limit and upload size","Configure")}
+    ${manage("Git deploy","git",s.deploy?`${s.deploy.repo} · last deploy ${s.deploy.when}`:"Connect a repository to deploy","Deploy")}
+    ${manage("Backups &amp; restore","save","Back up this site, verify and restore a snapshot","View")}
+    ${manage("File manager","file","Browse the "+s.size+" in this site's folder","Browse")}
+    ${manage("Scheduled tasks","clock","Schedule commands to run on a timer","Edit")}
   </div>`;
 }
 
 function vDatabases(){
   return `<div class="page-head"><div><h1>Databases</h1><p>MariaDB 10.11 · bound to 127.0.0.1 · one least-privilege user per database</p></div>
-    <div class="head-actions"><button class="btn btn-primary" onclick="newDb()">${ic("plus")}New database <span class="verb">database.create</span></button></div></div>
+    <div class="head-actions"><button class="btn btn-primary" onclick="newDb()">${ic("plus")}New database</button></div></div>
     <div class="card"><div class="tbl-wrap"><table class="tbl">
       <thead><tr><th>Database</th><th>User</th><th>Engine</th><th>Tables</th><th>Size</th><th>Site</th><th></th></tr></thead>
       <tbody>${dbs.map(d=>`<tr><td class="row-main mono">${esc(d.name)}</td><td class="mono" style="font-size:12px">${esc(d.user)}</td>
         <td><span class="tag">${d.engine}</span></td><td class="tnum">${d.tables}</td><td class="mono tnum">${d.size}</td>
         <td class="row-sub">${esc(d.site)}</td>
-        <td class="cell-actions"><button class="btn btn-sm btn-ghost" onclick="toast('Rotate password → show-once (demo)')">Rotate <span class="verb">database.rotate_password</span></button></td></tr>`).join("")}</tbody>
+        <td class="cell-actions"><button class="btn btn-sm btn-ghost" onclick="toast('New password generated — shown once (demo)')">Reset password</button></td></tr>`).join("")}</tbody>
     </table></div></div>
     <div class="notice accent" style="margin-top:16px">${ic("key")}<div class="nt"><div class="nh">Passwords are shown once</div>
       <div class="nb">A generated password is delivered through a one-time claim and never stored in plaintext, logs, or the job record.</div></div></div>`;
@@ -662,8 +652,8 @@ function vDatabases(){
 
 function vBackups(){
   return `<div class="page-head"><div><h1>Backups</h1><p>Restic · verified by reading back · daily schedule</p></div>
-    <div class="head-actions"><button class="btn btn-sm" onclick="toast('Verify (read-data 4/7) queued (demo)')">${ic("check")}Verify <span class="verb">backup.verify</span></button>
-      <button class="btn btn-primary btn-sm" onclick="toast('Snapshot job queued (demo)')">${ic("plus")}Back up now <span class="verb">backup.create</span></button></div></div>
+    <div class="head-actions"><button class="btn btn-sm" onclick="toast('Verify (read-data 4/7) queued (demo)')">${ic("check")}Verify</button>
+      <button class="btn btn-primary btn-sm" onclick="toast('Snapshot job queued (demo)')">${ic("plus")}Back up now</button></div></div>
 
   <div class="grid cards-2" style="margin-bottom:16px">
     ${repos.map(r=>`<div class="card"><div class="card-h">${ic("save")}<h3>${r.name}</h3>
@@ -682,14 +672,14 @@ function vBackups(){
         <td><span class="badge ${s.kind==='db'?'info':s.kind==='panel'?'accent':'good'}" style="margin-right:7px">${s.kind}</span>${esc(s.target)}</td>
         <td class="row-sub">${s.repo}</td><td class="mono tnum">${s.size}</td><td class="row-sub">${s.when}</td>
         <td>${s.warn?`<span class="badge warn"><span class="dt"></span>${s.verify}</span>`:`<span class="badge good">${ic("check","dt")}${s.verify}</span>`}</td>
-        <td class="cell-actions"><button class="btn btn-sm" onclick="restoreFlow('${esc(s.target)}')">Restore <span class="verb">backup.restore</span></button></td></tr>`).join("")}</tbody>
+        <td class="cell-actions"><button class="btn btn-sm" onclick="restoreFlow('${esc(s.target)}')">Restore</button></td></tr>`).join("")}</tbody>
     </table></div></div>`;
 }
 
 function vFirewall(){
   return `<div class="page-head"><div><h1>Firewall</h1><p>UFW · safe-apply with a timed auto-revert · the SSH rule can't be removed</p></div>
     <div class="head-actions"><button class="btn btn-sm" onclick="toast('Dry-run shows the diff (demo)')">Dry-run</button>
-      <button class="btn btn-primary btn-sm" onclick="armFirewall()">${ic("shield")}Apply change <span class="verb">firewall.apply</span></button></div></div>
+      <button class="btn btn-primary btn-sm" onclick="armFirewall()">${ic("shield")}Apply change</button></div></div>
 
   <div id="fwArmed"></div>
 
@@ -710,7 +700,7 @@ function vFirewall(){
 function vDns(){
   return `<div class="page-head"><div><h1>DNS</h1><p>Cloudflare · zone <span class="mono">lumina.co</span> · proxy only on web records</p></div>
     <div class="head-actions"><button class="btn btn-sm" onclick="toast('DNS verify: points here ✓ (demo)')">Verify</button>
-      <button class="btn btn-primary btn-sm" onclick="toast('Add record (demo)')">${ic("plus")}Add record <span class="verb">dns.record.create</span></button></div></div>
+      <button class="btn btn-primary btn-sm" onclick="toast('Add record (demo)')">${ic("plus")}Add record</button></div></div>
     <div class="card"><div class="tbl-wrap"><table class="tbl">
       <thead><tr><th>Type</th><th>Name</th><th>Value</th><th>TTL</th><th>Proxy</th><th></th></tr></thead>
       <tbody>${dns.map(r=>`<tr><td><span class="tag">${r.type}</span></td><td class="mono">${esc(r.name)}</td>
@@ -741,7 +731,7 @@ function vUsers(){
 
 function vTokens(){
   return `<div class="page-head"><div><h1>API tokens</h1><p>Bearer <span class="mono">npat_…</span> tokens · scoped · shown once</p></div>
-    <div class="head-actions"><button class="btn btn-primary" onclick="newToken()">${ic("plus")}New token <span class="verb">tokens.create</span></button></div></div>
+    <div class="head-actions"><button class="btn btn-primary" onclick="newToken()">${ic("plus")}New token</button></div></div>
     <div class="card"><div class="tbl-wrap"><table class="tbl">
       <thead><tr><th>Name</th><th>Token</th><th>Scopes</th><th>Last used</th><th>Expires</th><th></th></tr></thead>
       <tbody>${tokens.map(t=>`<tr><td class="row-main">${esc(t.name)}${t.auto?' <span class="tag" style="color:var(--accent)">automation</span>':''}</td>
@@ -761,7 +751,7 @@ function vUpdates(){
     ${ic("chevr")}
     <div><div class="kv"><div class="k">Available</div></div><div style="font-size:26px;font-weight:800;color:var(--accent)" class="mono">1.4.5</div></div>
     <span class="badge crit"><span class="dt"></span>Security release</span>
-    <button class="btn btn-primary mla" onclick="toast('Signature verified · applying in a job (demo)')">${ic("up")}Apply update <span class="verb">update.apply</span></button></div></div>
+    <button class="btn btn-primary mla" onclick="toast('Signature verified · applying in a job (demo)')">${ic("up")}Apply update</button></div></div>
 
   <div class="grid cards-2">
     <div class="card"><div class="card-h">${ic("logs")}<h3>What's in 1.4.5</h3></div>
