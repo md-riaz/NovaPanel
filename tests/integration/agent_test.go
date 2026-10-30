@@ -46,14 +46,17 @@ func TestScratchAgent(t *testing.T) {
 		return text, exit
 	}
 	goBin := "/usr/bin/env" // Resolve Go from PATH without importing os/exec.
-	for _, name := range []string{"panel-agent", "novapanelctl", "panel-web"} {
+	for _, name := range []string{"novapanelctl", "panel-web"} {
 		if text, exit := run(goBin, []string{"go", "build", "-o", filepath.Join(scratch, name), "./cmd/" + name}, runner.RunOpts{Dir: root, Env: os.Environ()}); exit != 0 {
 			t.Fatalf("build %s: %s", name, text)
 		}
 	}
+	if text, exit := run(goBin, []string{"go", "test", "-c", "-o", filepath.Join(scratch, "panel-agent"), "./cmd/panel-agent"}, runner.RunOpts{Dir: root, Env: os.Environ()}); exit != 0 {
+		t.Fatalf("build safe test binary: %s", text)
+	}
 	socket := filepath.Join(scratch, "agent.sock")
 	config := filepath.Join(scratch, "agent.toml")
-	if err := os.WriteFile(config, []byte(fmt.Sprintf("socket_path = %q\nweb_user = \"nobody\"\n", socket)), 0600); err != nil {
+	if err := os.WriteFile(config, []byte(fmt.Sprintf("socket_path = %q\nweb_user = \"nobody\"\ndb_path = %q\nseal_key_path = %q\nlog_dir = %q\nacme_webroot = %q\n", socket, filepath.Join(scratch, "state", "panel.db"), filepath.Join(scratch, "state", "seal.key"), filepath.Join(scratch, "logs"), filepath.Join(scratch, "acme"))), 0600); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -66,7 +69,7 @@ func TestScratchAgent(t *testing.T) {
 	done := make(chan result, 1)
 	start := func() {
 		go func() {
-			out, stderr, exit, err := (runner.Real{}).Run(ctx, filepath.Join(scratch, "panel-agent"), []string{"--config", config}, runner.RunOpts{Dir: scratch, Env: os.Environ()})
+			out, stderr, exit, err := (runner.Real{}).Run(ctx, filepath.Join(scratch, "panel-agent"), []string{"-test.run=^TestSafeAgentProcess$", "--", "--config", config}, runner.RunOpts{Dir: scratch, Env: append(os.Environ(), "NOVAPANEL_SAFE_TEST_PROCESS=1")})
 			done <- result{string(out) + string(stderr), exit, err}
 		}()
 	}
@@ -103,8 +106,12 @@ func TestScratchAgent(t *testing.T) {
 		}
 	}
 	waitSocket()
-	for _, verb := range []string{"ping", "agent.info"} {
-		text, exit := run(filepath.Join(scratch, "novapanelctl"), []string{"--socket", socket, verb}, runner.RunOpts{Dir: scratch, Env: os.Environ()})
+	for _, verb := range []string{"ping", "agent.info", "service.status", "service.restart"} {
+		args := []string{"--socket", socket, verb}
+		if strings.HasPrefix(verb, "service.") {
+			args = append(args, "nginx")
+		}
+		text, exit := run(filepath.Join(scratch, "novapanelctl"), args, runner.RunOpts{Dir: scratch, Env: os.Environ()})
 		if exit != 0 {
 			t.Fatalf("root %s: exit=%d %s", verb, exit, text)
 		}

@@ -7,9 +7,11 @@ import (
 	"errors"
 	"log"
 	"novapanel/internal/agent"
+	"novapanel/internal/audit"
 	"novapanel/internal/jobs"
 	"novapanel/internal/rpcerr"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -63,16 +65,24 @@ type AuditFunc func(AuditEvent)
 func (f AuditFunc) Record(e AuditEvent) { f(e) }
 
 type Server struct {
-	Agent             *agent.Agent
-	WebUID            uint32
-	Registry          map[string]Verb
-	Sessions          SessionResolver
-	Audit             AuditSink
+	Agent    *agent.Agent
+	WebUID   uint32
+	Registry map[string]Verb
+	Sessions SessionResolver
+	Audit    AuditSink
+	// DurableAudit propagates persistent audit failures. Legacy Audit is an observer.
+	DurableAudit      func(AuditEvent) error
 	DefaultDeadlineMs int
 }
 
 func NewServer(a *agent.Agent) *Server {
-	return &Server{Agent: a, WebUID: ^uint32(0), Registry: Registry, Sessions: closedSessions{}, Audit: AuditFunc(func(AuditEvent) {}), DefaultDeadlineMs: 120000}
+	s := &Server{Agent: a, WebUID: ^uint32(0), Registry: Registry, Sessions: closedSessions{}, Audit: AuditFunc(func(AuditEvent) {}), DefaultDeadlineMs: 120000}
+	if a.Audit != nil {
+		s.DurableAudit = func(e AuditEvent) error {
+			return a.Audit.Record(audit.Event{Actor: e.Actor, Role: e.Role, Verb: e.Verb, ObjectKey: e.ObjectKey, Outcome: auditOutcome(e.Outcome), Code: e.Code, Detail: map[string]any{"stage": e.Outcome}})
+		}
+	}
+	return s
 }
 func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	caller := CallerFrom(ctx)
@@ -91,6 +101,12 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 				event.Outcome = "error"
 			}
 		}
+		if s.DurableAudit != nil {
+			if err := s.DurableAudit(event); err != nil {
+				reply = Err("agent_error", "Durable audit unavailable")
+				reply.ID = req.ID
+			}
+		}
 		if s.Audit != nil {
 			s.Audit.Record(event)
 		}
@@ -99,10 +115,11 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	if !ok {
 		return Err("unknown_verb", "Unknown verb")
 	}
-	// Phase 0 has no modules, queue or durable audit prerequisites. Never
-	// invoke a future handler merely because it was added to the registry.
-	if v.Module != "" || v.Slow || v.Effectful {
-		return Err("unsupported", "Unavailable in this phase")
+	if v.Module != "" {
+		return Err("unsupported", "Unavailable module")
+	}
+	if (v.Slow || v.Effectful) && (s.Agent.Jobs == nil || s.DurableAudit == nil) {
+		return Err("unsupported", "Job queue unavailable")
 	}
 	if !object(req.Args) {
 		return Err("bad_request", "Object args required")
@@ -120,6 +137,9 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 		caller = resolved
 	}
 	event.Role = caller.Role
+	if strings.HasPrefix(v.Name, "schedule.") && caller.Role != "owner" {
+		return Err("forbidden", "Schedule owner required")
+	}
 	if v.Internal && (caller.Peer != s.WebUID || caller.Peer == 0) {
 		return Err("forbidden", "Forbidden")
 	}
@@ -173,6 +193,18 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(ms)*time.Millisecond)
 	defer cancel()
+	if !v.ReadOnly && s.DurableAudit != nil {
+		pre := event
+		pre.Outcome = "authorized"
+		if err := s.DurableAudit(pre); err != nil {
+			return Err("agent_error", "Durable audit unavailable")
+		}
+	}
+	createdBy := caller.UserID
+	if caller.Role == "owner" && caller.Peer == 0 && caller.UserID == "" {
+		createdBy = "root@local"
+	}
+	ctx = jobs.WithMetadata(ctx, jobs.Metadata{Actor: caller.Actor, Role: caller.Role, CreatedBy: createdBy, Scopes: caller.Scopes, Effectful: v.Effectful})
 	data, err := v.Run(ctx, s.Agent, args)
 	if ctx.Err() != nil {
 		return Err("deadline_exceeded", "Deadline exceeded")

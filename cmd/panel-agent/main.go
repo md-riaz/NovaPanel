@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,9 +16,11 @@ import (
 	_ "novapanel/internal/verbs"
 	"os"
 	"os/signal"
+	"path/filepath"
 )
 
 var geteuid = os.Geteuid
+var commandRunner exec.Runner = exec.Real{}
 
 func listenSocket(path string, gid uint32) (*net.UnixListener, error) {
 	// Refuse stale sockets too. Never unlink a path that another agent may own.
@@ -40,7 +43,7 @@ func listenSocket(path string, gid uint32) (*net.UnixListener, error) {
 	}
 	return l, nil
 }
-func run(args []string) error {
+func run(args []string) (runErr error) {
 	if geteuid() != 0 {
 		return fmt.Errorf("panel-agent must run as root")
 	}
@@ -84,13 +87,32 @@ func run(args []string) error {
 		}
 		cfg.WebGID = uint32(*webGID)
 	}
+	if err = os.MkdirAll(filepath.Dir(cfg.SocketPath), 0755); err != nil {
+		return err
+	}
+	lock, err := lockInstance(filepath.Join(filepath.Dir(cfg.SocketPath), "agent.pid"))
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	a := agent.NewWithDependencies(cfg, commandRunner, &validate.V{})
+	cleanup, err := a.OpenState(context.Background())
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 	l, err := listenSocket(cfg.SocketPath, cfg.WebGID)
 	if err != nil {
 		return err
 	}
 	defer l.Close()
-	a := agent.NewWithDependencies(cfg, exec.Real{}, &validate.V{})
 	s := rpc.NewServer(a)
+	s.ConfigureJobs()
+	workCtx, cancelWorkers := context.WithCancel(context.Background())
+	workerErrors := make(chan error, 2)
+	go func() { workerErrors <- a.Jobs.Run(workCtx) }()
+	go func() { workerErrors <- a.Scheduler.Run(workCtx) }()
+	defer func() { cancelWorkers(); runErr = errors.Join(runErr, <-workerErrors, <-workerErrors) }()
 	s.WebUID = cfg.WebUID
 	s.DefaultDeadlineMs = cfg.DeadlineDefaultMs
 	sig := make(chan os.Signal, 1)
@@ -101,6 +123,12 @@ func run(args []string) error {
 	go func() {
 		select {
 		case <-sig:
+			cancelWorkers()
+			_ = l.Close()
+		case err := <-workerErrors:
+			// Preserve the error for shutdown collection and stop serving immediately.
+			workerErrors <- err
+			cancelWorkers()
 			_ = l.Close()
 		case <-done:
 		}

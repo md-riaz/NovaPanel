@@ -2,8 +2,12 @@
 package agent
 
 import (
+	"novapanel/internal/audit"
 	"novapanel/internal/config"
 	"novapanel/internal/exec"
+	"novapanel/internal/jobs"
+	"novapanel/internal/secret"
+	"novapanel/internal/store"
 	"novapanel/internal/validate"
 	"time"
 )
@@ -14,11 +18,16 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Agent struct {
-	Cfg      config.Config
-	Exec     exec.Runner
-	Validate *validate.V
-	Clock    Clock
-	Started  int64
+	Jobs      *jobs.Queue
+	Scheduler *jobs.Scheduler
+	Store     *store.Store
+	Secret    *secret.Sealer
+	Audit     *audit.Log
+	Cfg       config.Config
+	Exec      exec.Runner
+	Validate  *validate.V
+	Clock     Clock
+	Started   int64
 }
 
 func New() *Agent { return NewWithDependencies(config.Defaults(), exec.Real{}, &validate.V{}) }

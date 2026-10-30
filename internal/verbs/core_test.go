@@ -10,8 +10,14 @@ import (
 )
 
 func TestSeedVerbs(t *testing.T) {
-	if len(rpc.Registry) != 2 {
-		t.Fatalf("want exactly seed verbs, got %d", len(rpc.Registry))
+	expected := []string{"ping", "agent.info", "service.status", "service.restart", "job.status", "job.list", "job.claim", "reconcile", "schedule.list", "schedule.set", "schedule.enable", "schedule.disable"}
+	if len(rpc.Registry) != len(expected) {
+		t.Fatalf("Phase 1 allowlist mismatch: %d", len(rpc.Registry))
+	}
+	for _, name := range expected {
+		if _, ok := rpc.Registry[name]; !ok {
+			t.Fatalf("missing verb %s", name)
+		}
 	}
 	s := rpc.NewServer(agent.New())
 	for _, verb := range []string{"ping", "agent.info"} {
