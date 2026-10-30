@@ -372,6 +372,26 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 	if count() != n || l.reloads != before {
 		t.Fatal("manual certificate auto-renewed")
 	}
+	// A real nginx validation failure must terminate through Queue.Run and audit
+	// error without a reload, rather than bypassing the executor with a fake error.
+	l.invalid = true
+	failed := enqueue("site.update", map[string]any{"site_id": sid, "maintenance": true}, key)
+	all = all[:len(all)-1]
+	until := time.Now().Add(10 * time.Second)
+	for time.Now().Before(until) {
+		got, e := st.GetJob(ctx, failed.ID)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if got.State == "failed" {
+			failed = got
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if failed.State != "failed" || failed.Code != "agent_error" {
+		t.Fatal("missing executor failure", failed.State, failed.Code)
+	}
 	run("domain.remove", map[string]any{"domain_id": ds[0].ID}, key)
 	run("site.delete", map[string]any{"site_id": sid, "purge_files": false}, key)
 	if _, err = st.SiteByID(ctx, sid); err != sql.ErrNoRows {
@@ -412,6 +432,17 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 		if en != 1 || ex != 1 {
 			t.Fatalf("%s audit enqueue=%d exec=%d", job.Verb, en, ex)
 		}
+	}
+	failureEvents := 0
+	for _, ev := range events {
+		var d map[string]any
+		json.Unmarshal(ev.Detail, &d)
+		if d["job_id"] == failed.ID && d["stage"] == "exec" && ev.Outcome == "error" && ev.Code == "agent_error" && ev.Actor == failed.Actor && ev.Role == failed.Role {
+			failureEvents++
+		}
+	}
+	if failureEvents != 1 {
+		t.Fatal("missing terminal failure audit", failureEvents)
 	}
 	autoSuccess := 0
 	for _, ev := range events {
