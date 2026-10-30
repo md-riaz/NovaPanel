@@ -36,7 +36,7 @@ func (s *Store) UpdateSite(ctx context.Context, id string, p SitePatch) error {
 			if err := tx.QueryRowContext(ctx, "SELECT count(*),COALESCE(sum(is_primary),0),COALESCE(sum(id=?),0),COALESCE(sum(cert_state!='none'),0) FROM domains WHERE site_id=?", *p.PrimaryDomainID, id).Scan(&count, &primaries, &targets, &covered); err != nil {
 				return err
 			}
-			if status != "active" || count < 1 || primaries != 1 || targets != 1 || source != "none" || force || hsts != 0 || covered != 0 {
+			if status != "active" || count < 1 || primaries != 1 || targets != 1 {
 				return ErrSitePrecondition
 			}
 			var primary string
@@ -44,6 +44,9 @@ func (s *Store) UpdateSite(ctx context.Context, id string, p SitePatch) error {
 				return err
 			}
 			if primary != *p.PrimaryDomainID {
+				if source != "none" || force || hsts != 0 || covered != 0 {
+					return ErrSitePrecondition
+				}
 				if _, err := tx.ExecContext(ctx, "UPDATE domains SET is_primary=(id=?) WHERE site_id=?", *p.PrimaryDomainID, id); err != nil {
 					return err
 				}

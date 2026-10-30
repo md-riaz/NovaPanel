@@ -49,6 +49,7 @@ func TestPrimaryPromotion(t *testing.T) {
 			case "inactive":
 				s.SetSiteStatus(ctx, "s", "deleting")
 			case "tls":
+				id = "d" // A real change is held; same-primary remains a no-op.
 				s.db.ExecContext(ctx, "UPDATE sites SET cert_source='manual' WHERE id='s'")
 			case "zero":
 				s.db.ExecContext(ctx, "UPDATE domains SET is_primary=0")

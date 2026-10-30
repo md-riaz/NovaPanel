@@ -11,9 +11,11 @@ import (
 	"novapanel/internal/render/nginx"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
+	certs "novapanel/internal/tls"
 	"novapanel/internal/validate"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type siteUpdateArgs struct {
@@ -98,7 +100,7 @@ func init() {
 	rpc.Register(rpc.Verb{Name: "redirect.remove", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, NewArgs: func() any { return &childRemoveArgs{} }, ObjectKey: func(v any) string { return "site:" + v.(*childRemoveArgs).SiteID }, Run: redirectRemove, Exec: redirectRemoveExec})
 }
 
-// The HTTP renderer must never overwrite an installed TLS configuration.
+// Site mutations retain installed TLS and refuse unresolved publication recovery.
 type siteMutationState struct{ a *agent.Agent }
 
 func (m siteMutationState) mutableSite(ctx context.Context, sid string) (store.Site, error) {
@@ -115,19 +117,61 @@ func (m siteMutationState) mutableSite(ctx context.Context, sid string) (store.S
 	if s.Status != "active" {
 		return s, rpc.Errf("precondition_failed", "Site must be active")
 	}
-	if s.CertSource != "none" || s.ForceHTTPS || s.HSTSMaxAge != 0 {
-		return s, rpc.Errf("precondition_failed", "TLS-aware rendering is required")
-	}
-	ds, e := a.Store.ListDomains(ctx, sid)
-	if e != nil {
-		return s, e
-	}
-	for _, d := range ds {
-		if d.CertState != "none" {
-			return s, rpc.Errf("precondition_failed", "TLS-aware rendering is required")
+	if s.CertSource != "none" {
+		ds, err := a.Store.ListDomains(ctx, sid)
+		if err != nil {
+			return s, err
+		}
+		_, primary := sslNames(ds)
+		if _, err = nginx.LoadTLS(a.Cfg.TLSDir, primary, tlsStaging(ds), time.UnixMilli(a.Now())); err != nil {
+			return s, rpc.Errf("precondition_failed", "A valid installed certificate is required")
 		}
 	}
 	return s, nil
+}
+
+func tlsStaging(ds []store.Domain) bool {
+	for _, d := range ds {
+		if d.CertStaging {
+			return true
+		}
+	}
+	return false
+}
+
+// Initial enable requires full actual coverage; later uncovered aliases stay HTTP.
+func (m siteMutationState) updatePolicy(ctx context.Context, v siteUpdateArgs) error {
+	s, err := m.a.Store.SiteByID(ctx, v.SiteID)
+	if err != nil {
+		return err
+	}
+	ds, err := m.a.Store.ListDomains(ctx, v.SiteID)
+	if err != nil {
+		return err
+	}
+	force, age := s.ForceHTTPS, s.HSTSMaxAge
+	if v.ForceHTTPS != nil {
+		force = *v.ForceHTTPS
+	}
+	if v.HSTSMaxAge != nil {
+		age = *v.HSTSMaxAge
+	}
+	if age > 0 && !force {
+		return rpc.Errf("precondition_failed", "HSTS requires forced HTTPS")
+	}
+	if force {
+		names, primary := sslNames(ds)
+		if s.CertSource == "none" || tlsStaging(ds) {
+			return rpc.Errf("precondition_failed", "A production certificate is required")
+		}
+		if s.ForceHTTPS {
+			names = []string{primary}
+		}
+		if _, err = certs.Load(m.a.Cfg.TLSDir, primary, names, time.UnixMilli(m.a.Now())); err != nil {
+			return rpc.Errf("precondition_failed", "A valid covering installed certificate is required")
+		}
+	}
+	return nil
 }
 func (m siteMutationState) primaryTarget(ctx context.Context, sid string, target *string) error {
 	if target == nil {
@@ -149,6 +193,15 @@ func (m siteMutationState) primaryTarget(ctx context.Context, sid string, target
 	if len(ds) == 0 || primaries != 1 || !found {
 		return rpc.Errf("precondition_failed", "Primary domain must be an existing same-site domain with exactly one current primary")
 	}
+	site, err := m.a.Store.SiteByID(ctx, sid)
+	if err != nil {
+		return err
+	}
+	for _, d := range ds {
+		if d.IsPrimary && d.ID != *target && site.CertSource != "none" {
+			return rpc.Errf("precondition_failed", "TLS primary promotion requires a re-key recovery journal")
+		}
+	}
 	return nil
 }
 func siteUpdate(ctx context.Context, a *agent.Agent, args any) (any, error) {
@@ -159,8 +212,8 @@ func siteUpdate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	if v.HSTSMaxAge != nil && rpc.CallerFrom(ctx).Role != "owner" {
 		return nil, rpc.Errf("forbidden", "Only an owner may set HSTS")
 	}
-	if v.ForceHTTPS != nil && *v.ForceHTTPS || v.HSTSMaxAge != nil && *v.HSTSMaxAge != 0 {
-		return nil, rpc.Errf("precondition_failed", "A valid installed certificate is required")
+	if e := (siteMutationState{a}).updatePolicy(ctx, *v); e != nil {
+		return nil, e
 	}
 	if e := (siteMutationState{a}).primaryTarget(ctx, v.SiteID, v.PrimaryDomainID); e != nil {
 		return nil, e
@@ -178,8 +231,8 @@ func siteUpdateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if _, e := (siteMutationState{a}).mutableSite(ctx, v.SiteID); e != nil {
 		return e
 	}
-	if v.ForceHTTPS != nil && *v.ForceHTTPS || v.HSTSMaxAge != nil && *v.HSTSMaxAge != 0 {
-		return rpc.Errf("precondition_failed", "A valid installed certificate is required")
+	if e := (siteMutationState{a}).updatePolicy(ctx, v); e != nil {
+		return e
 	}
 	if v.HSTSMaxAge != nil && j.Role != "owner" {
 		return rpc.Errf("forbidden", "Only an owner may set HSTS")
@@ -383,7 +436,14 @@ func (m siteMutationState) applySite(ctx context.Context, sid string, j *jobs.Jo
 	if e != nil {
 		return e
 	}
-	d := nginx.Desired{Name: s.Name, Docroot: s.Docroot, ACMERoot: filepath.Join(a.Cfg.ACMEWebroot, s.Name), Maintenance: s.Maintenance}
+	d := nginx.Desired{Name: s.Name, Docroot: s.Docroot, ACMERoot: filepath.Join(a.Cfg.ACMEWebroot, s.Name), Maintenance: s.Maintenance, ForceHTTPS: s.ForceHTTPS, HSTSMaxAge: s.HSTSMaxAge}
+	if s.CertSource != "none" {
+		_, primary := sslNames(ds)
+		d.TLS, e = nginx.LoadTLS(a.Cfg.TLSDir, primary, tlsStaging(ds), time.UnixMilli(a.Now()))
+		if e != nil {
+			return e
+		}
+	}
 	for _, v := range ds {
 		d.Domains = append(d.Domains, v.FQDN)
 	}
