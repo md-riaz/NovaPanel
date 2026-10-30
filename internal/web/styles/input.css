@@ -1,0 +1,25 @@
+/* Tailwind 4.1.18 static build. Layout and palette follow the approved prototype. */
+@import "tailwindcss";
+@source "../templates/*.html";
+@layer base {
+ :root {color-scheme:light dark;--bg:#f5f6fb;--surface:#fff;--fg:#191b27;--muted:#676c82;--border:#e4e6f1;--accent:#5b3df5}
+ body {margin:0;background:var(--bg);color:var(--fg);font-family:ui-sans-serif,system-ui,sans-serif;line-height:1.5}
+ a {color:var(--accent)}
+ h1 {font-size:1.5rem;font-weight:800} h2 {font-size:1.1rem;font-weight:700}
+ label {display:block;margin-block:1rem} input {display:block;width:100%;border:1px solid var(--border);border-radius:10px;padding:.65rem;background:var(--bg)}
+ button {border-radius:10px;background:var(--accent);color:white;padding:.65rem 1rem;cursor:pointer;margin-block:.5rem}
+ :focus-visible {outline:2px solid var(--accent);outline-offset:3px}
+ pre,code {white-space:pre-wrap;overflow-wrap:anywhere}
+ small {display:block;color:var(--muted);font-size:.75rem}
+}
+@layer components {
+ .app {@apply min-h-screen grid;grid-template-columns:262px 1fr}
+ .sidebar {padding:1.5rem;background:var(--surface);border-right:1px solid var(--border)}
+ .brand {font-size:1.25rem;font-weight:800;text-decoration:none}
+ nav {display:grid;gap:1rem;margin-block:2rem}
+ .content {padding:2rem;max-width:1200px;min-width:0}
+ .grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}
+ .card {background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:1.5rem;margin-block:1rem;max-width:48rem}
+ @media(max-width:700px) {.app,.grid {grid-template-columns:1fr}.content {padding:1rem}.sidebar {border-right:0;border-bottom:1px solid var(--border)}nav {display:flex;margin-block:1rem}}
+ @media(prefers-color-scheme:dark) {:root {--bg:#0c0d14;--surface:#14161f;--fg:#e9eaf3;--muted:#9a9fb6;--border:#262a3a;--accent:#8b79ff}}
+}
