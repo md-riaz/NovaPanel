@@ -223,6 +223,7 @@ CREATE TABLE sites (
   cert_source  TEXT NOT NULL DEFAULT 'none' CHECK (cert_source IN ('none','letsencrypt','manual')),
   ssl_auto     INTEGER NOT NULL DEFAULT 1,  -- Let's Encrypt auto-renew; always ignored for a manual cert
   maintenance  INTEGER NOT NULL DEFAULT 0,
+  status       TEXT NOT NULL DEFAULT 'creating' CHECK (status IN ('creating','active','failed','deleting')),  -- lifecycle (F6); site.list/get return it
   config_hash  TEXT,                  -- hash of the last rendered nginx config (skip-reload compare)
   created      INTEGER NOT NULL,
   updated      INTEGER NOT NULL

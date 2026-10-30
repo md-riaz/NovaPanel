@@ -164,6 +164,20 @@ mfa_at}` where `kind ∈ {anon, user, token}`.
   to `session.start` returns `code:"precondition_failed"` (F3) — that session's CSRF is read via `whoami`,
   not here. The idempotent return does **not** extend the anon session's absolute lifetime; once it
   expires the next `session.start` mints anew.
+- **Anon-mint budget is a global backstop, not per-visitor.** The agent's `session.start` rate limit is
+  keyed by the connecting **peer UID** (F1); the web peer is a **single UID fronting every browser**, so
+  that budget is effectively **global** and must be sized as a high ceiling (config `anon_mint_rps`/
+  `anon_mint_burst`) — a defense-in-depth cap against a flooded or compromised web tier, **never** a
+  per-visitor throttle (keying it low starves all new logins once a handful of visitors arrive).
+  **Per-client** anon-bootstrap throttling is the **web tier's** responsibility (only it sees the client
+  IP), and its token bucket **must cover cookie-less bootstrap** (`GET /login` → `session.start`);
+  skipping the bucket when no cookie is present is a defect. Exhaustion of the agent ceiling returns
+  `rate_limited` (F3); the agent never trusts a client IP/identity the web tier forwards.
+- **Expired-session GC.** Rejecting an expired session on read is **not** enough — the agent **deletes**
+  rows past their deadline (`now > idle_deadline OR now > abs_deadline`) via a bounded, indexed sweep,
+  triggered opportunistically on mint (and/or a periodic F18 task), using the injected clock and
+  **never** touching a live row. Otherwise repeated cookie disposal grows `sessions` without bound.
+  (Revocation remains a row delete; this adds lifetime GC.)
 - **Login** (`session.login{user, password, totp?}`): agent verifies (Argon2id; TOTP if enrolled),
   **mints a new session id** (the anon one is deleted — this is the "rotate on login"), stores
   `kind=user`, sets `mfa_at = now` iff a TOTP/backup code was verified, returns the token. `panel-web`
@@ -249,13 +263,25 @@ jobs(id, verb, args_json, object_key, state, step, attempts, progress, result_js
      created, updated, finished)
 job_events(id, job_id, ts, msg)            -- the streamed progress lines the API exposes
 state ∈ { queued, running, done, failed }
-object_key = the resource a job serializes on (e.g. "site:example.com")
+object_key = the resource a job serializes on (see the site rule below)
 ```
+- **Site-scoped lock key (reconciles F6↔01).** `site.create` keys on **`site:<name>`** (ensure-absent
+  on the new name — the `site_id` does not exist yet); **every other** site-scoped verb keys on
+  **`site:<site_id>`** resolved from persisted state **before enqueue** (a `domain.*`/`redirect.*`/
+  `ssl.*` verb resolves its parent `site_id` first; `domain.remove`/`redirect.remove` look the parent up
+  by the child id). The `site:<name>` entries in 01 are shorthand for this rule. Other domains key on
+  their stable id likewise (`db:<name>`, `zone:<zone>`).
 - `result_json` holds the **non-secret** result (the created resource / a link). A **show-once
   secret** (a generated DB or admin password) is **never** written to `result_json`, the row, or
   audit — it is delivered once via a sealed one-shot: the enqueue reply carries a `claim` token and
   the secret is readable exactly once through `job.claim{job_id, claim}` within a short TTL, then
   destroyed. `code` mirrors the F3 catalog on failure.
+- **Secret job *input* (decided).** A slow verb that takes a **secret input** (e.g. `ssl.upload`'s
+  `key_pem`) **seals it (F12) before the job row is written** — `args_json` holds only the sealed
+  ciphertext (or a sealed-blob reference), **never plaintext**. `Exec` opens it to use it, and the
+  sealed input is destroyed on the job's terminal state. A crash leaves the job `interrupted` (effectful,
+  not blindly re-run) with its sealed input for a retry; plaintext never reaches `args_json`,
+  `result_json`, `job_events`, audit, or web state.
 
 - A slow verb's handler **enqueues a row and returns** `202`-style `{ ok:true, data:{ job } }`
   immediately. The web tier polls `job.status{id}` or `job.list`.
@@ -614,6 +640,7 @@ ssh_port      = 22                    # the never-removable firewall rule (B-D7)
 firewall_window_min = 15              # deadman revert timer default
 update_manifest_url = "https://releases.example/novapanel/stable/manifest.json"  # D2; pubkey is compiled in
 rate_limit_rps = 5   rate_limit_burst = 20     # per-token/per-session token bucket (web tier)
+anon_mint_rps = 20   anon_mint_burst = 100     # agent GLOBAL ceiling on session.start mints (web peer = all browsers); backstop, not per-visitor
 login_max_attempts = 5   login_window_sec = 900   totp_max_attempts = 5
 webhook_body_max_kb = 512             # deploy.hook raw body cap (fits base64 in the 1 MiB frame)
 reauth_window_sec = 300   idle_sec = 600   abs_sec = 43200   deadline_default_ms = 120000

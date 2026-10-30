@@ -48,6 +48,7 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 | `ssl.status` | | RO | ✓ | sites:read | | | | |
 | `php.set` | | A | | sites:write | ✓ | | | `site:<name>` |
 | `php.list` | | RO | ✓ | sites:read | | | | |
+| `redirect.add` / `redirect.remove` | | A | | sites:write | ✓ | | | `site:<site_id>` |
 | `database.create` | | A | | databases:write | ✓ | | | `db:<name>` (show-once pw via claim) |
 | `database.rotate_password` | | A | | databases:write | ✓ | | ✓ | `db:<name>` |
 | `database.delete` | | A | | databases:write | ✓ | | ✓ | `db:<name>` |
