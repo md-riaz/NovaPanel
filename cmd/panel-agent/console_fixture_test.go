@@ -42,10 +42,7 @@ func configureConsoleFixture(t *testing.T, a *agent.Agent) {
 			t.Fatal("console fixture path outside scratch")
 		}
 	}
-	// Match the installer-owned private TLS root; publication refuses absent roots.
-	if err := os.Mkdir(a.Cfg.TLSDir, 0700); err != nil {
-		t.Fatal(err)
-	}
+	// OpenState must provision TLSDir, not this browser fixture.
 	r := consoleRunner{sites: a.Cfg.SitesRoot}
 	a.Exec = r
 	a.ProvisionSite = func(ctx context.Context, name string) error {

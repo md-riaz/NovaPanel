@@ -11,6 +11,20 @@ import (
 	"testing"
 )
 
+func TestReleaseStageIncludesMaintenance(t *testing.T) {
+	output := t.TempDir()
+	cmd := exec.Command("make", "-C", "../..", "release-stage", "OUT="+output)
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("release staging: %v: %s", err, b)
+	}
+	for _, name := range []string{"panel-agent", "panel-web", "novapanelctl", "maintenance.tar"} {
+		info, err := os.Stat(filepath.Join(output, name))
+		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+			t.Fatalf("missing staged artifact %s: %v", name, err)
+		}
+	}
+}
+
 func TestMaintenancePackage(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "maintenance.tar")
 	cmd := exec.Command("python3", "../../tools/package_maintenance.py", output)

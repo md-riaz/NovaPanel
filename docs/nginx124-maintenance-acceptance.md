@@ -29,7 +29,7 @@ The base renderer referenced `/var/www/novapanel/maintenance.html`, but the repo
 
 `tools/package_maintenance.py` stages a tar artifact only. Its entries are root:root, directories `0755`, and the regular page `0644`. `TestMaintenancePackage` reads the generated archive and verifies the exact destination, parent entries, ownership, modes, file type and content. The real nginx test now serves this committed asset instead of an invented maintenance fixture. The specification pins the path and 503 behavior, not exact page wording; the plain wording is an implementation detail.
 
-No installer exists in this slice and none is invented. The release packaging owner must consume this tar or the rootfs asset with those permissions. No archive is extracted into host system paths.
+`make release-stage OUT="$TMPDIR/novapanel-release"` builds panel-agent, panel-web and novapanelctl alongside the maintenance tar, consuming `package-maintenance` in the release staging path. `TestReleaseStageIncludesMaintenance` exercises that build and checks every output. This Phase 3 artifact stage is not an installer or a signed release. No archive is extracted into host system paths. Host installation, systemd and final package delivery remain deferred.
 
 ## Coverage limits
 

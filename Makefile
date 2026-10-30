@@ -3,7 +3,7 @@ GOFMT ?= gofmt
 STATICCHECK ?= staticcheck
 GOVULNCHECK ?= govulncheck
 
-.PHONY: build test lint ci arch integration format-check systemd-verify package-maintenance packaging-test
+.PHONY: build test lint ci arch integration format-check systemd-verify package-maintenance packaging-test release-stage
 build:
 	$(GO) build ./...
 test:
@@ -16,10 +16,17 @@ lint: format-check
 arch:
 	$(GO) test ./internal/rpc -run 'TestArchitecture|TestRegisteredVerbs' -count=1
 	python3 tools/arch/backstop.py
+release-stage:
+	@test -n "$(OUT)" || { printf 'OUT staging directory is required\n'; exit 1; }
+	mkdir -p "$(OUT)"
+	$(GO) build -o "$(OUT)/panel-agent" ./cmd/panel-agent
+	$(GO) build -o "$(OUT)/panel-web" ./cmd/panel-web
+	$(GO) build -o "$(OUT)/novapanelctl" ./cmd/novapanelctl
+	$(MAKE) package-maintenance OUT="$(OUT)/maintenance.tar"
 package-maintenance:
-	python3 tools/package_maintenance.py $(OUT)
+	python3 tools/package_maintenance.py "$(OUT)"
 packaging-test:
-	$(GO) test ./tests/integration -run 'TestPackagingContracts|TestMaintenancePackage' -count=1
+	$(GO) test ./tests/integration -run 'TestPackagingContracts|TestMaintenancePackage|TestReleaseStageIncludesMaintenance' -count=1
 integration:
 	NOVAPANEL_INTEGRATION=1 $(GO) test ./tests/integration -count=1 -v
 systemd-verify:

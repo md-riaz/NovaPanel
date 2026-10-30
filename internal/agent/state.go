@@ -17,6 +17,9 @@ import (
 // OpenState initializes root-held state before the transport accepts requests.
 // The runner is injected so tests never need immutable-file capabilities.
 func (a *Agent) OpenState(ctx context.Context) (func() error, error) {
+	if err := prepareTLSRoot(a.Cfg.TLSDir); err != nil {
+		return nil, err
+	}
 	for _, d := range []struct {
 		p string
 		m os.FileMode
