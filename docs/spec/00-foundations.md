@@ -279,9 +279,12 @@ object_key = the resource a job serializes on (see the site rule below)
 - **Secret job *input* (decided).** A slow verb that takes a **secret input** (e.g. `ssl.upload`'s
   `key_pem`) **seals it (F12) before the job row is written** — `args_json` holds only the sealed
   ciphertext (or a sealed-blob reference), **never plaintext**. `Exec` opens it to use it, and the
-  sealed input is destroyed on the job's terminal state. A crash leaves the job `interrupted` (effectful,
-  not blindly re-run) with its sealed input for a retry; plaintext never reaches `args_json`,
-  `result_json`, `job_events`, audit, or web state.
+  sealed input is destroyed on the job's terminal state (and **retained** while the job is `interrupted`,
+  for the retry). Crash recovery depends on the verb's class: an **effectful** secret-input verb recovers
+  as `interrupted` (not blindly re-run); an **idempotent** one may roll forward (re-run) safely **provided
+  an intent journal prevents a half-applied state** — `ssl.upload` takes this path (installing a
+  user-supplied cert is idempotent, and a TLS intent journal guards the publish step). Either way,
+  plaintext never reaches `args_json`, `result_json`, `job_events`, audit, or web state.
 
 - A slow verb's handler **enqueues a row and returns** `202`-style `{ ok:true, data:{ job } }`
   immediately. The web tier polls `job.status{id}` or `job.list`.
