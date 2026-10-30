@@ -77,7 +77,15 @@ func mfaConfirm(ctx context.Context, a *agent.Agent, v any) (any, error) {
 		return nil, rpc.Errf("agent_error", "MFA unavailable")
 	}
 	defer clear(plain)
-	step, ok := auth.VerifyTOTP(string(plain), v.(*reauthArgs).TOTP, time.UnixMilli(now))
+	var step int64
+	ok, e := a.MFAFailures.Verify(u.ID, now, a.Cfg.TOTPMaxAttempts, int64(a.Cfg.LoginWindowSec)*1000, func() (bool, error) {
+		var valid bool
+		step, valid = auth.VerifyTOTP(string(plain), v.(*reauthArgs).TOTP, time.UnixMilli(now))
+		return valid, nil
+	})
+	if e != nil {
+		return nil, e
+	}
 	if !ok {
 		return nil, authFailure()
 	}
@@ -111,7 +119,7 @@ func mfaDisable(ctx context.Context, a *agent.Agent, v any) (any, error) {
 	if e != nil {
 		return nil, e
 	}
-	if e = verifyMFA(ctx, a.Store, a.Secret, a.Now(), u, v.(*reauthArgs).TOTP); e != nil {
+	if e = verifyMFA(ctx, a.Store, a.Secret, &a.MFAFailures, a.Cfg.TOTPMaxAttempts, int64(a.Cfg.LoginWindowSec)*1000, a.Now(), u, v.(*reauthArgs).TOTP); e != nil {
 		return nil, e
 	}
 	if e = a.Store.DisableMFA(ctx, u.ID, *u.TOTPSecret); e != nil {
