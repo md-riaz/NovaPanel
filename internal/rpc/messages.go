@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"novapanel/internal/agent"
+	"novapanel/internal/audit"
 	"novapanel/internal/jobs"
 	"novapanel/internal/rpcerr"
 	"slices"
@@ -56,7 +57,10 @@ func Register(v Verb) {
 	Registry[v.Name] = v
 }
 
-type AuditEvent struct{ Actor, Role, Verb, ObjectKey, Outcome, Code string }
+type AuditEvent struct {
+	Actor, Role, Verb, ObjectKey, Outcome, Code string
+	Detail                                      map[string]any
+}
 type AuditSink interface{ Record(AuditEvent) }
 type AuditFunc func(AuditEvent)
 
@@ -68,15 +72,23 @@ type Server struct {
 	Registry          map[string]Verb
 	Sessions          SessionResolver
 	Audit             AuditSink
+	DurableAudit      func(AuditEvent) error
 	DefaultDeadlineMs int
 }
 
 func NewServer(a *agent.Agent) *Server {
-	return &Server{Agent: a, WebUID: ^uint32(0), Registry: Registry, Sessions: closedSessions{}, Audit: AuditFunc(func(AuditEvent) {}), DefaultDeadlineMs: 120000}
+	s := &Server{Agent: a, WebUID: ^uint32(0), Registry: Registry, Sessions: closedSessions{}, Audit: AuditFunc(func(AuditEvent) {}), DefaultDeadlineMs: 120000}
+	if a.Audit != nil {
+		s.DurableAudit = func(e AuditEvent) error {
+			return a.Audit.Record(audit.Event{Actor: e.Actor, Role: e.Role, Verb: e.Verb, ObjectKey: e.ObjectKey, Outcome: e.Outcome, Code: e.Code, Detail: e.Detail})
+		}
+	}
+	return s
 }
 func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	caller := CallerFrom(ctx)
-	event := AuditEvent{Actor: req.Actor, Role: caller.Role, Verb: req.Verb}
+	event := AuditEvent{Actor: req.Actor, Role: caller.Role, Verb: req.Verb, Detail: map[string]any{"stage": "authz"}}
+	mutation := false
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("rpc: dispatch panic: %v", r)
@@ -91,6 +103,17 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 				event.Outcome = "error"
 			}
 		}
+		if s.DurableAudit != nil {
+			if err := s.DurableAudit(event); err != nil {
+				// Never log reply data, claim tokens, or sink errors here.
+				log.Print("rpc: completion audit unavailable")
+				// A successful claim has already destroyed its one-shot secret row.
+				if mutation && !(req.Verb == "job.claim" && reply.OK) {
+					reply = Err("agent_error", "Durable audit unavailable")
+					reply.ID = req.ID
+				}
+			}
+		}
 		if s.Audit != nil {
 			s.Audit.Record(event)
 		}
@@ -99,9 +122,9 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	if !ok {
 		return Err("unknown_verb", "Unknown verb")
 	}
-	// Phase 0 has no modules, queue or durable audit prerequisites. Never
-	// invoke a future handler merely because it was added to the registry.
-	if v.Module != "" || v.Slow || v.Effectful {
+	mutation = !v.ReadOnly
+	// Disabled modules and slow verbs without a configured queue stay closed.
+	if v.Module != "" || (v.Effectful && !v.Slow) || (v.Slow && s.Agent.Jobs == nil) {
 		return Err("unsupported", "Unavailable in this phase")
 	}
 	if !object(req.Args) {
@@ -123,7 +146,24 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	if v.Internal && (caller.Peer != s.WebUID || caller.Peer == 0) {
 		return Err("forbidden", "Forbidden")
 	}
-	if caller.Kind == "token" || caller.Role == "token" {
+	ownJob := false
+	if (req.Verb == "job.status" || req.Verb == "job.claim") && s.Agent.Store != nil && callerIdentity(caller) != "" {
+		var target struct {
+			ID    string `json:"id"`
+			JobID string `json:"job_id"`
+		}
+		if json.Unmarshal(req.Args, &target) == nil {
+			id := target.ID
+			if req.Verb == "job.claim" {
+				id = target.JobID
+			}
+			j, err := s.Agent.Store.GetJob(ctx, id)
+			ownJob = err == nil && j.CreatedBy == callerIdentity(caller)
+		}
+	}
+	if ownJob {
+		// Ownership bypasses only the job status/claim role and scope gate.
+	} else if caller.Kind == "token" || caller.Role == "token" {
 		if v.Internal || v.Scope == "" || (!slices.Contains(caller.Scopes, v.Scope) && !slices.Contains(caller.Scopes, "*")) {
 			return Err("forbidden", "Forbidden")
 		}
@@ -132,11 +172,11 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 			return Err("unauthenticated", "Authentication required")
 		}
 		rank, known := map[string]Role{"read_only": ReadOnly, "admin": Admin, "owner": Owner}[caller.Role]
-		if !known || rank < v.MinRole || (rank == ReadOnly && !v.ReadOnly) {
+		if !known || (rank == ReadOnly && !v.ReadOnly) || (rank < v.MinRole && !(rank == ReadOnly && v.ReadOnly)) {
 			return Err("forbidden", "Forbidden")
 		}
 	}
-	if v.MFA && (caller.MFAat <= 0 || s.Agent.Now()-caller.MFAat > 300000) {
+	if v.MFA && !((caller.Kind == "token" || caller.Role == "token") && caller.Automation) && (caller.Kind == "token" || caller.Role == "token" || (caller.Kind != "user" && callerIdentity(caller) != "local-root") || caller.MFAat <= 0 || s.Agent.Now()-caller.MFAat > 300000) {
 		r := Err("forbidden", "Reauthentication required")
 		r.Data = map[string]bool{"reauth_required": true}
 		return r
@@ -146,6 +186,7 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 		caller.Actor = "root@local"
 	}
 	ctx = WithCaller(ctx, caller)
+	ctx = jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: callerIdentity(caller), Actor: caller.Actor, Role: caller.Role, Scopes: caller.Scopes, Automation: caller.Automation, Effectful: v.Effectful})
 	args := v.NewArgs()
 	d := json.NewDecoder(bytes.NewReader(req.Args))
 	d.DisallowUnknownFields()
@@ -173,12 +214,23 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(ms)*time.Millisecond)
 	defer cancel()
+	if mutation && s.DurableAudit != nil {
+		pre := event
+		pre.Outcome = "ok"
+		if err := s.DurableAudit(pre); err != nil {
+			return Err("agent_error", "Durable audit unavailable")
+		}
+	}
+	event.Detail["stage"] = "exec"
 	data, err := v.Run(ctx, s.Agent, args)
 	if ctx.Err() != nil {
 		return Err("deadline_exceeded", "Deadline exceeded")
 	}
 	if err != nil {
 		return errorReply(err)
+	}
+	if req.Verb == "job.claim" {
+		event.Detail["stage"] = "claim"
 	}
 	return OK(data)
 }
@@ -188,7 +240,12 @@ func errorReply(err error) Reply {
 	}
 	var ce *CodedError
 	if errors.As(err, &ce) && validCode(ce.Code) {
-		return Err(ce.Code, ce.Msg)
+		r := Err(ce.Code, ce.Msg)
+		var reauth *reauthError
+		if errors.As(err, &reauth) {
+			r.Data = map[string]bool{"reauth_required": true}
+		}
+		return r
 	}
 	log.Printf("rpc: handler error: %v", err)
 	return Err("agent_error", "Internal agent error")

@@ -6,6 +6,7 @@ import (
 )
 
 type Caller struct {
+	Automation           bool
 	Kind                 string
 	Session, Actor, Role string
 	Scopes               []string
@@ -17,6 +18,15 @@ type callerKey struct{}
 
 func WithCaller(ctx context.Context, c Caller) context.Context {
 	return context.WithValue(ctx, callerKey{}, c)
+}
+func callerIdentity(c Caller) string {
+	if c.Session != "" {
+		return c.Session
+	}
+	if c.Peer == 0 && c.Role == "owner" {
+		return "local-root"
+	}
+	return ""
 }
 func CallerFrom(ctx context.Context) Caller { c, _ := ctx.Value(callerKey{}).(Caller); return c }
 func RootCaller(uid uint32) Caller {

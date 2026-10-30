@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -20,7 +21,7 @@ import (
 var geteuid = os.Geteuid
 
 func listenSocket(path string, gid uint32) (*net.UnixListener, error) {
-	// Refuse stale sockets too. Never unlink a path that another agent may own.
+	// Refuse existing paths here; recovery requires serve's lifetime reservations.
 	if _, err := os.Lstat(path); err == nil {
 		return nil, fmt.Errorf("socket path already exists: %s", path)
 	} else if !os.IsNotExist(err) {
@@ -84,30 +85,92 @@ func run(args []string) error {
 		}
 		cfg.WebGID = uint32(*webGID)
 	}
-	l, err := listenSocket(cfg.SocketPath, cfg.WebGID)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, unix.SIGTERM)
+	defer stop()
+	return serve(ctx, agent.NewWithDependencies(cfg, exec.Real{}, &validate.V{}))
+}
+
+// serve shares the production lifecycle with scratch tests using an injected runner.
+func serve(ctx context.Context, a *agent.Agent) (err error) {
+	cleanup, err := a.OpenState(ctx)
 	if err != nil {
 		return err
 	}
-	defer l.Close()
-	a := agent.NewWithDependencies(cfg, exec.Real{}, &validate.V{})
-	s := rpc.NewServer(a)
-	s.WebUID = cfg.WebUID
-	s.DefaultDeadlineMs = cfg.DeadlineDefaultMs
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, unix.SIGTERM)
-	defer signal.Stop(sig)
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-sig:
-			_ = l.Close()
-		case <-done:
+	var socketPath string
+	var releaseSocket func() error
+	defer func() {
+		err = errors.Join(err, cleanup())
+		if socketPath != "" {
+			err = errors.Join(err, os.Remove(socketPath))
+		}
+		if releaseSocket != nil {
+			err = errors.Join(err, releaseSocket())
 		}
 	}()
-	err = s.Serve(l)
-	if errors.Is(err, net.ErrClosed) {
-		return nil
+	releaseSocket, err = reserveSocket(a.Cfg.SocketPath)
+	if err != nil {
+		return err
+	}
+	if err = recoverSocket(a.Cfg.SocketPath); err != nil {
+		return err
+	}
+	s := rpc.NewServer(a)
+	s.WebUID = a.Cfg.WebUID
+	s.DefaultDeadlineMs = a.Cfg.DeadlineDefaultMs
+	s.ConfigureJobs()
+	l, err := listenSocket(a.Cfg.SocketPath, a.Cfg.WebGID)
+	if err != nil {
+		return err
+	}
+	// Keep the socket pathname reserved until state has drained and unlocked.
+	l.SetUnlinkOnClose(false)
+	socketPath = a.Cfg.SocketPath
+	defer l.Close()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan error, 2)
+	go func() { results <- a.Jobs.Run(ctx) }()
+	go func() { results <- a.Scheduler.Run(ctx) }()
+	serving := make(chan error, 1)
+	go func() { serving <- s.ServeContext(ctx, l) }()
+	served := false
+	consumed := 0
+running:
+	for {
+		select {
+		case e := <-results:
+			consumed++
+			// A worker may stop on sticky audit failure; reads must remain available.
+			if health := a.Audit.Healthy(); health != nil && errors.Is(e, health) {
+				continue
+			}
+			err = e
+			if ctx.Err() != nil && errors.Is(e, context.Canceled) {
+				err = nil
+			}
+			break running
+		case err = <-serving:
+			served = true
+			if errors.Is(err, net.ErrClosed) || errors.Is(err, context.Canceled) {
+				err = nil
+			}
+			break running
+		case <-ctx.Done():
+			break running
+		}
+	}
+	cancel()
+	if !served {
+		<-serving
+	}
+	for consumed < 2 {
+		e := <-results
+		if e != nil && !errors.Is(e, context.Canceled) {
+			if health := a.Audit.Healthy(); health == nil || !errors.Is(e, health) {
+				err = errors.Join(err, e)
+			}
+		}
+		consumed++
 	}
 	return err
 }

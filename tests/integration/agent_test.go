@@ -3,7 +3,6 @@ package integration
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -13,8 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"novapanel/internal/config"
 	runner "novapanel/internal/exec"
 	"novapanel/internal/id"
+	"novapanel/internal/rpc"
 )
 
 func TestScratchAgent(t *testing.T) {
@@ -46,14 +47,27 @@ func TestScratchAgent(t *testing.T) {
 		return text, exit
 	}
 	goBin := "/usr/bin/env" // Resolve Go from PATH without importing os/exec.
-	for _, name := range []string{"panel-agent", "novapanelctl", "panel-web"} {
+	for _, name := range []string{"novapanelctl", "panel-web"} {
 		if text, exit := run(goBin, []string{"go", "build", "-o", filepath.Join(scratch, name), "./cmd/" + name}, runner.RunOpts{Dir: root, Env: os.Environ()}); exit != 0 {
 			t.Fatalf("build %s: %s", name, text)
 		}
 	}
+	// Reuse the production lifecycle with its test-only injected runner, never exec.Real.
+	if text, exit := run(goBin, []string{"go", "test", "-c", "-o", filepath.Join(scratch, "panel-agent.test"), "./cmd/panel-agent"}, runner.RunOpts{Dir: root, Env: os.Environ()}); exit != 0 {
+		t.Fatalf("build safe daemon: %s", text)
+	}
 	socket := filepath.Join(scratch, "agent.sock")
-	config := filepath.Join(scratch, "agent.toml")
-	if err := os.WriteFile(config, []byte(fmt.Sprintf("socket_path = %q\nweb_user = \"nobody\"\n", socket)), 0600); err != nil {
+	cfg := config.Defaults()
+	cfg.SocketPath = socket
+	cfg.DBPath = filepath.Join(scratch, "state", "panel.db")
+	cfg.SealKeyPath = filepath.Join(scratch, "state", "seal.key")
+	cfg.LogDir = filepath.Join(scratch, "log")
+	cfg.ACMEWebroot = filepath.Join(scratch, "acme")
+	cfg.SitesRoot = filepath.Join(scratch, "sites")
+	cfg.TLSDir = filepath.Join(scratch, "tls")
+	cfg.WebUID, cfg.WebGID = 65534, 65534
+	encodedConfig, err := json.Marshal(cfg)
+	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -66,7 +80,7 @@ func TestScratchAgent(t *testing.T) {
 	done := make(chan result, 1)
 	start := func() {
 		go func() {
-			out, stderr, exit, err := (runner.Real{}).Run(ctx, filepath.Join(scratch, "panel-agent"), []string{"--config", config}, runner.RunOpts{Dir: scratch, Env: os.Environ()})
+			out, stderr, exit, err := (runner.Real{}).Run(ctx, filepath.Join(scratch, "panel-agent.test"), []string{"-test.run=^TestSafeDaemonHelper$"}, runner.RunOpts{Dir: scratch, Env: append(os.Environ(), "NOVAPANEL_SAFE_HELPER=1", "NOVAPANEL_SAFE_CONFIG="+string(encodedConfig))})
 			done <- result{string(out) + string(stderr), exit, err}
 		}()
 	}
@@ -144,7 +158,55 @@ except (ConnectionResetError,BrokenPipeError): print("PEER_CLOSED")
 			t.Fatalf("uid=%s %s: exit=%d %s", tc.uid, tc.verb, exit, text)
 		}
 	}
-	t.Log("real binaries: root ping/info accepted; root web refused; web ping accepted and owner info denied; disallowed uid connected through filesystem then rejected by SO_PEERCRED")
+	text, exit := run(filepath.Join(scratch, "novapanelctl"), []string{"--socket", socket, "service.status", "nginx"}, runner.RunOpts{Dir: scratch})
+	var status struct {
+		OK   bool
+		Data struct {
+			Unit            string
+			Active, Enabled bool
+			State           string
+		}
+	}
+	if err := json.Unmarshal([]byte(text), &status); err != nil || exit != 0 || !status.OK || status.Data.Unit != "nginx.service" || !status.Data.Active || !status.Data.Enabled || status.Data.State != "active" {
+		t.Fatalf("service.status: exit=%d %s", exit, text)
+	}
+	for _, unit := range []string{"unlisted.service", "../nginx.service"} {
+		text, exit := run(filepath.Join(scratch, "novapanelctl"), []string{"--socket", socket, "service.status", unit}, runner.RunOpts{Dir: scratch})
+		if exit == 0 || !strings.Contains(text, `"code":"invalid_argument"`) {
+			t.Fatalf("invalid unit %q: exit=%d %s", unit, exit, text)
+		}
+	}
+	text, exit = run(filepath.Join(scratch, "novapanelctl"), []string{"--socket", socket, "service.restart", "nginx"}, runner.RunOpts{Dir: scratch})
+	var enqueued struct {
+		OK   bool
+		Data struct{ Job struct{ ID string } }
+	}
+	if err := json.Unmarshal([]byte(text), &enqueued); err != nil || exit != 0 || !enqueued.OK || !id.Valid(enqueued.Data.Job.ID) {
+		t.Fatalf("service.restart enqueue: exit=%d %s", exit, text)
+	}
+	client, err := rpc.Dial(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		reply, err := client.Call(context.Background(), "job.status", map[string]string{"id": enqueued.Data.Job.ID}, "")
+		raw, _ := json.Marshal(reply.Data)
+		var job struct{ State string }
+		if err != nil || json.Unmarshal(raw, &job) != nil {
+			t.Fatalf("job.status: %+v %v", reply, err)
+		}
+		if job.State == "done" {
+			break
+		}
+		if job.State == "failed" || time.Now().After(deadline) {
+			t.Fatalf("restart did not complete: %s", raw)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	client.Close()
+	t.Log("safe injected daemon: root ping/info/status and restart job accepted; invalid units refused; root web refused; web ping accepted and owner info denied; disallowed uid rejected by SO_PEERCRED")
 	stop := func() {
 		t.Helper()
 		// Identify only the process serving our scratch socket, not a host service.
