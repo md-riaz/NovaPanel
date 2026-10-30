@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {JSDOM} = require('jsdom');
-const dom = new JSDOM('<main id="main" data-csrf="expected"><div id="enrollment-qr" data-uri="otpauth://totp/Panel?secret=ABCDEFGHIJKLMNOP"></div></main>', {runScripts:'outside-only',url:'https://panel.example'});
+const dom = new JSDOM('<main id="main" data-csrf="expected"><div id="enrollment-qr" data-enrollment="otpauth://totp/Panel?secret=ABCDEFGHIJKLMNOP"></div></main>', {runScripts:'outside-only',url:'https://panel.example'});
 dom.window.eval(fs.readFileSync('internal/web/assets/qrcode.js','utf8'));
 dom.window.eval(fs.readFileSync('internal/web/assets/app.js','utf8'));
 const event = new dom.window.CustomEvent('htmx:configRequest',{detail:{headers:{}}});
@@ -29,5 +29,5 @@ for (const match of svg.querySelector('path').getAttribute('d').matchAll(/M(\d+)
 }
 const decoded = jsQR(pixels, width, width);
 assert.ok(decoded, 'independent QR decoder rejected enrollment SVG');
-assert.equal(decoded.data, dom.window.document.getElementById('enrollment-qr').dataset.uri);
+assert.equal(decoded.data, dom.window.document.getElementById('enrollment-qr').dataset.enrollment);
 console.log('CSRF event, local SVG QR, and independent jsQR decode passed');

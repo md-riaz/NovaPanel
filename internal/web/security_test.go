@@ -184,6 +184,9 @@ func TestMFAForwardingShowOnce(t *testing.T) {
 			if w.Code != 200 || !strings.Contains(w.Body.String(), tc.text) {
 				t.Fatalf("%d %s", w.Code, w.Body.String())
 			}
+			if tc.verb == "mfa.enroll" && strings.Contains(w.Body.String(), "#ZgotmplZ") {
+				t.Fatal("enrollment QR payload was filtered as a navigation URL")
+			}
 			if strings.Contains(fmt.Sprint(f.rpcCalls), "someone-else") {
 				t.Fatal("cross-user parameter forwarded")
 			}

@@ -50,7 +50,7 @@ function totp(secret) {
   await page.goto(origin+'/mfa');
   const enroll = await submit('form[action="/mfa/enroll"]'); assert.equal(enroll.status(),200);
   await page.locator('#enrollment-qr svg path').waitFor();
-  const uri = await page.locator('#enrollment-qr').getAttribute('data-uri'); const secret = new URL(uri).searchParams.get('secret');
+  const uri = await page.locator('#enrollment-qr').getAttribute('data-enrollment'); const secret = new URL(uri).searchParams.get('secret');
   await page.locator('form[action="/mfa/confirm"] [name=totp]').fill(totp(secret));
   assert.equal((await submit('form[action="/mfa/confirm"]')).status(),200);
   await page.locator('li code').first().waitFor(); const backups = await page.locator('li code').allTextContents(); assert(backups.length>=8);

@@ -4,9 +4,9 @@ document.addEventListener('htmx:configRequest', function (event) {
 });
 function renderEnrollmentQR() {
   const target = document.getElementById('enrollment-qr');
-  if (!target || !target.dataset.uri || typeof qrcode !== 'function') return;
+  if (!target || !target.dataset.enrollment || typeof qrcode !== 'function') return;
   const qr = qrcode(0, 'M');
-  qr.addData(target.dataset.uri);
+  qr.addData(target.dataset.enrollment);
   qr.make();
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   const size = qr.getModuleCount();
