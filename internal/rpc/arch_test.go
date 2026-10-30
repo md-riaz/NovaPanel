@@ -34,7 +34,7 @@ func TestRegisteredVerbs(t *testing.T) {
 	if len(rpc.Registry) == 0 {
 		t.Fatal("empty built registry: seed verbs were not imported")
 	}
-	expected := []string{"ping", "agent.info", "service.status", "service.restart", "job.status", "job.list", "job.claim", "reconcile", "schedule.list", "schedule.set", "schedule.enable", "schedule.disable", "session.start", "session.login", "session.logout", "session.whoami", "session.reauth", "mfa.enroll", "mfa.confirm", "mfa.disable", "user.create", "user.update", "user.delete", "user.set_password", "user.list", "tokens.create", "tokens.list", "tokens.revoke", "site.list", "site.get", "site.create", "site.update", "site.delete", "domain.add", "domain.remove", "redirect.add", "redirect.remove", "ssl.status", "ssl.auto_set", "ssl.upload"}
+	expected := []string{"ping", "agent.info", "service.status", "service.restart", "job.status", "job.list", "job.claim", "reconcile", "schedule.list", "schedule.set", "schedule.enable", "schedule.disable", "session.start", "session.login", "session.logout", "session.whoami", "session.reauth", "mfa.enroll", "mfa.confirm", "mfa.disable", "user.create", "user.update", "user.delete", "user.set_password", "user.list", "tokens.create", "tokens.list", "tokens.revoke", "site.list", "site.get", "site.create", "site.update", "site.delete", "domain.add", "domain.remove", "redirect.add", "redirect.remove", "ssl.status", "ssl.auto_set", "ssl.upload", "ssl.issue", "ssl.renew"}
 	if len(rpc.Registry) != len(expected) {
 		t.Fatalf("Implemented verb allowlist mismatch: %d", len(rpc.Registry))
 	}

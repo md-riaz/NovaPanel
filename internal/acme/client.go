@@ -32,6 +32,7 @@ type Config struct {
 	Sealer               *secret.Sealer
 	SaveAccount          func(AccountRecord) error // Must commit registration before an order.
 	BeforeOrder          func(Order) error         // Required; no permissive default.
+	FailedOrder          func(Order) error         // Durable coordinator charges ambiguous CA failures.
 	TermsOfServiceAgreed bool
 	HTTPClient           *http.Client  // Optional trusted transport/roots, never a web-tier input.
 	Timeout              time.Duration // HTTP/request and lego polling bound; callbacks/sleeps may delay return.
@@ -87,7 +88,7 @@ func (c *Client) Renew(ctx context.Context, domains []string, webroot string, pr
 	return c.obtain(ctx, domains, webroot, previousFullchain)
 }
 
-func (c *Client) obtain(ctx context.Context, domains []string, root string, previous []byte) (*paneltls.Certificate, error) {
+func (c *Client) obtain(ctx context.Context, domains []string, root string, previous []byte) (result *paneltls.Certificate, err error) {
 	if err := checkDomains(domains); err != nil {
 		return nil, err
 	}
@@ -126,6 +127,13 @@ func (c *Client) obtain(ctx context.Context, domains []string, root string, prev
 	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
+	defer func() {
+		if err != nil && c.cfg.FailedOrder != nil {
+			if chargeErr := c.cfg.FailedOrder(Order{Operation: operation, Environment: c.cfg.Environment, Domains: domains}); chargeErr != nil {
+				err = chargeErr
+			}
+		}
+	}()
 	cfg := lego.NewConfig(c.account)
 	cfg.CADirURL = c.cfg.Directory
 	cfg.Certificate.KeyType = certcrypto.EC256
@@ -169,7 +177,7 @@ func (c *Client) obtain(ctx context.Context, domains []string, root string, prev
 		return nil, ErrCA
 	}
 	defer clear(resource.PrivateKey)
-	result, err := paneltls.Validate(resource.Certificate, resource.PrivateKey, domains, time.Now())
+	result, err = paneltls.Validate(resource.Certificate, resource.PrivateKey, domains, time.Now())
 	if err != nil {
 		return nil, ErrCA
 	}

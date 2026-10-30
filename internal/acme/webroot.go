@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"syscall"
+	// Filesystem calls use the existing unix dependency.
 
 	"golang.org/x/sys/unix"
 	"novapanel/internal/rpcerr"
@@ -45,7 +45,7 @@ func NewWebroot(root string, domains []string) (*Webroot, error) {
 	for _, name := range []string{"", ".well-known", "acme-challenge"} {
 		if name != "" {
 			err = unix.Mkdirat(int(current.Fd()), name, 0755)
-			if err != nil && !errors.Is(err, syscall.EEXIST) {
+			if err != nil && !errors.Is(err, unix.EEXIST) {
 				current.Close()
 				return nil, errChallenge
 			}
@@ -57,7 +57,9 @@ func NewWebroot(root string, domains []string) (*Webroot, error) {
 			current = os.NewFile(uintptr(next), name)
 		}
 		st, e := current.Stat()
-		if e != nil || st.Sys().(*syscall.Stat_t).Uid != uint32(os.Geteuid()) || st.Mode().Perm()&0022 != 0 || st.Mode().Perm()&0005 != 0005 {
+		var stat unix.Stat_t
+		statErr := unix.Fstat(int(current.Fd()), &stat)
+		if e != nil || statErr != nil || stat.Uid != uint32(os.Geteuid()) || st.Mode().Perm()&0022 != 0 || st.Mode().Perm()&0005 != 0005 {
 			current.Close()
 			return nil, errChallenge
 		}
@@ -128,7 +130,7 @@ func (p *Webroot) CleanUp(domain, token, keyAuth string) error {
 		delete(entries, domain)
 		return nil
 	}
-	if err := unix.Unlinkat(int(p.dir.Fd()), token, 0); err != nil && !errors.Is(err, syscall.ENOENT) {
+	if err := unix.Unlinkat(int(p.dir.Fd()), token, 0); err != nil && !errors.Is(err, unix.ENOENT) {
 		return errChallenge
 	}
 	delete(p.active, token)
@@ -143,7 +145,7 @@ func (p *Webroot) Close() error {
 	}
 	var result error
 	for token := range p.active {
-		if err := unix.Unlinkat(int(p.dir.Fd()), token, 0); err != nil && !errors.Is(err, syscall.ENOENT) {
+		if err := unix.Unlinkat(int(p.dir.Fd()), token, 0); err != nil && !errors.Is(err, unix.ENOENT) {
 			result = errChallenge
 		}
 	}
