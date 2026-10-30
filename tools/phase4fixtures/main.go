@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"novapanel/internal/database"
+	"novapanel/internal/render/nginx"
 	"novapanel/internal/render/php"
 )
 
@@ -18,10 +19,15 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	site, err := nginx.Render(nginx.Desired{Name: "lab-site", Domains: []string{"lab.invalid"}, Docroot: "/tmp/lab/public", ACMERoot: "/tmp/lab/acme"})
+	if err != nil {
+		panic(err)
+	}
 	if err := json.NewEncoder(os.Stdout).Encode(struct {
+		Nginx  string
 		Pool   string
 		Grants database.Grants
-	}{string(pool), grants}); err != nil {
+	}{string(site), string(pool), grants}); err != nil {
 		panic(err)
 	}
 }
