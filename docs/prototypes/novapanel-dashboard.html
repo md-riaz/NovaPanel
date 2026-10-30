@@ -1,8 +1,11 @@
-<title>NovaPanel Prototype</title>
+<title>NovaPanel Console</title>
 <meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap">
 <style>
 /* Layout: fixed left sidebar + sticky topbar + routed main panel; hPanel-style
-   consolidated nav and a per-site "Manage" card dashboard. Single-VPS scope. */
+   consolidated nav, a per-site "Manage" dashboard, a live Jobs drawer, and a
+   firewall safe-apply (deadman) confirm screen. Single-VPS scope, demo data. */
 :root{
   --bg:#f5f6fb; --surface:#ffffff; --surface-2:#eef0f8; --surface-3:#e7e9f4;
   --border:#e4e6f1; --border-strong:#d3d6e6;
@@ -11,6 +14,7 @@
   --good:#0f9d8f; --good-weak:rgba(15,157,143,.12);
   --warn:#c67908; --warn-weak:rgba(198,121,8,.13);
   --crit:#d93a40; --crit-weak:rgba(217,58,64,.12);
+  --info:#3b6ef5; --info-weak:rgba(59,110,245,.12);
   --shadow:0 1px 2px rgba(22,24,40,.05),0 8px 24px -14px rgba(22,24,40,.25);
   --radius:14px; --radius-sm:10px;
   --ui:"Plus Jakarta Sans",ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
@@ -25,6 +29,7 @@
   --good:#2dd4bf; --good-weak:rgba(45,212,191,.14);
   --warn:#e7a33e; --warn-weak:rgba(231,163,62,.15);
   --crit:#ff6166; --crit-weak:rgba(255,97,102,.15);
+  --info:#6f9bff; --info-weak:rgba(111,155,255,.15);
   --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px -16px rgba(0,0,0,.7);
   color-scheme:dark;
 }}
@@ -36,6 +41,7 @@
   --good:#2dd4bf; --good-weak:rgba(45,212,191,.14);
   --warn:#e7a33e; --warn-weak:rgba(231,163,62,.15);
   --crit:#ff6166; --crit-weak:rgba(255,97,102,.15);
+  --info:#6f9bff; --info-weak:rgba(111,155,255,.15);
   --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px -16px rgba(0,0,0,.7);
   color-scheme:dark;
 }
@@ -47,39 +53,41 @@ h1,h2,h3,h4{margin:0;text-wrap:balance;font-weight:700;letter-spacing:-.01em}
 a{color:inherit;text-decoration:none}
 button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
 svg{display:block}
+.ic{width:16px;height:16px;flex:none}
 .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
 .tnum{font-variant-numeric:tabular-nums}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+@media (prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;transition-duration:.001ms!important}}
 
 /* ---------- app shell ---------- */
-.app{display:grid;grid-template-columns:260px 1fr;min-height:100%}
+.app{display:grid;grid-template-columns:262px 1fr;min-height:100%}
 .sidebar{position:sticky;top:0;align-self:start;height:100vh;height:100dvh;background:var(--surface);
   border-right:1px solid var(--border);display:flex;flex-direction:column;
   padding-top:env(safe-area-inset-top,0px);padding-left:env(safe-area-inset-left,0px);z-index:50}
 .sb-brand{display:flex;align-items:center;gap:10px;padding:16px 16px 12px}
-.logo{width:30px;height:30px;border-radius:9px;background:linear-gradient(145deg,var(--accent),#9b84ff);
+.logo{width:32px;height:32px;border-radius:9px;background:linear-gradient(145deg,var(--accent),#9b84ff);
   display:grid;place-items:center;color:#fff;flex:none;box-shadow:0 4px 12px -4px var(--accent-line)}
 .brand-name{font-weight:800;font-size:16px;letter-spacing:-.02em}
 .brand-sub{font-size:11px;color:var(--faint);font-weight:600;letter-spacing:.02em}
 .server-card{margin:0 12px 10px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);
-  background:var(--surface-2);display:flex;align-items:center;gap:10px;cursor:pointer}
+  background:var(--surface-2);display:flex;align-items:center;gap:10px;cursor:pointer;width:calc(100% - 24px)}
 .server-card:hover{border-color:var(--border-strong)}
-.server-meta{min-width:0}
+.server-meta{min-width:0;text-align:left}
 .server-host{font-weight:700;font-size:13px;display:flex;align-items:center;gap:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .server-ip{font-size:11px;color:var(--muted)}
 .nav{flex:1;overflow-y:auto;padding:4px 12px 16px;min-height:0}
 .nav-group{margin-top:14px}
 .nav-label{font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--faint);padding:0 10px 6px}
 .nav-item{display:flex;align-items:center;gap:11px;padding:8px 10px;border-radius:9px;color:var(--muted);
-  font-weight:600;font-size:13.5px;position:relative}
+  font-weight:600;font-size:13.5px;position:relative;width:100%;text-align:left}
 .nav-item:hover{background:var(--surface-2);color:var(--fg)}
 .nav-item.active{background:var(--accent-weak);color:var(--accent)}
 .nav-item.active::before{content:"";position:absolute;left:-12px;top:50%;transform:translateY(-50%);
   width:3px;height:18px;border-radius:0 3px 3px 0;background:var(--accent)}
 .nav-item .ic{width:18px;height:18px;flex:none}
-.nav-item .pin{margin-left:auto;color:var(--faint);opacity:0;width:15px;height:15px}
-.nav-item:hover .pin{opacity:1}
-.nav-badge{margin-left:auto;font-size:11px;font-weight:700;background:var(--surface-3);color:var(--muted);
-  padding:1px 7px;border-radius:999px}
+.nav-badge{margin-left:auto;font-size:11px;font-weight:700;background:var(--surface-3);color:var(--muted);padding:1px 7px;border-radius:999px}
+.nav-badge.warn{background:var(--warn-weak);color:var(--warn)}
+.nav-badge.crit{background:var(--crit-weak);color:var(--crit)}
 .sb-foot{border-top:1px solid var(--border);padding:12px;display:flex;align-items:center;gap:10px}
 .avatar{width:32px;height:32px;border-radius:50%;background:var(--surface-3);display:grid;place-items:center;
   font-weight:800;color:var(--accent);font-size:13px;flex:none}
@@ -90,23 +98,26 @@ svg{display:block}
 .main{min-width:0;display:flex;flex-direction:column}
 .topbar{position:sticky;top:env(safe-area-inset-top,0px);z-index:40;background:color-mix(in srgb,var(--surface) 86%,transparent);
   backdrop-filter:blur(10px);border-bottom:1px solid var(--border);
-  display:flex;align-items:center;gap:14px;padding:11px max(16px,env(safe-area-inset-right,0px)) 11px max(16px,env(safe-area-inset-left,0px))}
-.hamburger{display:none;width:34px;height:34px;border-radius:9px;border:1px solid var(--border);place-items:center;background:var(--surface)}
-.crumb{display:flex;align-items:center;gap:7px;font-weight:700;font-size:15px;min-width:0}
+  display:flex;align-items:center;gap:12px;padding:11px max(16px,env(safe-area-inset-right,0px)) 11px max(16px,env(safe-area-inset-left,0px))}
+.hamburger{display:none;width:34px;height:34px;border-radius:9px;border:1px solid var(--border);place-items:center;background:var(--surface);flex:none}
+.crumb{display:flex;align-items:center;gap:7px;font-weight:700;font-size:15px;min-width:0;overflow:hidden}
+.crumb a:hover{color:var(--accent)}
 .crumb .sep{color:var(--faint)}
-.crumb .dim{color:var(--muted);font-weight:600}
+.crumb .dim{color:var(--muted);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .search{margin-left:auto;display:flex;align-items:center;gap:8px;background:var(--surface-2);border:1px solid var(--border);
-  border-radius:10px;padding:7px 11px;min-width:180px;max-width:320px;flex:1}
-.search input{border:0;background:none;outline:none;color:var(--fg);width:100%;font-size:13px}
-.search .kbd{font-size:10px;color:var(--faint);border:1px solid var(--border-strong);border-radius:5px;padding:1px 5px;font-weight:700}
+  border-radius:10px;padding:7px 11px;min-width:150px;max-width:300px;flex:1}
+.search input{border:0;background:none;outline:none;color:var(--fg);width:100%;font-size:13px;min-width:0}
+.search .kbd{font-size:10px;color:var(--faint);border:1px solid var(--border-strong);border-radius:5px;padding:1px 5px;font-weight:700;flex:none}
 .tb-btn{width:36px;height:36px;border-radius:10px;border:1px solid var(--border);display:grid;place-items:center;
   background:var(--surface);color:var(--muted);position:relative;flex:none}
 .tb-btn:hover{color:var(--fg);border-color:var(--border-strong)}
-.tb-btn .dot{position:absolute;top:7px;right:8px;width:7px;height:7px;border-radius:50%;background:var(--crit);border:2px solid var(--surface)}
-.content{padding:22px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px));max-width:1180px;width:100%}
+.tb-btn .dot{position:absolute;top:6px;right:7px;min-width:15px;height:15px;padding:0 3px;border-radius:999px;background:var(--accent);
+  color:var(--accent-ink);font-size:9px;font-weight:800;display:grid;place-items:center;border:2px solid var(--surface)}
+.content{padding:22px max(16px,env(safe-area-inset-right,0px)) 48px max(16px,env(safe-area-inset-left,0px));max-width:1200px;width:100%}
 .page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px}
 .page-head h1{font-size:22px;font-weight:800;letter-spacing:-.02em}
-.page-head p{margin:3px 0 0;color:var(--muted);font-size:13.5px}
+.page-head p{margin:4px 0 0;color:var(--muted);font-size:13.5px}
+.head-actions{display:flex;gap:8px;flex-wrap:wrap}
 
 /* buttons */
 .btn{display:inline-flex;align-items:center;gap:8px;padding:9px 14px;border-radius:10px;font-weight:700;font-size:13.5px;
@@ -116,558 +127,850 @@ svg{display:block}
 .btn-primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);box-shadow:0 6px 16px -8px var(--accent-line)}
 .btn-primary:hover{filter:brightness(1.06)}
 .btn-ghost{border-color:transparent;background:var(--surface-2)}
+.btn-danger{background:var(--crit);border-color:var(--crit);color:#fff}
 .btn-sm{padding:6px 11px;font-size:12.5px;border-radius:8px}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
 
 /* cards & grids */
 .grid{display:grid;gap:16px}
 .cards-4{grid-template-columns:repeat(4,1fr)}
 .cards-3{grid-template-columns:repeat(3,1fr)}
 .cards-2{grid-template-columns:repeat(2,1fr)}
+.span-2{grid-column:span 2}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
 .card-pad{padding:16px}
 .card-h{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--border)}
 .card-h h3{font-size:14px;font-weight:700}
-.card-h .more{margin-left:auto;color:var(--muted);font-size:12.5px;font-weight:600}
+.card-h .ic{width:17px;height:17px;color:var(--muted)}
+.card-h .more{margin-left:auto;color:var(--muted);font-size:12.5px;font-weight:600;display:inline-flex;align-items:center;gap:4px}
+.card-h .more:hover{color:var(--accent)}
 
 /* stat tile */
-.tile{padding:15px 16px}
+.tile{padding:15px 16px;display:flex;flex-direction:column;gap:7px}
 .tile .lbl{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12.5px;font-weight:600}
 .tile .lbl .ic{width:16px;height:16px;color:var(--faint)}
-.tile .val{font-size:26px;font-weight:800;letter-spacing:-.02em;margin-top:9px;display:flex;align-items:baseline;gap:5px}
-.tile .val small{font-size:13px;font-weight:600;color:var(--muted)}
-.meter{height:6px;border-radius:999px;background:var(--surface-3);margin-top:12px;overflow:hidden}
-.meter > i{display:block;height:100%;border-radius:999px;background:var(--accent)}
-.meter.good > i{background:var(--good)} .meter.warn > i{background:var(--warn)} .meter.crit > i{background:var(--crit)}
-.tile .sub{margin-top:8px;font-size:11.5px;color:var(--faint)}
+.tile .val{font-size:26px;font-weight:800;letter-spacing:-.02em;line-height:1}
+.tile .sub{font-size:12px;color:var(--muted);font-weight:600;display:flex;align-items:center;gap:5px}
+.tile .trend.up{color:var(--good)} .tile .trend.down{color:var(--crit)}
 
-/* chips / badges */
-.chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;padding:3px 9px;border-radius:999px;
-  background:var(--surface-3);color:var(--muted)}
-.chip .d{width:7px;height:7px;border-radius:50%;background:currentColor}
-.chip.good{background:var(--good-weak);color:var(--good)}
-.chip.warn{background:var(--warn-weak);color:var(--warn)}
-.chip.crit{background:var(--crit-weak);color:var(--crit)}
-.chip.accent{background:var(--accent-weak);color:var(--accent)}
-.type-badge{font-size:11px;font-weight:800;letter-spacing:.02em;padding:2px 8px;border-radius:6px;background:var(--surface-3);color:var(--muted)}
+/* meters */
+.meter{display:flex;flex-direction:column;gap:7px}
+.meter .mt{display:flex;justify-content:space-between;font-size:12.5px;font-weight:600}
+.meter .mt .v{color:var(--muted)}
+.bar{height:8px;border-radius:999px;background:var(--surface-3);overflow:hidden}
+.bar>span{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.bar>span.good{background:var(--good)} .bar>span.warn{background:var(--warn)} .bar>span.crit{background:var(--crit)}
 
-/* service row */
-.svc{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border)}
+/* badges / pills */
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:999px;
+  background:var(--surface-3);color:var(--muted);white-space:nowrap}
+.badge .dt{width:6px;height:6px;border-radius:50%;background:currentColor}
+.badge.good{background:var(--good-weak);color:var(--good)}
+.badge.warn{background:var(--warn-weak);color:var(--warn)}
+.badge.crit{background:var(--crit-weak);color:var(--crit)}
+.badge.info{background:var(--info-weak);color:var(--info)}
+.badge.accent{background:var(--accent-weak);color:var(--accent)}
+.tag{font-size:11px;font-weight:700;padding:2px 7px;border-radius:6px;background:var(--surface-2);color:var(--muted);border:1px solid var(--border)}
+.verb{font-family:var(--mono);font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:6px;
+  background:var(--accent-weak);color:var(--accent);white-space:nowrap;letter-spacing:-.01em}
+.verb::before{content:"⌁ ";opacity:.6}
+.btn .verb{background:rgba(127,127,127,.16)}
+.btn-primary .verb{background:rgba(255,255,255,.22);color:var(--accent-ink)}
+.head-actions .verb{align-self:center}
+
+/* tables */
+.tbl-wrap{overflow-x:auto}
+table.tbl{width:100%;border-collapse:collapse;font-size:13px;min-width:540px}
+table.tbl th{text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);
+  padding:10px 14px;border-bottom:1px solid var(--border);white-space:nowrap}
+table.tbl td{padding:12px 14px;border-bottom:1px solid var(--border);vertical-align:middle}
+table.tbl tr:last-child td{border-bottom:0}
+table.tbl tbody tr:hover{background:var(--surface-2)}
+.row-main{font-weight:700}
+.row-sub{font-size:12px;color:var(--muted)}
+.cell-actions{text-align:right;white-space:nowrap}
+.linklike{color:var(--accent);font-weight:700;cursor:pointer}
+.linklike:hover{text-decoration:underline}
+
+/* site cards */
+.site-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
+.site-card{display:flex;flex-direction:column;cursor:pointer;transition:border-color .12s,transform .12s}
+.site-card:hover{border-color:var(--border-strong);transform:translateY(-2px)}
+.site-top{display:flex;align-items:flex-start;gap:12px;padding:16px 16px 12px}
+.site-fav{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;flex:none;font-weight:800;color:#fff;font-size:15px}
+.site-id .nm{font-weight:800;font-size:15px;display:flex;align-items:center;gap:7px}
+.site-id .ty{font-size:12px;color:var(--muted);font-weight:600;display:flex;align-items:center;gap:6px;margin-top:1px}
+.site-meta{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px;padding:4px 16px 14px}
+.kv .k{font-size:11px;color:var(--faint);font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+.kv .v{font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px}
+.site-foot{margin-top:auto;border-top:1px solid var(--border);padding:11px 16px;display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;font-weight:600}
+.site-foot .btn{margin-left:auto}
+
+/* tabs */
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);overflow-x:auto;margin-bottom:18px}
+.tab{padding:9px 13px;font-weight:700;font-size:13.5px;color:var(--muted);border-bottom:2px solid transparent;white-space:nowrap}
+.tab:hover{color:var(--fg)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+
+/* services strip */
+.svc{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--border)}
 .svc:last-child{border-bottom:0}
-.svc .ic{width:30px;height:30px;border-radius:8px;background:var(--surface-2);display:grid;place-items:center;color:var(--muted);flex:none}
-.svc .nm{font-weight:700;font-size:13.5px}
-.svc .mt{font-size:11.5px;color:var(--muted)}
-.svc .act{margin-left:auto}
+.svc .nm{font-weight:700;font-size:13px}
+.svc .ver{font-size:11.5px;color:var(--muted)}
+.svc .st{margin-left:auto}
 
-/* list rows (todo / jobs) */
-.row{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border)}
-.row:last-child{border-bottom:0}
-.row .ic{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;flex:none}
-.ic-good{background:var(--good-weak);color:var(--good)} .ic-warn{background:var(--warn-weak);color:var(--warn)}
-.ic-crit{background:var(--crit-weak);color:var(--crit)} .ic-run{background:var(--accent-weak);color:var(--accent)}
-.row .tx{min-width:0}
-.row .tx b{font-weight:700;font-size:13.5px}
-.row .tx span{display:block;font-size:12px;color:var(--muted)}
-.row .tm{margin-left:auto;font-size:11.5px;color:var(--faint);white-space:nowrap}
+/* list rows (jobs/audit mini) */
+.lrow{display:flex;align-items:center;gap:11px;padding:11px 14px;border-bottom:1px solid var(--border)}
+.lrow:last-child{border-bottom:0}
+.lrow .li{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;flex:none;background:var(--surface-2);color:var(--muted)}
+.lrow .li.good{background:var(--good-weak);color:var(--good)}.lrow .li.warn{background:var(--warn-weak);color:var(--warn)}
+.lrow .li.crit{background:var(--crit-weak);color:var(--crit)}.lrow .li.info{background:var(--info-weak);color:var(--info)}
+.lrow .lt{min-width:0}
+.lrow .lt .a{font-weight:700;font-size:13px;overflow:hidden;text-overflow:ellipsis}
+.lrow .lt .b{font-size:12px;color:var(--muted)}
+.lrow .lx{margin-left:auto;font-size:11.5px;color:var(--faint);white-space:nowrap;font-weight:600}
 
-/* table */
-.tbl{width:100%;border-collapse:collapse}
-.tbl th{text-align:left;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);
-  padding:11px 16px;border-bottom:1px solid var(--border)}
-.tbl td{padding:13px 16px;border-bottom:1px solid var(--border);font-size:13.5px;vertical-align:middle}
-.tbl tr:last-child td{border-bottom:0}
-.tbl tr:hover td{background:var(--surface-2)}
-.site-cell{display:flex;align-items:center;gap:11px}
-.fav-ic{width:28px;height:28px;border-radius:8px;background:var(--surface-2);display:grid;place-items:center;color:var(--accent);flex:none;font-weight:800}
-.site-cell .nm{font-weight:700} .site-cell .url{font-size:11.5px;color:var(--muted)}
-.rowact{display:flex;gap:7px;justify-content:flex-end}
+/* toggle switch */
+.sw{width:38px;height:22px;border-radius:999px;background:var(--surface-3);position:relative;flex:none;transition:background .15s}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.sw.on{background:var(--accent)} .sw.on::after{left:18px}
 
-/* per-site manage */
-.site-hero{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:6px}
-.site-pick{display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--border-strong);
-  border-radius:11px;padding:9px 13px;font-weight:800;font-size:15px}
-.site-pick .fav-ic{width:26px;height:26px}
-.site-pick .cv{color:var(--faint);width:16px;height:16px}
-.tool-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
-.tool{display:flex;gap:13px;padding:15px;align-items:flex-start;background:var(--surface);border:1px solid var(--border);
-  border-radius:var(--radius);box-shadow:var(--shadow);transition:border-color .12s,transform .12s}
-.tool:hover{border-color:var(--accent-line);transform:translateY(-1px)}
-.tool .ic{width:38px;height:38px;border-radius:10px;background:var(--accent-weak);color:var(--accent);display:grid;place-items:center;flex:none}
-.tool h4{font-size:14px;font-weight:700}
-.tool p{margin:3px 0 0;font-size:12px;color:var(--muted);line-height:1.45}
-.sec-title{font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin:22px 2px 12px}
+/* code / notice */
+.codeblock{font-family:var(--mono);font-size:12px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px;
+  padding:12px 14px;overflow-x:auto;color:var(--fg);white-space:pre}
+.notice{display:flex;gap:11px;padding:13px 15px;border-radius:12px;border:1px solid var(--border);background:var(--surface-2);align-items:flex-start}
+.notice .ic{width:18px;height:18px;flex:none;margin-top:1px}
+.notice.warn{background:var(--warn-weak);border-color:transparent;color:var(--warn)}
+.notice.crit{background:var(--crit-weak);border-color:transparent;color:var(--crit)}
+.notice.good{background:var(--good-weak);border-color:transparent;color:var(--good)}
+.notice.accent{background:var(--accent-weak);border-color:transparent;color:var(--accent)}
+.notice .nt{color:var(--fg)} .notice .nt .nh{font-weight:800;font-size:13.5px} .notice .nt .nb{font-size:12.5px;color:var(--muted);margin-top:2px}
+.notice.warn .nt .nh,.notice.crit .nt .nh,.notice.good .nt .nh,.notice.accent .nt .nh{color:inherit}
 
-/* wizard / modal */
-.overlay{position:fixed;inset:0;z-index:80;background:rgba(14,15,22,.55);backdrop-filter:blur(3px);
-  display:grid;place-items:center;padding:20px}
-.modal{width:min(560px,100%);background:var(--surface);border:1px solid var(--border);border-radius:18px;
-  box-shadow:0 30px 70px -30px rgba(0,0,0,.6);overflow:hidden;max-height:90vh;display:flex;flex-direction:column}
-.modal-h{display:flex;align-items:center;gap:12px;padding:18px 20px;border-bottom:1px solid var(--border)}
-.modal-h h3{font-size:17px;font-weight:800}
-.modal-h .x{margin-left:auto;width:32px;height:32px;border-radius:9px;display:grid;place-items:center;color:var(--muted);border:1px solid var(--border)}
-.steps{display:flex;gap:6px;padding:14px 20px 0}
-.steps i{flex:1;height:4px;border-radius:999px;background:var(--surface-3)}
-.steps i.on{background:var(--accent)}
-.modal-body{padding:16px 20px;overflow-y:auto}
-.step-lbl{font-size:12px;font-weight:700;color:var(--accent);letter-spacing:.04em;text-transform:uppercase}
-.step h4{font-size:18px;margin:5px 0 3px}
-.step .hint{color:var(--muted);font-size:13px;margin:0 0 14px}
-.opt-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.opt{border:1.5px solid var(--border);border-radius:12px;padding:13px;display:flex;gap:11px;align-items:center;cursor:pointer}
-.opt:hover{border-color:var(--border-strong)}
-.opt.sel{border-color:var(--accent);background:var(--accent-weak)}
-.opt .ic{width:34px;height:34px;border-radius:9px;background:var(--surface-2);display:grid;place-items:center;color:var(--accent);flex:none}
-.opt b{font-size:13.5px;font-weight:700} .opt span{font-size:11.5px;color:var(--muted)}
-.field{margin-top:14px}
-.field label{display:block;font-size:12.5px;font-weight:700;margin-bottom:6px}
-.field .inp{display:flex;align-items:center;border:1.5px solid var(--border);border-radius:10px;overflow:hidden;background:var(--surface-2)}
-.field .inp input{flex:1;border:0;background:none;outline:none;padding:10px 12px;color:var(--fg);font-size:14px;font-family:var(--mono)}
-.field .inp .pre{padding:10px 0 10px 12px;color:var(--faint);font-family:var(--mono)}
-.field .inp .suf{padding:10px 12px;color:var(--muted);font-size:12.5px;background:var(--surface-3)}
-.field .help{font-size:11.5px;color:var(--faint);margin-top:6px}
-.review{border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:6px}
-.review .ri{display:flex;justify-content:space-between;padding:11px 14px;border-bottom:1px solid var(--border);font-size:13px}
-.review .ri:last-child{border-bottom:0} .review .ri .k{color:var(--muted)} .review .ri .v{font-weight:700}
-.modal-f{display:flex;align-items:center;gap:10px;padding:16px 20px;border-top:1px solid var(--border)}
-.modal-f .sp{flex:1}
+/* banner */
+.banner{display:flex;align-items:center;gap:13px;padding:13px 16px;border-radius:12px;background:var(--accent-weak);
+  border:1px solid var(--accent-line);margin-bottom:18px}
+.banner .ic{width:20px;height:20px;color:var(--accent);flex:none}
+.banner .bt{min-width:0} .banner .bt .h{font-weight:800;font-size:13.5px} .banner .bt .s{font-size:12.5px;color:var(--muted)}
+.banner .btn{margin-left:auto}
 
-.view{display:none}
-.view.active{display:block}
-.note{font-size:12px;color:var(--faint);display:flex;align-items:center;gap:7px;margin-top:18px;padding:10px 12px;
-  border:1px dashed var(--border-strong);border-radius:10px;background:var(--surface-2)}
+/* progress (jobs) */
+.prog{height:6px;border-radius:999px;background:var(--surface-3);overflow:hidden}
+.prog>span{display:block;height:100%;background:var(--accent);border-radius:999px;transition:width .5s ease}
+@keyframes stripe{to{background-position:22px 0}}
+.prog.run>span{background-image:linear-gradient(135deg,rgba(255,255,255,.25) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.25) 50%,rgba(255,255,255,.25) 75%,transparent 75%);
+  background-size:22px 22px;animation:stripe .7s linear infinite}
 
-@media (max-width:900px){
-  .cards-4{grid-template-columns:repeat(2,1fr)} .tool-grid{grid-template-columns:repeat(2,1fr)}
-  .dash-2{grid-template-columns:1fr !important}
-}
-@media (max-width:720px){
+/* drawer */
+.scrim{position:fixed;inset:0;background:rgba(10,11,20,.5);z-index:70;opacity:0;pointer-events:none;transition:opacity .18s}
+.scrim.show{opacity:1;pointer-events:auto}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(440px,94vw);background:var(--surface);border-left:1px solid var(--border);
+  z-index:80;transform:translateX(100%);transition:transform .22s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;
+  padding-top:env(safe-area-inset-top,0px)}
+.drawer.show{transform:none}
+.drawer-h{display:flex;align-items:center;gap:10px;padding:16px;border-bottom:1px solid var(--border)}
+.drawer-h h3{font-size:15px;font-weight:800}
+.drawer-b{overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:12px}
+.job{border:1px solid var(--border);border-radius:12px;padding:13px 14px;background:var(--surface)}
+.job .jh{display:flex;align-items:center;gap:9px;margin-bottom:9px}
+.job .jv{font-family:var(--mono);font-size:12.5px;font-weight:700}
+.job .jx{margin-left:auto;font-size:11.5px;color:var(--faint);font-weight:600}
+.job .jm{font-size:12px;color:var(--muted);margin-bottom:9px}
+.job .jp{display:flex;align-items:center;gap:9px}
+.job .jp .pct{font-size:11.5px;font-weight:700;color:var(--muted);width:34px;text-align:right;flex:none}
+
+/* modal */
+.modal-b{display:flex;flex-direction:column;gap:14px;padding:18px}
+.modal-card{position:fixed;z-index:80;left:50%;top:50%;transform:translate(-50%,-50%);width:min(520px,94vw);max-height:88vh;overflow:auto;
+  background:var(--surface);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow);display:none;flex-direction:column}
+.modal-card.show{display:flex}
+.modal-h{display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid var(--border)}
+.modal-h h3{font-size:16px;font-weight:800}
+.modal-f{display:flex;gap:10px;justify-content:flex-end;padding:14px 18px;border-top:1px solid var(--border);flex-wrap:wrap}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:12.5px;font-weight:700}
+.field .hint{font-size:11.5px;color:var(--muted)}
+.input,select.input{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--border-strong);background:var(--surface-2);
+  color:var(--fg);font:inherit;font-size:13.5px;outline:none}
+.input:focus{border-color:var(--accent)}
+.seg{display:flex;gap:6px;flex-wrap:wrap}
+.seg .opt{flex:1;min-width:120px;border:1px solid var(--border-strong);border-radius:10px;padding:11px 12px;cursor:pointer;background:var(--surface-2)}
+.seg .opt.sel{border-color:var(--accent);background:var(--accent-weak)}
+.seg .opt .t{font-weight:700;font-size:13px;display:flex;align-items:center;gap:7px}
+.seg .opt .d{font-size:11.5px;color:var(--muted);margin-top:2px}
+.steps{display:flex;gap:6px;align-items:center;font-size:12px;font-weight:700;color:var(--faint);padding:0 18px 0}
+.steps .s.on{color:var(--accent)} .steps .s.done{color:var(--good)}
+.secret{font-family:var(--mono);font-size:13px;background:var(--surface-2);border:1px dashed var(--accent-line);border-radius:10px;
+  padding:12px 14px;word-break:break-all;color:var(--fg)}
+
+/* countdown ring for firewall */
+.countdown{display:flex;align-items:center;gap:14px}
+.ring{width:66px;height:66px;flex:none}
+.ring .bgc{stroke:var(--surface-3)} .ring .fgc{stroke:var(--warn);stroke-linecap:round;transition:stroke-dashoffset 1s linear}
+.ring .cd{font-family:var(--mono);font-weight:700;font-size:15px;fill:var(--fg)}
+
+.empty{text-align:center;color:var(--muted);padding:40px 16px}
+.hr{height:1px;background:var(--border);margin:2px 0}
+.flex{display:flex;align-items:center;gap:10px} .wrap{flex-wrap:wrap} .mla{margin-left:auto} .gap6{gap:6px} .col{flex-direction:column;align-items:stretch}
+
+/* responsive */
+@media (max-width:920px){
   .app{grid-template-columns:1fr}
-  .sidebar{position:fixed;inset:0 auto 0 0;width:270px;transform:translateX(-100%);transition:transform .2s;box-shadow:var(--shadow)}
-  .sidebar.open{transform:none}
-  .scrim{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:45;display:none}
-  .scrim.show{display:block}
+  .sidebar{position:fixed;top:0;left:0;bottom:0;width:276px;transform:translateX(-100%);transition:transform .22s;box-shadow:var(--shadow)}
+  .sidebar.show{transform:none}
   .hamburger{display:grid}
-  .search{min-width:0}
-  .cards-4,.cards-3,.cards-2{grid-template-columns:1fr} .tool-grid{grid-template-columns:1fr}
-  .opt-grid{grid-template-columns:1fr}
-  .hide-sm{display:none}
+  .cards-4{grid-template-columns:repeat(2,1fr)} .cards-3{grid-template-columns:1fr} .span-2{grid-column:auto}
+}
+@media (max-width:560px){
+  .cards-4{grid-template-columns:1fr} .cards-2{grid-template-columns:1fr}
+  .search{min-width:0} .page-head h1{font-size:19px}
 }
 </style>
 
-<!-- icon sprite -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
 <symbol id="i-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></symbol>
-<symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 2.5 15 0 18M12 3c-2.5 2.5-2.5 15 0 18"/></symbol>
-<symbol id="i-db" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
-<symbol id="i-dns" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></symbol>
-<symbol id="i-save" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></symbol>
-<symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+<symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 2.5 15.5 0 18M12 3c-2.5 2.5-2.5 15.5 0 18"/></symbol>
+<symbol id="i-db" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
+<symbol id="i-save" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></symbol>
+<symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 5-3.5 8-7 10-3.5-2-7-5-7-10V6z"/></symbol>
+<symbol id="i-dns" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></symbol>
+<symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="4"/><path d="M11 11l8 8M16 16l2-2M19 19l2-2"/></symbol>
+<symbol id="i-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c0-3 2.5-5 5.5-5s5.5 2 5.5 5"/><path d="M16 5.5a3 3 0 0 1 0 5.5M18 20c0-2-1-3.6-2.5-4.5"/></symbol>
+<symbol id="i-token" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="10" rx="3"/><path d="M7 12h.01M11 12h.01M15 12h4"/></symbol>
 <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
-<symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 5-3.5 8-7 10-3.5-2-7-5-7-10V6z"/><path d="M9 12l2 2 4-4"/></symbol>
-<symbol id="i-logs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16M4 10h16M4 15h10M4 20h7"/></symbol>
-<symbol id="i-cog" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 2.6 7a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 7 2.6h.1A1.6 1.6 0 0 0 9 1.1V1a2 2 0 1 1 4 0v.1A1.6 1.6 0 0 0 15 2.6a1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7h.1a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></symbol>
-<symbol id="i-cpu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></symbol>
-<symbol id="i-mem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 7v10M12 7v10M17 7v10"/></symbol>
-<symbol id="i-disk" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></symbol>
-<symbol id="i-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20v-9M7 11l5-5 5 5"/><path d="M4 20h16"/></symbol>
-<symbol id="i-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></symbol>
-<symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/></symbol>
-<symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
-<symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/></symbol>
-<symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></symbol>
-<symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></symbol>
-<symbol id="i-star" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.9 5.9 6.5.9-4.7 4.6 1.1 6.4L12 17.8 6.2 20.8l1.1-6.4L2.6 9.8l6.5-.9z"/></symbol>
-<symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></symbol>
-<symbol id="i-chevd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></symbol>
-<symbol id="i-ext" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></symbol>
-<symbol id="i-git" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 1.5-6 5"/></symbol>
-<symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
-<symbol id="i-php" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h4a2 2 0 1 1 0 4H3zM3 8v8M11 6v12M11 12h4M15 10v4M17 8h4a2 2 0 1 1 0 4h-4z"/></symbol>
-<symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"/></symbol>
-<symbol id="i-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16l13-8z"/></symbol>
-<symbol id="i-wp" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M5 9h8M9 9l3 9 3-9"/></symbol>
-<symbol id="i-code" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M13 6l-2 12"/></symbol>
+<symbol id="i-cpu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></symbol>
+<symbol id="i-ram" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 17v3M10 17v3M14 17v3M18 17v3M7 11v2M12 11v2M17 11v2"/></symbol>
+<symbol id="i-disk" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="12" cy="12" r="3.2"/><path d="M12 4v3"/></symbol>
+<symbol id="i-activity" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3 8 4-16 3 8h4"/></symbol>
+<symbol id="i-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></symbol>
+<symbol id="i-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M10.5 21a2 2 0 0 0 3 0"/></symbol>
+<symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+<symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4 7 7 0 1 0 20 14.5z"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-chevr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></symbol>
+<symbol id="i-ext" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+<symbol id="i-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17h.01"/></symbol>
+<symbol id="i-git" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="9" r="2.5"/><path d="M6 8.5v7M18 11.5c0 3-3 4-6 4"/></symbol>
 <symbol id="i-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></symbol>
+<symbol id="i-cog" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1l2.1-2.1M17 7l2.1-2.1"/></symbol>
+<symbol id="i-logs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 10h16M4 14h10M4 18h7"/></symbol>
+<symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v4h-4"/></symbol>
+<symbol id="i-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V7M6 12l6-6 6 6"/></symbol>
+<symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
 </defs></svg>
 
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
-
-<div class="scrim" id="scrim" onclick="toggleNav(false)"></div>
 <div class="app">
-  <!-- ================= SIDEBAR ================= -->
-  <aside class="sidebar" id="sidebar">
-    <div class="sb-brand">
-      <div class="logo"><svg width="17" height="17"><use href="#i-grid"/></svg></div>
-      <div><div class="brand-name">NovaPanel</div><div class="brand-sub">VPS Control</div></div>
-    </div>
-    <div class="server-card" title="Single VPS — this panel manages one server">
-      <span class="chip good" style="padding:4px"><span class="d"></span></span>
-      <div class="server-meta">
-        <div class="server-host">nova-sgp-01 <span class="chip good" style="font-size:10px;padding:1px 6px">Healthy</span></div>
-        <div class="server-ip mono">139.59.102.44 · Ubuntu 24.04</div>
-      </div>
-    </div>
-    <nav class="nav">
-      <div class="nav-group">
-        <div class="nav-label">Favourites</div>
-        <a class="nav-item" data-view="site-detail"><svg class="ic"><use href="#i-star"/></svg>shop.acme.io</a>
-        <a class="nav-item" data-view="backups"><svg class="ic"><use href="#i-save"/></svg>Backups</a>
-      </div>
-      <div class="nav-group">
-        <div class="nav-label">Manage</div>
-        <a class="nav-item active" data-view="dashboard"><svg class="ic"><use href="#i-grid"/></svg>Dashboard<svg class="pin"><use href="#i-star"/></svg></a>
-        <a class="nav-item" data-view="websites"><svg class="ic"><use href="#i-globe"/></svg>Websites<span class="nav-badge">4</span></a>
-        <a class="nav-item" data-view="databases"><svg class="ic"><use href="#i-db"/></svg>Databases<svg class="pin"><use href="#i-star"/></svg></a>
-        <a class="nav-item" data-view="stub" data-title="Domains &amp; DNS"><svg class="ic"><use href="#i-dns"/></svg>Domains &amp; DNS<svg class="pin"><use href="#i-star"/></svg></a>
-      </div>
-      <div class="nav-group">
-        <div class="nav-label">Operate</div>
-        <a class="nav-item" data-view="backups"><svg class="ic"><use href="#i-save"/></svg>Backups<svg class="pin"><use href="#i-star"/></svg></a>
-        <a class="nav-item" data-view="stub" data-title="Files"><svg class="ic"><use href="#i-folder"/></svg>File Manager<svg class="pin"><use href="#i-star"/></svg></a>
-        <a class="nav-item" data-view="stub" data-title="Scheduler"><svg class="ic"><use href="#i-clock"/></svg>Scheduler<svg class="pin"><use href="#i-star"/></svg></a>
-        <a class="nav-item" data-view="stub" data-title="Security"><svg class="ic"><use href="#i-shield"/></svg>Security<svg class="pin"><use href="#i-star"/></svg></a>
-      </div>
-      <div class="nav-group">
-        <div class="nav-label">System</div>
-        <a class="nav-item" data-view="stub" data-title="Logs"><svg class="ic"><use href="#i-logs"/></svg>Logs<svg class="pin"><use href="#i-star"/></svg></a>
-        <a class="nav-item" data-view="stub" data-title="Preferences"><svg class="ic"><use href="#i-cog"/></svg>Preferences<svg class="pin"><use href="#i-star"/></svg></a>
-      </div>
-    </nav>
-    <div class="sb-foot">
-      <div class="avatar">RA</div>
-      <div style="min-width:0"><div class="nm">Riaz A.</div><div class="rl">Owner</div></div>
-      <svg class="ic" style="margin-left:auto;width:16px;height:16px;color:var(--faint)"><use href="#i-chevd"/></svg>
-    </div>
-  </aside>
-
-  <!-- ================= MAIN ================= -->
+  <aside class="sidebar" id="sidebar"></aside>
   <div class="main">
     <header class="topbar">
-      <button class="hamburger" onclick="toggleNav(true)"><svg width="18" height="18"><use href="#i-menu"/></svg></button>
-      <div class="crumb" id="crumb"><svg width="17" height="17" style="color:var(--accent)"><use href="#i-grid"/></svg> Dashboard</div>
-      <div class="search">
-        <svg width="16" height="16" style="color:var(--faint)"><use href="#i-search"/></svg>
-        <input placeholder="Search sites, settings, jobs…" aria-label="Search">
-        <span class="kbd hide-sm">⌘K</span>
-      </div>
-      <button class="tb-btn" aria-label="Jobs and notifications"><svg width="18" height="18"><use href="#i-bell"/></svg><span class="dot"></span></button>
-      <button class="tb-btn" id="themeBtn" aria-label="Toggle theme" onclick="toggleTheme()"><svg width="18" height="18" id="themeIc"><use href="#i-moon"/></svg></button>
-      <div class="avatar hide-sm">RA</div>
+      <button class="hamburger" id="ham" aria-label="Menu"><svg class="ic" style="width:18px;height:18px"><use href="#i-grid"/></svg></button>
+      <nav class="crumb" id="crumb"></nav>
+      <label class="search"><svg style="width:15px;height:15px;color:var(--faint);flex:none"><use href="#i-search"/></svg>
+        <input id="q" placeholder="Search sites, databases, domains…" autocomplete="off"><span class="kbd">/</span></label>
+      <button class="tb-btn" id="jobsBtn" aria-label="Jobs" title="Background jobs"><svg style="width:17px;height:17px"><use href="#i-activity"/></svg><span class="dot" id="jobsDot">1</span></button>
+      <button class="tb-btn" aria-label="Notifications" title="Alerts"><svg style="width:17px;height:17px"><use href="#i-bell"/></svg><span class="dot">3</span></button>
+      <button class="tb-btn" id="themeBtn" aria-label="Theme" title="Toggle theme"><svg style="width:17px;height:17px"><use href="#i-moon" id="themeIcon"/></svg></button>
     </header>
-
-    <main class="content">
-
-      <!-- ====== DASHBOARD ====== -->
-      <section class="view active" id="v-dashboard">
-        <div class="page-head">
-          <div><h1>Good evening, Riaz</h1><p>nova-sgp-01 has been up for 47 days. Everything is running.</p></div>
-          <button class="btn btn-primary" onclick="openWizard()"><svg class="ic"><use href="#i-plus"/></svg> Create website</button>
-        </div>
-
-        <div class="grid cards-4" style="margin-bottom:16px">
-          <div class="card tile">
-            <div class="lbl"><svg class="ic"><use href="#i-cpu"/></svg> CPU</div>
-            <div class="val tnum">18<small>%</small></div>
-            <div class="meter good"><i style="width:18%"></i></div>
-            <div class="sub">2 vCPU · load 0.34</div>
-          </div>
-          <div class="card tile">
-            <div class="lbl"><svg class="ic"><use href="#i-mem"/></svg> Memory</div>
-            <div class="val tnum">2.1<small>/ 4 GB</small></div>
-            <div class="meter warn"><i style="width:53%"></i></div>
-            <div class="sub">1.9 GB available</div>
-          </div>
-          <div class="card tile">
-            <div class="lbl"><svg class="ic"><use href="#i-disk"/></svg> Disk</div>
-            <div class="val tnum">31<small>/ 80 GB</small></div>
-            <div class="meter good"><i style="width:39%"></i></div>
-            <div class="sub">49 GB free</div>
-          </div>
-          <div class="card tile">
-            <div class="lbl"><svg class="ic"><use href="#i-up"/></svg> Uptime</div>
-            <div class="val tnum">47<small>days</small></div>
-            <div class="meter good"><i style="width:100%"></i></div>
-            <div class="sub">Last reboot Sep 11</div>
-          </div>
-        </div>
-
-        <div class="grid dash-2" style="grid-template-columns:1.35fr 1fr;align-items:start">
-          <div style="display:grid;gap:16px">
-            <div class="card">
-              <div class="card-h"><svg width="16" height="16" style="color:var(--warn)"><use href="#i-shield"/></svg><h3>Needs attention</h3><span class="chip warn" style="margin-left:auto">2</span></div>
-              <div class="row"><div class="ic ic-warn"><svg width="16" height="16"><use href="#i-lock"/></svg></div>
-                <div class="tx"><b>blog.acme.io — SSL expires in 6 days</b><span>Auto-renew failed once. Retry the certificate job.</span></div>
-                <button class="btn btn-sm" style="margin-left:auto">Renew</button></div>
-              <div class="row"><div class="ic ic-warn"><svg width="16" height="16"><use href="#i-save"/></svg></div>
-                <div class="tx"><b>Nightly backup is overdue</b><span>Last successful snapshot was 2 days ago.</span></div>
-                <button class="btn btn-sm btn-primary" style="margin-left:auto">Run now</button></div>
-            </div>
-            <div class="card">
-              <div class="card-h"><svg width="16" height="16" style="color:var(--accent)"><use href="#i-globe"/></svg><h3>Websites</h3><a class="more" data-view="websites" style="cursor:pointer">View all →</a></div>
-              <table class="tbl"><tbody>
-                <tr data-view="site-detail" style="cursor:pointer"><td><div class="site-cell"><div class="fav-ic">S</div><div><div class="nm">shop.acme.io</div><div class="url mono">/home/shop · WordPress</div></div></div></td>
-                  <td class="hide-sm"><span class="type-badge">WP 6.6</span></td><td><span class="chip good"><span class="d"></span>Online</span></td><td class="rowact"><button class="btn btn-sm btn-ghost">Manage</button></td></tr>
-                <tr data-view="site-detail" style="cursor:pointer"><td><div class="site-cell"><div class="fav-ic">B</div><div><div class="nm">blog.acme.io</div><div class="url mono">/home/blog · WordPress</div></div></div></td>
-                  <td class="hide-sm"><span class="type-badge">WP 6.6</span></td><td><span class="chip warn"><span class="d"></span>SSL soon</span></td><td class="rowact"><button class="btn btn-sm btn-ghost">Manage</button></td></tr>
-                <tr data-view="site-detail" style="cursor:pointer"><td><div class="site-cell"><div class="fav-ic">A</div><div><div class="nm">api.acme.io</div><div class="url mono">/home/api · Laravel</div></div></div></td>
-                  <td class="hide-sm"><span class="type-badge">PHP 8.3</span></td><td><span class="chip good"><span class="d"></span>Online</span></td><td class="rowact"><button class="btn btn-sm btn-ghost">Manage</button></td></tr>
-              </tbody></table>
-            </div>
-          </div>
-
-          <div style="display:grid;gap:16px">
-            <div class="card">
-              <div class="card-h"><svg width="16" height="16" style="color:var(--good)"><use href="#i-check"/></svg><h3>Services</h3></div>
-              <div class="svc"><div class="ic"><svg width="16" height="16"><use href="#i-globe"/></svg></div><div><div class="nm">Nginx</div><div class="mt">v1.26 · 12 vhosts</div></div><span class="chip good act"><span class="d"></span>Running</span></div>
-              <div class="svc"><div class="ic"><svg width="16" height="16"><use href="#i-php"/></svg></div><div><div class="nm">PHP-FPM</div><div class="mt">8.3 · 4 pools</div></div><span class="chip good act"><span class="d"></span>Running</span></div>
-              <div class="svc"><div class="ic"><svg width="16" height="16"><use href="#i-db"/></svg></div><div><div class="nm">MariaDB</div><div class="mt">11.4 · localhost</div></div><span class="chip good act"><span class="d"></span>Running</span></div>
-              <div class="svc"><div class="ic"><svg width="16" height="16"><use href="#i-shield"/></svg></div><div><div class="nm">UFW firewall</div><div class="mt">6 rules · SSH kept</div></div><span class="chip good act"><span class="d"></span>Active</span></div>
-            </div>
-            <div class="card">
-              <div class="card-h"><svg width="16" height="16" style="color:var(--muted)"><use href="#i-clock"/></svg><h3>Recent jobs</h3></div>
-              <div class="row"><div class="ic ic-good"><svg width="15" height="15"><use href="#i-check"/></svg></div><div class="tx"><b>Deploy shop.acme.io</b><span class="mono">a1f9c2 · succeeded</span></div><div class="tm">4m ago</div></div>
-              <div class="row"><div class="ic ic-run"><svg width="15" height="15"><use href="#i-play"/></svg></div><div class="tx"><b>Backup → S3 (api.acme.io)</b><span>running · 62%</span></div><div class="tm">now</div></div>
-              <div class="row"><div class="ic ic-crit"><svg width="15" height="15"><use href="#i-lock"/></svg></div><div class="tx"><b>SSL renew blog.acme.io</b><span>failed · DNS not propagated</span></div><div class="tm">2h ago</div></div>
-              <div class="row"><div class="ic ic-good"><svg width="15" height="15"><use href="#i-check"/></svg></div><div class="tx"><b>Create database shop_wp</b><span class="mono">succeeded</span></div><div class="tm">1d ago</div></div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- ====== WEBSITES ====== -->
-      <section class="view" id="v-websites">
-        <div class="page-head">
-          <div><h1>Websites</h1><p>Four sites on this server. Each runs as its own user with an isolated PHP pool.</p></div>
-          <button class="btn btn-primary" onclick="openWizard()"><svg class="ic"><use href="#i-plus"/></svg> Create website</button>
-        </div>
-        <div class="card">
-          <table class="tbl">
-            <thead><tr><th>Site</th><th class="hide-sm">Type</th><th class="hide-sm">PHP</th><th>Status</th><th class="hide-sm">Last deploy</th><th></th></tr></thead>
-            <tbody>
-              <tr data-view="site-detail" style="cursor:pointer"><td><div class="site-cell"><div class="fav-ic">S</div><div><div class="nm">shop.acme.io</div><div class="url mono">/home/shop</div></div></div></td><td class="hide-sm"><span class="type-badge">WordPress</span></td><td class="hide-sm mono">8.3</td><td><span class="chip good"><span class="d"></span>Online</span></td><td class="hide-sm mono">4m ago</td><td class="rowact"><button class="btn btn-sm btn-ghost">Manage</button></td></tr>
-              <tr data-view="site-detail" style="cursor:pointer"><td><div class="site-cell"><div class="fav-ic">B</div><div><div class="nm">blog.acme.io</div><div class="url mono">/home/blog</div></div></div></td><td class="hide-sm"><span class="type-badge">WordPress</span></td><td class="hide-sm mono">8.3</td><td><span class="chip warn"><span class="d"></span>SSL soon</span></td><td class="hide-sm mono">6d ago</td><td class="rowact"><button class="btn btn-sm btn-ghost">Manage</button></td></tr>
-              <tr data-view="site-detail" style="cursor:pointer"><td><div class="site-cell"><div class="fav-ic">A</div><div><div class="nm">api.acme.io</div><div class="url mono">/home/api</div></div></div></td><td class="hide-sm"><span class="type-badge">Laravel</span></td><td class="hide-sm mono">8.3</td><td><span class="chip good"><span class="d"></span>Online</span></td><td class="hide-sm mono">1h ago</td><td class="rowact"><button class="btn btn-sm btn-ghost">Manage</button></td></tr>
-              <tr data-view="site-detail" style="cursor:pointer"><td><div class="site-cell"><div class="fav-ic">D</div><div><div class="nm">docs.acme.io</div><div class="url mono">/home/docs</div></div></div></td><td class="hide-sm"><span class="type-badge">Static</span></td><td class="hide-sm mono">—</td><td><span class="chip good"><span class="d"></span>Online</span></td><td class="hide-sm mono">3d ago</td><td class="rowact"><button class="btn btn-sm btn-ghost">Manage</button></td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <!-- ====== SITE DETAIL (manage) ====== -->
-      <section class="view" id="v-site-detail">
-        <div class="page-head" style="align-items:center">
-          <div class="site-hero">
-            <div class="site-pick"><div class="fav-ic">S</div> shop.acme.io <svg class="cv"><use href="#i-chevd"/></svg></div>
-            <span class="chip good"><span class="d"></span>Online</span>
-            <span class="chip good"><svg width="12" height="12"><use href="#i-lock"/></svg>SSL valid</span>
-            <span class="chip accent"><svg width="12" height="12"><use href="#i-php"/></svg>PHP 8.3</span>
-          </div>
-          <div style="display:flex;gap:8px">
-            <a class="btn btn-sm" href="https://example.com" target="_blank" rel="noopener"><svg class="ic"><use href="#i-ext"/></svg> Visit</a>
-            <button class="btn btn-sm btn-ghost">Restart PHP</button>
-          </div>
-        </div>
-
-        <div class="sec-title">Manage this site</div>
-        <div class="tool-grid">
-          <div class="tool"><div class="ic"><svg width="19" height="19"><use href="#i-grid"/></svg></div><div><h4>Overview</h4><p>Traffic, document root, runtime and quick health at a glance.</p></div></div>
-          <div class="tool"><div class="ic"><svg width="19" height="19"><use href="#i-dns"/></svg></div><div><h4>Domains &amp; SSL</h4><p>Domains, redirects, Let's Encrypt certificates and force-HTTPS.</p></div></div>
-          <div class="tool"><div class="ic"><svg width="19" height="19"><use href="#i-folder"/></svg></div><div><h4>Files</h4><p>Browse and edit within the site root, with safe uploads.</p></div></div>
-          <div class="tool"><div class="ic"><svg width="19" height="19"><use href="#i-db"/></svg></div><div><h4>Database</h4><p>This site's MariaDB database and user. Open in phpMyAdmin.</p></div></div>
-          <div class="tool"><div class="ic"><svg width="19" height="19"><use href="#i-php"/></svg></div><div><h4>PHP</h4><p>Version, extensions and php.ini limits for this site's pool.</p></div></div>
-          <div class="tool"><div class="ic"><svg width="19" height="19"><use href="#i-git"/></svg></div><div><h4>Git Deploy</h4><p>Connect a repository, pin a branch and deploy on push.</p></div></div>
-          <div class="tool"><div class="ic"><svg width="19" height="19"><use href="#i-clock"/></svg></div><div><h4>Cron</h4><p>Scheduled tasks that run as this site's user.</p></div></div>
-          <div class="tool"><div class="ic"><svg width="19" height="19"><use href="#i-save"/></svg></div><div><h4>Backups</h4><p>Snapshots of files and database, with one-click restore.</p></div></div>
-          <div class="tool"><div class="ic"><svg width="19" height="19"><use href="#i-logs"/></svg></div><div><h4>Logs</h4><p>Access and error logs, tailed live and searchable.</p></div></div>
-        </div>
-        <div class="note"><svg width="15" height="15"><use href="#i-shield"/></svg> This site runs as the non-login user <span class="mono">shop</span> with its own PHP-FPM pool — isolated from every other site on the server.</div>
-      </section>
-
-      <!-- ====== DATABASES ====== -->
-      <section class="view" id="v-databases">
-        <div class="page-head">
-          <div><h1>Databases</h1><p>MariaDB 11.4, bound to localhost. Each site gets its own database and least-privilege user.</p></div>
-          <button class="btn btn-primary"><svg class="ic"><use href="#i-plus"/></svg> Create database</button>
-        </div>
-        <div class="card">
-          <table class="tbl">
-            <thead><tr><th>Database</th><th class="hide-sm">User</th><th class="hide-sm">Size</th><th>Site</th><th></th></tr></thead>
-            <tbody>
-              <tr><td><div class="site-cell"><div class="fav-ic"><svg width="15" height="15"><use href="#i-db"/></svg></div><div class="nm mono">shop_wp</div></div></td><td class="hide-sm mono">shop_wp@localhost</td><td class="hide-sm mono">184 MB</td><td><span class="chip">shop.acme.io</span></td><td class="rowact"><button class="btn btn-sm btn-ghost">phpMyAdmin</button></td></tr>
-              <tr><td><div class="site-cell"><div class="fav-ic"><svg width="15" height="15"><use href="#i-db"/></svg></div><div class="nm mono">blog_wp</div></div></td><td class="hide-sm mono">blog_wp@localhost</td><td class="hide-sm mono">92 MB</td><td><span class="chip">blog.acme.io</span></td><td class="rowact"><button class="btn btn-sm btn-ghost">phpMyAdmin</button></td></tr>
-              <tr><td><div class="site-cell"><div class="fav-ic"><svg width="15" height="15"><use href="#i-db"/></svg></div><div class="nm mono">api_prod</div></div></td><td class="hide-sm mono">api_prod@localhost</td><td class="hide-sm mono">410 MB</td><td><span class="chip">api.acme.io</span></td><td class="rowact"><button class="btn btn-sm btn-ghost">phpMyAdmin</button></td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <!-- ====== BACKUPS ====== -->
-      <section class="view" id="v-backups">
-        <div class="page-head">
-          <div><h1>Backups</h1><p>Restic snapshots, verified by reading them back. Restore a file, a database, or a whole site.</p></div>
-          <button class="btn btn-primary"><svg class="ic"><use href="#i-play"/></svg> Back up now</button>
-        </div>
-        <div class="grid cards-3" style="margin-bottom:16px">
-          <div class="card tile"><div class="lbl"><svg class="ic"><use href="#i-clock"/></svg> Schedule</div><div class="val" style="font-size:18px">Nightly · 02:30</div><div class="sub">Keep 7 daily · 4 weekly</div></div>
-          <div class="card tile"><div class="lbl"><svg class="ic"><use href="#i-save"/></svg> Target</div><div class="val" style="font-size:18px">S3 · ap-south-1</div><div class="sub">Also mirrored to local disk</div></div>
-          <div class="card tile"><div class="lbl"><svg class="ic"><use href="#i-check"/></svg> Last verified</div><div class="val" style="font-size:18px">Yesterday</div><div class="sub">Read-back check passed</div></div>
-        </div>
-        <div class="card">
-          <div class="card-h"><svg width="16" height="16" style="color:var(--muted)"><use href="#i-save"/></svg><h3>Snapshots</h3></div>
-          <table class="tbl"><thead><tr><th>Snapshot</th><th class="hide-sm">Scope</th><th class="hide-sm">Size</th><th>When</th><th></th></tr></thead><tbody>
-            <tr><td class="mono">7c1a·full</td><td class="hide-sm">All sites + databases</td><td class="hide-sm mono">1.3 GB</td><td>Today 02:30</td><td class="rowact"><button class="btn btn-sm btn-ghost">Restore</button></td></tr>
-            <tr><td class="mono">b93f·full</td><td class="hide-sm">All sites + databases</td><td class="hide-sm mono">1.3 GB</td><td>Yesterday 02:30</td><td class="rowact"><button class="btn btn-sm btn-ghost">Restore</button></td></tr>
-            <tr><td class="mono">a204·shop</td><td class="hide-sm">shop.acme.io (manual)</td><td class="hide-sm mono">206 MB</td><td>Oct 26 18:04</td><td class="rowact"><button class="btn btn-sm btn-ghost">Restore</button></td></tr>
-          </tbody></table>
-        </div>
-      </section>
-
-      <!-- ====== STUB ====== -->
-      <section class="view" id="v-stub">
-        <div class="page-head"><div><h1 id="stub-title">Section</h1><p>This screen is part of the prototype's navigation map — not built out yet.</p></div></div>
-        <div class="card card-pad" style="display:flex;align-items:center;gap:14px;color:var(--muted)">
-          <svg width="22" height="22" style="color:var(--faint)"><use href="#i-grid"/></svg>
-          <div>Placeholder for the <b id="stub-title2" style="color:var(--fg)">section</b>. The prototype focuses on Dashboard, Websites, the per-site Manage view, Databases, Backups, and Create website.</div>
-        </div>
-      </section>
-
-    </main>
+    <main class="content" id="view"></main>
   </div>
 </div>
 
-<!-- ================= CREATE WEBSITE WIZARD ================= -->
-<div class="overlay" id="wizard" hidden>
-  <div class="modal" role="dialog" aria-modal="true" aria-label="Create website">
-    <div class="modal-h"><svg width="18" height="18" style="color:var(--accent)"><use href="#i-plus"/></svg><h3>Create website</h3><button class="x" onclick="closeWizard()" aria-label="Close">✕</button></div>
-    <div class="steps"><i class="on" data-s="1"></i><i data-s="2"></i><i data-s="3"></i><i data-s="4"></i></div>
-    <div class="modal-body">
-      <!-- step 1 -->
-      <div class="step" data-step="1">
-        <div class="step-lbl">Step 1 of 4</div><h4>What are you building?</h4><p class="hint">Pick a type — NovaPanel sets sensible defaults for each.</p>
-        <div class="opt-grid">
-          <div class="opt sel" onclick="pickType(this,'WordPress')"><div class="ic"><svg width="18" height="18"><use href="#i-wp"/></svg></div><div><b>WordPress</b><span>Installed &amp; secured for you</span></div></div>
-          <div class="opt" onclick="pickType(this,'PHP app')"><div class="ic"><svg width="18" height="18"><use href="#i-php"/></svg></div><div><b>PHP / Laravel</b><span>Composer-ready pool</span></div></div>
-          <div class="opt" onclick="pickType(this,'Static site')"><div class="ic"><svg width="18" height="18"><use href="#i-file"/></svg></div><div><b>Static site</b><span>HTML, or a built SPA</span></div></div>
-          <div class="opt" onclick="pickType(this,'Node app')"><div class="ic"><svg width="18" height="18"><use href="#i-code"/></svg></div><div><b>Node app</b><span>Reverse-proxied service</span></div></div>
-        </div>
-      </div>
-      <!-- step 2 -->
-      <div class="step" data-step="2" hidden>
-        <div class="step-lbl">Step 2 of 4</div><h4>Domain</h4><p class="hint">We'll create the vhost and request a certificate once DNS points here.</p>
-        <div class="field"><label>Primary domain</label><div class="inp"><span class="pre">https://</span><input id="wz-domain" value="store.acme.io" spellcheck="false"></div><div class="help">A records should point to 139.59.102.44. NovaPanel verifies before issuing SSL.</div></div>
-        <div class="field"><label>Document root</label><div class="inp"><input value="/home/store/public" spellcheck="false" readonly style="color:var(--muted)"></div><div class="help">Created and owned by a new non-login user, <span class="mono">store</span>.</div></div>
-      </div>
-      <!-- step 3 -->
-      <div class="step" data-step="3" hidden>
-        <div class="step-lbl">Step 3 of 4</div><h4>Runtime</h4><p class="hint">Opinionated defaults — change only if you need to.</p>
-        <div class="field"><label>PHP version</label><div class="opt-grid"><div class="opt sel"><div><b>8.3</b><span>Recommended</span></div></div><div class="opt"><div><b>8.2</b><span>Stable</span></div></div></div></div>
-        <div class="field"><label>Options</label>
-          <div style="display:flex;flex-direction:column;gap:9px;margin-top:4px">
-            <label class="opt sel" style="cursor:pointer"><svg width="16" height="16" style="color:var(--accent)"><use href="#i-check"/></svg> <span style="font-size:13px;font-weight:600">Create a MariaDB database &amp; user</span></label>
-            <label class="opt sel" style="cursor:pointer"><svg width="16" height="16" style="color:var(--accent)"><use href="#i-check"/></svg> <span style="font-size:13px;font-weight:600">Issue Let's Encrypt SSL &amp; force HTTPS</span></label>
-            <label class="opt" style="cursor:pointer"><svg width="16" height="16" style="color:var(--faint)"><use href="#i-git"/></svg> <span style="font-size:13px;font-weight:600">Deploy from a Git repository</span></label>
-          </div>
-        </div>
-      </div>
-      <!-- step 4 -->
-      <div class="step" data-step="4" hidden>
-        <div class="step-lbl">Step 4 of 4</div><h4>Review &amp; create</h4><p class="hint">NovaPanel runs this as a single job you can watch. Nothing else is touched.</p>
-        <div class="review">
-          <div class="ri"><span class="k">Type</span><span class="v" id="rv-type">WordPress</span></div>
-          <div class="ri"><span class="k">Domain</span><span class="v mono" id="rv-domain">store.acme.io</span></div>
-          <div class="ri"><span class="k">Site user</span><span class="v mono">store (nologin)</span></div>
-          <div class="ri"><span class="k">PHP</span><span class="v mono">8.3 · ondemand pool</span></div>
-          <div class="ri"><span class="k">Database</span><span class="v mono">store_wp</span></div>
-          <div class="ri"><span class="k">SSL</span><span class="v">Let's Encrypt · force HTTPS</span></div>
-        </div>
-        <div class="note" style="margin-top:14px"><svg width="15" height="15"><use href="#i-check"/></svg> Creates the user, vhost, pool, database and certificate — then probes the site before reporting success.</div>
-      </div>
-    </div>
-    <div class="modal-f">
-      <button class="btn" id="wz-back" onclick="wizNav(-1)" hidden>Back</button>
-      <div class="sp"></div>
-      <button class="btn" onclick="closeWizard()">Cancel</button>
-      <button class="btn btn-primary" id="wz-next" onclick="wizNav(1)">Continue</button>
-    </div>
-  </div>
-</div>
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer">
+  <div class="drawer-h"><svg style="width:18px;height:18px;color:var(--accent)"><use href="#i-activity"/></svg><h3>Background jobs</h3>
+    <button class="tb-btn" style="margin-left:auto;width:32px;height:32px" id="drawerClose" aria-label="Close"><svg style="width:15px;height:15px"><use href="#i-x"/></svg></button></div>
+  <div class="drawer-b" id="jobsBody"></div>
+</aside>
+<div class="modal-card" id="modal" role="dialog" aria-modal="true"></div>
 
 <script>
-(function(){
-  "use strict";
-  var VIEW_META={
-    dashboard:{t:"Dashboard",ic:"i-grid"}, websites:{t:"Websites",ic:"i-globe"},
-    "site-detail":{t:"Websites / shop.acme.io",ic:"i-globe"}, databases:{t:"Databases",ic:"i-db"},
-    backups:{t:"Backups",ic:"i-save"}, stub:{t:"Section",ic:"i-grid"}
-  };
-  function show(view,title){
-    document.querySelectorAll(".view").forEach(function(v){v.classList.remove("active")});
-    var el=document.getElementById("v-"+view); if(!el){view="dashboard";el=document.getElementById("v-dashboard");}
-    el.classList.add("active");
-    document.querySelectorAll(".nav-item").forEach(function(n){
-      n.classList.toggle("active", n.getAttribute("data-view")===view && (!title || n.getAttribute("data-title")===title));
-    });
-    var meta=VIEW_META[view]||VIEW_META.dashboard;
-    var label=(view==="stub"&&title)?title:meta.t;
-    var crumb=document.getElementById("crumb");
-    crumb.innerHTML='<svg width="17" height="17" style="color:var(--accent)"><use href="#'+meta.ic+'"/></svg> '+esc(label);
-    if(view==="stub"){document.getElementById("stub-title").textContent=title||"Section";
-      document.getElementById("stub-title2").textContent=(title||"section");}
-    window.scrollTo(0,0);
-  }
-  function esc(s){return String(s).replace(/[&<>]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;"}[c]});}
+"use strict";
+const $=s=>document.querySelector(s), ce=document.getElementById.bind(document);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ic=(n,cl="ic")=>`<svg class="${cl}"><use href="#i-${n}"/></svg>`;
+const hue=s=>{let h=0;for(const c of s)h=(h*31+c.charCodeAt(0))%360;return h;};
+const fav=s=>`<div class="site-fav" style="background:linear-gradient(145deg,hsl(${hue(s)} 70% 55%),hsl(${(hue(s)+40)%360} 70% 50%))">${esc(s[0].toUpperCase())}</div>`;
 
-  // nav + row clicks (delegated)
-  document.addEventListener("click",function(e){
-    var el=e.target.closest("[data-view]"); if(!el) return;
-    if(el.tagName==="A"||el.closest(".nav-item")===el){e.preventDefault();}
-    var view=el.getAttribute("data-view"); var title=el.getAttribute("data-title");
-    show(view,title);
-    if(window.matchMedia("(max-width:720px)").matches) toggleNav(false);
-  });
+/* ---------------- demo data (single VPS) ---------------- */
+const server={host:"vps-ams-01",fqdn:"vps-ams-01.novapanel.app",ip:"203.0.113.47",region:"Amsterdam · AMS1",
+  os:"Ubuntu 24.04.1 LTS",kernel:"6.8.0-45-generic",agent:"1.4.2",uptime:"47d 6h",cores:4,ram:8,disk:160,load:"0.42"};
+const metrics={cpu:18,ramUsed:3.1,diskUsed:62,bwIn:"1.2 TB",bwOut:"4.8 TB",bwCap:"20 TB"};
+const services=[
+  {nm:"Nginx",ver:"nginx/1.24.0",st:"good"},{nm:"PHP-FPM",ver:"php8.3-fpm",st:"good"},
+  {nm:"MariaDB",ver:"10.11.8",st:"good"},{nm:"NovaPanel agent",ver:"panel-agent 1.4.2 (root)",st:"good"},
+  {nm:"UFW firewall",ver:"active · 6 rules",st:"good"},{nm:"Restic",ver:"0.17.1",st:"warn"}];
+const sites=[
+ {id:"shop",domain:"shop.lumina.co",type:"wordpress",php:"8.3",cert:"force",certDays:71,domains:2,db:"wp_lumina_shop",
+  size:"142 MB",status:"good",deploy:{repo:"lumina/storefront",branch:"main",sha:"a19c4f2",when:"2h ago"},visits:"18.4k/day"},
+ {id:"api",domain:"api.lumina.co",type:"php",php:"8.3",cert:"force",certDays:71,domains:1,db:"lumina_api",
+  size:"44 MB",status:"good",deploy:{repo:"lumina/api",branch:"release",sha:"7d3e8b1",when:"22m ago"},visits:"54.1k/day"},
+ {id:"blog",domain:"blog.harbor.dev",type:"wordpress",php:"8.2",cert:"expiring",certDays:6,domains:2,db:"wp_harbor_blog",
+  size:"72 MB",status:"warn",deploy:null,visits:"2.1k/day"},
+ {id:"staging",domain:"staging.lumina.co",type:"php",php:"8.3",cert:"none",certDays:null,domains:1,db:"lumina_api_stg",
+  size:"39 MB",status:"info",deploy:{repo:"lumina/api",branch:"develop",sha:"c88a01e",when:"1d ago"},visits:"310/day"},
+ {id:"files",domain:"files.harbor.dev",type:"static",php:null,cert:"on",certDays:58,domains:1,db:null,
+  size:"910 MB",status:"good",deploy:null,visits:"6.0k/day"},
+ {id:"dev",domain:"dev.internal",type:"php",php:"8.3",cert:"none",certDays:null,domains:1,db:null,
+  size:"12 MB",status:"maint",deploy:null,visits:"—"}];
+const dbs=[
+ {name:"wp_lumina_shop",user:"u_shop@127.0.0.1",engine:"MariaDB 10.11",size:"118 MB",tables:62,site:"shop.lumina.co"},
+ {name:"lumina_api",user:"u_api@127.0.0.1",engine:"MariaDB 10.11",size:"44 MB",tables:28,site:"api.lumina.co"},
+ {name:"wp_harbor_blog",user:"u_hblog@127.0.0.1",engine:"MariaDB 10.11",size:"71 MB",tables:51,site:"blog.harbor.dev"},
+ {name:"lumina_api_stg",user:"u_apistg@127.0.0.1",engine:"MariaDB 10.11",size:"22 MB",tables:28,site:"staging.lumina.co"}];
+const repos=[
+ {name:"local-nvme",kind:"local",loc:"/var/backups/restic",used:"38 GB",snaps:214,last:"today 03:12",st:"good"},
+ {name:"offsite-b2",kind:"s3",loc:"s3:s3.eu-central.backblazeb2.com/nova-ams",used:"96 GB",snaps:410,last:"today 03:40",st:"good"}];
+const snaps=[
+ {id:"a7f3c91",target:"shop.lumina.co",kind:"site",repo:"offsite-b2",size:"142 MB",when:"today 03:20",verify:"read-back ✓"},
+ {id:"b2e8044",target:"wp_lumina_shop",kind:"db",repo:"offsite-b2",size:"118 MB",when:"today 03:18",verify:"read-back ✓"},
+ {id:"c5190ad",target:"api.lumina.co",kind:"site",repo:"local-nvme",size:"44 MB",when:"today 03:12",verify:"check ✓"},
+ {id:"d803f6b",target:"wp_harbor_blog",kind:"db",repo:"offsite-b2",size:"71 MB",when:"yest 03:18",verify:"read-back ✓"},
+ {id:"e44c2a0",target:"panel.db + agent config",kind:"panel",repo:"offsite-b2",size:"9 MB",when:"yest 03:05",verify:"read-back ✓"},
+ {id:"f1a7730",target:"files.harbor.dev",kind:"site",repo:"local-nvme",size:"910 MB",when:"yest 02:40",verify:"pending",warn:1}];
+const fwRules=[
+ {n:1,action:"allow",proto:"tcp",port:"22",src:"any",cm:"SSH (pinned · never removable)",pin:1},
+ {n:2,action:"allow",proto:"tcp",port:"80",src:"any",cm:"HTTP → ACME + redirect"},
+ {n:3,action:"allow",proto:"tcp",port:"443",src:"any",cm:"HTTPS"},
+ {n:4,action:"limit",proto:"tcp",port:"22",src:"any",cm:"rate-limit SSH brute force"},
+ {n:5,action:"deny",proto:"tcp",port:"3306",src:"any",cm:"MariaDB — localhost only"},
+ {n:6,action:"allow",proto:"tcp",port:"2019",src:"10.0.0.0/8",cm:"metrics (private)"}];
+const dns=[
+ {type:"A",name:"shop.lumina.co",val:"203.0.113.47",ttl:"auto",proxied:1},
+ {type:"A",name:"api.lumina.co",val:"203.0.113.47",ttl:"auto",proxied:1},
+ {type:"CNAME",name:"www.lumina.co",val:"lumina.co",ttl:"auto",proxied:1},
+ {type:"MX",name:"lumina.co",val:"mx1.forwardemail.net",ttl:"3600",prio:10,proxied:0},
+ {type:"TXT",name:"lumina.co",val:"v=spf1 include:_spf.forwardemail.net ~all",ttl:"3600",proxied:0},
+ {type:"TXT",name:"_dmarc.lumina.co",val:"v=DMARC1; p=quarantine; rua=…",ttl:"3600",proxied:0}];
+const users=[
+ {nm:"Riaz Ahmed",email:"mdriaz@alpha.net.bd",role:"owner",mfa:1,last:"now"},
+ {nm:"Dev Ops",email:"devops@lumina.co",role:"admin",mfa:1,last:"3h ago"},
+ {nm:"Auditor",email:"audit@lumina.co",role:"read-only",mfa:0,last:"2d ago"}];
+const tokens=[
+ {name:"ci-deploy",prefix:"npat_8sK2…",scopes:["deploy","sites:read"],auto:0,last:"12m ago",exp:"in 83 days"},
+ {name:"uptime-probe",prefix:"npat_q4Z1…",scopes:["system:read"],auto:0,last:"1m ago",exp:"never"},
+ {name:"nightly-restore-check",prefix:"npat_Lp09…",scopes:["backups:read","backups:restore"],auto:1,last:"today 04:00",exp:"in 30 days"}];
+let jobs=[
+ {id:"job_8sK2",verb:"backup.create",obj:"shop.lumina.co → offsite-b2",state:"running",pct:62,msg:"uploading pack 128/206"},
+ {id:"job_Lp71",verb:"ssl.renew",obj:"blog.harbor.dev",state:"queued",pct:0,msg:"waiting for worker"},
+ {id:"job_7d3e",verb:"deploy.run",obj:"api.lumina.co @ 7d3e8b1",state:"done",pct:100,msg:"checked out pinned SHA · reloaded"},
+ {id:"job_c5a0",verb:"backup.verify",obj:"local-nvme (read-data 3/7)",state:"failed",pct:0,msg:"repository is locked (stale lock) — unlock + retry"}];
+const audit=[
+ {verb:"firewall.apply",actor:"mdriaz",out:"ok",code:"armed · awaiting confirm",when:"2m ago",ic:"shield",cl:"warn"},
+ {verb:"ssl.issue",actor:"mdriaz",out:"ok",code:"files.harbor.dev · 1 SAN",when:"1h ago",ic:"lock",cl:"good"},
+ {verb:"database.create",actor:"devops",out:"ok",code:"lumina_api_stg · show-once pw",when:"3h ago",ic:"db",cl:"good"},
+ {verb:"session.login",actor:"devops",out:"ok",code:"TOTP verified",when:"3h ago",ic:"users",cl:"info"},
+ {verb:"deploy.run",actor:"token:ci-deploy",out:"ok",code:"api.lumina.co @ 7d3e8b1",when:"22m ago",ic:"git",cl:"good"},
+ {verb:"tokens.create",actor:"mdriaz",out:"ok",code:"nightly-restore-check (automation)",when:"1d ago",ic:"token",cl:"info"},
+ {verb:"backup.restore",actor:"mdriaz",out:"refused",code:"forbidden · reauth_required",when:"2d ago",ic:"save",cl:"crit"}];
 
-  // sidebar drawer
-  window.toggleNav=function(open){
-    document.getElementById("sidebar").classList.toggle("open",open);
-    document.getElementById("scrim").classList.toggle("show",open);
-  };
+/* ---------------- helpers ---------------- */
+const siteBy=id=>sites.find(s=>s.id===id);
+const certBadge=s=>{
+  if(s.status==="maint")return `<span class="badge info">${ic("cog","dt")}Maintenance</span>`;
+  if(s.cert==="none")return `<span class="badge warn"><span class="dt"></span>No TLS · HTTP</span>`;
+  if(s.cert==="expiring")return `<span class="badge crit"><span class="dt"></span>Cert ${s.certDays}d left</span>`;
+  if(s.cert==="force")return `<span class="badge good">${ic("lock","dt")}HTTPS forced</span>`;
+  return `<span class="badge good"><span class="dt"></span>HTTPS</span>`;};
+const typeLabel=t=>({wordpress:"WordPress",php:"PHP site",static:"Static"}[t]||t);
+const jobState=s=>({running:"accent",queued:"info",done:"good",failed:"crit"}[s]);
+const runningJobs=()=>jobs.filter(j=>j.state==="running"||j.state==="queued").length;
 
-  // theme
-  function applyTheme(t){
-    if(t==="dark"||t==="light"){document.documentElement.setAttribute("data-theme",t);}
-    else{document.documentElement.removeAttribute("data-theme");}
-    var dark = t==="dark" || (t!=="light" && window.matchMedia("(prefers-color-scheme:dark)").matches);
-    document.getElementById("themeIc").innerHTML='<use href="#'+(dark?"i-sun":"i-moon")+'"/>';
-  }
-  var saved=null; try{saved=localStorage.getItem("nova-theme");}catch(e){}
-  applyTheme(saved||"system");
-  window.toggleTheme=function(){
-    var cur=document.documentElement.getAttribute("data-theme");
-    var isDark = cur ? cur==="dark" : window.matchMedia("(prefers-color-scheme:dark)").matches;
-    var next=isDark?"light":"dark";
-    applyTheme(next); try{localStorage.setItem("nova-theme",next);}catch(e){}
-  };
-
-  // wizard
-  var step=1,type="WordPress";
-  window.openWizard=function(){step=1;type="WordPress";renderStep();document.getElementById("wizard").hidden=false;};
-  window.closeWizard=function(){document.getElementById("wizard").hidden=true;};
-  window.pickType=function(el,t){el.parentNode.querySelectorAll(".opt").forEach(function(o){o.classList.remove("sel")});el.classList.add("sel");type=t;};
-  window.wizNav=function(d){
-    if(d>0&&step===4){ // "create"
-      closeWizard(); show("websites"); return;
+/* ---------------- sidebar + nav ---------------- */
+const NAV=[
+ {g:"Server",items:[["dashboard","Overview","grid"],["firewall","Firewall","shield","1 armed","warn"],
+   ["updates","Updates","up","1","accent"],["audit","Audit log","logs"]]},
+ {g:"Hosting",items:[["websites","Websites","globe",String(sites.length)],["databases","Databases","db",String(dbs.length)],
+   ["dns","DNS","dns"],["backups","Backups","save"]]},
+ {g:"Access",items:[["users","Users & roles","users"],["tokens","API tokens","token"]]}];
+function renderSidebar(active){
+  const route=active.split("/")[0];
+  let nav="";
+  for(const grp of NAV){
+    nav+=`<div class="nav-group"><div class="nav-label">${grp.g}</div>`;
+    for(const [r,label,icon,badge,bc] of grp.items){
+      const on=(route===r||(r==="websites"&&route==="site"))?"active":"";
+      nav+=`<a class="nav-item ${on}" href="#${r}">${ic(icon)}<span>${label}</span>${badge?`<span class="nav-badge ${bc||''}">${badge}</span>`:""}</a>`;
     }
-    step=Math.min(4,Math.max(1,step+d)); renderStep();
-  };
-  function renderStep(){
-    document.querySelectorAll(".step").forEach(function(s){s.hidden = (+s.getAttribute("data-step"))!==step;});
-    document.querySelectorAll(".steps i").forEach(function(i){i.classList.toggle("on",(+i.getAttribute("data-s"))<=step);});
-    document.getElementById("wz-back").hidden = step===1;
-    document.getElementById("wz-next").textContent = step===4?"Create website":"Continue";
-    document.getElementById("rv-type").textContent=type;
-    var dv=document.getElementById("wz-domain"); if(dv) document.getElementById("rv-domain").textContent=dv.value||"store.acme.io";
+    nav+=`</div>`;
   }
+  $("#sidebar").innerHTML=`
+   <div class="sb-brand"><div class="logo">${ic("bolt","ic")}</div>
+     <div><div class="brand-name">NovaPanel</div><div class="brand-sub">Console · single VPS</div></div></div>
+   <button class="server-card" onclick="location.hash='dashboard'">
+     <span class="badge good" style="padding:5px"><span class="dt"></span></span>
+     <span class="server-meta"><span class="server-host">${server.host}</span><span class="server-ip mono">${server.ip}</span></span>
+     ${ic("chevr","ic")}</button>
+   <nav class="nav">${nav}</nav>
+   <div class="sb-foot"><div class="avatar">R</div><div style="min-width:0"><div class="nm">Riaz Ahmed</div><div class="rl">Owner · MFA on</div></div>
+     <svg style="width:16px;height:16px;color:var(--faint);margin-left:auto"><use href="#i-cog"/></svg></div>`;
+}
 
-  show("dashboard");
-})();
+/* ---------------- views ---------------- */
+function vDashboard(){
+  const meter=(label,icn,used,total,unit,cls)=>{const p=Math.round(used/total*100);
+    return `<div class="meter"><div class="mt"><span class="flex gap6">${ic(icn)}${label}</span><span class="v mono">${used}${unit} / ${total}${unit}</span></div>
+      <div class="bar"><span class="${cls}" style="width:${p}%"></span></div></div>`;};
+  return `
+  <div class="banner">${ic("up")}<div class="bt"><div class="h">NovaPanel 1.4.5 is available — security update</div>
+     <div class="s">Signed release · verified before apply · no downgrade. Fixes CVE-2026-20311 in the file manager.</div></div>
+     <a class="btn btn-primary btn-sm" href="#updates">Review & apply</a></div>
+
+  <div class="page-head"><div><h1>Server overview</h1><p>${server.fqdn} · ${server.os} · up ${server.uptime}</p></div>
+    <div class="head-actions"><button class="btn btn-sm" onclick="openJobs()">${ic("activity")}Jobs</button>
+      <button class="btn btn-primary btn-sm" onclick="wizard()">${ic("plus")}New website <span class="verb">site.create</span></button></div></div>
+
+  <div class="grid cards-4" style="margin-bottom:16px">
+    <div class="card tile"><span class="lbl">${ic("globe")}Websites</span><span class="val tnum">${sites.length}</span>
+      <span class="sub"><span class="trend up">▲ 2</span> this month · ${sites.filter(s=>s.cert==='none').length} without TLS</span></div>
+    <div class="card tile"><span class="lbl">${ic("db")}Databases</span><span class="val tnum">${dbs.length}</span>
+      <span class="sub">MariaDB · 255 MB total</span></div>
+    <div class="card tile"><span class="lbl">${ic("save")}Backups</span><span class="val tnum">214</span>
+      <span class="sub"><span class="trend up">●</span> last night OK · 1 verify pending</span></div>
+    <div class="card tile"><span class="lbl">${ic("lock")}TLS certs</span><span class="val tnum">4</span>
+      <span class="sub" style="color:var(--crit)">1 expiring in 6 days</span></div>
+  </div>
+
+  <div class="grid cards-3">
+    <div class="card span-2">
+      <div class="card-h">${ic("activity")}<h3>Resource usage</h3><span class="more">live · 5s</span></div>
+      <div class="card-pad grid" style="gap:16px">
+        ${meter("CPU","cpu",metrics.cpu,100,"%","")}
+        ${meter("Memory","ram",metrics.ramUsed,server.ram," GB","good")}
+        ${meter("Disk (/)","disk",metrics.diskUsed,server.disk," GB","")}
+        <div class="meter"><div class="mt"><span class="flex gap6">${ic("globe")}Bandwidth (month)</span>
+          <span class="v mono">${metrics.bwIn} in · ${metrics.bwOut} out / ${metrics.bwCap}</span></div>
+          <div class="bar"><span style="width:30%"></span></div></div>
+        <div class="flex wrap" style="gap:10px;color:var(--muted);font-size:12.5px;font-weight:600">
+          <span class="tag">${server.cores} vCPU</span><span class="tag">${server.ram} GB RAM</span>
+          <span class="tag">${server.disk} GB NVMe</span><span class="tag">load ${server.load}</span>
+          <span class="tag mono">kernel ${server.kernel}</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-h">${ic("cpu")}<h3>Services</h3><span class="more">systemd</span></div>
+      <div>${services.map(s=>`<div class="svc"><div><div class="nm">${s.nm}</div><div class="ver mono">${s.ver}</div></div>
+        <span class="st badge ${s.st}"><span class="dt"></span>${s.st==="good"?"active":"degraded"}</span></div>`).join("")}</div>
+    </div>
+  </div>
+
+  <div class="grid cards-2" style="margin-top:16px">
+    <div class="card">
+      <div class="card-h">${ic("activity")}<h3>Background jobs</h3><button class="more" onclick="openJobs()">Open drawer ${ic("chevr","ic")}</button></div>
+      <div>${jobs.slice(0,4).map(j=>`<div class="lrow"><div class="li ${jobState(j.state)}">${ic(j.state==="failed"?"warn":j.state==="done"?"check":"refresh")}</div>
+        <div class="lt"><div class="a mono">${j.verb}</div><div class="b">${esc(j.obj)}</div></div>
+        <span class="lx"><span class="badge ${jobState(j.state)}">${j.state}${j.state==="running"?" "+j.pct+"%":""}</span></span></div>`).join("")}</div>
+    </div>
+    <div class="card">
+      <div class="card-h">${ic("logs")}<h3>Recent activity</h3><a class="more" href="#audit">All events ${ic("chevr","ic")}</a></div>
+      <div>${audit.slice(0,4).map(a=>`<div class="lrow"><div class="li ${a.cl}">${ic(a.ic)}</div>
+        <div class="lt"><div class="a mono">${a.verb} <span style="color:var(--faint)">· ${esc(a.actor)}</span></div><div class="b">${esc(a.code)}</div></div>
+        <span class="lx">${a.when}</span></div>`).join("")}</div>
+    </div>
+  </div>
+  <p style="margin:18px 2px 0;color:var(--faint);font-size:12px;font-weight:600">
+    Every action shows the RPC verb it maps to — e.g. <span class="verb">php.set</span>,
+    <span class="verb">ssl.issue</span>, <span class="verb">backup.restore</span> — so the UI maps 1:1 to the agent's typed verbs.</p>`;
+}
+
+function vWebsites(){
+  const cards=sites.map(s=>`
+   <div class="card site-card" onclick="location.hash='site/${s.id}'">
+     <div class="site-top">${fav(s.domain)}
+       <div class="site-id" style="min-width:0"><div class="nm">${esc(s.domain)}</div>
+         <div class="ty">${ic("chevr","ic")&&typeLabel(s.type)} · PHP ${s.php||"—"}</div></div>
+       <div class="mla">${certBadge(s)}</div></div>
+     <div class="site-meta">
+       <div class="kv"><div class="k">Domains</div><div class="v">${ic("globe","ic")&&s.domains}</div></div>
+       <div class="kv"><div class="k">Database</div><div class="v">${s.db?esc(s.db):'<span style="color:var(--faint)">none</span>'}</div></div>
+       <div class="kv"><div class="k">Disk</div><div class="v mono">${s.size}</div></div>
+       <div class="kv"><div class="k">Traffic</div><div class="v mono">${s.visits}</div></div>
+     </div>
+     <div class="site-foot">${s.deploy?`${ic("git","ic")} <span class="mono">${s.deploy.sha}</span> · ${s.deploy.when}`:`${ic("file","ic")} no deploy source`}
+       <span class="btn btn-sm btn-ghost">Manage ${ic("chevr","ic")}</span></div>
+   </div>`).join("");
+  return `<div class="page-head"><div><h1>Websites</h1><p>${sites.length} sites on this server · Nginx + per-site PHP-FPM</p></div>
+    <div class="head-actions"><button class="btn btn-primary" onclick="wizard()">${ic("plus")}New website <span class="verb">site.create</span></button></div></div>
+    <div id="siteGrid" class="site-grid">${cards}</div>`;
+}
+
+function vSite(id){
+  const s=siteBy(id); if(!s)return `<div class="empty">Site not found.</div>`;
+  const tabs=["Overview","Domains & TLS","Database","Deploy","Files","Cron","Logs"];
+  const manage=(t,icn,d,act,verb)=>`<div class="card"><div class="card-pad flex col" style="gap:10px;align-items:flex-start">
+     <div class="flex" style="gap:10px;width:100%"><span class="li" style="width:34px;height:34px;border-radius:9px;display:grid;place-items:center;background:var(--accent-weak);color:var(--accent);flex:none">${ic(icn)}</span>
+       <div style="min-width:0"><div style="font-weight:800">${t}</div><div style="font-size:12px;color:var(--muted)">${d}</div></div>
+       <span class="verb mla" style="align-self:flex-start" title="RPC verb this maps to">${verb}</span></div>
+     <button class="btn btn-sm btn-ghost mla">${act} ${ic("chevr","ic")}</button></div></div>`;
+  return `
+  <div class="page-head"><div class="flex" style="gap:14px">${fav(s.domain)}
+    <div><h1 style="display:flex;align-items:center;gap:10px">${esc(s.domain)} <a href="https://${esc(s.domain)}" style="color:var(--faint)">${ic("ext","ic")}</a></h1>
+      <p>${typeLabel(s.type)} · PHP ${s.php||"—"} · ${s.size} · ${s.visits}</p></div></div>
+    <div class="head-actions">${certBadge(s)}
+      <button class="btn btn-sm" onclick="toast('Opened file manager (demo)')">${ic("file")}Files</button>
+      <button class="btn btn-sm btn-ghost" onclick="toast('Restart queued (demo)')">${ic("refresh")}Restart PHP <span class="verb">service.restart</span></button></div></div>
+
+  <div class="tabs">${tabs.map((t,i)=>`<button class="tab ${i===0?'active':''}" onclick="siteTab(this,${i})">${t}</button>`).join("")}</div>
+
+  ${s.cert==="none"?`<div class="notice warn" style="margin-bottom:16px">${ic("warn")}
+    <div class="nt"><div class="nh">No TLS certificate yet — serving over HTTP only</div>
+      <div class="nb">Force-HTTPS is disabled until a valid certificate is installed. Issue a Let's Encrypt certificate (HTTP-01) to enable it.</div></div>
+    <button class="btn btn-sm btn-primary mla" style="align-self:center" onclick="toast('ACME HTTP-01 issuance queued (demo)')">Issue certificate <span class="verb">ssl.issue</span></button></div>`:""}
+  ${s.cert==="expiring"?`<div class="notice crit" style="margin-bottom:16px">${ic("warn")}
+    <div class="nt"><div class="nh">Certificate expires in ${s.certDays} days</div>
+      <div class="nb">Auto-renewal runs daily within the 30-day window. You can renew now if needed.</div></div>
+    <button class="btn btn-sm mla" style="align-self:center" onclick="toast('Renewal job queued (demo)')">Renew now <span class="verb">ssl.renew</span></button></div>`:""}
+  ${s.status==="maint"?`<div class="notice info" style="margin-bottom:16px">${ic("cog")}
+    <div class="nt"><div class="nh">Maintenance mode is on</div><div class="nb">Visitors see a 503 maintenance page. The ACME challenge path stays reachable.</div></div>
+    <label class="flex mla" style="align-self:center;gap:8px;font-weight:700;font-size:12.5px">On <span class="sw on" onclick="this.classList.toggle('on')"></span></label></div>`:""}
+
+  <div class="grid cards-3" style="margin-bottom:16px">
+    <div class="card tile"><span class="lbl">${ic("globe")}Primary domain</span><span class="val" style="font-size:16px">${esc(s.domain)}</span>
+      <span class="sub">${s.domains} domain${s.domains>1?"s":""} · ${s.cert==="none"?"HTTP":"HTTPS"}</span></div>
+    <div class="card tile"><span class="lbl">${ic("git")}Last deploy</span>
+      <span class="val mono" style="font-size:16px">${s.deploy?s.deploy.sha:"—"}</span>
+      <span class="sub">${s.deploy?`${s.deploy.branch} · ${s.deploy.when}`:"no git source"}</span></div>
+    <div class="card tile"><span class="lbl">${ic("db")}Database</span><span class="val" style="font-size:16px">${s.db?esc(s.db):"—"}</span>
+      <span class="sub">${s.db?"MariaDB · localhost":"no database"}</span></div>
+  </div>
+
+  <div class="grid cards-2">
+    ${manage("Domains &amp; TLS","globe","Add domains, issue / renew certificates, force HTTPS","Manage","domain.add · ssl.issue")}
+    ${manage("PHP version &amp; limits","cpu","Set the PHP version, memory limit, upload size","Configure","php.set")}
+    ${manage("Git deploy","git",s.deploy?`${s.deploy.repo} · pinned SHA`:"Connect a repository","Deploy","deploy.run")}
+    ${manage("Backups","save","Per-site snapshots, verify, restore","View","backup.create · restore")}
+    ${manage("File manager","file","Browse "+s.size+" in the docroot (sandboxed)","Browse","files.list")}
+    ${manage("Scheduled jobs","clock","Per-site cron as systemd timers","Edit","cron.create")}
+  </div>`;
+}
+
+function vDatabases(){
+  return `<div class="page-head"><div><h1>Databases</h1><p>MariaDB 10.11 · bound to 127.0.0.1 · one least-privilege user per database</p></div>
+    <div class="head-actions"><button class="btn btn-primary" onclick="newDb()">${ic("plus")}New database <span class="verb">database.create</span></button></div></div>
+    <div class="card"><div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>Database</th><th>User</th><th>Engine</th><th>Tables</th><th>Size</th><th>Site</th><th></th></tr></thead>
+      <tbody>${dbs.map(d=>`<tr><td class="row-main mono">${esc(d.name)}</td><td class="mono" style="font-size:12px">${esc(d.user)}</td>
+        <td><span class="tag">${d.engine}</span></td><td class="tnum">${d.tables}</td><td class="mono tnum">${d.size}</td>
+        <td class="row-sub">${esc(d.site)}</td>
+        <td class="cell-actions"><button class="btn btn-sm btn-ghost" onclick="toast('Rotate password → show-once (demo)')">Rotate <span class="verb">database.rotate_password</span></button></td></tr>`).join("")}</tbody>
+    </table></div></div>
+    <div class="notice accent" style="margin-top:16px">${ic("key")}<div class="nt"><div class="nh">Passwords are shown once</div>
+      <div class="nb">A generated password is delivered through a one-time claim and never stored in plaintext, logs, or the job record.</div></div></div>`;
+}
+
+function vBackups(){
+  return `<div class="page-head"><div><h1>Backups</h1><p>Restic · verified by reading back · daily schedule</p></div>
+    <div class="head-actions"><button class="btn btn-sm" onclick="toast('Verify (read-data 4/7) queued (demo)')">${ic("check")}Verify <span class="verb">backup.verify</span></button>
+      <button class="btn btn-primary btn-sm" onclick="toast('Snapshot job queued (demo)')">${ic("plus")}Back up now <span class="verb">backup.create</span></button></div></div>
+
+  <div class="grid cards-2" style="margin-bottom:16px">
+    ${repos.map(r=>`<div class="card"><div class="card-h">${ic("save")}<h3>${r.name}</h3>
+      <span class="badge ${r.st} mla"><span class="dt"></span>healthy</span></div>
+      <div class="card-pad grid" style="gap:10px"><div class="codeblock">${esc(r.loc)}</div>
+      <div class="flex wrap" style="gap:18px"><div><div class="kv"><div class="k">Used</div><div class="v mono">${r.used}</div></div></div>
+        <div><div class="kv"><div class="k">Snapshots</div><div class="v mono tnum">${r.snaps}</div></div></div>
+        <div><div class="kv"><div class="k">Last</div><div class="v">${r.last}</div></div></div>
+        <div><div class="kv"><div class="k">Retention</div><div class="v">7d·4w·6m</div></div></div></div></div></div>`).join("")}
+  </div>
+
+  <div class="card"><div class="card-h">${ic("clock")}<h3>Recent snapshots</h3><span class="more">restic</span></div>
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>Snapshot</th><th>Target</th><th>Repo</th><th>Size</th><th>When</th><th>Verify</th><th></th></tr></thead>
+      <tbody>${snaps.map(s=>`<tr><td class="mono">${s.id}</td>
+        <td><span class="badge ${s.kind==='db'?'info':s.kind==='panel'?'accent':'good'}" style="margin-right:7px">${s.kind}</span>${esc(s.target)}</td>
+        <td class="row-sub">${s.repo}</td><td class="mono tnum">${s.size}</td><td class="row-sub">${s.when}</td>
+        <td>${s.warn?`<span class="badge warn"><span class="dt"></span>${s.verify}</span>`:`<span class="badge good">${ic("check","dt")}${s.verify}</span>`}</td>
+        <td class="cell-actions"><button class="btn btn-sm" onclick="restoreFlow('${esc(s.target)}')">Restore <span class="verb">backup.restore</span></button></td></tr>`).join("")}</tbody>
+    </table></div></div>`;
+}
+
+function vFirewall(){
+  return `<div class="page-head"><div><h1>Firewall</h1><p>UFW · safe-apply with a timed auto-revert · the SSH rule can't be removed</p></div>
+    <div class="head-actions"><button class="btn btn-sm" onclick="toast('Dry-run shows the diff (demo)')">Dry-run</button>
+      <button class="btn btn-primary btn-sm" onclick="armFirewall()">${ic("shield")}Apply change <span class="verb">firewall.apply</span></button></div></div>
+
+  <div id="fwArmed"></div>
+
+  <div class="card"><div class="card-h">${ic("shield")}<h3>Active rules</h3><span class="badge good mla"><span class="dt"></span>active · IPv4 + IPv6</span></div>
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>#</th><th>Action</th><th>Proto</th><th>Port</th><th>Source</th><th>Comment</th><th></th></tr></thead>
+      <tbody>${fwRules.map(r=>`<tr><td class="mono tnum">${r.n}</td>
+        <td><span class="badge ${r.action==='allow'?'good':r.action==='deny'?'crit':'warn'}">${r.action}</span></td>
+        <td class="mono">${r.proto}</td><td class="mono">${r.port}</td><td class="mono">${r.src}</td>
+        <td class="row-sub">${r.pin?ic("lock","ic")+" ":""}${esc(r.cm)}</td>
+        <td class="cell-actions">${r.pin?'<span class="tag">pinned</span>':`<button class="btn btn-sm btn-ghost" onclick="toast('Edit via Apply change (demo)')">Edit</button>`}</td></tr>`).join("")}</tbody>
+    </table></div></div>
+
+  <div class="notice accent" style="margin-top:16px">${ic("shield")}<div class="nt"><div class="nh">How safe-apply works</div>
+    <div class="nb">Every change arms a timed revert before it applies. If you don't confirm from a fresh page load within 15 minutes, the firewall rolls back on its own — so a bad rule can never lock you out.</div></div></div>`;
+}
+
+function vDns(){
+  return `<div class="page-head"><div><h1>DNS</h1><p>Cloudflare · zone <span class="mono">lumina.co</span> · proxy only on web records</p></div>
+    <div class="head-actions"><button class="btn btn-sm" onclick="toast('DNS verify: points here ✓ (demo)')">Verify</button>
+      <button class="btn btn-primary btn-sm" onclick="toast('Add record (demo)')">${ic("plus")}Add record <span class="verb">dns.record.create</span></button></div></div>
+    <div class="card"><div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>Type</th><th>Name</th><th>Value</th><th>TTL</th><th>Proxy</th><th></th></tr></thead>
+      <tbody>${dns.map(r=>`<tr><td><span class="tag">${r.type}</span></td><td class="mono">${esc(r.name)}</td>
+        <td class="mono" style="font-size:12px;max-width:260px;overflow:hidden;text-overflow:ellipsis">${r.prio?`<span class="row-sub">prio ${r.prio} </span>`:""}${esc(r.val)}</td>
+        <td class="mono">${r.ttl}</td>
+        <td>${["A","AAAA","CNAME"].includes(r.type)?`<span class="sw ${r.proxied?'on':''}" onclick="this.classList.toggle('on')"></span>`:`<span class="tag" title="Mail/auth records are never proxied">off · locked</span>`}</td>
+        <td class="cell-actions"><button class="btn btn-sm btn-ghost">Edit</button></td></tr>`).join("")}</tbody>
+    </table></div></div>
+    <div class="notice warn" style="margin-top:16px">${ic("warn")}<div class="nt"><div class="nh">Mail and auth records stay un-proxied</div>
+      <div class="nb">MX, SPF, DKIM and DMARC can't be put behind the Cloudflare proxy — doing so would break mail delivery and alignment. The toggle is locked off for those.</div></div></div>`;
+}
+
+function vUsers(){
+  return `<div class="page-head"><div><h1>Users &amp; roles</h1><p>owner · admin · read-only — no tenants, packages, or resellers</p></div>
+    <div class="head-actions"><button class="btn btn-primary" onclick="toast('Invite user (demo)')">${ic("plus")}Invite user</button></div></div>
+    <div class="card"><div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>User</th><th>Role</th><th>MFA</th><th>Last active</th><th></th></tr></thead>
+      <tbody>${users.map(u=>`<tr><td><div class="flex" style="gap:10px"><div class="avatar" style="width:30px;height:30px;font-size:12px">${esc(u.nm[0])}</div>
+        <div><div class="row-main">${esc(u.nm)}</div><div class="row-sub mono">${esc(u.email)}</div></div></div></td>
+        <td><span class="badge ${u.role==='owner'?'accent':u.role==='admin'?'info':''}">${u.role}</span></td>
+        <td>${u.mfa?`<span class="badge good">${ic("lock","dt")}TOTP on</span>`:`<span class="badge warn"><span class="dt"></span>off</span>`}</td>
+        <td class="row-sub">${u.last}</td>
+        <td class="cell-actions"><button class="btn btn-sm btn-ghost">Edit</button></td></tr>`).join("")}</tbody>
+    </table></div></div>
+    <div class="notice accent" style="margin-top:16px">${ic("shield")}<div class="nt"><div class="nh">MFA gates the dangerous verbs</div>
+      <div class="nb">Restore, firewall changes, SSH keys, token creation and reboot need a fresh TOTP within a 5-minute window — a recent sign-in isn't enough.</div></div></div>`;
+}
+
+function vTokens(){
+  return `<div class="page-head"><div><h1>API tokens</h1><p>Bearer <span class="mono">npat_…</span> tokens · scoped · shown once</p></div>
+    <div class="head-actions"><button class="btn btn-primary" onclick="newToken()">${ic("plus")}New token <span class="verb">tokens.create</span></button></div></div>
+    <div class="card"><div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>Name</th><th>Token</th><th>Scopes</th><th>Last used</th><th>Expires</th><th></th></tr></thead>
+      <tbody>${tokens.map(t=>`<tr><td class="row-main">${esc(t.name)}${t.auto?' <span class="tag" style="color:var(--accent)">automation</span>':''}</td>
+        <td class="mono" style="font-size:12px">${t.prefix}</td>
+        <td><div class="flex wrap gap6">${t.scopes.map(sc=>`<span class="tag">${sc}</span>`).join("")}</div></td>
+        <td class="row-sub">${t.last}</td><td class="row-sub">${t.exp}</td>
+        <td class="cell-actions"><button class="btn btn-sm btn-ghost" onclick="toast('Token revoked (demo)')">Revoke</button></td></tr>`).join("")}</tbody>
+    </table></div></div>
+    <div class="notice accent" style="margin-top:16px">${ic("token")}<div class="nt"><div class="nh">Destructive scopes need an automation grant</div>
+      <div class="nb">restore, firewall:write, ssh:write and token creation aren't on an ordinary token — they need a stepped-up automation grant, because a token can't present TOTP.</div></div></div>`;
+}
+
+function vUpdates(){
+  return `<div class="page-head"><div><h1>Updates</h1><p>Signed releases · verified before apply · no downgrade</p></div></div>
+  <div class="card" style="margin-bottom:16px"><div class="card-pad flex wrap" style="gap:18px;align-items:center">
+    <div><div class="kv"><div class="k">Installed</div></div><div style="font-size:26px;font-weight:800" class="mono">1.4.2</div></div>
+    ${ic("chevr")}
+    <div><div class="kv"><div class="k">Available</div></div><div style="font-size:26px;font-weight:800;color:var(--accent)" class="mono">1.4.5</div></div>
+    <span class="badge crit"><span class="dt"></span>Security release</span>
+    <button class="btn btn-primary mla" onclick="toast('Signature verified · applying in a job (demo)')">${ic("up")}Apply update <span class="verb">update.apply</span></button></div></div>
+
+  <div class="grid cards-2">
+    <div class="card"><div class="card-h">${ic("logs")}<h3>What's in 1.4.5</h3></div>
+      <div class="card-pad grid" style="gap:9px;font-size:13px">
+        <div class="flex gap6"><span class="badge crit">security</span> Fix path traversal in the file manager (CVE-2026-20311)</div>
+        <div class="flex gap6"><span class="badge info">fix</span> ACME DNS-01 wildcard renewal retry</div>
+        <div class="flex gap6"><span class="badge info">fix</span> Restic stale-lock auto-unlock on exit 11</div>
+        <div class="flex gap6"><span class="badge good">new</span> Per-site PHP OPcache tuning profile</div>
+      </div></div>
+    <div class="card"><div class="card-h">${ic("shield")}<h3>How updates stay safe</h3></div>
+      <div class="card-pad grid" style="gap:11px;font-size:13px;color:var(--muted)">
+        <div class="flex gap6">${ic("check","ic")&&'<span style="color:var(--good)">'+ic("check","ic")+'</span>'} ed25519 signature verified <b style="color:var(--fg)">before</b> the manifest is parsed</div>
+        <div class="flex gap6"><span style="color:var(--good)">${ic("check","ic")}</span> Refuses any version older than installed (no downgrade)</div>
+        <div class="flex gap6"><span style="color:var(--good)">${ic("check","ic")}</span> Each artifact checked against the signed sha256 + size</div>
+        <div class="flex gap6"><span style="color:var(--good)">${ic("check","ic")}</span> Applied in a job; rolls back if the restart health-check fails</div>
+      </div></div>
+  </div>`;
+}
+
+function vAudit(){
+  const all=[...audit,...audit.map(a=>({...a,when:"3d ago"}))];
+  return `<div class="page-head"><div><h1>Audit log</h1><p>Append-only · every privileged action, refusal and failure — written by the agent</p></div>
+    <div class="head-actions"><button class="btn btn-sm">${ic("file")}Export</button></div></div>
+    <div class="card"><div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>Verb</th><th>Actor</th><th>Outcome</th><th>Detail</th><th>When</th></tr></thead>
+      <tbody>${all.map(a=>`<tr><td class="mono row-main">${a.verb}</td><td class="mono" style="font-size:12px">${esc(a.actor)}</td>
+        <td><span class="badge ${a.out==='ok'?'good':a.out==='refused'?'crit':'warn'}">${a.out}</span></td>
+        <td class="row-sub">${esc(a.code)}</td><td class="row-sub">${a.when}</td></tr>`).join("")}</tbody>
+    </table></div></div>`;
+}
+
+/* ---------------- router ---------------- */
+const TITLES={dashboard:["Overview"],websites:["Websites"],databases:["Databases"],backups:["Backups"],
+  firewall:["Firewall"],dns:["DNS"],users:["Users & roles"],tokens:["API tokens"],updates:["Updates"],audit:["Audit log"]};
+function route(){
+  const h=(location.hash.replace(/^#/,"")||"dashboard");
+  const [r,arg]=h.split("/");
+  let html,crumb;
+  if(r==="site"&&arg){const s=siteBy(arg); html=vSite(arg);
+    crumb=`<a href="#websites">Websites</a><span class="sep">${ic("chevr","ic")}</span><span class="dim">${s?esc(s.domain):arg}</span>`;}
+  else{
+    const map={dashboard:vDashboard,websites:vWebsites,databases:vDatabases,backups:vBackups,firewall:vFirewall,
+      dns:vDns,users:vUsers,tokens:vTokens,updates:vUpdates,audit:vAudit};
+    const fn=map[r]||vDashboard;
+    html=fn();
+    crumb=`<span class="dim">${(TITLES[r]||["Overview"])[0]}</span>`;
+  }
+  $("#view").innerHTML=html;
+  $("#crumb").innerHTML=crumb;
+  renderSidebar(r==="site"?"site":r);
+  window.scrollTo(0,0);
+  $("#sidebar").classList.remove("show"); $("#scrim").classList.remove("show");
+  if(r==="firewall"&&armed) paintArmed();
+}
+window.addEventListener("hashchange",route);
+
+/* ---------------- jobs drawer ---------------- */
+function renderJobs(){
+  $("#jobsBody").innerHTML=jobs.map(j=>`<div class="job"><div class="jh"><span class="badge ${jobState(j.state)}">${j.state}</span>
+    <span class="jv">${j.verb}</span><span class="jx">${j.id}</span></div>
+    <div class="jm">${esc(j.obj)}</div>
+    ${j.state==="failed"?`<div class="notice crit" style="padding:9px 11px;font-size:12px">${ic("warn")}<div class="nt"><div class="nb" style="color:inherit">${esc(j.msg)}</div></div></div>
+      <div class="flex gap6" style="margin-top:9px"><button class="btn btn-sm" onclick="retryJob('${j.id}')">Unlock &amp; retry</button></div>`
+    :`<div class="jp"><div class="prog ${j.state==='running'?'run':''}" style="flex:1"><span style="width:${j.pct}%"></span></div><span class="pct mono">${j.pct}%</span></div>
+      <div class="jm" style="margin:8px 0 0">${esc(j.msg)}</div>`}</div>`).join("");
+  const n=runningJobs(); const dot=ce("jobsDot"); dot.textContent=n; dot.style.display=n?"grid":"none";
+}
+function openJobs(){renderJobs();$("#drawer").classList.add("show");$("#scrim").classList.add("show");}
+function closeDrawer(){$("#drawer").classList.remove("show");$("#scrim").classList.remove("show");}
+function retryJob(id){const j=jobs.find(x=>x.id===id);if(!j)return;j.state="running";j.pct=5;j.msg="stale lock removed · re-reading packs";renderJobs();route();toast("Repository unlocked — verify re-queued");}
+
+/* ---------------- modal ---------------- */
+function modal(html){$("#modal").innerHTML=html;$("#modal").classList.add("show");$("#scrim").classList.add("show");}
+function closeModal(){$("#modal").classList.remove("show");$("#scrim").classList.remove("show");}
+
+function newDb(){modal(`<div class="modal-h">${ic("db")}<h3>New database</h3>
+  <button class="tb-btn" style="margin-left:auto;width:32px;height:32px" onclick="closeModal()">${ic("x","ic")}</button></div>
+  <div class="modal-b">
+    <div class="field"><label>Database name</label><input class="input mono" id="dbn" value="wp_lumina_newsite"><div class="hint">A least-privilege user bound to 127.0.0.1 is created automatically.</div></div>
+    <div class="field"><label>Attach to site</label><select class="input"><option>shop.lumina.co</option><option>api.lumina.co</option><option>— none —</option></select></div>
+  </div>
+  <div class="modal-f"><button class="btn" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="showSecret('Database password','M9x!q2',document.getElementById('dbn').value,'database')">Create database</button></div>`);}
+
+function newToken(){modal(`<div class="modal-h">${ic("token")}<h3>New API token</h3>
+  <button class="tb-btn" style="margin-left:auto;width:32px;height:32px" onclick="closeModal()">${ic("x","ic")}</button></div>
+  <div class="modal-b">
+    <div class="field"><label>Name</label><input class="input" value="ci-staging-deploy"></div>
+    <div class="field"><label>Scopes</label><div class="flex wrap gap6">
+      ${["system:read","sites:read","sites:write","deploy","databases:read","backups:read"].map((s,i)=>`<span class="tag" style="cursor:pointer;${i<4?'border-color:var(--accent);color:var(--accent)':''}">${s}</span>`).join("")}</div>
+      <div class="hint">Destructive scopes (restore, firewall:write) need an automation grant and a stepped-up session.</div></div>
+  </div>
+  <div class="modal-f"><button class="btn" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="showSecret('API token','npat_8sK2_7pQ…Z1','ci-staging-deploy','token')">Create token</button></div>`);}
+
+function showSecret(title,pw,name,kind){
+  const val=kind==="token"?"npat_8sK2_x7Qp2aLZ9m4Rk1vD0cBnH":("db_"+name+"_"+pw+"Kp93qZ");
+  modal(`<div class="modal-h">${ic("key")}<h3>${title} — copy it now</h3></div>
+  <div class="modal-b">
+    <div class="notice warn" style="margin:0">${ic("warn")}<div class="nt"><div class="nh">Shown once</div>
+      <div class="nb">This value is delivered through a one-time claim and is never stored or logged. You won't see it again.</div></div></div>
+    <div class="field"><label>${kind==="token"?"Token":"Password"} for ${esc(name)}</label>
+      <div class="secret" id="secretv">${esc(val)}</div></div>
+  </div>
+  <div class="modal-f"><button class="btn" id="copyBtn" onclick="copySecret()">Copy</button>
+    <button class="btn btn-primary" onclick="closeModal();toast('${title} created')">Done</button></div>`);}
+function copySecret(){const t=$("#secretv").textContent;
+  (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(()=>{$("#copyBtn").textContent="Copied ✓";})
+   .catch(()=>{const r=document.createRange();r.selectNodeContents($("#secretv"));getSelection().removeAllRanges();getSelection().addRange(r);$("#copyBtn").textContent="Selected";});}
+
+/* restore flow */
+function restoreFlow(target){modal(`<div class="modal-h">${ic("save")}<h3>Restore ${esc(target)}</h3></div>
+  <div class="modal-b">
+    <div class="notice crit" style="margin:0">${ic("warn")}<div class="nt"><div class="nh">This overwrites live data</div>
+      <div class="nb">A pre-restore snapshot is taken first, the data is restored into a scratch DB, validated, then swapped in. Needs a fresh TOTP.</div></div></div>
+    <div class="field"><label>Type the target name to confirm</label><input class="input mono" placeholder="${esc(target)}"></div>
+    <div class="field"><label>TOTP code</label><input class="input mono" placeholder="123 456" inputmode="numeric"></div>
+  </div>
+  <div class="modal-f"><button class="btn" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-danger" onclick="closeModal();toast('Restore job queued with pre-restore snapshot (demo)')">Restore</button></div>`);}
+
+/* create-site wizard */
+let wz={step:0,type:"wordpress"};
+function wizard(){wz={step:0,type:"wordpress"};paintWizard();}
+function paintWizard(){
+  const steps=["Type","Domain","Settings","Review"];
+  const body=[
+   ()=>`<div class="seg" style="flex-direction:column">
+     ${[["wordpress","WordPress","Core + wp-config, checksum-verified install","globe"],
+        ["php","PHP site","Nginx + per-site PHP-FPM pool","cpu"],
+        ["static","Static site","Served directly by Nginx, no PHP","file"]].map(([v,t,d])=>
+       `<div class="opt ${wz.type===v?'sel':''}" onclick="wz.type='${v}';paintWizard()"><div class="t">${ic("check","ic")&&t} ${wz.type===v?ic("check","ic"):""}</div><div class="d">${d}</div></div>`).join("")}</div>`,
+   ()=>`<div class="field"><label>Primary domain</label><input class="input mono" value="newsite.lumina.co" id="wzdom">
+     <div class="hint">DNS should point to ${server.ip}. A Let's Encrypt certificate is issued after the site is created.</div></div>
+     <div class="field"><label>Also add</label><label class="flex gap6" style="font-weight:600;font-size:13px"><span class="sw on"></span> www.newsite.lumina.co</label></div>`,
+   ()=>`<div class="field"><label>PHP version</label><select class="input" ${wz.type==='static'?'disabled':''}><option>8.3 (recommended)</option><option>8.2</option></select></div>
+     <div class="field"><label>Database</label><label class="flex gap6" style="font-weight:600;font-size:13px"><span class="sw ${wz.type!=='static'?'on':''}"></span> Create a MariaDB database + user</label></div>
+     <div class="field"><label>Git deploy</label><label class="flex gap6" style="font-weight:600;font-size:13px"><span class="sw"></span> Connect a repository (optional)</label></div>`,
+   ()=>`<div class="grid" style="gap:10px">
+     <div class="flex"><span class="row-sub mla" style="margin-left:0;width:120px">Type</span><b>${typeLabel(wz.type)}</b></div>
+     <div class="flex"><span class="row-sub" style="width:120px">Domain</span><b class="mono">newsite.lumina.co</b></div>
+     <div class="flex"><span class="row-sub" style="width:120px">PHP</span><b>${wz.type==='static'?'—':'8.3'}</b></div>
+     <div class="flex"><span class="row-sub" style="width:120px">TLS</span><b>Let's Encrypt after create</b></div>
+     <div class="notice accent" style="margin-top:6px">${ic("bolt")}<div class="nt"><div class="nb" style="color:inherit">Creates the Unix user, docroot, FPM pool, Nginx vhost and database, then issues the certificate — as one job you can watch in the drawer.</div></div></div></div>`
+  ][wz.step]();
+  modal(`<div class="modal-h">${ic("plus")}<h3>New website</h3>
+    <div class="steps mla">${steps.map((s,i)=>`<span class="s ${i===wz.step?'on':i<wz.step?'done':''}">${i<wz.step?'✓':i+1}·${s}</span>`).join('<span style="color:var(--faint)">›</span>')}</div></div>
+    <div class="modal-b">${body}</div>
+    <div class="modal-f">${wz.step>0?'<button class="btn" onclick="wz.step--;paintWizard()">Back</button>':'<button class="btn" onclick="closeModal()">Cancel</button>'}
+      ${wz.step<3?'<button class="btn btn-primary" onclick="wz.step++;paintWizard()">Continue</button>'
+        :'<button class="btn btn-primary" onclick="closeModal();createSiteJob()">Create website</button>'}</div>`);
+}
+function createSiteJob(){jobs.unshift({id:"job_"+Math.random().toString(36).slice(2,6),verb:"site.create",
+  obj:"newsite.lumina.co (wordpress)",state:"running",pct:12,msg:"creating unix user + docroot"});renderJobs();toast("Creating website — follow it in Jobs");openJobs();}
+
+/* firewall deadman */
+let armed=false, armT=null, armLeft=900;
+function armFirewall(){armed=true;armLeft=900;location.hash="firewall";setTimeout(paintArmed,30);}
+function paintArmed(){
+  const box=ce("fwArmed"); if(!box)return;
+  const draw=()=>{const r=28,c=2*Math.PI*r,off=c*(1-armLeft/900);
+    const mm=String(Math.floor(armLeft/60)).padStart(2,"0"),ss=String(armLeft%60).padStart(2,"0");
+    box.innerHTML=`<div class="notice warn" style="margin-bottom:16px;align-items:center">
+      <div class="countdown"><svg class="ring" viewBox="0 0 66 66"><circle class="bgc" cx="33" cy="33" r="${r}" fill="none" stroke-width="6"/>
+        <circle class="fgc" cx="33" cy="33" r="${r}" fill="none" stroke-width="6" stroke-dasharray="${c}" stroke-dashoffset="${off}" transform="rotate(-90 33 33)"/>
+        <text class="cd" x="33" y="38" text-anchor="middle">${mm}:${ss}</text></svg></div>
+      <div class="nt"><div class="nh">Change applied — confirm you're still connected</div>
+        <div class="nb">A new rule set is live. Confirm from this page within the countdown or it auto-reverts to the previous rules. Open a fresh tab to the panel to be sure you're not locked out.</div></div>
+      <div class="flex gap6" style="align-self:center"><button class="btn btn-sm" onclick="revertFw()">Revert now</button>
+        <button class="btn btn-sm btn-primary" onclick="confirmFw()">I'm still connected — confirm</button></div></div>`;};
+  draw(); clearInterval(armT);
+  armT=setInterval(()=>{armLeft-=7; if(armLeft<=0){clearInterval(armT);revertFw();return;} if(ce("fwArmed"))draw(); else clearInterval(armT);},1000);
+}
+function confirmFw(){clearInterval(armT);armed=false;ce("fwArmed").innerHTML="";toast("Firewall change confirmed — revert cancelled");}
+function revertFw(){clearInterval(armT);armed=false;if(ce("fwArmed"))ce("fwArmed").innerHTML="";toast("Reverted to the previous rules");}
+
+/* site tabs (demo) */
+function siteTab(el,i){el.parentElement.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));el.classList.add("active");
+  if(i>0)toast(el.textContent.trim()+" — section is interactive in the full build");}
+
+/* toast */
+let toastT=null;
+function toast(msg){let t=ce("toast");if(!t){t=document.createElement("div");t.id="toast";
+  t.style.cssText="position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:90;background:var(--fg);color:var(--bg);font-weight:700;font-size:13px;padding:10px 16px;border-radius:10px;box-shadow:var(--shadow);max-width:90vw";
+  document.body.appendChild(t);}
+  t.textContent=msg;t.style.opacity="1";clearTimeout(toastT);toastT=setTimeout(()=>t.style.opacity="0",2200);}
+
+/* theme */
+function initTheme(){let t=null;try{t=localStorage.getItem("np-theme")}catch(e){}
+  if(t)document.documentElement.setAttribute("data-theme",t);syncThemeIcon();}
+function toggleTheme(){const cur=document.documentElement.getAttribute("data-theme");
+  const dark=cur?cur==="dark":matchMedia("(prefers-color-scheme:dark)").matches;const next=dark?"light":"dark";
+  document.documentElement.setAttribute("data-theme",next);try{localStorage.setItem("np-theme",next)}catch(e){}syncThemeIcon();}
+function syncThemeIcon(){const cur=document.documentElement.getAttribute("data-theme");
+  const dark=cur?cur==="dark":matchMedia("(prefers-color-scheme:dark)").matches;
+  ce("themeIcon").setAttribute("href",dark?"#i-sun":"#i-moon");}
+
+/* wire up */
+ce("themeBtn").onclick=toggleTheme;
+ce("jobsBtn").onclick=openJobs;
+ce("drawerClose").onclick=closeDrawer;
+ce("ham").onclick=()=>{$("#sidebar").classList.toggle("show");$("#scrim").classList.toggle("show");};
+ce("scrim").onclick=()=>{closeDrawer();closeModal();$("#sidebar").classList.remove("show");};
+ce("q").addEventListener("input",e=>{const v=e.target.value.toLowerCase();
+  if(location.hash.replace("#","")!=="websites"&&v){location.hash="websites";setTimeout(()=>filterSites(v),40);return;}
+  filterSites(v);});
+function filterSites(v){const g=ce("siteGrid");if(!g)return;[...g.children].forEach(c=>{c.style.display=c.textContent.toLowerCase().includes(v)?"":"none";});}
+document.addEventListener("keydown",e=>{if(e.key==="/"&&document.activeElement.tagName!=="INPUT"){e.preventDefault();ce("q").focus();}
+  if(e.key==="Escape"){closeModal();closeDrawer();}});
+
+initTheme(); renderJobs(); route();
 </script>

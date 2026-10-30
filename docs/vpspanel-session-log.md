@@ -112,11 +112,18 @@ Full detail in `vpspanel-plan-amendments.md`. We downloaded and read BHPanel's r
 
 ## 5. UI prototype
 
-- **Published artifact:** https://claude.ai/artifact/CMETzSRD3ieaL1sbzfPheW
+- **Published artifact (data-rich v2):** https://claude.ai/artifact/5oPuejzo85uxybvyn2TnVi
 - **Repo copy:** `docs/prototypes/novapanel-dashboard.html` (open locally or re-publish).
-- hPanel-inspired: consolidated sidebar + Favourites, server-context card (single VPS), quicksearch,
-  per-site **Manage** card dashboard, create-site wizard, dashboard/websites/databases/backups. Light
-  + dark, responsive. Doubles as a visual spec for Phase 2/3.
+- hPanel-inspired, **render-from-data demo** covering the real feature set: Overview (server context,
+  resource meters, services, jobs, activity), Websites + per-site **Manage** (3 cert states, PHP, Git
+  deploy, DB, files, cron), Databases (show-once), Backups (repos + snapshots + restore flow), Firewall
+  (safe-apply **deadman** confirm with countdown), DNS (Cloudflare, proxy web-only), Users & roles
+  (MFA), API tokens (npat_, scopes), Updates (signed/anti-rollback), Audit log; live **Jobs drawer**
+  (async 202+poll), create-site **wizard**, show-once **secret** modal. Light + dark, responsive,
+  verified in the viewer (no console errors).
+- **Every UI action is labelled with the canonical RPC verb it maps to** (`⌁ php.set`, `ssl.issue`,
+  `backup.restore`, `firewall.apply`, …) so the prototype is a 1:1 wiring map to the agent verb set in
+  `spec/01-rpc-and-verbs.md` — this is the visual contract Phase 2/3 wire against.
 
 ---
 
