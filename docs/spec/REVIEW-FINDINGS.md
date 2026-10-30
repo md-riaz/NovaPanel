@@ -264,7 +264,9 @@ missing per-verb arg/reply layer, (c) self-inflicted contradictions from pass-1 
   202, agent-side scope, naming), phase-6 (unix_socket dump, firewall deadman v2 as a root transient
   subcommand with enabled-state + confirm-id + conflict + client round-trip, restore-swap edge
   handling, repo management).
-- **Phase 9:** stack.switch folded to BHPanel's verified migration-free auto-rollback sequence.
+- **Phase 9:** the earlier BHPanel-inspired global `stack.switch` idea was replaced. OLS is now a
+  private, per-site WordPress backend behind the permanent Nginx edge, with site-scoped health checks
+  and rollback.
 
 ## Round 3 (final re-check) + pass 3
 

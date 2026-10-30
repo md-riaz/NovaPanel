@@ -290,8 +290,10 @@ another), *not* as a tenancy product:
 > cron, XFS/ext4 disk+inode quota) *because it sells accounts*. With one owner there are no competing
 > tenants to meter. **v1 keeps only:** the per-site non-login user + `0750` home + per-site FPM pool
 > (defense-in-depth so a compromised site can't read another). **v1 drops:** kernel disk/inode quotas
-> (and the quota-bootstrap/reboot dance and `quotaon`-ordering drop-in). **Optional later:** a single
-> shared `vpspanel.slice` CPU/memory cap to keep the box responsive under load — one cap for the
+> (and the quota-bootstrap/reboot dance and `quotaon`-ordering drop-in). PHP compatibility restrictions
+> are not the boundary: `open_basedir` and command-function deny lists stay off by default and are an
+> explicit hardened per-site option. **Optional later:** a single shared `vpspanel.slice` CPU/memory cap
+> to keep the box responsive under load — one cap for the
 > whole machine, not per-site metering.
 
 ---
@@ -340,12 +342,12 @@ files/Git/cron/logs → backups → firewall/SSH → DNS → integrations/API �
   require a separate automation grant (a token can't present TOTP). Deployment API + webhooks per
   **D1**; GitHub OAuth/deploy-key/HMAC-webhook push-to-deploy.
 - **Phase 9 — optional modules, after core is boring (D4, first-party compiled-in):** OpenLiteSpeed
-  WordPress-performance mode (private, 127.0.0.1 behind Nginx; rewrite rules only, **not** full
-  `.htaccess`); then only if demand proves it — local mail (Postfix/Dovecot/Rspamd), authoritative
+  WordPress-performance mode, private on `127.0.0.1` or a Unix socket behind the permanent Nginx
+  edge. It is per-site, supports structured rewrite rules only, and never binds public ports or
+  replaces Nginx. Then only if demand proves it — local mail (Postfix/Dovecot/Rspamd), authoritative
   DNS (**PowerDNS**, requires an independent secondary NS before "healthy"; reject same-IP ns1/ns2),
-  optional Pure-FTPd (explicit TLS only), Docker/Compose for self-hosted apps. **Switching web
-  stacks must be transactional with backup + rollback** (aaPanel's switch corrupts vhosts via
-  `#`-marker heuristics — don't copy that).
+  optional Pure-FTPd (explicit TLS only), Docker/Compose for self-hosted apps. OLS enablement must be
+  transactional per site, with config backup, health probe and rollback to that site's PHP-FPM route.
 
 ---
 

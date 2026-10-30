@@ -98,8 +98,8 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 | `repo.delete` | | A | | backups:write | | | ✓ | |
 | `repo.list` | | RO | ✓ | backups:read | | | | |
 | `schedule.list`/`set`/`enable`/`disable` | | A | list:✓ | system:read/write | | | | drives F18 |
-| `stack.status` | | A | ✓ | system:read | | | | module (Phase 9) |
-| `stack.switch` | | O | | — | ✓ | ✓ | ✓ | `system` (server-wide, auto-rollback) |
+| `ols.status` | | A | ✓ | system:read | | | | module (Phase 9, private per-site backend) |
+| `ols.enable`/`ols.disable` | | O | | — | ✓ | ✓ | ✓ | site-scoped, auto-rollback |
 | `firewall.apply` confirm flow → `firewall.confirm`/`revert` | | A | | **firewall:write** | | | ✓ | now token-reachable so automation can confirm |
 
 **Internal** (not web/registry-reachable in the public scope map, called by `panel-web` handlers over

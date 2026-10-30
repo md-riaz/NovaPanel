@@ -26,23 +26,19 @@ and real demand. Reads: `00-foundations.md` (all), `vpspanel-plan.md` §1 non-go
   **enables/configures a shipped module** — it never fetches or executes downloaded code (D4).
 - A module registers its verbs in the **same** registry (F13) with the same validation/audit/job
   rules; a disabled module's verbs return `code:"unsupported"`.
-- **Web-stack switching is server-wide, transactional, migration-free (verified against BHPanel's real
-  `stack.switch`).** The stack is one global choice (e.g. `nginx` ↔ `ols`); **no data migration** —
-  PHP-FPM pools, certificates, DB users and accounts are stack-independent, so only the web-server
-  config is **re-rendered from the DB** (the derived-artifact model). aaPanel corrupts vhosts by
-  editing them with `#`-marker heuristics — **never do that**; always regenerate from the DB. The
-  `stack.switch` job (owner, MFA, effectful, `objectKey system`) follows BHPanel's sequence:
-  1. **Install the new stack beside the running one** — visitors unaffected.
-  2. **Render + validate** the new stack's config for every site; if validation is refused, **stop —
-     nothing has changed**.
-  3. **Baseline:** record how every site answers now (status, redirect, certificate), site by site.
-  4. **Swap** — a brief all-sites outage of a few seconds (honest; not zero-downtime).
-  5. **Re-probe** every site; **if any answers worse, switch back automatically** and report which.
-  A **dry-run ("only check, don't switch")** runs steps 1–3. `stack.status` reports the current stack,
-  versions, and whether a switch is in progress. (Note BHPanel's lesson: there is no "Nginx-only" —
-  Nginx silently ignores `.htaccess`; our v1 is Nginx-only *because* we render rewrite rules from
-  structured fields rather than honoring `.htaccess`, so this is a module concern only if an
-  Apache-compatible stack is ever offered.)
+- **Nginx remains the permanent public edge.** It owns ports 80 and 443, TLS, HTTP/2 and HTTP/3,
+  ACME HTTP-01, redirects, access logs, WebSocket and reverse-proxy routes for every site type.
+  OLS never owns a public port and does not replace Nginx.
+- **OLS is a private, per-site WordPress backend.** The OLS listener binds only to `127.0.0.1` or a
+  private Unix socket. Nginx proxies only opted-in WordPress sites to it. Static sites, ordinary PHP,
+  Node, Python, Go and container applications stay on their existing Nginx routes.
+- **Enablement is transactional per site, not a stack switch.** Install OLS beside the running site,
+  render and validate its private vhost, record the site's HTTP status, redirect and certificate,
+  atomically change that site's Nginx upstream, then re-probe it. On a worse result, restore the prior
+  Nginx-to-PHP-FPM route automatically. A dry run performs installation, rendering, validation and the
+  baseline probe without changing the upstream.
+- **Render from structured state only.** Never edit generated Nginx or OLS vhosts with marker-comment
+  heuristics. OLS supports declared rewrite rules, not arbitrary `.htaccess` directives.
 
 ### Resolved interface (B29, C22)
 ```go
@@ -75,8 +71,8 @@ type Module interface {
 1.  The module is OFF by default; a fresh install never enables it; its verbs return "unsupported"
       until explicitly enabled.
 2.  Enabling/disabling is idempotent and audited; disabling fully reverts config + reloads.
-3.  Web-stack switch: force a failure mid-switch → the prior stack's config is restored and the site
-      stays online (no half-switched vhost). A pre-switch backup exists.
+3.  OLS (if built): force a failure while enabling it for one site → that site's prior Nginx-to-PHP-FPM
+      route is restored and every other site remains untouched. A pre-change config backup exists.
 4.  Mail (if built): outbound is capped; DKIM signs; no open relay (test a relay attempt → refused).
 5.  PowerDNS (if built): refuses same-IP ns1/ns2; a zone is not "healthy" without an independent
       secondary.
@@ -87,7 +83,8 @@ type Module interface {
 ## Definition of Done (per module)
 - [ ] Off by default; demand-gated; its verbs are `unsupported` until enabled.
 - [ ] Enable/disable idempotent, audited, fully reversible.
-- [ ] If it replaces a web stack, the switch is transactional with backup + health-probe + rollback.
+- [ ] If OLS is enabled for a site, it remains private behind Nginx and rollback restores only that
+  site's Nginx-to-PHP-FPM route.
 - [ ] All global invariants still machine-enforced with the module built in.
 
 ## Guardrails (this phase)
@@ -95,7 +92,8 @@ type Module interface {
   module without restore is a foot-gun.
 - **First-party, compiled-in only (D4).** No third-party executable plugins; `module.install` never
   fetches or runs downloaded code.
-- **No stack switch without backup + rollback.** Never edit a live vhost with marker-comment
-  heuristics.
-- Each module is a separate gated sub-project — this phase does not authorize building all of them;
-  it sets the rules they are each built under.
+- **Nginx stays the only public server.** OLS, when built, binds only to loopback or a private Unix
+  socket behind Nginx. Do not add a global `stack.switch` or let OLS bind public ports.
+- Never edit a live vhost with marker-comment heuristics. Render a complete replacement from structured
+  state, validate it, atomically install it, probe it, and restore the last-known-good config on failure.
+- Each module is a separate gated sub-project. This phase does not authorize building all modules.

@@ -39,15 +39,20 @@ pm = ondemand
 pm.max_children         = {{cap}}     ; HARD per-pool concurrency cap, sized to RAM
 pm.process_idle_timeout = 10s
 pm.max_requests         = 500         ; respawn worker (leak guard)
-php_admin_value[open_basedir]      = /srv/sites/{{site}}:/tmp/{{site}}
-php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,dl,symlink,link
 php_admin_value[cgi.fix_pathinfo]  = 0        ; defense in depth w/ nginx try_files (Phase 3)
+; Compatibility profile: no open_basedir and no command-function denylist.
+; The worker's Unix uid, filesystem permissions and DB grant are the isolation boundary.
+; dl remains disabled in the system PHP configuration.
 php_admin_value[error_log]         = /var/log/novapanel/{{site}}/php-error.log
 php_admin_flag[log_errors]         = on
 ```
-Every parent dir of the socket must be **nginx-traversable**; on RHEL-family set SELinux
-`httpd_can_network_connect` (or a socket-context policy). Reload **php-fpm** (not nginx) after a pool
-change. Use `php_admin_*` (not `php_value`) so `ini_set()` can't override security settings.
+- **Compatibility profile is the default.** Do not set `open_basedir` or disable `exec`, `passthru`,
+  `shell_exec`, `system`, `proc_open` or `popen` by default. A VPS owner may need Composer, framework
+  workers, image/PDF processors and deployment hooks. The per-site Unix uid, `0750` ownership and
+  least-privilege DB user provide the actual boundary; `dl` stays disabled system-wide.
+- **Optional hardened PHP profile:** an owner may enable `open_basedir` and a command-function denylist
+  for one site. The panel must state that this can break child-process workloads, Composer, queue
+  workers, deployment hooks and image/PDF processing. It is never enabled silently.
 
 ### MariaDB lifecycle (reference)
 ```sql
@@ -120,7 +125,9 @@ FPM pool user so auto-updates work.
 ```
 1.  Per-site user: non-login, 0750 home; a second site's user cannot read the first site's files.
 2.  FPM pool: worker runs as the SITE user (asserted), socket owned by the NGINX user mode 0660 →
-      nginx serves PHP (no 502); open_basedir/disable_functions block cross-site read + shell funcs.
+      nginx serves PHP (no 502). A second site's worker cannot read the first site's `0750` files.
+      The default compatibility profile leaves child-process functions available; a hardened profile is
+      opt-in and its warning is tested.
 3.  DB lifecycle: database.create makes a loopback-bound user with ONLY that db's privileges (a test
       asserts the user cannot read another db and has no *.* grant); rotate updates wp-config in the
       same job; the agent used unix_socket (no admin password exists anywhere in config/DB).
@@ -135,15 +142,20 @@ FPM pool user so auto-updates work.
 
 ## Definition of Done
 - [ ] Per-site user + FPM pool with the socket-owner 502 fix; cross-site isolation proven.
-- [ ] Pool hardening: open_basedir, disable_functions, cgi.fix_pathinfo=0, per-site error log.
+- [ ] Pool hardening: `cgi.fix_pathinfo=0`, per-site error log, and default compatibility profile
+  documented. Hardened PHP is an explicit per-site option with compatibility warning.
 - [ ] MariaDB per-site DB+user, least-privilege (no `*.*`), loopback-bound; admin via unix_socket, no stored admin password.
 - [ ] Single DB transport (127.0.0.1) consistent across user host / DSN / wp-config.
 - [ ] WordPress install verifies checksums (never --insecure), wp-config 440/400, runs as site user, refuses non-empty docroot.
 - [ ] Show-once passwords; all verbs jobs + audited; no destructive WP ops before Phase 6.
 
 ## Guardrails (this phase)
-- **The FPM socket is owned by the nginx user, never the site user** (the 502 trap). The worker runs
-  as the site user; those are two different settings.
+- **The FPM socket is owned by the Nginx user, never the site user.** The worker runs as the site user;
+  these settings must remain separate to avoid the 502 permission-denied failure.
+- **Do not treat PHP configuration as the isolation boundary.** The default profile keeps process-execution
+  functions available and does not set `open_basedir`; per-site Unix uid, `0750` filesystem ownership,
+  per-site socket and least-privilege DB grants contain a compromised project. Hardened PHP restrictions
+  are optional and must carry a compatibility warning.
 - **Never grant `*.*` or `GRANT OPTION`/`FILE`/`SUPER`;** per-site DB + loopback user only.
 - **No DB-admin password stored anywhere** — agent uses `unix_socket`; never `MYSQL_PWD`/`-p` on argv.
 - **Never skip checksum verification or use `--insecure`;** wp-config never world-readable; WP-CLI

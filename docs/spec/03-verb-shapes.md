@@ -145,8 +145,9 @@ dns.purge{zone, urls?:[string]}                         → job → {}
 
 ## modules / webhooks (Phase 8–9)
 ```
-stack.status{}                                          → {current, versions, switching:bool}
-stack.switch{to, confirm:bool, check_only?:bool}        → job → {baseline:[…], result:'switched'|'checked'|'reverted'}
+ols.status{}                                            → {installed, sites:[{site_id,enabled,version,status}]}
+ols.enable{site_id, confirm:bool, check_only?:bool}     → job → {baseline, result:'enabled'|'checked'|'reverted'}
+ols.disable{site_id, confirm:bool}                       → job → {result:'disabled'|'reverted'}
 module.install{name}/module.enable{name,target?}/module.disable{name,target?} → job → {}
 module.status{name}                                     → {name, enabled, detail}
 module.list{}                                           → {modules:[{name,enabled,scope}]}
