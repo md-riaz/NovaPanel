@@ -13,7 +13,22 @@ PR77 F4 defines `session.start` as idempotent get-or-create. Login GET presents 
 - `go vet ./internal/web ./cmd/panel-web`
 - Install jsdom 26.1.0 and jsqr 1.4.0 in a scratch npm prefix, then run `NODE_PATH=/path/to/scratch/node_modules node internal/web/assets_test.cjs`. This tests the CSRF event and independently decodes the rendered enrollment SVG with jsQR. These are test-only dependencies, not served assets.
 
-The module owner supplies github.com/go-chi/chi/v5 v5.5.0. Until that dependency commit is integrated, checks require an isolated scratch `-modfile` containing chi. No module files belong to this slice.
+The module includes chi; no scratch module override is needed.
+
+## Real browser acceptance
+
+Install `playwright@1.58.2` in a scratch npm prefix, then run:
+
+```sh
+NODE_PATH=/path/to/scratch/node_modules \
+NOVAPANEL_BROWSER_NODE="$(command -v node)" \
+NOVAPANEL_BROWSER_ARTIFACTS=/path/to/scratch/browser-artifacts \
+go test ./internal/web/testdata/browser -run TestBrowserAuthentication -count=1 -v
+```
+
+`NOVAPANEL_CHROME` optionally selects the Chrome executable. The default is `/usr/bin/google-chrome`. The test uses a disposable TLS server, real SQLite/auth/dispatcher, and an injected web peer identity. It never connects to a host agent, invokes service commands, or grants implicit host-root identity. Its test-only expiry endpoint is not in the production router. The browser driver and process launcher live in testdata, outside production packages. The audit assertion rejects credential/session leakage.
+
+PR77's idempotent `session.start` agent implementation is required. Until that implementation is integrated the browser test intentionally fails on anonymous reload, rather than hiding the contract mismatch.
 
 ## Assets
 

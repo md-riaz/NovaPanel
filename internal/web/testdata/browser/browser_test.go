@@ -87,6 +87,20 @@ func TestBrowserAuthentication(t *testing.T) {
 			w.WriteHeader(204)
 			return
 		}
+		if r.URL.Path == "/__test/forbidden" && r.Method == "POST" {
+			cookie, err := r.Cookie(web.CookieName)
+			if err != nil {
+				w.WriteHeader(401)
+				return
+			}
+			reply, _ := (browserRPC{s}).Call(r.Context(), "user.create", map[string]any{"username": "forbidden", "email": "bad@example.test", "role": "admin", "password": "never created"}, cookie.Value)
+			if reply.Code != "forbidden" {
+				w.WriteHeader(500)
+				return
+			}
+			w.WriteHeader(403)
+			return
+		}
 		h.ServeHTTP(w, r)
 	})
 	cmd := exec.Command(node, "../browser.cjs", ts.URL)

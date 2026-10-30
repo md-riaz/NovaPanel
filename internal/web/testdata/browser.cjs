@@ -44,6 +44,9 @@ function totp(secret) {
   assert.notEqual((await cookie()).value,anon.value); assert.notEqual(await csrf(),before); assert.match(await page.locator('body').innerText(),/read_only/);
   assert.equal(await page.locator('form').count(),1);
   evidence.push('Real HTMX password login sends synchronizer header, rotates cookie and CSRF, opens read-only dashboard.');
+  assert.equal((await post('/__test/forbidden','',await csrf())).status,403);
+  evidence.push('Injected test-only user.create dispatch refuses the real read_only browser session.');
+  const fallback = await page.request.post(origin+'/logout',{headers:{Origin:origin,'X-CSRF-Token':'wrong','Content-Type':'application/x-www-form-urlencoded'},data:''}); assert.equal(fallback.status(),403);
   await page.goto(origin+'/mfa');
   const enroll = await submit('form[action="/mfa/enroll"]'); assert.equal(enroll.status(),200);
   await page.locator('#enrollment-qr svg path').waitFor();
