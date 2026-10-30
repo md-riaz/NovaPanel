@@ -77,18 +77,36 @@ func siteChanged(r sql.Result, e error) error {
 	return e
 }
 
-func (s *Store) AddDomain(ctx context.Context, v Domain) (out Domain, err error) {
+func (s *Store) AddDomain(ctx context.Context, v Domain) (Domain, error) {
+	out, _, err := s.addDomain(ctx, v, "", 0)
+	return out, err
+}
+
+// AddDomainWithExpansion commits the desired row and automatic follow-up together.
+func (s *Store) AddDomainWithExpansion(ctx context.Context, v Domain, parentID string, now int64) (Domain, *Job, error) {
+	return s.addDomain(ctx, v, parentID, now)
+}
+
+func (s *Store) addDomain(ctx context.Context, v Domain, parentID string, now int64) (out Domain, child *Job, err error) {
 	if v.ID == "" || v.SiteID == "" || v.FQDN == "" {
-		return out, ErrSiteInvalid
+		return out, nil, ErrSiteInvalid
 	}
 	err = s.Tx(ctx, func(tx *sql.Tx) error {
+		enqueue := func() error {
+			if parentID == "" {
+				return nil
+			}
+			var e error
+			child, e = domainExpansion(ctx, tx, out, parentID, now)
+			return e
+		}
 		old, e := scanDomain(tx.QueryRowContext(ctx, "SELECT "+domainColumns+" FROM domains WHERE fqdn=?", v.FQDN))
 		if e == nil {
 			if old.SiteID != v.SiteID {
 				return ErrSiteConflict
 			}
 			out = old
-			return nil
+			return enqueue()
 		}
 		if !errors.Is(e, sql.ErrNoRows) {
 			return e
@@ -104,7 +122,10 @@ func (s *Store) AddDomain(ctx context.Context, v Domain) (out Domain, err error)
 			return siteWriteError(e)
 		}
 		out, e = scanDomain(tx.QueryRowContext(ctx, "SELECT "+domainColumns+" FROM domains WHERE id=?", v.ID))
-		return e
+		if e != nil {
+			return e
+		}
+		return enqueue()
 	})
 	return
 }

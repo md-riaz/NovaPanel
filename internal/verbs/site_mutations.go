@@ -326,7 +326,7 @@ func domainAddExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if _, e := (siteMutationState{a}).mutableSite(ctx, v.SiteID); e != nil {
 		return e
 	}
-	d, e := a.Store.AddDomain(ctx, store.Domain{ID: v.DomainID, SiteID: v.SiteID, FQDN: v.FQDN})
+	d, e := a.Jobs.AddDomain(ctx, store.Domain{ID: v.DomainID, SiteID: v.SiteID, FQDN: v.FQDN}, j.ID)
 	if e != nil {
 		return siteError(e)
 	}

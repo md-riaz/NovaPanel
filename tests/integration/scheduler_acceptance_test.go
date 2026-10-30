@@ -352,11 +352,12 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 		ID string `json:"domain_id"`
 	}
 	json.Unmarshal(added.Result, &domain)
-	tick()
+	// domain.add publishes the child immediately. No scheduler tick is allowed
+	// between its completion and locating the full-SAN expansion.
 	issues, _ := st.ListJobs(ctx, store.JobFilter{Verb: "ssl.issue"})
 	var expansion jobs.Job
 	for _, v := range issues {
-		if v.Actor == "scheduler@local" {
+		if v.ID == domain.ID {
 			expansion = v
 		}
 	}
