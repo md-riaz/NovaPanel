@@ -72,8 +72,8 @@ make release-stage OUT=/absolute/scratch/release-stage
 ```
 
 This creates `panel-agent`, `panel-web`, `novapanelctl` and `maintenance.tar`.
-The maintenance archive contains the committed maintenance assets and integrity
-manifest; staging does not install them into production or start services.
+The maintenance archive contains the committed maintenance page; staging does not
+install it into production or start services.
 There is no Go installer in this branch. Review the
 [next-phase dependency map](docs/phase4-dependency-map.md) before authorizing
 Phase 4 implementation. Phase 3 review readiness is a prerequisite, not implied
