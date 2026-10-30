@@ -322,6 +322,21 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 	wait(one)
 	wait(two)
 	a.Jobs.SetRunner(server.ExecuteJob)
+	r = dispatch("ssl.auto_set", map[string]any{"site_id": sid, "enabled": false})
+	if !r.OK {
+		t.Fatal(r)
+	}
+	n = count()
+	before = l.reloads
+	clock.now = cadence.NextRun
+	tick()
+	if count() != n || l.reloads != before {
+		t.Fatal("disabled automatic certificate renewed")
+	}
+	r = dispatch("ssl.auto_set", map[string]any{"site_id": sid, "enabled": true})
+	if !r.OK {
+		t.Fatal(r)
+	}
 	// Upload the genuine issued pair as a manual input. This tests sealing and real
 	// publication without manufacturing an ACME response or exposing PEM in output.
 	cp, err := os.ReadFile(a.Cfg.TLSDir + "/alias.test/current/fullchain.pem")
@@ -352,7 +367,7 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 	// must suppress even the pre-existing automatic schedule's next occurrence.
 	n = count()
 	before = l.reloads
-	clock.now = cadence.NextRun
+	clock.now = cadence.NextRun + 24*60*60*1000
 	tick()
 	if count() != n || l.reloads != before {
 		t.Fatal("manual certificate auto-renewed")
