@@ -39,9 +39,11 @@ type Verb struct {
 	MaxDeadlineMs        int
 	NewArgs              func() any
 	// Durable jobs may carry trusted fields that public admission must reject.
-	NewJobArgs       func() any
-	JobObjectKey     func(any) string
-	ObjectKey        func(any) string
+	NewJobArgs   func() any
+	JobObjectKey func(any) string
+	ObjectKey    func(any) string
+	// ResolveObjectKey is read-only and runs only after registry authorization.
+	ResolveObjectKey func(context.Context, *agent.Agent, any) (string, error)
 	Run              func(context.Context, *agent.Agent, any) (any, error)
 	Exec             func(context.Context, *agent.Agent, *jobs.Job) error
 	ValidateRecovery func(context.Context, *agent.Agent, *jobs.Job) error
@@ -146,6 +148,7 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	if !object(req.Args) {
 		return Err("bad_request", "Object args required")
 	}
+	event.ObjectKey = requestObjectKey(req)
 	if caller.Role == "" && caller.Kind == "" && req.Session != "" {
 		resolver := s.Sessions
 		if resolver == nil {
@@ -253,8 +256,10 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 			return errorReply(err)
 		}
 	}
-	if v.ObjectKey != nil {
-		event.ObjectKey = v.ObjectKey(args)
+	if v.ObjectKey != nil && v.ResolveObjectKey == nil {
+		if key := v.ObjectKey(args); key != "site:" {
+			event.ObjectKey = key
+		}
 	}
 	max := v.MaxDeadlineMs
 	if max <= 0 {
@@ -269,6 +274,15 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(ms)*time.Millisecond)
 	defer cancel()
+	if v.ResolveObjectKey != nil {
+		event.Detail["stage"] = "resolve"
+		key, err := v.ResolveObjectKey(ctx, s.Agent, args)
+		if err != nil {
+			return errorReply(err)
+		}
+		event.ObjectKey = key
+		event.Detail["stage"] = "authz"
+	}
 	if mutation && s.DurableAudit != nil {
 		pre := event
 		pre.Outcome = "ok"

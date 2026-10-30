@@ -114,25 +114,33 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 		for _, ev := range before {
 			ids[ev.ID] = true
 		}
-		reply := server.Dispatch(rpc.WithCaller(ctx, caller), rpc.Request{Verb: verb, Args: raw, Actor: "untrusted-label"})
-		if !reply.OK {
-			t.Fatalf("%s dispatch failed code=%s", verb, reply.Code)
-		}
 		var target map[string]any
 		if err := json.Unmarshal(raw, &target); err != nil {
 			t.Fatal(err)
 		}
-		// Dispatch records the pre-handler key. Child handlers resolve the
-		// parent later; the queue events must use the resolved site ID instead.
+		// Authorized child removals resolve the persisted parent before admission.
 		wantKey := ""
 		switch verb {
 		case "site.create":
 			wantKey = "site:" + target["name"].(string)
-		case "domain.remove", "redirect.remove":
-			wantKey = "site:"
-		case "ssl.auto_set":
+		case "domain.remove":
+			d, e := st.DomainByID(ctx, target["domain_id"].(string))
+			if e != nil {
+				t.Fatal(e)
+			}
+			wantKey = "site:" + d.SiteID
+		case "redirect.remove":
+			d, e := st.RedirectByID(ctx, target["redirect_id"].(string))
+			if e != nil {
+				t.Fatal(e)
+			}
+			wantKey = "site:" + d.SiteID
 		default:
 			wantKey = "site:" + target["site_id"].(string)
+		}
+		reply := server.Dispatch(rpc.WithCaller(ctx, caller), rpc.Request{Verb: verb, Args: raw, Actor: "untrusted-label"})
+		if !reply.OK {
+			t.Fatalf("%s dispatch failed code=%s", verb, reply.Code)
 		}
 		after, err := st.ListEvents(ctx, 1000, "")
 		if err != nil {
@@ -470,8 +478,7 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 	if _, err = st.SiteByID(ctx, sid); err != sql.ErrNoRows {
 		t.Fatal("delete did not remove site", err)
 	}
-	// Refusals precede typed decoding/target lookup, so object_key is exactly
-	// empty, even for well-formed target arguments. Do not invent a resolved key.
+	// Refusals use only validated request IDs, never a persisted parent lookup.
 	verbs := []string{"site.create", "site.update", "site.delete", "domain.add", "domain.remove", "redirect.add", "redirect.remove", "ssl.issue", "ssl.renew", "ssl.upload", "ssl.auto_set"}
 	refusalCallers := []rpc.Caller{
 		{Role: "read_only", Session: "acceptance-reader", Peer: 1234},
@@ -545,7 +552,7 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 		if err := json.Unmarshal(ev.Detail, &d); err != nil {
 			t.Fatal(err)
 		}
-		if ev.ObjectKey != "" || ev.Outcome != "ok" || ev.Code != "" || ev.Role != "owner" || len(d) != 1 {
+		if ev.ObjectKey != key || ev.Outcome != "ok" || ev.Code != "" || ev.Role != "owner" || len(d) != 1 {
 			t.Fatal("synchronous auto_set audit differs")
 		}
 		stage, _ := d["stage"].(string)
@@ -566,7 +573,11 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 				if err := json.Unmarshal(ev.Detail, &d); err != nil {
 					t.Fatal(err)
 				}
-				if ev.Role != incoming.Role || ev.ObjectKey != "" || ev.Outcome != "refused" || ev.Code != "forbidden" || d["stage"] != "authz" || len(d) != 1 {
+				wantRefusalKey := key
+				if verb == "site.create" || verb == "domain.remove" || verb == "redirect.remove" {
+					wantRefusalKey = ""
+				}
+				if ev.Role != incoming.Role || ev.ObjectKey != wantRefusalKey || ev.Outcome != "refused" || ev.Code != "forbidden" || d["stage"] != "authz" || len(d) != 1 {
 					t.Fatalf("%s refusal binding/stage differs", verb)
 				}
 				n++

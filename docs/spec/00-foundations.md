@@ -464,6 +464,20 @@ Record(Event) error                                    -- fail-closed: see sinks
   the installer and re-made by the agent if missing; **no `LogsDirectory=`** in the unit (systemd
   re-chowns an ExecDirectory on every start and fails against `chattr +a` — BHPanel incident).
 - Secrets are redacted before an event is written (F12 redaction helper).
+- **Phase-3 object attribution clarification.** Authorization precedes resource lookups, including
+  lookups used for audit attribution. Before authorization, `detail.stage='authz'` identifies a
+  refusal; `object_key` may identify only a validated resource ID supplied in the request
+  (`site:<site_id>`, `domain:<domain_id>`, `redirect:<redirect_id>`) or a validated create name.
+  Otherwise it is empty, never a fabricated parent or the incomplete key `site:`. The request key
+  does not assert existence or parent resolution. After registry role/scope/MFA authorization and
+  argument validation, a shared dispatcher resolution step may read persisted parent bindings.
+  Child-removal admission and completion then use `site:<persisted_site_id>`, as do their queued
+  events; resolution failures retain the safe request key with `detail.stage='resolve'`.
+  Synchronous `ssl.auto_set` admission and completion use `site:<site_id>`. Durable admission must
+  still precede every mutation; resolution is read-only and cannot bypass registry authorization.
+  Existing sticky fail-closed audit behavior, actor-label semantics and authenticated roles remain
+  unchanged. Test seams are the production dispatcher with file/SQLite audit mirrors and the real
+  queue worker in the confined Pebble/nginx lab.
 
 ---
 

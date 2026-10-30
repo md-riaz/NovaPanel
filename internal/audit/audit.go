@@ -29,7 +29,7 @@ func (ev Event) validate() error {
 	}
 	if stage, ok := ev.Detail["stage"]; ok {
 		switch stage {
-		case "authz", "enqueue", "exec", "claim":
+		case "authz", "resolve", "enqueue", "exec", "claim":
 		default:
 			return errors.New("invalid audit stage")
 		}
