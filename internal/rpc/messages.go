@@ -143,6 +143,17 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 		caller = resolved
 	}
 	event.Role = caller.Role
+	if caller.Kind == "anon" && req.Verb != "session.start" && req.Verb != "session.login" {
+		return Err("unauthenticated", "Authentication required")
+	}
+	selfService := false
+	switch req.Verb {
+	case "session.reauth", "session.logout", "mfa.enroll", "mfa.confirm", "mfa.disable":
+		if caller.Kind != "user" || caller.UserID == "" || caller.Session == "" {
+			return Err("forbidden", "User session required")
+		}
+		selfService = true
+	}
 	if v.Internal && (caller.Peer != s.WebUID || caller.Peer == 0) {
 		return Err("forbidden", "Forbidden")
 	}
@@ -172,11 +183,16 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 			return Err("unauthenticated", "Authentication required")
 		}
 		rank, known := map[string]Role{"read_only": ReadOnly, "admin": Admin, "owner": Owner}[caller.Role]
-		if !known || (rank == ReadOnly && !v.ReadOnly) || (rank < v.MinRole && !(rank == ReadOnly && v.ReadOnly)) {
+		if !known || (rank == ReadOnly && !v.ReadOnly && !selfService) || (rank < v.MinRole && !(rank == ReadOnly && v.ReadOnly)) {
 			return Err("forbidden", "Forbidden")
 		}
 	}
-	if v.MFA && !((caller.Kind == "token" || caller.Role == "token") && caller.Automation) && (caller.Kind == "token" || caller.Role == "token" || (caller.Kind != "user" && callerIdentity(caller) != "local-root") || caller.MFAat <= 0 || s.Agent.Now()-caller.MFAat > 300000) {
+	reauthWindow := s.Agent.Cfg.ReauthWindowSec
+	if reauthWindow <= 0 {
+		reauthWindow = 300
+	}
+	now := s.Agent.Now()
+	if v.MFA && !((caller.Kind == "token" || caller.Role == "token") && caller.Automation) && (caller.Kind == "token" || caller.Role == "token" || (caller.Kind != "user" && callerIdentity(caller) != "local-root") || caller.MFAat <= 0 || caller.MFAat > now || now-caller.MFAat > int64(reauthWindow)*1000) {
 		r := Err("forbidden", "Reauthentication required")
 		r.Data = map[string]bool{"reauth_required": true}
 		return r
