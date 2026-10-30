@@ -41,7 +41,11 @@ Phases 0–1 (RPC, store, audit, secret seal). Reads: `00-foundations.md` F4, F1
 - **`panel-web`**: session cookie handling (`__Host-`), the HTMX shell, CSRF middleware (synchronizer
   token in session + constant-time header validate in the web tier), `Sec-Fetch-Site`/Origin fallback
   middleware, login + MFA screens, dashboard. On a cookie-less first visit it calls the public
-  **`session.start`** verb to mint the anon session + CSRF token before rendering login.
+  **`session.start`** verb to mint the anon session + CSRF token before rendering login. On the **login
+  POST** (anon session, where `whoami` is non-public) it calls **`session.start` again presenting the
+  anon cookie** — idempotent, so it returns that same row's `csrf_token` (F4) — and constant-time
+  compares the submitted `X-CSRF-Token` header against it **before** forwarding `session.login`. (For
+  authenticated mutating requests the equivalent re-fetch is `session.whoami`.)
   **`panel-web` never hashes or stores passwords/secrets** — it calls the agent.
 - **MFA-gate middleware** (agent-side): a verb marked `MFA` (F13) requires the session was minted with
   TOTP and is within a short re-auth window, else `code:"forbidden"` + `reauth_required`.
@@ -58,11 +62,13 @@ Phases 0–1 (RPC, store, audit, secret seal). Reads: `00-foundations.md` F4, F1
   to render a QR; this is the one allowed moment `panel-web` handles the secret (in transit, never
   stored). The Guardrail "never sees a secret in the clear" means never **persists/logs** it — the
   password login form and the enroll QR are forwarding, not storage.
-- **CSRF token** lives in the session row (`sessions.csrf_token`, F4), returned by `session.whoami`;
-  `panel-web` echoes it in the `X-CSRF-Token` header and **`panel-web` compares it constant-time**
-  against the session's value (F4 wins over earlier phase prose: the agent owns the session, the CSRF
-  token, and all authorization, but does **not** receive or compare a CSRF header — there is no CSRF
-  field in the F2 envelope). It is not a cookie and rotates with the session.
+- **CSRF token** lives in the session row (`sessions.csrf_token`, F4), re-fetched per mutating request
+  by the stateless web tier: via `session.whoami` for a `kind=user`/`token` session, and via the
+  **idempotent `session.start`** for the `anon` pre-login POST (whoami is non-public to anon).
+  `panel-web` echoes the submitted token in the `X-CSRF-Token` header and **`panel-web` compares it
+  constant-time** against the fetched session value (F4 wins over earlier phase prose: the agent owns
+  the session, the CSRF token, and all authorization, but does **not** receive or compare a CSRF header
+  — there is no CSRF field in the F2 envelope). It is not a cookie and rotates with the session.
 - **Sec-Fetch-Site** ships behind a config flag defaulting to **enforce** for non-safe methods (with
   Origin/Referer fallback); the "log-only first" note is an ops rollout aid, and the gate test sets
   enforce.

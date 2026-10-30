@@ -147,6 +147,16 @@ mfa_at}` where `kind ∈ {anon, user, token}`.
   **public `session.start` verb** (01 / 03), which returns `{session, csrf_token}`; it is rate-limited
   per peer and short-lived. Only `session.start`, `session.login`, and read of public assets are
   allowed under an `anon` session.
+  **`session.start` is idempotent get-or-create.** When the F2 envelope presents a **live `anon`
+  session**, `session.start` returns that **same** `{session, csrf_token}` unchanged — no new row, no
+  rotation, and not counted against the per-peer mint rate limit — so the stateless web tier can
+  **re-fetch the anon session's expected `csrf_token` on the login POST** to do its constant-time
+  header compare (whoami is non-public, so the anon flow needs this symmetric read path; see CSRF-token
+  storage below). When no valid `anon` session is presented (absent / expired / malformed) it **mints**
+  a fresh anon row (rate-limited per peer). An **authenticated** (`kind=user`/`token`) session presented
+  to `session.start` returns `code:"failed_precondition"` — that session's CSRF is read via `whoami`,
+  not here. The idempotent return does **not** extend the anon session's absolute lifetime; once it
+  expires the next `session.start` mints anew.
 - **Login** (`session.login{user, password, totp?}`): agent verifies (Argon2id; TOTP if enrolled),
   **mints a new session id** (the anon one is deleted — this is the "rotate on login"), stores
   `kind=user`, sets `mfa_at = now` iff a TOTP/backup code was verified, returns the token. `panel-web`
@@ -175,10 +185,14 @@ mfa_at}` where `kind ∈ {anon, user, token}`.
   carries an **automation grant** (`api_tokens.automation = true`), which `tokens.create` issues only
   from a stepped-up (`mfa_at` fresh) `user` session; such tokens are exempt from the TOTP-recency
   check but still scope-checked.
-- **CSRF token storage.** The synchronizer CSRF token lives in the **session row** (`csrf_token`,
-  returned by `session.whoami`); it is **not** a cookie. `panel-web` injects it into pages and
-  validates the `X-CSRF-Token` header against the session's value (constant-time). It rotates with the
-  session id.
+- **CSRF token storage.** The synchronizer CSRF token lives in the **session row** (`csrf_token`); it
+  is **not** a cookie. `panel-web` injects it into pages and validates the `X-CSRF-Token` header against
+  the session's value (constant-time) on every mutating request. It rotates with the session id.
+  Because panel-web holds no session state, it **re-fetches the expected value per request** from the
+  agent: a `kind=user`/`token` session reads it via **`session.whoami`**; an **`anon`** session (the
+  pre-login POST, where whoami is non-public) reads it via the **idempotent `session.start`** above.
+  The agent **never** receives or compares a CSRF header — there is no CSRF field in the F2 envelope;
+  the web tier owns the compare, the agent owns the token's value and storage.
 - **Timeouts:** idle **10 min**, absolute **12 h** (high-value panel), both enforced agent-side from
   `last_seen`/`created`; revocation = row delete. *(Supersedes any earlier "30 min" default.)*
 - **Idempotency** for the public API lives in an agent `idempotency` table keyed by
