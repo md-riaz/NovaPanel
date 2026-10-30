@@ -146,14 +146,26 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 		if resolver == nil {
 			resolver = closedSessions{}
 		}
-		resolved, err := resolver.Resolve(ctx, req.Session)
+		var resolved Caller
+		var err error
+		if stored, ok := resolver.(storedSessions); ok && req.Verb == "session.start" {
+			resolved, err = stored.resolve(ctx, req.Session, false)
+		} else {
+			resolved, err = resolver.Resolve(ctx, req.Session)
+		}
 		if err != nil {
-			return Err("unauthenticated", "Authentication required")
+			if req.Verb != "session.start" {
+				return Err("unauthenticated", "Authentication required")
+			}
+			resolved = Caller{}
 		}
 		resolved.Peer = caller.Peer
 		caller = resolved
 	}
 	event.Role = caller.Role
+	if req.Verb == "session.start" && (caller.Kind == "user" || caller.Kind == "token" || caller.Role != "") {
+		return Err("precondition_failed", "Anonymous session required")
+	}
 	if caller.Kind == "anon" && req.Verb != "session.start" && req.Verb != "session.login" {
 		return Err("unauthenticated", "Authentication required")
 	}
@@ -208,7 +220,7 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 		r.Data = map[string]bool{"reauth_required": true}
 		return r
 	}
-	if !s.allowAuthentication(caller.Peer, req.Verb, req.Args) {
+	if !(req.Verb == "session.start" && caller.Kind == "anon") && !s.allowAuthentication(caller.Peer, req.Verb, req.Args) {
 		return Err("forbidden", "Authentication rate limit exceeded")
 	}
 	caller.Actor = req.Actor
@@ -216,6 +228,7 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 		caller.Actor = "root@local"
 	}
 	ctx = WithCaller(ctx, caller)
+	ctx = context.WithValue(ctx, presentedSessionKey{}, req.Session)
 	ctx = jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: callerIdentity(caller), Actor: caller.Actor, Role: caller.Role, Scopes: caller.Scopes, Automation: caller.Automation, Effectful: v.Effectful})
 	args := v.NewArgs()
 	d := json.NewDecoder(bytes.NewReader(req.Args))

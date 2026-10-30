@@ -15,6 +15,13 @@ type Caller struct {
 	Peer                 uint32
 }
 type callerKey struct{}
+type presentedSessionKey struct{}
+
+// PresentedSession returns the transport credential, never an authorization input.
+func PresentedSession(ctx context.Context) string {
+	v, _ := ctx.Value(presentedSessionKey{}).(string)
+	return v
+}
 
 func WithCaller(ctx context.Context, c Caller) context.Context {
 	return context.WithValue(ctx, callerKey{}, c)

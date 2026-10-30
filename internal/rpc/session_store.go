@@ -14,6 +14,9 @@ import (
 type storedSessions struct{ a *agent.Agent }
 
 func (r storedSessions) Resolve(ctx context.Context, token string) (Caller, error) {
+	return r.resolve(ctx, token, true)
+}
+func (r storedSessions) resolve(ctx context.Context, token string, touch bool) (Caller, error) {
 	deny := func() (Caller, error) { return Caller{}, Errf("unauthenticated", "Authentication required") }
 	parts := strings.Split(token, "_")
 	if len(parts) != 3 || !id.Valid(parts[1]) || len(parts[2]) != 64 {
@@ -66,8 +69,10 @@ func (r storedSessions) Resolve(ctx context.Context, token string) (Caller, erro
 	if s.MFAAt != nil {
 		c.MFAat = *s.MFAAt
 	}
-	if _, e = r.a.Store.TouchSession(ctx, s.ID, h, 600000); e != nil {
-		return deny()
+	if touch {
+		if _, e = r.a.Store.TouchSession(ctx, s.ID, h, 600000); e != nil {
+			return deny()
+		}
 	}
 	return c, nil
 }

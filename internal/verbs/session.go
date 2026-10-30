@@ -53,6 +53,16 @@ func sessionStart(ctx context.Context, a *agent.Agent, _ any) (any, error) {
 	if a.Store == nil {
 		return nil, rpc.Errf("unsupported", "Unavailable in this phase")
 	}
+	if c := rpc.CallerFrom(ctx); c.Kind == "anon" {
+		row, e := a.Store.GetSession(ctx, c.Session)
+		if e != nil {
+			return nil, authFailure()
+		}
+		return struct {
+			Session string `json:"session"`
+			CSRF    string `json:"csrf_token"`
+		}{rpc.PresentedSession(ctx), row.CSRFToken}, nil
+	}
 	row, token, e := randomSession(a.Now())
 	if e != nil {
 		return nil, e

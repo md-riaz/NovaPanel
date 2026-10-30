@@ -250,7 +250,11 @@ func TestRealPATResolverAndSelfServiceRefusal(t *testing.T) {
 		t.Fatalf("resolve %+v %v", c, e)
 	}
 	for _, verb := range []string{"session.logout", "session.reauth", "session.whoami", "session.start", "session.login", "mfa.enroll", "mfa.confirm", "mfa.disable", "tokens.create", "tokens.list", "tokens.revoke", "user.list", "user.create", "user.update", "user.delete", "user.set_password"} {
-		if r := call(verb, token, `{}`); r.Code != "forbidden" {
+		want := "forbidden"
+		if verb == "session.start" {
+			want = "precondition_failed"
+		}
+		if r := call(verb, token, `{}`); r.Code != want {
 			t.Fatalf("token %s %+v", verb, r)
 		}
 	}
