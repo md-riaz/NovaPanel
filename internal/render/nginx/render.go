@@ -51,7 +51,12 @@ var httpTemplate = template.Must(template.New("http").Funcs(template.FuncMap{"pa
         try_files $uri =404;
     }
     {{end}}{{if .RedirectHTTPS}}location / { return 301 https://$host$request_uri; }
-    {{else}}{{range .Redirects}}{{if pathSource .Source}}location = "{{.Source}}" { return {{.Code}} "{{.Target}}"; }
+    {{else}}{{if .Maintenance}}error_page 503 /maintenance.html;
+    location = /maintenance.html {
+        internal;
+        root "/var/www/novapanel";
+    }
+    {{end}}{{range .Redirects}}{{if pathSource .Source}}location = "{{.Source}}" { return {{.Code}} "{{.Target}}"; }
     {{end}}{{end}}location / {
         {{range .Redirects}}{{if not (pathSource .Source)}}if ($host = "{{.Source}}") { return {{.Code}} "{{.Target}}"; }
         {{end}}{{end}}{{if .Maintenance}}return 503;{{else}}try_files $uri $uri/ =404;{{end}}
@@ -94,6 +99,9 @@ func Render(d Desired) ([]byte, error) {
 	}
 	seen := map[string]bool{}
 	for _, r := range d.Redirects {
+		if d.Maintenance && r.Source == "/maintenance.html" {
+			return nil, rpcerr.Errf("invalid_argument", "Redirect conflicts with maintenance page")
+		}
 		if e := v.RedirectSource(r.Source); e != nil {
 			return nil, e
 		}

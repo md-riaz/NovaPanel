@@ -7,10 +7,15 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStateProbeTLSAndCoverage(t *testing.T) {
 	d := Desired{Domains: []string{"demo.test", "new.test"}, TLS: installedTLS(t, false), ForceHTTPS: true}
+	pair, err := tls.LoadX509KeyPair(d.TLS.certPath(), d.TLS.keyPath())
+	if err != nil {
+		t.Fatal(err)
+	}
 	httpsCalls := 0
 	secure := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		httpsCalls++
@@ -19,6 +24,7 @@ func TestStateProbeTLSAndCoverage(t *testing.T) {
 		}
 		w.WriteHeader(403)
 	}))
+	secure.TLS = &tls.Config{Certificates: []tls.Certificate{pair}}
 	secure.StartTLS()
 	defer secure.Close()
 	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -34,7 +40,7 @@ func TestStateProbeTLSAndCoverage(t *testing.T) {
 		w.WriteHeader(404)
 	}))
 	defer plain.Close()
-	probe := StateProbe(plain.URL, secure.URL, &tls.Config{InsecureSkipVerify: true})
+	probe := StateProbe(plain.URL, secure.URL, &tls.Config{Time: func() time.Time { return tlsNow }})
 	if err := probe(context.Background(), d); err != nil {
 		t.Fatal(err)
 	}

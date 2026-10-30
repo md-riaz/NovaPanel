@@ -1,6 +1,7 @@
 package nginx
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"net"
@@ -17,8 +18,9 @@ func HTTPProbe(endpoint string) func(context.Context, Desired) error {
 }
 
 // StateProbe connects only to fixed loopback endpoints. TLS uses the site's host
-// for both SNI and Host, without consulting its DNS. TLS options are cloned;
-// verification remains enabled unless an agent explicitly supplies test CA policy.
+// for both SNI and Host, without consulting its DNS. A LoadTLS-approved state pins
+// the exact installed leaf and checks hostname and dates, including private CAs.
+// Without an approved identity the cloned TLS policy retains system-root defaults.
 func StateProbe(httpEndpoint, httpsEndpoint string, tlsConfig *tls.Config) func(context.Context, Desired) error {
 	config := &tls.Config{MinVersion: tls.VersionTLS12}
 	if tlsConfig != nil {
@@ -53,6 +55,28 @@ func StateProbe(httpEndpoint, httpsEndpoint string, tlsConfig *tls.Config) func(
 			if secure != nil && d.TLS.covers(host) {
 				cfg := config.Clone()
 				cfg.ServerName = host
+				if d.TLS.leaf != nil {
+					priorVerify := cfg.VerifyConnection
+					// Trust only the validated installed leaf, never an arbitrary private CA.
+					cfg.InsecureSkipVerify = true
+					cfg.VerifyConnection = func(cs tls.ConnectionState) error {
+						if len(cs.PeerCertificates) == 0 || !bytes.Equal(cs.PeerCertificates[0].Raw, d.TLS.leaf.Raw) {
+							return rpcerr.Errf("agent_error", "Unexpected served TLS certificate")
+						}
+						leaf := cs.PeerCertificates[0]
+						now := time.Now()
+						if cfg.Time != nil {
+							now = cfg.Time()
+						}
+						if now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) || leaf.VerifyHostname(host) != nil || cs.ServerName != host {
+							return rpcerr.Errf("agent_error", "Invalid served TLS certificate")
+						}
+						if priorVerify != nil {
+							return priorVerify(cs)
+						}
+						return nil
+					}
+				}
 				// URL carries the hostname for certificate validation; dial ignores DNS.
 				transport = &http.Transport{Proxy: nil, TLSClientConfig: cfg, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 					return (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp", secure.Host)
