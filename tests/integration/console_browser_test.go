@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"novapanel/internal/config"
+	"novapanel/internal/id"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
 )
@@ -86,6 +87,7 @@ func TestRealBackendConsoleBrowser(t *testing.T) {
 	must(err)
 	daemon := exec.CommandContext(ctx, filepath.Join(scratch, "agent.test"), "-test.run=^TestSafeDaemonHelper$")
 	daemon.Env = append(os.Environ(), "NOVAPANEL_SAFE_HELPER=1", "NOVAPANEL_SAFE_CONSOLE=1", "NOVAPANEL_SAFE_CONFIG="+string(raw))
+	started := time.Now()
 	must(daemon.Start())
 	defer func() { daemon.Process.Kill(); daemon.Wait() }()
 	deadline := time.Now().Add(15 * time.Second)
@@ -149,6 +151,24 @@ os.execve('./panel-web',['./panel-web'],os.environ)`)
 	out, err := browser.CombinedOutput()
 	t.Log(string(out))
 	if err != nil {
+		// Read-only daemon evidence before cleanup; never log RPC payloads or errors.
+		diagnosticCtx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+		defer stop()
+		reply, callErr := client.Call(diagnosticCtx, "job.list", map[string]any{"limit": 20}, "")
+		t.Logf("[daemon-diag] elapsed_ms=%d read_ok=%t", time.Since(started).Milliseconds(), callErr == nil && reply.OK)
+		if callErr == nil && reply.OK {
+			data, _ := json.Marshal(reply.Data)
+			var result struct {
+				Jobs []store.Job `json:"jobs"`
+			}
+			if json.Unmarshal(data, &result) == nil {
+				for _, job := range result.Jobs {
+					if id.Valid(job.ID) && (job.State == "queued" || job.State == "running" || job.State == "done" || job.State == "failed") {
+						t.Logf("[daemon-diag] job_id=%s state=%s created_ms=%d updated_ms=%d", job.ID, job.State, job.Created, job.Updated)
+					}
+				}
+			}
+		}
 		info, statErr := os.Lstat(cfg.TLSDir)
 		if statErr != nil {
 			t.Logf("TLS publication root stat: %v", statErr)
@@ -253,4 +273,18 @@ os.execve('./panel-web',['./panel-web'],os.environ)`)
 		}
 	}
 	t.Logf("Verified actual SQLite completed jobs=%d, deletion and secret-free durable audit", len(jobs))
+}
+
+func TestRealBackendConsoleDiagnostics(t *testing.T) {
+	node := os.Getenv("NOVAPANEL_BROWSER_NODE")
+	if node == "" {
+		t.Skip("set NOVAPANEL_BROWSER_NODE for Chromium diagnostic checks")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, node, "--test", "console_diagnostics_test.cjs").CombinedOutput()
+	t.Log(string(out))
+	if err != nil {
+		t.Fatalf("browser diagnostic checks: %v", err)
+	}
 }

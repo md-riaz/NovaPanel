@@ -12,7 +12,9 @@ let stage='login';
  const browser=await chromium.launch({executablePath:process.env.NOVAPANEL_CHROME||'/usr/bin/google-chrome',args:['--no-sandbox']});
  try {
  const context=await browser.newContext({ignoreHTTPSErrors:true}),page=await context.newPage(),origin=process.argv[2],errors=[];
+ const diagnostics=await require('./console_diagnostics.cjs').observe(page);
  page.on('pageerror',()=>errors.push('JavaScript error'));
+ try {
  page.setDefaultTimeout(15000);
  const submit=async selector=>{const response=page.waitForResponse(r=>r.request().method()==='POST');await page.locator(selector+' button').click();const r=await response;if(selector==='form[data-secret-form]')console.log('Upload HTTP '+r.status())};
  const done=async()=>{await page.waitForFunction(()=>document.body.textContent.includes('Job completed.')||document.querySelector('[role=alert]'));if(await page.locator('[role=alert]').count()){const text=await page.locator('[role=alert]').first().textContent();throw new Error('job code '+(text.match(/^[a-z_]+:/)||['unknown'])[0])}};
@@ -50,5 +52,6 @@ let stage='login';
  await page.setViewportSize({width:390,height:844});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.deepEqual(errors,[]);
  stage='delete';await page.goto(siteURL);page.once('dialog',d=>d.accept());await submit('form[action$="/delete"]');await done();await page.goto(origin+'/sites');assert.equal(await page.getByRole('link',{name:'browserdemo',exact:true}).count(),0);
  console.log('PASS actual panel-web -> UID-gated socket -> daemon -> queue -> SQLite: owner login; create/poll; maintenance; domain; redirect; HTTP and TLS primary promotion; upload/delete MFA refusal; MFA enrollment/backup step-up; manual certificate upload; force HTTPS; secret-free storage; mobile width; deletion; no JS errors.');
+ } catch(e) {console.error('[browser-diag] '+JSON.stringify(await diagnostics()));throw e}
  } finally {await browser.close()}
 })().catch(e=>{console.error('Real-backend browser acceptance failed at '+stage+' ('+(e.message.startsWith('job code ')?e.message:e.name)+'), source '+((e.stack||'').match(/console_browser.cjs:\d+:\d+/)||['unknown'])[0]);process.exitCode=1});
