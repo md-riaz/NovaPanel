@@ -77,6 +77,28 @@ not "the reviewer will catch it" — it is work that isn't done. The same list g
 If a box can't be ticked because the spec is wrong or underspecified, **raise it to the head** (don't
 reinterpret); the head amends the spec, then work resumes.
 
+## Contract-completeness check (head: before a phase spec is confirmed for coding)
+
+Phase 2 surfaced six recurring classes of under-specification. The head runs this check over **every**
+phase spec *before* it is opened for implementation, so each gap is closed in the contract instead of
+being rediscovered mid-build (one gap → one stall → one patch). A phase that fails any item is amended
+first.
+
+1. **Error-code completeness.** Every documented refusal/precondition **names its F3 code** (no
+   "refuses until X" without a code). Every code used is in the F3 catalog; the only non-catalog codes
+   are the web-tier superset (`agent_unavailable`, the `429` `rate_limited`).
+2. **Show-once secrets.** Every verb that returns a newly-minted secret is covered by the **F11
+   show-once reply exception** (sync) or the **F19 claim path** (slow), or is explicitly excluded as
+   cheaply re-obtainable.
+3. **Stateless-web read paths.** Any per-request state the web tier must display (CSRF, a claim, a
+   pubkey) has a **registered read path**; nothing assumes web-tier memory across requests.
+4. **Throttle policy.** Every rate-limited / ACME-limited / deadman verb pins its **keying, window,
+   reset, and exhaustion code**.
+5. **Config wiring.** Every F16 key the phase uses is **read from `Cfg`**, not a restated literal
+   (drift risk — the `idle_sec`/`abs_sec` and `firewall_window_min` lesson).
+6. **Authz exceptions.** Every non-standard authz rule (self-scope, automation grant, internal/
+   peer-only) spells out **subject-resolution and token-reachability** (the B4 self-service shape).
+
 ## The non-negotiable invariants (every phase, no exceptions)
 
 These restate `vpspanel-plan.md` §3. Any phase that violates one is rejected regardless of features.

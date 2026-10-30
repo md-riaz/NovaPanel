@@ -130,16 +130,20 @@ post-reload request probe is the real safety net.
 - **SSL is its own UI section, separate from Domains** (per the prototype). Three cert sources on a
   site (`sites.cert_source`): **automatic** (Let's Encrypt via `ssl.issue`/`ssl.renew`, auto-renew
   governed by `ssl.auto_set`), **manual** (`ssl.upload{cert_pem,key_pem}` — MFA; the agent validates
-  the key matches the leaf and the dates are current, then installs into the same versioned-dir +
+  the key matches the leaf and the dates are current (mismatch or expired → `invalid_argument`), then installs into the same versioned-dir +
   `current` symlink; the scheduler **never** auto-renews a manual cert), and **none**. **Force-HTTPS
   lives in the SSL section** and is the `site.update{force_https}` field, still gated on a valid cert.
 - **Maintenance mode** renders a `return 503` + a static maintenance page served from
   `/var/www/novapanel/maintenance.html`; it is a `sites.maintenance` field set by `site.update`.
 - **HSTS raise** is `site.update{hsts_max_age}` (owner), only in state 3; never auto-`preload`.
-- **ACME config** (F16): `acme_directory_staging`/`acme_directory_prod`, `acme_email`; separate
+- **ACME config** (F16, all read from `Cfg`): `acme_directory_staging`/`acme_directory_prod`,
+  `acme_email` (`ssl.issue` for prod refuses with `precondition_failed` when it is empty); separate
   account keys sealed as `acme:account:staging` and `acme:account:prod`; tests/dev default to staging,
-  real issuance uses prod (chosen by a `staging` arg/flag, default prod in production config). A local
-  per-registered-domain issuance limiter (counter in `settings`) guards the LE failure limit.
+  real issuance uses prod (chosen by a `staging` arg, defaulting to **`Cfg.acme_use_staging`**). A local
+  issuance limiter (counter persisted in `settings`) self-throttles **before** LE's caps — **keyed per
+  registered-domain**, windows mirroring LE (50 issued/7 d · 5 duplicate-set/7 d · 5 auth-failures/hour),
+  each **reset** as its window rolls off; on exhaustion `ssl.issue`/`ssl.renew` return **`rate_limited`**
+  (F3) without calling ACME.
 - **Apply order (reconciles F8):** render to `sites-available/<site>.conf.tmp` → atomic-rename to the
   real `sites-available/<site>.conf` (symlinked into `sites-enabled`) → `nginx -t` (validates the full
   live set) → on pass reload; **on fail, atomic-rename the last-known-good copy back** (kept at

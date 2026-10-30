@@ -94,14 +94,14 @@ files.list{site_id, path}                               → {entries:[{name,type
 files.read{site_id, path, offset?:int, length?:int}     → {content_b64, size, eof:bool}   # length ≤ 512 KiB/chunk
 files.write{site_id, path, content_b64}                 → {}                                # temp+atomic, as site user
 files.mkdir{site_id, path} / files.delete{site_id, path} / files.move{site_id, from, to} → {}
-files.chmod{site_id, path, mode}                        → {}        # mode ∈ {0644,0640,0600,0755,0750,0700}
+files.chmod{site_id, path, mode}                        → {}        # mode ∈ {0644,0640,0600,0755,0750,0700}; else invalid_argument
 files.upload{site_id, path, upload_id}                  → job → {}  # staged (see upload note)
 files.archive{site_id, paths:[string], dest}            → job → {}
 files.extract{site_id, archive, dest}                   → job → {}  # archive-entry guard (F9/F15)
-deploy.configure{site_id, repo_url, branch}             → {deploy_pubkey}   # shown once
+deploy.configure{site_id, repo_url, branch}             → {deploy_pubkey}   # public key; also re-readable via deploy.status (not a secret)
 deploy.run{site_id, ref}                                → job → {sha}       # ref resolved→pinned sha
 deploy.rollback{site_id, sha}                           → job → {sha}
-deploy.status{site_id}                                  → {current_sha, state, last_run}
+deploy.status{site_id}                                  → {current_sha, state, last_run, deploy_pubkey}
 deploy.history{site_id, limit?}                         → {deploys:[{sha,state,created}]}
 cron.create{site_id, schedule, argv:[string]}           → job → {cron_id}   # schedule=OnCalendar; argv validated
 cron.delete{cron_id}/cron.enable{cron_id}/cron.disable{cron_id} → job → {}
@@ -118,16 +118,16 @@ moves it into place as the site user. (Large archives/extract run as jobs.)
 
 ## backups / firewall (Phase 6)
 ```
-repo.create{name, kind:'local'|'sftp'|'s3', location, creds?:{…}} → {repo_id}  # creds sealed; password claim once
+repo.create{name, kind:'local'|'sftp'|'s3', location, creds?:{…}} → job → {repo_id}  + claim(password)   # Slow (restic init); creds sealed
 repo.list{}                                            → {repos:[{id,name,kind,location}]}
 repo.delete{repo_id}                                    → {}       # MFA
 backup.create{repo_id, target_kind:'site'|'db'|'panel', target_ref} → job → {snapshot_id}
 backup.list{repo_id?, target_ref?}                      → {backups:[{id,snapshot_id,target_kind,target_ref,bytes,created}]}
 backup.verify{repo_id, mode?:'check'|'read-data'}       → job → {ok:bool, detail}
 backup.restore{backup_id, confirm:string, scope?:'file'|'db'|'full', include?:[string]} → job → {}
-                                                        # MFA; confirm must equal the target name; pre-restore snapshot taken
+                                                        # MFA; confirm must equal the target name (else invalid_argument); pre-restore snapshot taken
 firewall.status{}                                       → {enabled:bool, rules:[{num,action,proto,port,source,comment}], pending?:{id,deadline}}
-firewall.apply{rules:[{action,proto,port,source?,comment?}], window_min?:int=15} → job → {pending_id}
+firewall.apply{rules:[{action,proto,port,source?,comment?}], window_min?:int} → job → {pending_id}   # window_min default Cfg.firewall_window_min
                                                         # MFA; conflict if already armed; structured rules only (no raw ufw)
 firewall.confirm{pending_id}                            → {}       # MFA; stops the revert timer
 firewall.revert{pending_id}                             → {}       # MFA; reverts now

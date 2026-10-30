@@ -127,6 +127,13 @@ string).
 | `agent_error` | internal failure (logged + audited; never leaks internals to web) |
 | `interrupted` | an effectful job was left running by a crash/restart and was not blindly re-run (F6) |
 | `unsupported` | feature is a deferred module / not enabled |
+| `rate_limited` | a throttle or quota was hit (an **agent-side** limiter, e.g. the ACME per-domain issuance cap); retry later |
+
+**Public-API superset.** Agent handlers return only the codes above. The HTTP/API layer (`panel-web`)
+may additionally surface codes for conditions where **no agent reply exists**: `agent_unavailable`
+(agent socket down → `503`) and the transport token-bucket `429` (which carries `rate_limited`). These
+are **web-tier-synthesised**, never emitted by an agent handler — the one documented exception to
+"agents return one of these."
 
 ---
 
@@ -394,9 +401,14 @@ Record(Event) error                                    -- fail-closed: see sinks
   arrives **after** an effect already happened does **not** undo the effect — audit records the effect
   and the failing stage; effect reversal is the verb's concern under the effectful rules (F6), not
   audit's.
-- **Show-once reply exception (bounded, decided).** Two synchronous verbs return a secret that exists
-  **only** in their reply — `mfa.confirm → {backup_codes}` and `tokens.create → {token}` (backup codes
-  and the PAT are stored **hash-only**; there is no second read). When such a verb's **effect has
+- **Show-once reply exception (bounded, decided).** **Any synchronous verb that returns a newly-minted,
+  irrecoverable show-once secret** in its reply is covered — currently `mfa.confirm → {backup_codes}`,
+  `tokens.create → {token}`, and `deploy.hook_create → {secret}`, plus any later verb of the same shape
+  (the secret is stored **sealed or hash-only**, with no second read). **Excluded** is a show-once value
+  the caller can cheaply **re-obtain** — e.g. `mfa.enroll`'s `otpauth_uri` (re-enroll regenerates it) or
+  a non-secret `deploy_pubkey` exposed through a read verb (`deploy.status`) — losing it costs only a
+  re-request, so such a verb **fails closed** on an audit failure like any other mutation. When a covered
+  verb's **effect has
   already durably committed** and only the **completion (final-outcome) audit write** then fails, the
   agent **returns the committed show-once reply** instead of overwriting it with `agent_error`, **and**
   still enters the sticky `unhealthy` state that gates all subsequent mutating verbs. Suppressing the
@@ -694,3 +706,9 @@ idempotent replay returns the same (still-unclaimed) `claim` or `410`-style `not
 - **Owner-bound, one-shot.** `job.claim` requires the caller to be the job's `created_by` owner (F4
   job-ownership exception) **and** within TTL; the row is deleted on first successful read or on
   expiry. Nothing about the secret survives in `jobs.result_json`, `job_events`, `events`, or any log.
+- **Browser conveyance (decided).** The stateless web tier holds no store, so for a browser-initiated
+  slow verb the enqueue reply's `claim` is returned to the browser in the HTMX response; the page holds
+  it **in memory only** (never a cookie, never web-tier state) and calls `job.claim` once `job.status`
+  reports the job done. If the page is lost before claiming, the secret is recovered only by re-running
+  the verb (rotate/recreate) — never re-read. This is the single browser-side claim path for **every**
+  `+ claim(…)` verb.
