@@ -61,6 +61,14 @@ func Load(root, primary string, domains []string, now time.Time) (*Certificate, 
 }
 
 func readPairFile(root *os.Root, name string, limit int64) ([]byte, error) {
+	// os.Root may resolve an in-root symlink before applying open flags.
+	entry, err := root.Lstat(name)
+	if err != nil {
+		return nil, storageError()
+	}
+	if !entry.Mode().IsRegular() {
+		return nil, invalid()
+	}
 	f, err := root.OpenFile(name, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, storageError()
@@ -71,7 +79,7 @@ func readPairFile(root *os.Root, name string, limit int64) ([]byte, error) {
 		return nil, storageError()
 	}
 	var raw unix.Stat_t
-	if !st.Mode().IsRegular() || st.Mode().Perm() != 0600 || st.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 || st.Size() <= 0 || st.Size() > limit || unix.Fstat(int(f.Fd()), &raw) != nil || raw.Uid != uint32(os.Geteuid()) {
+	if !os.SameFile(entry, st) || !st.Mode().IsRegular() || st.Mode().Perm() != 0600 || st.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 || st.Size() <= 0 || st.Size() > limit || unix.Fstat(int(f.Fd()), &raw) != nil || raw.Uid != uint32(os.Geteuid()) {
 		return nil, invalid()
 	}
 	data, err := io.ReadAll(io.LimitReader(f, limit+1))
