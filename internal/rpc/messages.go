@@ -117,8 +117,9 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 			if err := s.DurableAudit(event); err != nil {
 				// Never log reply data, claim tokens, or sink errors here.
 				log.Print("rpc: completion audit unavailable")
-				// A successful claim has already destroyed its one-shot secret row.
-				if mutation && !(req.Verb == "job.claim" && reply.OK) {
+				// These successful replies follow committed, unrecoverable secret effects.
+				preserve := reply.OK && (req.Verb == "job.claim" || req.Verb == "mfa.confirm" || req.Verb == "tokens.create")
+				if mutation && !preserve {
 					reply = Err("agent_error", "Durable audit unavailable")
 					reply.ID = req.ID
 				}

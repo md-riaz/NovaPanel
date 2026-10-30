@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"novapanel/internal/agent"
 	"novapanel/internal/auth"
 	"novapanel/internal/id"
@@ -83,13 +84,32 @@ func sessionLogin(ctx context.Context, a *agent.Agent, v any) (any, error) {
 	if e != nil {
 		phc = dummyPHC
 	}
-	ok, rehash := auth.Verify(args.Password, phc)
-	if !ok || e != nil || u.Disabled {
+	ok, rehash := false, false
+	digest := sha256.Sum256([]byte(args.User))
+	key := hex.EncodeToString(digest[:])
+	verifyPassword := func() (bool, error) {
+		var verified bool
+		verified, rehash = auth.Verify(args.Password, phc)
+		return verified && e == nil && !u.Disabled, nil
+	}
+	verifyAccount := func() (bool, error) {
+		return a.PasswordFailures.Verify(key, a.Now(), a.Cfg.LoginMaxAttempts, int64(a.Cfg.LoginWindowSec)*1000, verifyPassword)
+	}
+	var budgetErr error
+	if e != nil {
+		ok, budgetErr = a.UnknownFailures.Verify(fmt.Sprint(c.Peer), a.Now(), a.Cfg.LoginMaxAttempts, int64(a.Cfg.LoginWindowSec)*1000, verifyAccount)
+	} else {
+		ok, budgetErr = verifyAccount()
+	}
+	if budgetErr != nil {
+		return nil, budgetErr
+	}
+	if !ok {
 		return nil, authFailure()
 	}
 	mfa := u.TOTPSecret != nil
 	if mfa {
-		if e = verifyMFA(ctx, a.Store, a.Secret, a.Now(), u, args.TOTP); e != nil {
+		if e = verifyMFA(ctx, a.Store, a.Secret, &a.MFAFailures, a.Cfg.TOTPMaxAttempts, int64(a.Cfg.LoginWindowSec)*1000, a.Now(), u, args.TOTP); e != nil {
 			return nil, e
 		}
 	}
@@ -150,7 +170,24 @@ func sessionWhoami(ctx context.Context, a *agent.Agent, _ any) (any, error) {
 		MFAAt int64  `json:"mfa_at"`
 	}{u.Username, c.Role, row.CSRFToken, c.MFAat}, nil
 }
-func verifyMFA(ctx context.Context, st *store.Store, sealer *secret.Sealer, now int64, u store.User, proof string) error {
+func verifyMFA(ctx context.Context, st *store.Store, sealer *secret.Sealer, budgets *auth.FailureBudgets, limit int, window, now int64, u store.User, proof string) error {
+	ok, e := budgets.Verify(u.ID, now, limit, window, func() (bool, error) {
+		err := verifyMFAProof(ctx, st, sealer, now, u, proof)
+		var ce *rpc.CodedError
+		if errors.As(err, &ce) && ce.Code == "unauthenticated" {
+			return false, nil
+		}
+		return err == nil, err
+	})
+	if e != nil {
+		return e
+	}
+	if !ok {
+		return authFailure()
+	}
+	return nil
+}
+func verifyMFAProof(ctx context.Context, st *store.Store, sealer *secret.Sealer, now int64, u store.User, proof string) error {
 	if u.TOTPSecret == nil || sealer == nil {
 		return authFailure()
 	}
@@ -195,7 +232,7 @@ func sessionReauth(ctx context.Context, a *agent.Agent, v any) (any, error) {
 	if e != nil {
 		return nil, e
 	}
-	if e = verifyMFA(ctx, a.Store, a.Secret, a.Now(), u, v.(*reauthArgs).TOTP); e != nil {
+	if e = verifyMFA(ctx, a.Store, a.Secret, &a.MFAFailures, a.Cfg.TOTPMaxAttempts, int64(a.Cfg.LoginWindowSec)*1000, a.Now(), u, v.(*reauthArgs).TOTP); e != nil {
 		return nil, e
 	}
 	old, e := a.Store.GetSession(ctx, c.Session)

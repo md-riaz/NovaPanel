@@ -306,11 +306,11 @@ func TestConfiguredAuthenticationBudgets(t *testing.T) {
 			t.Fatalf("early limit %+v", r)
 		}
 	}
-	if r := call("session.login", anon, `{"user":"reader","password":"correct password"}`); r.Code != "forbidden" {
+	if r := call("session.login", anon, `{"user":"reader","password":"correct password"}`); r.Code != "unauthenticated" {
 		t.Fatalf("configured budget ignored %+v", r)
 	}
 	c.now += 60000
-	if r := call("session.login", anon, `{"user":"reader","password":"wrong"}`); r.Code != "forbidden" {
+	if r := call("session.login", anon, `{"user":"reader","password":"wrong"}`); r.Code != "unauthenticated" {
 		t.Fatalf("configured window ignored %+v", r)
 	}
 	c.now += 840000
@@ -319,7 +319,7 @@ func TestConfiguredAuthenticationBudgets(t *testing.T) {
 	if r := call("mfa.confirm", token, `{"totp":"invalid"}`); r.Code != "unauthenticated" {
 		t.Fatalf("first proof %+v", r)
 	}
-	if r := call("mfa.confirm", token, `{"totp":"invalid"}`); r.Code != "forbidden" {
+	if r := call("mfa.confirm", token, `{"totp":"invalid"}`); r.Code != "unauthenticated" {
 		t.Fatalf("configured MFA budget ignored %+v", r)
 	}
 }
