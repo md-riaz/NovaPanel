@@ -50,6 +50,33 @@ those decisions into buildable, verifiable units of work.
    raise, not a judgment call. (This check is what would have caught all four Phase-1 reconciliations up
    front.)
 
+## Pre-review verification checklist (every phase — tick all before requesting review)
+
+An implementing agent **does not request architecture review until every box below is ticked on the PR
+head**, and the PR comment that requests review **includes this checklist, ticked**. An unchecked box is
+not "the reviewer will catch it" — it is work that isn't done. The same list gates the final wiring task.
+
+- [ ] **Full gate green on the PR head:** `go build ./...`, `go vet`, `staticcheck`, `govulncheck`,
+      `gofmt -l` (empty), `go test ./...`, and the three architecture tests **with their negative
+      fixtures**. Paste the results in the PR.
+- [ ] **This phase's own Verification section passes in full** (it is the definition of done, not your
+      judgment that "it works").
+- [ ] **Pre-flight contract check done** (item 7 above): verb attributes ↔ `01`, args/reply ↔ `03`,
+      every `code` ↔ the F3 catalog, tables/columns ↔ `02`, cross-cutting rules cited from `00`.
+- [ ] **No invariant weakened to make something pass** — the agent boundary, the peer gate, the no-shell
+      rule, the config-sink guards, and secret/audit handling are all intact. A green check bought by
+      relaxing a guard is a blocker, not a pass.
+- [ ] **CI is green for the right reason** — a check that can pass on warnings or skipped bodies doesn't
+      count; the gate must actually exercise the code (this is the Phase-1 `systemd-verify`/integration
+      lesson).
+- [ ] **Scope is this phase only** — no later-phase work pulled forward; later-owned needs are stubbed
+      per spec. Docs/prototype files match `main` unless this phase owns them.
+- [ ] **Open items answered** — every bot/review finding is verified and either fixed or answered with a
+      traced reason; nothing silently ignored.
+
+If a box can't be ticked because the spec is wrong or underspecified, **raise it to the head** (don't
+reinterpret); the head amends the spec, then work resumes.
+
 ## The non-negotiable invariants (every phase, no exceptions)
 
 These restate `vpspanel-plan.md` §3. Any phase that violates one is rejected regardless of features.
