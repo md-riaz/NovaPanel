@@ -10,6 +10,7 @@ CREATE TABLE sites (
   cert_source  TEXT NOT NULL DEFAULT 'none' CHECK (cert_source IN ('none','letsencrypt','manual')),
   ssl_auto     INTEGER NOT NULL DEFAULT 1,
   maintenance  INTEGER NOT NULL DEFAULT 0,
+  status       TEXT NOT NULL DEFAULT 'creating' CHECK (status IN ('creating','active','failed','deleting')),
   config_hash  TEXT,
   created      INTEGER NOT NULL,
   updated      INTEGER NOT NULL

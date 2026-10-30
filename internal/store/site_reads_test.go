@@ -133,11 +133,11 @@ func TestTypedSiteReads(t *testing.T) {
 		t.Fatalf("sites: %#v %v", sites, err)
 	}
 	php, hash := "8.3", "hash"
-	want := Site{ID: "a", Name: "first", Type: "php", StackDriver: "nginx", Docroot: "/srv/sites/first/public", PHPVersion: &php, ForceHTTPS: true, HSTSMaxAge: 300, CertSource: "manual", SSLAuto: false, Maintenance: true, ConfigHash: &hash, Created: 11, Updated: 21}
+	want := Site{ID: "a", Name: "first", Type: "php", StackDriver: "nginx", Status: "creating", Docroot: "/srv/sites/first/public", PHPVersion: &php, ForceHTTPS: true, HSTSMaxAge: 300, CertSource: "manual", SSLAuto: false, Maintenance: true, ConfigHash: &hash, Created: 11, Updated: 21}
 	if !reflect.DeepEqual(sites[0], want) {
 		t.Fatalf("site: %#v", sites[0])
 	}
-	wantDefault := Site{ID: "b", Name: "second", Type: "static", StackDriver: "nginx", Docroot: "/srv/sites/second/public", CertSource: "none", SSLAuto: true, Created: 10, Updated: 20}
+	wantDefault := Site{ID: "b", Name: "second", Type: "static", StackDriver: "nginx", Status: "creating", Docroot: "/srv/sites/second/public", CertSource: "none", SSLAuto: true, Created: 10, Updated: 20}
 	if !reflect.DeepEqual(sites[1], wantDefault) {
 		t.Fatalf("default: %#v", sites[1])
 	}

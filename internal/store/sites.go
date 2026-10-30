@@ -4,14 +4,14 @@ import "context"
 
 // Site is persisted desired state, not a runtime status or an RPC response.
 type Site struct {
-	ID, Name, Type, StackDriver, Docroot string
-	PHPVersion                           *string
-	ForceHTTPS                           bool
-	HSTSMaxAge                           int64
-	CertSource                           string
-	SSLAuto, Maintenance                 bool
-	ConfigHash                           *string
-	Created, Updated                     int64
+	ID, Name, Type, StackDriver, Docroot, Status string
+	PHPVersion                                   *string
+	ForceHTTPS                                   bool
+	HSTSMaxAge                                   int64
+	CertSource                                   string
+	SSLAuto, Maintenance                         bool
+	ConfigHash                                   *string
+	Created, Updated                             int64
 }
 
 // Domain records persisted certificate metadata, not proof of a valid installed cert.
@@ -87,10 +87,10 @@ func (s *Store) ListRedirects(ctx context.Context, siteID string) ([]Redirect, e
 	return out, rows.Err()
 }
 
-const siteColumns = "id,name,type,stack_driver,docroot,php_version,force_https,hsts_max_age,cert_source,ssl_auto,maintenance,config_hash,created,updated"
+const siteColumns = "id,name,type,stack_driver,docroot,php_version,force_https,hsts_max_age,cert_source,ssl_auto,maintenance,status,config_hash,created,updated"
 
 func scanSite(r scanner) (v Site, err error) {
-	err = r.Scan(&v.ID, &v.Name, &v.Type, &v.StackDriver, &v.Docroot, &v.PHPVersion, &v.ForceHTTPS, &v.HSTSMaxAge, &v.CertSource, &v.SSLAuto, &v.Maintenance, &v.ConfigHash, &v.Created, &v.Updated)
+	err = r.Scan(&v.ID, &v.Name, &v.Type, &v.StackDriver, &v.Docroot, &v.PHPVersion, &v.ForceHTTPS, &v.HSTSMaxAge, &v.CertSource, &v.SSLAuto, &v.Maintenance, &v.Status, &v.ConfigHash, &v.Created, &v.Updated)
 	return
 }
 
