@@ -22,7 +22,7 @@ func (s *Server) prepareTLSRecovery(ctx context.Context) (*jobs.Job, error) {
 					return nil, err
 				}
 				for _, j := range rows {
-					if j.Step == "tls_committed" && (j.Verb == "ssl.upload" || j.Verb == "ssl.issue" || j.Verb == "ssl.renew") && (j.State == "running" || j.Code == "interrupted") {
+					if j.Step == "tls_committed" && (j.Verb == "ssl.upload" || j.Verb == "ssl.issue" || j.Verb == "ssl.renew" || j.Verb == "site.update") && (j.State == "running" || j.Code == "interrupted") {
 						if err = s.executeJob(ctx, &j, true); err != nil {
 							return nil, err
 						}
@@ -47,7 +47,7 @@ func (s *Server) prepareTLSRecovery(ctx context.Context) (*jobs.Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	if j.Verb != "ssl.upload" && j.Verb != "ssl.issue" && j.Verb != "ssl.renew" {
+	if j.Verb != "ssl.upload" && j.Verb != "ssl.issue" && j.Verb != "ssl.renew" && j.Verb != "site.update" {
 		return nil, Errf("forbidden", "Invalid TLS recovery verb")
 	}
 	if j.State != "running" && !(j.State == "failed" && j.Code == "interrupted") {

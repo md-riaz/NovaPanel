@@ -26,8 +26,29 @@ func (s tlsStartup) validate(ctx context.Context, j *jobs.Job) error {
 	var intent tlsIntent
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
-	if d.Decode(&intent) != nil || d.Decode(new(any)) != io.EOF || intent.Version != 1 || intent.JobID != j.ID || !id.Valid(intent.JobID) || !id.Valid(intent.SiteID) || j.ObjectKey != "site:"+intent.SiteID || a.Nginx == nil || intent.NginxRoot != a.Nginx.Root || intent.Token.Root != a.Cfg.TLSDir || !id.Valid(intent.Token.Version) || (intent.Token.Previous != "" && !id.Valid(intent.Token.Previous)) || intent.Token.Version == intent.Token.Previous {
+	if d.Decode(&intent) != nil || d.Decode(new(any)) != io.EOF || (intent.Version != 1 && intent.Version != 2) || intent.JobID != j.ID || !id.Valid(intent.JobID) || !id.Valid(intent.SiteID) || j.ObjectKey != "site:"+intent.SiteID || a.Nginx == nil || intent.NginxRoot != a.Nginx.Root || intent.Token.Root != a.Cfg.TLSDir || !id.Valid(intent.Token.Version) || (intent.Token.Previous != "" && !id.Valid(intent.Token.Previous)) || intent.Token.Version == intent.Token.Previous {
 		return rpc.Errf("precondition_failed", "Invalid TLS recovery binding")
+	}
+	if j.Verb == "site.update" {
+		var v siteUpdateArgs
+		if json.Unmarshal(j.Args, &v) != nil || v.Validate() != nil || v.SiteID != intent.SiteID {
+			return rpc.Errf("precondition_failed", "TLS recovery input mismatch")
+		}
+		site, ds, err := (sslState{a.Store}).active(ctx, intent.SiteID)
+		if err != nil {
+			return err
+		}
+		names, primary := sslNames(ds)
+		if intent.Config.Name != site.Name || !equalNames(names, intent.Domains) || !validPrimaryIntent(intent, site, ds, v, a.Cfg.TLSDir, primary) || (v.HSTSMaxAge != nil && j.Role != "owner") {
+			return rpc.Errf("precondition_failed", "TLS primary recovery binding changed")
+		}
+		if err = checkRetainedPrimary(*intent.OldToken); err != nil {
+			return err
+		}
+		return certs.CheckRecovery(intent.Token)
+	}
+	if intent.Version != 1 || intent.Promotion != nil || intent.OldToken != nil {
+		return rpc.Errf("precondition_failed", "Invalid SSL recovery version")
 	}
 	var args struct {
 		SiteID  string `json:"site_id"`
@@ -63,6 +84,14 @@ func (s tlsStartup) resume(ctx context.Context, j *jobs.Job) error {
 	}
 	if j.Step == "tls_committed" {
 		return nil
+	}
+	if j.Verb == "site.update" {
+		var v siteUpdateArgs
+		if err := json.Unmarshal(j.Args, &v); err != nil {
+			return err
+		}
+		// Only replay the validated journal, never the general site update executor.
+		return (sslPublication{a}).publication(ctx, v.SiteID, j, false, nil, &v)
 	}
 	var v struct {
 		SiteID  string `json:"site_id"`

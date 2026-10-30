@@ -93,7 +93,7 @@ func (v *redirectAddArgs) Validate() error {
 	return nil
 }
 func init() {
-	rpc.Register(rpc.Verb{Name: "site.update", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, NewArgs: func() any { return &siteUpdateArgs{} }, ObjectKey: func(v any) string { return "site:" + v.(*siteUpdateArgs).SiteID }, Run: siteUpdate, Exec: siteUpdateExec})
+	rpc.Register(rpc.Verb{Name: "site.update", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, NewArgs: func() any { return &siteUpdateArgs{} }, ObjectKey: func(v any) string { return "site:" + v.(*siteUpdateArgs).SiteID }, Run: siteUpdate, Exec: siteUpdateExec, ValidateRecovery: func(ctx context.Context, a *agent.Agent, j *jobs.Job) error { return (tlsStartup{a}).validate(ctx, j) }, Recover: func(ctx context.Context, a *agent.Agent, j *jobs.Job) error { return (tlsStartup{a}).resume(ctx, j) }})
 	rpc.Register(rpc.Verb{Name: "domain.add", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, NewArgs: func() any { return &domainAddArgs{} }, ObjectKey: func(v any) string { return "site:" + v.(*domainAddArgs).SiteID }, Run: domainAdd, Exec: domainAddExec})
 	rpc.Register(rpc.Verb{Name: "domain.remove", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, NewArgs: func() any { return &childRemoveArgs{} }, ObjectKey: func(v any) string { return "site:" + v.(*childRemoveArgs).SiteID }, Run: domainRemove, Exec: domainRemoveExec})
 	rpc.Register(rpc.Verb{Name: "redirect.add", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, NewArgs: func() any { return &redirectAddArgs{} }, ObjectKey: func(v any) string { return "site:" + v.(*redirectAddArgs).SiteID }, Run: redirectAdd, Exec: redirectAddExec})
