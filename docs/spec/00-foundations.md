@@ -173,11 +173,19 @@ mfa_at}` where `kind ∈ {anon, user, token}`.
   IP), and its token bucket **must cover cookie-less bootstrap** (`GET /login` → `session.start`);
   skipping the bucket when no cookie is present is a defect. Exhaustion of the agent ceiling returns
   `rate_limited` (F3); the agent never trusts a client IP/identity the web tier forwards.
-- **Expired-session GC.** Rejecting an expired session on read is **not** enough — the agent **deletes**
-  rows past their deadline (`now > idle_deadline OR now > abs_deadline`) via a bounded, indexed sweep,
-  triggered opportunistically on mint (and/or a periodic F18 task), using the injected clock and
-  **never** touching a live row. Otherwise repeated cookie disposal grows `sessions` without bound.
-  (Revocation remains a row delete; this adds lifetime GC.)
+- **Expired-session GC.** Each fresh anonymous mint, never anonymous reuse, performs one indexed
+  sweep deleting at most **256** session rows of any kind. Each deadline branch selects at most 256
+  candidates in `(deadline, id)` order using its covering index; deduplicate their union, sort by id,
+  and limit to 256 before deleting. The exact single DELETE and indexes are pinned in 02.
+  Acquire the store connection and SQLite write lock before sampling the injected clock; bind that
+  same `now` to all four DELETE parameters. Cleanup and the fresh insert share one short transaction;
+  cleanup failure refuses the mint. Do not loop until empty or add a scheduler, config key or verb.
+  GC uses strict `now > idle_deadline OR now > abs_deadline`: live and exact-boundary rows survive.
+  Authentication separately rejects `now >= deadline`; retention must not weaken authentication.
+  Do not log credentials or deleted session contents. Revocation remains a row delete.
+  **Release dependency:** PR85's `0006_session_expiry_indexes.sql` must not merge or release before
+  Phase 3 PR81's reserved `0005_sites.sql`. Do not edit shipped 0001–0004 or add a placeholder 0005;
+  merge released Phase-3 main into PR85 normally and rerun gates before release.
 - **Login** (`session.login{user, password, totp?}`): agent verifies (Argon2id; TOTP if enrolled),
   **mints a new session id** (the anon one is deleted — this is the "rotate on login"), stores
   `kind=user`, sets `mfa_at = now` iff a TOTP/backup code was verified, returns the token. `panel-web`
