@@ -100,8 +100,10 @@ recoverable out-of-band** — never store the only copy inside the repo they unl
   never leaves a stale armed row that would `conflict` future applies).
 - **Confirmation is a fresh client round-trip, not an agent self-probe** (the agent cannot prove
   external reachability from inside the box, and an existing keep-alive connection survives UFW's
-  ESTABLISHED rule so it would prove nothing). `firewall.apply` returns a one-time **confirm nonce**
-  (in `pending_id`'s reply); the panel serves the confirm UI/endpoint with `Cache-Control: no-store`
+  ESTABLISHED rule so it would prove nothing). `firewall.apply` returns a one-time **confirm nonce — this *is* the `pending_id`** (an opaque one-shot
+  token = `fw_pending.id`, consumed on confirm/revert; **no separate nonce field or column**, and
+  `firewall.confirm`/`revert` are **synchronous** per 01, not jobs); the panel serves the confirm
+  UI/endpoint with `Cache-Control: no-store`
   and `Connection: close`, so the client must open a **new request** to submit `firewall.confirm`. A
   successful fresh confirm within N minutes (default **`Cfg.firewall_window_min`**, 15) is sufficient
   evidence the panel is still
@@ -134,6 +136,13 @@ circularity (DB holds sealed repo creds; `seal.key` unseals them) is broken by: 
 password is generated and **shown once to the operator at setup, stored out-of-band** (never inside
 any restic repo). Restore order: install binary → restore agent.toml + **seal.key** → restic-restore
 the panel repo using the out-of-band password → restore panel.db → ACME keys → per-site data.
+- **Panel repo setup (decided).** The dedicated panel repo is created via **`repo.create{role:'panel'}`**
+  (03) — **exactly one** panel repo allowed (`conflict` if one exists); `repo.list` exposes `role`
+  (02 `repos.role`). Its generated password rides the show-once claim **and** must be stored out-of-band
+  (it is the recovery key — never inside any restic repo).
+- **Consistent `panel.db` snapshot (decided).** The self-backup takes a **SQLite online-backup /
+  `VACUUM INTO` snapshot** of `panel.db` (WAL-consistent), **never a raw main-file copy** (which omits
+  uncheckpointed WAL contents), then backs up that snapshot file.
 
 **D2 update protocol (folded in so this phase stands alone).** `update.check` fetches a channel
 **`manifest.json` + `manifest.json.sig`**; the agent **verifies the ed25519 signature with a public
@@ -144,6 +153,33 @@ outside-top), swaps the binary, and restarts via systemd; a failed post-restart 
 back to the prior binary. A `security_fix` marker flags the update urgent; "notify" is a persistent
 dashboard banner. (Channels + approval-gated CI signing remain Phase-4-of-releases scope, per the
 plan; v1 ships single-manifest verify + anti-rollback.)
+
+**D2 pinned contract (decided — release-security).**
+- **Signed bytes + sig format:** the signature covers the **exact bytes of `manifest.json`** as fetched
+  (no JSON re-canonicalization). `manifest.json.sig` is the 64-byte Ed25519 signature **base64-encoded**
+  (RFC 4648, padded; trim surrounding whitespace before decode). Verify `ed25519.Verify(pub,
+  manifestBytes, sig)` **before** any JSON parse; failure → `invalid_argument`.
+- **Trust anchor:** the 32-byte Ed25519 **public key is a compile-time constant** (`internal/update`);
+  the updater **never** accepts a key from the manifest or any downloaded content. Rotation ships a
+  **new binary** (signed by the current key) carrying the next key — no in-band key swap. Tests inject a
+  test key through a seam; the production constant is the release signer's key.
+- **Manifest schema:** `{ "version":"<semver>", "security_fix"?:bool, "notes"?:string, "artifacts":[ {
+  "os","arch","filename","sha256":"<hex>","size":<bytes>,"url":"<https>" } ] }`. The agent selects the
+  artifact matching `runtime.GOOS`/`GOARCH` (no match → `unsupported`); integrity comes from the
+  **signed** `sha256`+`size` (checked before unpack), never the `url`. This release manifest is distinct
+  from the `update.check` RPC reply (03).
+- **Version grammar + anti-rollback:** **semver** precedence; accept only a `manifest.version`
+  **strictly greater** than installed (`==` and `<` → `precondition_failed`). The stable channel refuses
+  prereleases. An installed `dev`/unparseable version sorts **below every release** (dev may update), but
+  the manifest version must be a valid final release.
+- **Apply + recovery:** the artifact is a tarball of the three binaries (`panel-agent`, `panel-web`,
+  `novapanelctl`). Install to a **versioned dir** (`/opt/novapanel/<version>/`), verify sha256+size+sig,
+  **unpack defensively** (tar-slip guard), **atomic-swap the `current` symlink** the units point at, and
+  restart via systemd; **retain the prior version dir**. A **post-restart health check** (agent answers
+  `ping` within `deadline_default_ms`) gates success; failure **rolls the symlink back to the prior
+  (local, known-good) version** and restarts — rollback uses the retained **local** artifact, **never** a
+  downloaded older release, so anti-rollback holds. A crash mid-swap leaves the job `interrupted`
+  (effectful); on restart the agent reconciles the symlink/version and completes or rolls back.
 
 ## External refs (gathered — verified)
 - restic env vars, argv, `--stdin-from-command` failure-awareness, exit codes (3=failure), default
