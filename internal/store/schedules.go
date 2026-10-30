@@ -22,7 +22,7 @@ type Schedule struct {
 	Automation             bool            `json:"-"`
 }
 
-const scheduleColumns = "id,verb,args_json,cron,state_json,next_run,enabled,last_run,actor,role,owner_id,scopes_json,automation"
+const scheduleColumns = "id,verb,args_json,cron,state_json,next_run,enabled,last_run,actor,coalesce(role,''),coalesce(owner_id,''),scopes_json,automation"
 
 func scanSchedule(r scanner) (v Schedule, e error) {
 	var a, st, sc string

@@ -147,3 +147,14 @@ func TestBlockedClaimReadEvaluatesClockAfterAcquiringConnection(t *testing.T) {
 		t.Fatal(n, e)
 	}
 }
+
+func TestSystemSeededScheduleNullableAuthority(t *testing.T) {
+	s := fresh(t)
+	if _, e := s.db.ExecContext(context.Background(), "INSERT INTO schedules(id,verb,args_json,cron,next_run) VALUES('seed','update.check','{}','daily',1)"); e != nil {
+		t.Fatal(e)
+	}
+	v, e := s.GetSchedule(context.Background(), "seed")
+	if e != nil || v.CreatedBy != "" || v.Role != "" {
+		t.Fatal(v, e)
+	}
+}
