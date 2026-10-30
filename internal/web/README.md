@@ -6,6 +6,14 @@ Stateless chi + html/template renderer with self-hosted HTMX and compiled Tailwi
 
 PR77 F4 defines `session.start` as idempotent get-or-create. Login GET presents the existing cookie; login POST re-fetches the same anonymous row's CSRF via that verb, compares `X-CSRF-Token` constant-time, then forwards only canonical login fields. Login replaces the hardened session cookie and redirects to the dashboard. Authenticated mutations re-fetch their CSRF via `session.whoami`. No session/CSRF cache, CSRF cookie, or new RPC field exists.
 
+## Transport rate limit
+
+F16's `rate_limit_rps` and `rate_limit_burst` default to 5 and 20. `panel-web` reads the existing config loader once at startup from `/etc/novapanel/agent.toml`, or the `NOVAPANEL_CONFIG` path, with `NOVAPANEL_RATE_LIMIT_RPS` / `NOVAPANEL_RATE_LIMIT_BURST` environment overrides. Invalid settings fail startup. No account resolution or agent-state access is needed.
+
+Every routed request carrying the canonical session cookie spends one token before dialing RPC, including anonymous login and authenticated requests. Only the credential passed to RPC keys the bucket; Authorization, role and forwarded-address headers do not change it. Origin and duplicate-cookie refusals run first; security headers wrap all responses. Exhaustion returns HTTP 429 with `Retry-After: 1` without an RPC connection. Agent credential-failure budgets are unchanged.
+
+The process retains at most 4096 SHA-256 credential keys and token counters, not credentials or session authority. On capacity pressure it removes only fully replenished buckets; if all budgets remain active, new keyed requests fail closed with 429. Assets and cookie-less login bootstrap remain reachable. The spec defines no cookie-less transport identity, so no IP/header/global policy is invented; the agent's existing per-peer mint throttle still applies. Limits are process-local and reset on restart.
+
 ## Checks
 
 - `go test ./internal/web ./cmd/panel-web`

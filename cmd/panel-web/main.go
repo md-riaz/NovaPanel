@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"novapanel/internal/config"
 	"novapanel/internal/rpc"
 	"novapanel/internal/web"
 	"os"
@@ -24,8 +25,12 @@ func run() error {
 	if geteuid() == 0 {
 		return fmt.Errorf("panel-web refuses to run as root")
 	}
-	socket := env("NOVAPANEL_SOCKET_PATH", "/run/novapanel/agent.sock")
-	handler, err := web.New(web.Options{Origin: env("NOVAPANEL_WEB_ORIGIN", "https://localhost"), Dial: func() (web.RPCClient, error) { return rpc.Dial(socket) }, LogOnlyOrigin: os.Getenv("NOVAPANEL_WEB_ORIGIN_LOG_ONLY") == "true", OriginViolation: func() { log.Print("request origin policy violation") }})
+	cfg, err := config.Load(os.Getenv("NOVAPANEL_CONFIG"), nil)
+	if err != nil {
+		return err
+	}
+	socket := cfg.SocketPath
+	handler, err := web.New(web.Options{RateLimitRPS: cfg.RateLimitRPS, RateLimitBurst: cfg.RateLimitBurst, Origin: env("NOVAPANEL_WEB_ORIGIN", "https://localhost"), Dial: func() (web.RPCClient, error) { return rpc.Dial(socket) }, LogOnlyOrigin: os.Getenv("NOVAPANEL_WEB_ORIGIN_LOG_ONLY") == "true", OriginViolation: func() { log.Print("request origin policy violation") }})
 	if err != nil {
 		return err
 	}

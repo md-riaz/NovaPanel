@@ -13,6 +13,9 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
+
+	"novapanel/internal/config"
 
 	"github.com/go-chi/chi/v5"
 	"novapanel/internal/rpc"
@@ -29,8 +32,10 @@ type RPCClient interface {
 	Close() error
 }
 type Options struct {
-	Origin string
-	Dial   func() (RPCClient, error)
+	Origin                       string
+	Dial                         func() (RPCClient, error)
+	RateLimitRPS, RateLimitBurst int
+	Now                          func() time.Time
 	// LogOnlyOrigin never disables synchronizer-token validation.
 	LogOnlyOrigin   bool
 	OriginViolation func()
@@ -38,6 +43,7 @@ type Options struct {
 type server struct {
 	options Options
 	origin  string
+	limiter transportLimiter
 }
 type view struct {
 	Page, CSRF, User, Role, Message, URI string
@@ -50,7 +56,20 @@ func New(o Options) (http.Handler, error) {
 	if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || o.Dial == nil {
 		return nil, fmt.Errorf("valid HTTPS origin and RPC dialer required")
 	}
-	s := &server{o, "https://" + u.Host}
+	defaults := config.Defaults()
+	if o.RateLimitRPS == 0 {
+		o.RateLimitRPS = defaults.RateLimitRPS
+	}
+	if o.RateLimitBurst == 0 {
+		o.RateLimitBurst = defaults.RateLimitBurst
+	}
+	if o.RateLimitRPS < 0 || o.RateLimitBurst < 0 {
+		return nil, fmt.Errorf("rate limits must be positive")
+	}
+	if o.Now == nil {
+		o.Now = time.Now
+	}
+	s := &server{options: o, origin: "https://" + u.Host, limiter: transportLimiter{buckets: make(map[[32]byte]transportBucket), rps: float64(o.RateLimitRPS), burst: float64(o.RateLimitBurst)}}
 	r := chi.NewRouter()
 	assets, _ := fs.Sub(files, "assets")
 	r.HandleFunc("/assets/*", func(w http.ResponseWriter, r *http.Request) {
@@ -146,16 +165,21 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 			return
 		}
 	}
+	token := ""
+	if cookie, e := r.Cookie(CookieName); e == nil {
+		token = cookie.Value
+	}
+	if token != "" && !s.limiter.allow(token, s.options.Now()) {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+		return
+	}
 	c, e := s.options.Dial()
 	if e != nil {
 		http.Error(w, "Agent unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	defer c.Close()
-	token := ""
-	if cookie, e := r.Cookie(CookieName); e == nil {
-		token = cookie.Value
-	}
 	v := view{Page: rt.path}
 	if rt.auth == "bootstrap" {
 		// F4: a live anonymous cookie reuses its row and synchronizer token.
@@ -329,4 +353,4 @@ func (s *server) sameOrigin(r *http.Request) bool {
 	return fetch == "same-origin" || fetch == "none"
 }
 
-// No session, CSRF, credential or show-once secret is retained between requests.
+// Only hashed transport keys and counters survive requests, never session authority or secrets.
