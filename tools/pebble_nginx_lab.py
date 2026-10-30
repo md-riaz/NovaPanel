@@ -40,7 +40,7 @@ try:
   run('docker','cp',str(E/name),NAME+':/tmp/'+name)
  run('docker','exec','-d','-e','PEBBLE_VA_NOSLEEP=1','-e','PEBBLE_AUTHZREUSE=0',NAME,'/bin/sh','-c','exec /tmp/pebble -config /tmp/pebble.json > /tmp/pebble.log 2>&1')
  run('docker','exec',NAME,'/bin/sh','-c','for i in $(seq 1 40); do wget -q --no-check-certificate -O /tmp/directory.json https://127.0.0.1:14000/dir && exit 0; sleep 0.25; done; exit 1')
- p=run('docker','exec','-e','NOVAPANEL_REAL_NGINX=1','-e','NOVAPANEL_PEBBLE=1','-e','SSL_CERT_FILE=/tmp/server.pem','-w','/tmp/tests/integration',NAME,'/tmp/acceptance.test','-test.run','^TestRealPebbleNginxJobs$','-test.v','-test.timeout=240s',check=False)
+ p=run('docker','exec','-e','NOVAPANEL_REAL_NGINX=1','-e','NOVAPANEL_PEBBLE=1','-e','SSL_CERT_FILE=/tmp/server.pem','-w','/tmp/tests/integration',NAME,'/tmp/acceptance.test','-test.run',os.environ.get('NOVAPANEL_PEBBLE_TEST','^TestRealPebbleNginxJobs$'),'-test.v','-test.timeout=240s',check=False)
  (E/'acceptance.log').write_bytes(p.stdout+p.stderr)
  run('docker','cp',NAME+':/tmp/pebble.log',str(E/'pebble.log'))
  inspect('after')
