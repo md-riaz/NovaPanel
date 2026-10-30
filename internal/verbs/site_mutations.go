@@ -95,7 +95,10 @@ func init() {
 }
 
 // The HTTP renderer must never overwrite an installed TLS configuration.
-func mutableSite(ctx context.Context, a *agent.Agent, sid string) (store.Site, error) {
+type siteMutationState struct{ a *agent.Agent }
+
+func (m siteMutationState) mutableSite(ctx context.Context, sid string) (store.Site, error) {
+	a := m.a
 	s, e := a.Store.SiteByID(ctx, sid)
 	if e != nil {
 		return s, siteError(e)
@@ -119,7 +122,7 @@ func mutableSite(ctx context.Context, a *agent.Agent, sid string) (store.Site, e
 }
 func siteUpdate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*siteUpdateArgs)
-	if _, e := mutableSite(ctx, a, v.SiteID); e != nil {
+	if _, e := (siteMutationState{a}).mutableSite(ctx, v.SiteID); e != nil {
 		return nil, e
 	}
 	if v.HSTSMaxAge != nil && rpc.CallerFrom(ctx).Role != "owner" {
@@ -138,7 +141,7 @@ func siteUpdateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if e := v.Validate(); e != nil {
 		return e
 	}
-	if _, e := mutableSite(ctx, a, v.SiteID); e != nil {
+	if _, e := (siteMutationState{a}).mutableSite(ctx, v.SiteID); e != nil {
 		return e
 	}
 	if v.ForceHTTPS != nil && *v.ForceHTTPS || v.HSTSMaxAge != nil && *v.HSTSMaxAge != 0 {
@@ -147,14 +150,14 @@ func siteUpdateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if e := a.Store.UpdateSite(ctx, v.SiteID, store.SitePatch{Maintenance: v.Maintenance, ForceHTTPS: v.ForceHTTPS, HSTSMaxAge: v.HSTSMaxAge}); e != nil {
 		return siteError(e)
 	}
-	return applySite(ctx, a, v.SiteID, j)
+	return (siteMutationState{a}).applySite(ctx, v.SiteID, j)
 }
 func domainAdd(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := *args.(*domainAddArgs)
 	if v.DomainID != "" {
 		return nil, rpc.Errf("invalid_argument", "Domain ID is agent assigned")
 	}
-	if _, e := mutableSite(ctx, a, v.SiteID); e != nil {
+	if _, e := (siteMutationState{a}).mutableSite(ctx, v.SiteID); e != nil {
 		return nil, e
 	}
 	v.FQDN = strings.ToLower(v.FQDN)
@@ -176,20 +179,21 @@ func domainAddExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if !id.Valid(v.DomainID) {
 		return rpc.Errf("invalid_argument", "Invalid domain ID")
 	}
-	if _, e := mutableSite(ctx, a, v.SiteID); e != nil {
+	if _, e := (siteMutationState{a}).mutableSite(ctx, v.SiteID); e != nil {
 		return e
 	}
 	d, e := a.Store.AddDomain(ctx, store.Domain{ID: v.DomainID, SiteID: v.SiteID, FQDN: v.FQDN})
 	if e != nil {
 		return siteError(e)
 	}
-	if e = applySite(ctx, a, v.SiteID, j); e != nil {
+	if e = (siteMutationState{a}).applySite(ctx, v.SiteID, j); e != nil {
 		return e
 	}
 	j.Result, e = json.Marshal(map[string]string{"domain_id": d.ID})
 	return e
 }
-func removableDomain(ctx context.Context, a *agent.Agent, d store.Domain) error {
+func (m siteMutationState) removableDomain(ctx context.Context, d store.Domain) error {
+	a := m.a
 	ds, e := a.Store.ListDomains(ctx, d.SiteID)
 	if e != nil {
 		return e
@@ -209,10 +213,10 @@ func domainRemove(ctx context.Context, a *agent.Agent, args any) (any, error) {
 		return nil, siteError(e)
 	}
 	v.SiteID = d.SiteID
-	if _, e = mutableSite(ctx, a, v.SiteID); e != nil {
+	if _, e = (siteMutationState{a}).mutableSite(ctx, v.SiteID); e != nil {
 		return nil, e
 	}
-	if e = removableDomain(ctx, a, d); e != nil {
+	if e = (siteMutationState{a}).removableDomain(ctx, d); e != nil {
 		return nil, e
 	}
 	return a.Jobs.Enqueue(ctx, "domain.remove", &v, "site:"+v.SiteID)
@@ -225,7 +229,7 @@ func domainRemoveExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if e := v.Validate(); e != nil {
 		return e
 	}
-	if _, e := mutableSite(ctx, a, v.SiteID); e != nil {
+	if _, e := (siteMutationState{a}).mutableSite(ctx, v.SiteID); e != nil {
 		return e
 	}
 	d, e := a.Store.DomainByID(ctx, v.DomainID)
@@ -236,21 +240,21 @@ func domainRemoveExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 		if d.SiteID != v.SiteID {
 			return rpc.Errf("precondition_failed", "Domain parent changed")
 		}
-		if e = removableDomain(ctx, a, d); e != nil {
+		if e = (siteMutationState{a}).removableDomain(ctx, d); e != nil {
 			return e
 		}
 		if e = a.Store.RemoveDomain(ctx, d.ID); e != nil {
 			return siteError(e)
 		}
 	}
-	return applySite(ctx, a, v.SiteID, j)
+	return (siteMutationState{a}).applySite(ctx, v.SiteID, j)
 }
 func redirectAdd(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := *args.(*redirectAddArgs)
 	if v.RedirectID != "" {
 		return nil, rpc.Errf("invalid_argument", "Redirect ID is agent assigned")
 	}
-	if _, e := mutableSite(ctx, a, v.SiteID); e != nil {
+	if _, e := (siteMutationState{a}).mutableSite(ctx, v.SiteID); e != nil {
 		return nil, e
 	}
 	var e error
@@ -271,14 +275,14 @@ func redirectAddExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if !id.Valid(v.RedirectID) {
 		return rpc.Errf("invalid_argument", "Invalid redirect ID")
 	}
-	if _, e := mutableSite(ctx, a, v.SiteID); e != nil {
+	if _, e := (siteMutationState{a}).mutableSite(ctx, v.SiteID); e != nil {
 		return e
 	}
 	_, e := a.Store.AddRedirect(ctx, store.Redirect{ID: v.RedirectID, SiteID: v.SiteID, Source: v.Source, Target: v.Target, Code: v.Code})
 	if e != nil {
 		return siteError(e)
 	}
-	if e = applySite(ctx, a, v.SiteID, j); e != nil {
+	if e = (siteMutationState{a}).applySite(ctx, v.SiteID, j); e != nil {
 		return e
 	}
 	j.Result, e = json.Marshal(map[string]string{"redirect_id": v.RedirectID})
@@ -294,7 +298,7 @@ func redirectRemove(ctx context.Context, a *agent.Agent, args any) (any, error) 
 		return nil, siteError(e)
 	}
 	v.SiteID = r.SiteID
-	if _, e = mutableSite(ctx, a, v.SiteID); e != nil {
+	if _, e = (siteMutationState{a}).mutableSite(ctx, v.SiteID); e != nil {
 		return nil, e
 	}
 	return a.Jobs.Enqueue(ctx, "redirect.remove", &v, "site:"+v.SiteID)
@@ -307,7 +311,7 @@ func redirectRemoveExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 	if e := v.Validate(); e != nil {
 		return e
 	}
-	if _, e := mutableSite(ctx, a, v.SiteID); e != nil {
+	if _, e := (siteMutationState{a}).mutableSite(ctx, v.SiteID); e != nil {
 		return e
 	}
 	r, e := a.Store.RedirectByID(ctx, v.RedirectID)
@@ -320,10 +324,11 @@ func redirectRemoveExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 	if e = a.Store.RemoveRedirect(ctx, v.RedirectID); e != nil {
 		return e
 	}
-	return applySite(ctx, a, v.SiteID, j)
+	return (siteMutationState{a}).applySite(ctx, v.SiteID, j)
 }
-func applySite(ctx context.Context, a *agent.Agent, sid string, j *jobs.Job) error {
-	s, e := mutableSite(ctx, a, sid)
+func (m siteMutationState) applySite(ctx context.Context, sid string, j *jobs.Job) error {
+	a := m.a
+	s, e := (siteMutationState{a}).mutableSite(ctx, sid)
 	if e != nil {
 		return e
 	}

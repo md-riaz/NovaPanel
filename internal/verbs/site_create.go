@@ -117,7 +117,19 @@ func siteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 		names = append(names, d.FQDN)
 	}
 	// Until TLS rendering is installed, never downgrade an existing certificate site.
-	if site.CertSource != "none" || site.ForceHTTPS || site.Maintenance {
+	redirects, e := a.Store.ListRedirects(ctx, site.ID)
+	if e != nil {
+		return e
+	}
+	for _, d := range domains {
+		if d.CertState != "none" {
+			return rpc.Errf("precondition_failed", "Site requires TLS-aware rendering")
+		}
+	}
+	if len(redirects) > 0 {
+		return rpc.Errf("precondition_failed", "Site has redirect state; use site.update")
+	}
+	if site.CertSource != "none" || site.ForceHTTPS || site.Maintenance || site.HSTSMaxAge != 0 {
 		return rpc.Errf("precondition_failed", "Site requires an unsupported render state")
 	}
 	if e = a.Nginx.Apply(ctx, nginx.Desired{Name: site.Name, Domains: names, Docroot: site.Docroot, ACMERoot: filepath.Join(a.Cfg.ACMEWebroot, site.Name)}); e != nil {
