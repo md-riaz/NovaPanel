@@ -28,6 +28,12 @@ type tlsIntent struct {
 type sslPublication struct{ a *agent.Agent }
 
 func (s sslPublication) publish(ctx context.Context, v sslUploadArgs, j *jobs.Job) (result error) {
+	return s.publishCertificate(ctx, v.SiteID, j, false, func(names []string) (*certs.Certificate, error) {
+		return certs.Validate([]byte(v.CertPEM), []byte(v.KeyPEM), names, time.UnixMilli(s.a.Now()))
+	})
+}
+
+func (s sslPublication) publishCertificate(ctx context.Context, siteID string, j *jobs.Job, staging bool, acquire func([]string) (*certs.Certificate, error)) (result error) {
 	a := s.a
 	defer func() {
 		if recover() != nil {
@@ -50,7 +56,7 @@ func (s sslPublication) publish(ctx context.Context, v sslUploadArgs, j *jobs.Jo
 		if err != nil {
 			return err
 		}
-		if durable.Verb != "ssl.upload" || durable.ObjectKey != "site:"+v.SiteID {
+		if durable.Verb != j.Verb || (j.Verb != "ssl.upload" && j.Verb != "ssl.issue" && j.Verb != "ssl.renew") || durable.ObjectKey != "site:"+siteID {
 			return rpc.Errf("precondition_failed", "TLS job parent mismatch")
 		}
 		if durable.Step == "tls_committed" {
@@ -67,10 +73,10 @@ func (s sslPublication) publish(ctx context.Context, v sslUploadArgs, j *jobs.Jo
 			var intent tlsIntent
 			dec := json.NewDecoder(bytes.NewReader(raw))
 			dec.DisallowUnknownFields()
-			if dec.Decode(&intent) != nil || dec.Decode(new(any)) != io.EOF || intent.Version != 1 || intent.JobID != j.ID || intent.SiteID != v.SiteID || intent.Token.Root != a.Cfg.TLSDir || intent.NginxRoot != a.Nginx.Root || len(intent.Domains) == 0 {
+			if dec.Decode(&intent) != nil || dec.Decode(new(any)) != io.EOF || intent.Version != 1 || intent.JobID != j.ID || intent.SiteID != siteID || intent.Token.Root != a.Cfg.TLSDir || intent.NginxRoot != a.Nginx.Root || len(intent.Domains) == 0 {
 				return rpc.Errf("precondition_failed", "Unresolved TLS recovery intent")
 			}
-			site, ds, e := (sslState{a.Store}).active(ctx, v.SiteID)
+			site, ds, e := (sslState{a.Store}).active(ctx, siteID)
 			if e != nil {
 				return e
 			}
@@ -88,16 +94,28 @@ func (s sslPublication) publish(ctx context.Context, v sslUploadArgs, j *jobs.Jo
 			}
 			replay = &intent
 		}
-		site, ds, err := (sslState{a.Store}).active(ctx, v.SiteID)
+		site, ds, err := (sslState{a.Store}).active(ctx, siteID)
 		if err != nil {
 			return err
 		}
 		names, primary := sslNames(ds)
-		certificate, err := certs.Validate([]byte(v.CertPEM), []byte(v.KeyPEM), names, time.UnixMilli(a.Now()))
+		var certificate *certs.Certificate
+		if replay != nil {
+			// The retained intent owns this pointer while the shared nginx lock is held.
+			if err = certs.Publish(replay.Token); err != nil {
+				return err
+			}
+			certificate, err = certs.Load(a.Cfg.TLSDir, primary, names, time.UnixMilli(a.Now()))
+			if restoreErr := certs.Restore(replay.Token); restoreErr != nil {
+				return restoreErr
+			}
+		} else {
+			certificate, err = acquire(names)
+		}
 		if err != nil {
 			return err
 		}
-		rs, err := a.Store.ListRedirects(ctx, v.SiteID)
+		rs, err := a.Store.ListRedirects(ctx, siteID)
 		if err != nil {
 			return err
 		}
@@ -115,7 +133,7 @@ func (s sslPublication) publish(ctx context.Context, v sslUploadArgs, j *jobs.Jo
 				return err
 			}
 		}
-		intent := tlsIntent{Version: 1, JobID: j.ID, SiteID: v.SiteID, NginxRoot: a.Nginx.Root, Domains: names, Token: token, Config: snapshot}
+		intent := tlsIntent{Version: 1, JobID: j.ID, SiteID: siteID, NginxRoot: a.Nginx.Root, Domains: names, Token: token, Config: snapshot}
 		if replay == nil {
 			raw, err = json.Marshal(intent)
 			if err != nil {
@@ -142,7 +160,7 @@ func (s sslPublication) publish(ctx context.Context, v sslUploadArgs, j *jobs.Jo
 			}
 			return err
 		}
-		state, err := nginx.LoadTLS(a.Cfg.TLSDir, primary, false, time.UnixMilli(a.Now()))
+		state, err := nginx.LoadTLS(a.Cfg.TLSDir, primary, staging, time.UnixMilli(a.Now()))
 		if err != nil {
 			recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 			defer cancel()
@@ -156,7 +174,7 @@ func (s sslPublication) publish(ctx context.Context, v sslUploadArgs, j *jobs.Jo
 			d.Redirects = append(d.Redirects, nginx.Redirect{Source: r.Source, Target: r.Target, Code: r.Code})
 		}
 		return tx.Apply(ctx, d, rollback, func(ctx context.Context) error {
-			if err := a.Store.CommitManualTLS(ctx, v.SiteID, j.ID, certificate.NotAfter.UnixMilli(), raw); err != nil {
+			if err := a.Store.CommitTLS(ctx, siteID, j.ID, j.Verb, staging, certificate.NotAfter.UnixMilli(), raw); err != nil {
 				return err
 			}
 			j.Step = "tls_committed"

@@ -3,6 +3,11 @@ package verbs
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"novapanel/internal/acme"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -58,7 +63,7 @@ func (s sslACMEState) check(ctx context.Context, v *sslACMEArgs, verb string) (b
 	if primary == "" {
 		return false, rpc.Errf("precondition_failed", "Site has no primary domain")
 	}
-	if verb == "ssl.renew" && site.CertSource != "automatic" {
+	if verb == "ssl.renew" && site.CertSource != "letsencrypt" {
 		return false, rpc.Errf("precondition_failed", "Only automatic certificates can renew")
 	}
 	now := time.UnixMilli(s.now())
@@ -108,12 +113,30 @@ func (s sslACMEState) admit(ctx context.Context, q *jobs.Queue, v *sslACMEArgs, 
 	return q.Enqueue(ctx, verb, v, "site:"+v.SiteID)
 }
 func sslIssueExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
-	return (sslACMEState{a.Store, a.Cfg.TLSDir, a.Now}).execute(ctx, j, "ssl.issue")
+	return (acmeExecutor{a}).execute(ctx, j, "ssl.issue", nil)
 }
 func sslRenewExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
-	return (sslACMEState{a.Store, a.Cfg.TLSDir, a.Now}).execute(ctx, j, "ssl.renew")
+	return (acmeExecutor{a}).execute(ctx, j, "ssl.renew", nil)
 }
-func (s sslACMEState) execute(ctx context.Context, j *jobs.Job, verb string) error {
+
+type acmeExecutor struct{ a *agent.Agent }
+
+func (x acmeExecutor) execute(ctx context.Context, j *jobs.Job, verb string, transport *http.Client) error {
+	a := x.a
+	s := sslACMEState{a.Store, a.Cfg.TLSDir, a.Now}
+	durable, e := a.Store.GetJob(ctx, j.ID)
+	if e != nil {
+		return e
+	}
+	if durable.Verb != verb || durable.ObjectKey != j.ObjectKey || durable.State != "running" {
+		return rpc.Errf("precondition_failed", "ACME job parent mismatch")
+	}
+	j.Args = durable.Args
+	if durable.Step == "tls_committed" {
+		j.Step = durable.Step
+		j.Result = json.RawMessage(`{}`)
+		return nil
+	}
 	var v sslACMEArgs
 	if json.Unmarshal(j.Args, &v) != nil || v.Validate() != nil {
 		return rpc.Errf("invalid_argument", "Invalid ACME job")
@@ -125,9 +148,43 @@ func (s sslACMEState) execute(ctx context.Context, j *jobs.Job, verb string) err
 	if e != nil {
 		return e
 	}
-	if noop {
+	intent, e := a.Store.TLSIntent(ctx)
+	if e != nil {
+		return e
+	}
+	if noop && len(intent) == 0 {
 		return nil
 	}
-	// Never consume a CA order before durable common TLS/nginx publication exists.
-	return rpc.Errf("precondition_failed", "TLS publication recovery is not yet available")
+	env, directory := acme.Staging, a.Cfg.ACMEDirectoryStaging
+	if !*v.Staging {
+		env, directory = acme.Production, a.Cfg.ACMEDirectoryProd
+	}
+	return (sslPublication{a}).publishCertificate(ctx, v.SiteID, j, *v.Staging, func(names []string) (*certs.Certificate, error) {
+		client, err := acme.NewPersisted(ctx, a.Store, acme.Config{Environment: env, Directory: directory, Email: a.Cfg.ACMEEmail, Sealer: a.Secret, TermsOfServiceAgreed: true, HTTPClient: transport}, a.Now)
+		if err != nil {
+			return nil, err
+		}
+		site, ds, err := (sslState{a.Store}).active(ctx, v.SiteID)
+		if err != nil {
+			return nil, err
+		}
+		_, primary := sslNames(ds)
+		root := filepath.Join(a.Cfg.ACMEWebroot, site.Name)
+		if verb == "ssl.issue" {
+			return client.Issue(ctx, names, root)
+		}
+		if _, err = certs.Load(a.Cfg.TLSDir, primary, names, time.UnixMilli(a.Now())); err != nil {
+			return nil, err
+		}
+		f, err := os.Open(filepath.Join(a.Cfg.TLSDir, primary, "current", "fullchain.pem"))
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		previous, err := io.ReadAll(io.LimitReader(f, certs.MaxCertificateBytes+1))
+		if err != nil {
+			return nil, err
+		}
+		return client.Renew(ctx, names, root, previous)
+	})
 }

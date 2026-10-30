@@ -30,15 +30,25 @@ func (s *Store) ClearTLSIntent(ctx context.Context, b json.RawMessage) error {
 // CommitManualTLS commits metadata and the replay marker together. It cannot make
 // the preceding filesystem changes atomic with SQLite; the retained intent owns recovery.
 func (s *Store) CommitManualTLS(ctx context.Context, siteID, jobID string, expiry int64, b json.RawMessage) error {
+	return s.CommitTLS(ctx, siteID, jobID, "ssl.upload", false, expiry, b)
+}
+
+func (s *Store) CommitTLS(ctx context.Context, siteID, jobID, verb string, staging bool, expiry int64, b json.RawMessage) error {
+	source := "manual"
+	if verb == "ssl.issue" || verb == "ssl.renew" {
+		source = "letsencrypt"
+	} else if verb != "ssl.upload" || staging {
+		return ErrACMEPolicy
+	}
 	return s.Tx(ctx, func(tx *sql.Tx) error {
-		r, err := tx.ExecContext(ctx, "UPDATE sites SET cert_source='manual',updated=? WHERE id=? AND status='active'", s.clock.Now(), siteID)
+		r, err := tx.ExecContext(ctx, "UPDATE sites SET cert_source=?,updated=? WHERE id=? AND status='active'", source, s.clock.Now(), siteID)
 		if err = affected(r, err); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, "UPDATE domains SET cert_state='issued',cert_staging=0,cert_not_after=? WHERE site_id=?", expiry, siteID); err != nil {
+		if _, err = tx.ExecContext(ctx, "UPDATE domains SET cert_state='issued',cert_staging=?,cert_not_after=? WHERE site_id=?", staging, expiry, siteID); err != nil {
 			return err
 		}
-		r, err = tx.ExecContext(ctx, "UPDATE jobs SET step='tls_committed',result_json='{}' WHERE id=? AND verb='ssl.upload' AND object_key=? AND state='running'", jobID, "site:"+siteID)
+		r, err = tx.ExecContext(ctx, "UPDATE jobs SET step='tls_committed',result_json='{}' WHERE id=? AND verb=? AND object_key=? AND state='running'", jobID, verb, "site:"+siteID)
 		if err = affected(r, err); err != nil {
 			return err
 		}
