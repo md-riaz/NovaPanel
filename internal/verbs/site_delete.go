@@ -32,6 +32,11 @@ func siteDelete(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	return a.Jobs.Enqueue(ctx, "site.delete", v, "site:"+v.SiteID)
 }
 func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
+	if raw, err := a.Store.TLSIntent(ctx); err != nil {
+		return err
+	} else if len(raw) > 0 {
+		return rpc.Errf("precondition_failed", "Unresolved TLS publication")
+	}
 	var v siteDeleteArgs
 	if e := json.Unmarshal(j.Args, &v); e != nil {
 		return e

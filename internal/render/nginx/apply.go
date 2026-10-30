@@ -22,12 +22,32 @@ type Applier struct {
 	Runner runner.Runner
 	Probe  func(context.Context, Desired) error
 	Now    func() time.Time
+	Guard  func(context.Context) error
 	mu     sync.Mutex
 }
 
 func (a *Applier) Apply(ctx context.Context, d Desired) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.Guard != nil {
+		if err := a.Guard(ctx); err != nil {
+			return err
+		}
+	}
+	return a.apply(ctx, d, nil, nil)
+}
+
+func (a *Applier) apply(ctx context.Context, d Desired, recover func(context.Context, bool) error, commit func(context.Context) error) (result error) {
+	reloaded := false
+	if recover != nil {
+		defer func() {
+			if result != nil {
+				recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+				defer cancel()
+				result = errors.Join(result, recover(recovery, reloaded))
+			}
+		}()
+	}
 	if d.TLS != nil {
 		now := time.Now()
 		if a.Now != nil {
@@ -105,6 +125,9 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 		return goodErr
 	}
 	if !d.ForceReload && exists && hadLink && goodErr == nil && bytes.Equal(old, b) && bytes.Equal(good, b) {
+		if commit != nil {
+			return commit(ctx)
+		}
 		return nil
 	}
 	// Only a successful reload and probe promote bytes to last-known-good.
@@ -127,19 +150,32 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 	}
 	if !hadLink {
 		if e = enabled.Symlink(link, name); e != nil {
+			if recover != nil {
+				return e
+			}
 			if exists {
 				return errors.Join(e, writeAtomic(available, name, old))
 			}
 			return errors.Join(e, available.Remove(name))
 		}
 	}
+	if e = syncDirectory(enabled); e != nil {
+		return e
+	}
 	if e = a.command(ctx, platform.Nginx, []string{"-t"}); e != nil {
+		if recover != nil {
+			return e
+		}
 		return errors.Join(e, restore())
 	}
+	reloaded = true
 	if e = a.command(ctx, platform.Systemctl, []string{"reload", "nginx"}); e == nil {
 		e = a.Probe(ctx, d)
 	}
 	if e != nil {
+		if recover != nil {
+			return e
+		}
 		restored := restore()
 		if restored != nil {
 			return errors.Join(e, restored)
@@ -148,7 +184,13 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 		defer cancel()
 		return errors.Join(e, a.command(recovery, platform.Systemctl, []string{"reload", "nginx"}))
 	}
-	return writeAtomic(available, name+".lkg", b)
+	if e = writeAtomic(available, name+".lkg", b); e != nil {
+		return e
+	}
+	if commit != nil {
+		return commit(ctx)
+	}
+	return nil
 }
 func (a *Applier) command(ctx context.Context, prog string, args []string) error {
 	_, _, code, e := a.Runner.Run(ctx, prog, args, runner.RunOpts{})
@@ -200,5 +242,8 @@ func writeAtomic(root *os.Root, name string, b []byte) error {
 	if e != nil {
 		return e
 	}
-	return root.Rename(temp, name)
+	if e = root.Rename(temp, name); e != nil {
+		return e
+	}
+	return syncDirectory(root)
 }

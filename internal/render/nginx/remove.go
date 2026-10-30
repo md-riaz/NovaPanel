@@ -21,6 +21,11 @@ func (a *Applier) Remove(ctx context.Context, name string) error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.Guard != nil {
+		if err := a.Guard(ctx); err != nil {
+			return err
+		}
+	}
 	resolved, e := filepath.EvalSymlinks(a.Root)
 	if e != nil {
 		return e

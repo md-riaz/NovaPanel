@@ -99,6 +99,11 @@ type siteMutationState struct{ a *agent.Agent }
 
 func (m siteMutationState) mutableSite(ctx context.Context, sid string) (store.Site, error) {
 	a := m.a
+	if raw, err := a.Store.TLSIntent(ctx); err != nil {
+		return store.Site{}, err
+	} else if len(raw) > 0 {
+		return store.Site{}, rpc.Errf("precondition_failed", "Unresolved TLS publication")
+	}
 	s, e := a.Store.SiteByID(ctx, sid)
 	if e != nil {
 		return s, siteError(e)

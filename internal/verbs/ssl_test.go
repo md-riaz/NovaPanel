@@ -12,7 +12,9 @@ import (
 	"encoding/pem"
 	"math/big"
 	"novapanel/internal/audit"
+	runner "novapanel/internal/exec"
 	"novapanel/internal/jobs"
+	"novapanel/internal/render/nginx"
 	"novapanel/internal/secret"
 	certs "novapanel/internal/tls"
 	"os"
@@ -27,7 +29,7 @@ import (
 	"novapanel/internal/store"
 )
 
-func TestSSLUploadSealedAndFailClosed(t *testing.T) {
+func TestSSLUploadSealedAndPublished(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st, err := store.Open(filepath.Join(root, "panel.db"))
@@ -41,6 +43,19 @@ func TestSSLUploadSealedAndFailClosed(t *testing.T) {
 	}
 	defer log.Close()
 	a := agent.New()
+	a.Cfg.TLSDir = filepath.Join(root, "tls")
+	if err = os.Mkdir(a.Cfg.TLSDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	ng := filepath.Join(root, "nginx")
+	for _, dir := range []string{"sites-available", "sites-enabled"} {
+		if err = os.MkdirAll(filepath.Join(ng, dir), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a.Nginx.Root = ng
+	a.Nginx.Runner = sslRunner{}
+	a.Nginx.Probe = func(context.Context, nginx.Desired) error { return nil }
 	a.Store = st
 	a.Audit = log
 	a.Secret, err = secret.New(make([]byte, 32))
@@ -92,11 +107,20 @@ func TestSSLUploadSealedAndFailClosed(t *testing.T) {
 	if strings.Contains(string(stored.Args), "PRIVATE KEY") || strings.Contains(string(stored.Args), "CERTIFICATE") || j.Effectful || j.ObjectKey != "site:"+sid {
 		t.Fatal("unsafe stored input")
 	}
-	if err = rpc.Registry["ssl.upload"].Exec(ctx, a, &j); err == nil || !strings.Contains(err.Error(), "recovery") {
-		t.Fatalf("publication not fail closed: %v", err)
+	j, err = st.StartJob(ctx, j.ID, a.Now())
+	if err != nil {
+		t.Fatal(err)
 	}
-	j.State = "failed"
-	j.Code = "precondition_failed"
+	if err = rpc.Registry["ssl.upload"].Exec(ctx, a, &j); err != nil {
+		t.Fatal(err)
+	}
+	if j.Step != "tls_committed" {
+		t.Fatal(j.Step)
+	}
+	if err = rpc.Registry["ssl.upload"].Exec(ctx, a, &j); err != nil {
+		t.Fatal(err)
+	}
+	j.State = "done"
 	if err = st.UpdateJob(ctx, store.Job(j)); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +130,7 @@ func TestSSLUploadSealedAndFailClosed(t *testing.T) {
 	}
 	// A valid installed pair, not metadata, is required for issued status.
 	a.Cfg.TLSDir = filepath.Join(root, "tls")
-	if err = os.Mkdir(a.Cfg.TLSDir, 0700); err != nil {
+	if err = os.MkdirAll(a.Cfg.TLSDir, 0700); err != nil {
 		t.Fatal(err)
 	}
 	c, err := certs.Validate([]byte(cp), []byte(kp), []string{"demo.test"}, now)
@@ -131,6 +155,7 @@ func TestSSLUploadSealedAndFailClosed(t *testing.T) {
 	if d["cert_state"] != "issued" {
 		t.Fatal(d)
 	}
+	token.Previous = ""
 	if err = certs.Restore(token); err != nil {
 		t.Fatal(err)
 	}
@@ -139,6 +164,12 @@ func TestSSLUploadSealedAndFailClosed(t *testing.T) {
 	if d["cert_state"] != "none" {
 		t.Fatal(d)
 	}
+}
+
+type sslRunner struct{}
+
+func (sslRunner) Run(context.Context, string, []string, runner.RunOpts) ([]byte, []byte, int, error) {
+	return nil, nil, 0, nil
 }
 
 func TestSSLStatusAndAutoSet(t *testing.T) {

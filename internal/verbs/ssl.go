@@ -99,6 +99,18 @@ func sslUpload(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	return a.Jobs.EnqueueSealed(ctx, "ssl.upload", v, "site:"+v.SiteID)
 }
 func sslUploadExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
+	durable, err := a.Store.GetJob(ctx, j.ID)
+	if err != nil {
+		return err
+	}
+	if j.Verb != "ssl.upload" || durable.Verb != "ssl.upload" || durable.ObjectKey != j.ObjectKey {
+		return rpc.Errf("precondition_failed", "TLS job parent mismatch")
+	}
+	if durable.Step == "tls_committed" {
+		j.Step = durable.Step
+		j.Result = json.RawMessage(`{}`)
+		return nil
+	}
 	raw, err := a.Jobs.OpenInput(j)
 	if err != nil {
 		return err
@@ -114,19 +126,7 @@ func sslUploadExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if j.Verb != "ssl.upload" || j.ObjectKey != "site:"+v.SiteID {
 		return rpc.Errf("precondition_failed", "TLS job parent mismatch")
 	}
-	_, ds, err := (sslState{a.Store}).active(ctx, v.SiteID)
-	if err != nil {
-		return err
-	}
-	names := make([]string, 0, len(ds))
-	for _, d := range ds {
-		names = append(names, d.FQDN)
-	}
-	if _, err = certs.Validate([]byte(v.CertPEM), []byte(v.KeyPEM), names, time.UnixMilli(a.Now())); err != nil {
-		return err
-	}
-	// No pointer may change until restart recovery coordinates TLS, nginx and DB.
-	return rpc.Errf("precondition_failed", "TLS publication recovery is not yet available")
+	return (sslPublication{a}).publish(ctx, v, j)
 }
 
 type sslDomainStatus struct {
