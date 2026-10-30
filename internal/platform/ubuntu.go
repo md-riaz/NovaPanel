@@ -2,6 +2,7 @@
 package platform
 
 const Systemctl = "/usr/bin/systemctl"
+const Nginx = "/usr/sbin/nginx"
 const Chattr = "/usr/bin/chattr"
 
 func ManageableUnit(unit string) bool {
