@@ -86,7 +86,7 @@ type route struct{ method, path, auth, verb string }
 
 // All routes declare a policy; unknown paths/methods never reach RPC.
 var routes = []route{
-	{"GET", "/", "user", ""}, {"GET", "/login", "bootstrap", ""}, {"POST", "/login", "anonymous-blocked", "session.login"},
+	{"GET", "/", "user", ""}, {"GET", "/login", "bootstrap", ""}, {"POST", "/login", "anonymous", "session.login"},
 	{"POST", "/logout", "user", "session.logout"}, {"GET", "/reauth", "user", ""}, {"POST", "/reauth", "user", "session.reauth"},
 	{"GET", "/mfa", "user", ""}, {"POST", "/mfa/enroll", "user", "mfa.enroll"}, {"POST", "/mfa/confirm", "user", "mfa.confirm"}, {"POST", "/mfa/disable", "user", "mfa.disable"},
 }
@@ -136,11 +136,6 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 			return
 		}
 	}
-	if rt.auth == "anonymous-blocked" {
-		// Contract gap raised in PR75 #6521129631: no approved anon CSRF retrieval RPC.
-		http.Error(w, "Login unavailable pending anonymous CSRF contract resolution", http.StatusServiceUnavailable)
-		return
-	}
 	c, e := s.options.Dial()
 	if e != nil {
 		http.Error(w, "Agent unavailable", http.StatusServiceUnavailable)
@@ -153,8 +148,8 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 	}
 	v := view{Page: rt.path}
 	if rt.auth == "bootstrap" {
-		// Never call non-public whoami for an anonymous cookie. A login GET starts anew.
-		data, ok := call(w, r, c, "session.start", map[string]any{}, "")
+		// F4: a live anonymous cookie reuses its row and synchronizer token.
+		data, ok := call(w, r, c, "session.start", map[string]any{}, token)
 		if !ok {
 			return
 		}
@@ -172,14 +167,18 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	data, ok := call(w, r, c, "session.whoami", map[string]any{}, token)
+	identityVerb := "session.whoami"
+	if rt.auth == "anonymous" {
+		identityVerb = "session.start"
+	}
+	data, ok := call(w, r, c, identityVerb, map[string]any{}, token)
 	if !ok {
 		return
 	}
 	v.CSRF, _ = data["csrf_token"].(string)
 	v.User, _ = data["user"].(string)
 	v.Role, _ = data["role"].(string)
-	if v.CSRF == "" || (v.Role != "owner" && v.Role != "admin" && v.Role != "read_only") {
+	if v.CSRF == "" || (rt.auth != "anonymous" && v.Role != "owner" && v.Role != "admin" && v.Role != "read_only") {
 		http.Error(w, "Invalid agent identity", http.StatusBadGateway)
 		return
 	}
@@ -200,6 +199,17 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 			return
 		}
 		args := map[string]any{}
+		if rt.verb == "session.login" {
+			user, password, proof := r.PostForm.Get("user"), r.PostForm.Get("password"), r.PostForm.Get("totp")
+			if user == "" || len(user) > 128 || password == "" || len(password) > 1024 || len(proof) > 128 {
+				http.Error(w, "Invalid login form", http.StatusBadRequest)
+				return
+			}
+			args["user"], args["password"] = user, password
+			if proof != "" {
+				args["totp"] = proof
+			}
+		}
 		if rt.verb == "session.reauth" || rt.verb == "mfa.confirm" || rt.verb == "mfa.disable" {
 			code := r.PostForm.Get("totp")
 			if code == "" || len(code) > 128 {
@@ -218,7 +228,7 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 			w.Header().Set("HX-Redirect", "/login")
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
-		case "session.reauth":
+		case "session.login", "session.reauth":
 			session, _ := data["session"].(string)
 			csrf, _ := data["csrf_token"].(string)
 			if session == "" || csrf == "" {
@@ -226,6 +236,11 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 				return
 			}
 			setCookie(w, session, false)
+			if rt.verb == "session.login" {
+				w.Header().Set("HX-Redirect", "/")
+				http.Redirect(w, r, "/", http.StatusSeeOther)
+				return
+			}
 			v.CSRF = csrf
 			v.Message = "Session reauthenticated"
 		case "mfa.enroll":

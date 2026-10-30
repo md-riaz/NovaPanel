@@ -2,9 +2,9 @@
 
 Stateless chi + html/template renderer with self-hosted HTMX and compiled Tailwind CSS, following the canonical stack decision in docs/spec/05-adr.md. The agent remains the session, authorization and persistence authority. The web process only uses the existing RPC client.
 
-## Blocked login
+## Anonymous login
 
-`POST /login` returns 503 without making an RPC call. PR #75 comment 6521129631 requests the missing canonical anonymous-session CSRF retrieval path. Do not replace this with anonymous whoami, a second session.start, a CSRF cookie/cache, or a new RPC field. This slice is not complete Phase 2 acceptance.
+PR77 F4 defines `session.start` as idempotent get-or-create. Login GET presents the existing cookie; login POST re-fetches the same anonymous row's CSRF via that verb, compares `X-CSRF-Token` constant-time, then forwards only canonical login fields. Login replaces the hardened session cookie and redirects to the dashboard. Authenticated mutations re-fetch their CSRF via `session.whoami`. No session/CSRF cache, CSRF cookie, or new RPC field exists.
 
 ## Checks
 

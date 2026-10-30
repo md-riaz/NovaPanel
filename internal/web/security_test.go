@@ -74,17 +74,48 @@ func TestNoMutationOnSafeOrUnknownRoutes(t *testing.T) {
 		}
 	}
 	for _, r := range routes {
-		if r.auth != "user" && r.auth != "bootstrap" && r.auth != "anonymous-blocked" {
+		if r.auth != "user" && r.auth != "bootstrap" && r.auth != "anonymous" {
 			t.Fatalf("route lacks decision %+v", r)
 		}
 	}
 }
-func TestLoginGapFailsClosed(t *testing.T) {
-	f := identityRPC()
-	w := httptest.NewRecorder()
-	setup(t, f).ServeHTTP(w, request("POST", "/login", "user=alice&password=secret"))
-	if w.Code != 503 || len(f.rpcCalls) != 0 {
-		t.Fatalf("blocked anon seam status=%d calls=%+v", w.Code, f.rpcCalls)
+func TestAnonymousLoginCSRFBeforeCredentials(t *testing.T) {
+	for _, csrf := range []string{"expected", "wrong", ""} {
+		t.Run(csrf, func(t *testing.T) {
+			f := &fakeRPC{reply: func(v string) (rpc.Reply, error) {
+				if v == "session.start" {
+					return rpc.Reply{OK: true, Data: map[string]any{"session": "nps_user_secret", "csrf_token": "expected"}}, nil
+				}
+				if v == "session.login" {
+					return rpc.Reply{OK: true, Data: map[string]any{"session": "nps_rotated_secret", "csrf_token": "rotated", "role": "owner", "mfa": false}}, nil
+				}
+				t.Fatalf("unexpected RPC %s", v)
+				return rpc.Reply{}, nil
+			}}
+			w := httptest.NewRecorder()
+			r := request("POST", "/login", "user=alice&password=secret&totp=123456&role=owner")
+			r.Header.Set("X-CSRF-Token", csrf)
+			setup(t, f).ServeHTTP(w, r)
+			want, calls := 403, 1
+			if csrf == "expected" {
+				want, calls = 303, 2
+			}
+			if w.Code != want || len(f.rpcCalls) != calls {
+				t.Fatalf("status=%d calls=%+v", w.Code, f.rpcCalls)
+			}
+			if f.rpcCalls[0].session != "nps_user_secret" {
+				t.Fatal("anonymous envelope lost")
+			}
+			if calls == 2 {
+				if fmt.Sprint(f.rpcCalls[1].args) != "map[password:secret totp:123456 user:alice]" {
+					t.Fatal("noncanonical login args")
+				}
+				cookies := w.Result().Cookies()
+				if len(cookies) != 1 || cookies[0].Value != "nps_rotated_secret" || w.Header().Get("HX-Redirect") != "/" {
+					t.Fatal("login did not rotate and redirect")
+				}
+			}
+		})
 	}
 }
 func TestDashboardReadOnlyAndEscaped(t *testing.T) {
