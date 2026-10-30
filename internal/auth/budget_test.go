@@ -26,6 +26,41 @@ func TestFailureBudgetResetWindowAndIsolation(t *testing.T) {
 		t.Fatal("boundary blocked")
 	}
 }
+func TestFailureBudgetOlderOtherAccountDoesNotResetLiveFailure(t *testing.T) {
+	var b FailureBudgets
+	if ok, err := b.Verify("alice", 1001, 1, 900000, func() (bool, error) { return false, nil }); ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	// Bob sampled its timestamp before waiting for Alice's verification.
+	if ok, err := b.Verify("bob", 1000, 1, 900000, func() (bool, error) { return true, nil }); !ok || err != nil {
+		t.Fatal("other account blocked", ok, err)
+	}
+	called := false
+	ok, err := b.Verify("alice", 1002, 1, 900000, func() (bool, error) {
+		called = true
+		return true, nil
+	})
+	if called || ok || err != nil {
+		t.Fatal("older timestamp reset another account's exhausted live budget", called, ok, err)
+	}
+}
+
+func TestFailureBudgetOlderSameAccountCannotResetExhaustion(t *testing.T) {
+	var b FailureBudgets
+	if ok, err := b.Verify("alice", 1001, 1, 900000, func() (bool, error) { return false, nil }); ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	// A queued attempt may carry an older timestamp than the stored failure.
+	called := false
+	ok, err := b.Verify("alice", 1000, 1, 900000, func() (bool, error) {
+		called = true
+		return false, nil
+	})
+	if called || ok || err != nil {
+		t.Fatal("older timestamp bypassed the exhausted account budget", called, ok, err)
+	}
+}
+
 func TestFailureBudgetConcurrentAdmission(t *testing.T) {
 	var b FailureBudgets
 	var attempts atomic.Int64

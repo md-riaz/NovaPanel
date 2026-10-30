@@ -23,7 +23,8 @@ func (b *FailureBudgets) Verify(key string, now int64, limit int, window int64, 
 		b.accounts = make(map[string]failureBudget)
 	}
 	for k, r := range b.accounts {
-		if now < r.start || now-r.start >= window {
+		// Queued attempts may carry older timestamps; only elapsed windows expire.
+		if now >= r.start && now-r.start >= window {
 			delete(b.accounts, k)
 		}
 	}
