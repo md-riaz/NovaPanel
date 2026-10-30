@@ -118,17 +118,21 @@ func TestRealPebbleNginxJobs(t *testing.T) {
 	}
 	t.Logf("Pebble issued version=%s expires=%s", first, pair.NotAfter)
 	before := l.reloads
-	r := dispatch("ssl.issue", args)
-	if !r.OK {
-		t.Fatal(r)
+	noopJob := run("ssl.issue", args)
+	if len(noopJob.Result) == 0 {
+		t.Fatal("queued no-op omitted canonical result")
 	}
-	if _, ok := r.Data.(jobs.EnqueueResult); ok {
-		t.Fatal("duplicate issue queued")
+	var noopResult struct {
+		FQDNs    []string `json:"fqdns"`
+		NotAfter int64    `json:"not_after"`
+	}
+	if err := json.Unmarshal(noopJob.Result, &noopResult); err != nil || len(noopResult.FQDNs) != 1 || noopResult.FQDNs[0] != "demo.test" || noopResult.NotAfter != pair.NotAfter.UnixMilli() {
+		t.Fatalf("queued no-op result: %s: %v", noopJob.Result, err)
 	}
 	if l.reloads != before {
 		t.Fatal("no-op reloaded")
 	}
-	r = dispatch("site.update", map[string]any{"site_id": sid, "force_https": true})
+	r := dispatch("site.update", map[string]any{"site_id": sid, "force_https": true})
 	if r.OK || r.Code != "precondition_failed" {
 		t.Fatalf("staging force HTTPS not refused %+v", r)
 	}

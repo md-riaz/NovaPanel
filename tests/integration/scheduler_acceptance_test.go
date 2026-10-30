@@ -237,12 +237,17 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 	if err != nil || after.NextRun != cadence.NextRun {
 		t.Fatal("cadence lost", err)
 	}
-	r := dispatch("ssl.issue", args)
-	if !r.OK {
-		t.Fatal(r)
+	noop := run("ssl.issue", args, key)
+	var noopResult struct {
+		FQDNs    []string `json:"fqdns"`
+		NotAfter int64    `json:"not_after"`
 	}
-	if _, ok := r.Data.(jobs.EnqueueResult); ok {
-		t.Fatal("duplicate issue queued")
+	pairBefore, err := certs.Load(a.Cfg.TLSDir, "demo.test", []string{"demo.test"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(noop.Result, &noopResult); err != nil || len(noopResult.FQDNs) != 1 || noopResult.FQDNs[0] != "demo.test" || noopResult.NotAfter != pairBefore.NotAfter.UnixMilli() {
+		t.Fatalf("queued no-op canonical result: %s: %v", noop.Result, err)
 	}
 	if l.reloads != before {
 		t.Fatal("no-op issue reloaded")
@@ -322,7 +327,7 @@ func TestRealPebbleSchedulerMutationAcceptance(t *testing.T) {
 	wait(one)
 	wait(two)
 	a.Jobs.SetRunner(server.ExecuteJob)
-	r = dispatch("ssl.auto_set", map[string]any{"site_id": sid, "enabled": false})
+	r := dispatch("ssl.auto_set", map[string]any{"site_id": sid, "enabled": false})
 	if !r.OK {
 		t.Fatal(r)
 	}
