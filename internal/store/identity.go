@@ -250,6 +250,19 @@ func (s *Store) TouchSession(ctx context.Context, id, expectedHash string, idleM
 	return
 }
 func (s *Store) RotateSession(ctx context.Context, oldID string, v Session) error {
+	return s.rotateSession(ctx, oldID, v, nil, "")
+}
+
+// RotateVerifiedSession binds publication to the credentials that were verified.
+// Optional password rehashing commits with rotation, never before the state check.
+func (s *Store) RotateVerifiedSession(ctx context.Context, oldID string, v Session, verified User, newPHC string) error {
+	if v.Kind != "user" || v.UserID == nil || *v.UserID != verified.ID || verified.PWPHC == "" {
+		return ErrAuthInvalid
+	}
+	return s.rotateSession(ctx, oldID, v, &verified, newPHC)
+}
+
+func (s *Store) rotateSession(ctx context.Context, oldID string, v Session, verified *User, newPHC string) error {
 	return s.Tx(ctx, func(tx *sql.Tx) error {
 		old, e := scanSession(tx.QueryRowContext(ctx, "SELECT "+sessionColumns+" FROM sessions WHERE id=?", oldID))
 		if e != nil {
@@ -267,6 +280,20 @@ func (s *Store) RotateSession(ctx context.Context, oldID string, v Session) erro
 		}
 		if e = sessionUser(ctx, tx, v); e != nil {
 			return e
+		}
+		if verified != nil {
+			var matches bool
+			if e = tx.QueryRowContext(ctx, "SELECT pw_phc=? AND totp_secret IS ? FROM users WHERE id=?", verified.PWPHC, verified.TOTPSecret, verified.ID).Scan(&matches); e != nil {
+				return e
+			}
+			if !matches {
+				return ErrAuthConflict
+			}
+			if newPHC != "" {
+				if _, e = tx.ExecContext(ctx, "UPDATE users SET pw_phc=?,updated=? WHERE id=?", newPHC, now, verified.ID); e != nil {
+					return e
+				}
+			}
 		}
 		if _, e = tx.ExecContext(ctx, "DELETE FROM sessions WHERE id=?", oldID); e != nil {
 			return e

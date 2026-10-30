@@ -93,13 +93,11 @@ func sessionLogin(ctx context.Context, a *agent.Agent, v any) (any, error) {
 			return nil, e
 		}
 	}
+	fresh := ""
 	if rehash {
-		fresh := auth.Hash(args.Password)
+		fresh = auth.Hash(args.Password)
 		if fresh == "" {
 			return nil, rpc.Errf("agent_error", "Password hashing unavailable")
-		}
-		if e = a.Store.RehashPassword(ctx, u.ID, u.PWPHC, fresh); e != nil {
-			return nil, e
 		}
 	}
 	row, token, e := randomSession(a.Now())
@@ -113,7 +111,10 @@ func sessionLogin(ctx context.Context, a *agent.Agent, v any) (any, error) {
 		now := a.Now()
 		row.MFAAt = &now
 	}
-	if e = a.Store.RotateSession(ctx, c.Session, row); e != nil {
+	if e = a.Store.RotateVerifiedSession(ctx, c.Session, row, u, fresh); e != nil {
+		if errors.Is(e, store.ErrAuthConflict) || errors.Is(e, store.ErrAuthExpired) || errors.Is(e, sql.ErrNoRows) {
+			return nil, authFailure()
+		}
 		return nil, e
 	}
 	return struct {
