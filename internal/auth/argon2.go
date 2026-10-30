@@ -60,6 +60,12 @@ func Verify(pw, phc string) (ok, needsRehash bool) {
 	if p < 1 || p > 4 || m < 8*p || m > 65536 || t < 1 || t > 10 {
 		return false, false
 	}
+	// Strict decoding still ignores CR/LF; PHC fields permit only the raw alphabet.
+	for _, field := range parts[4:6] {
+		if strings.Trim(field, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/") != "" {
+			return false, false
+		}
+	}
 	salt, e := base64.RawStdEncoding.Strict().DecodeString(parts[4])
 	if e != nil || len(salt) < 8 || len(salt) > 64 {
 		return false, false
