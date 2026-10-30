@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	execx "novapanel/internal/exec"
 )
 
@@ -27,12 +29,16 @@ func TestPidfileReusedLivePID(t *testing.T) {
 	}
 	ticks := strings.Fields(string(stat[strings.LastIndex(string(stat), ") ")+2:]))[19]
 	for _, stale := range []struct{ name, boot, ticks string }{
+		{"legacy live unrelated PID", "", ""},
 		{"previous boot", "00000000-0000-0000-0000-000000000000", ticks},
 		{"previous process", strings.TrimSpace(string(boot)), "0"},
 	} {
 		t.Run(stale.name, func(t *testing.T) {
 			p := filepath.Join(t.TempDir(), "db")
 			raw := strconv.Itoa(os.Getpid()) + " " + stale.boot + " " + stale.ticks + "\n"
+			if stale.boot == "" {
+				raw = strconv.Itoa(os.Getpid()) + "\n"
+			}
 			if err := os.WriteFile(p+".pid", []byte(raw), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -53,7 +59,6 @@ func TestPidfileReusedLivePID(t *testing.T) {
 func TestPidfileOwnerAndSafety(t *testing.T) {
 	for _, tc := range []struct{ name, kind string }{
 		{"matching live identity", "live"},
-		{"legacy live PID", "legacy"},
 		{"invalid boot", "boot"},
 		{"invalid ticks", "ticks"},
 		{"missing fields", "missing"},
@@ -75,8 +80,6 @@ func TestPidfileOwnerAndSafety(t *testing.T) {
 			}
 			fields := strings.Fields(string(raw))
 			switch tc.kind {
-			case "legacy":
-				raw = []byte(fields[0] + "\n")
 			case "boot":
 				fields[1] = "not-a-boot"
 				raw = []byte(strings.Join(fields, " "))
@@ -122,6 +125,30 @@ func TestPidfileOwnerAndSafety(t *testing.T) {
 				t.Fatalf("refused pidfile changed: %q, %v", got, err)
 			}
 		})
+	}
+}
+
+func TestPidfileLegacyRecoveryRequiresDBLock(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "db")
+	lock, err := os.OpenFile(p, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(strconv.Itoa(os.Getpid()) + "\n")
+	if err := os.WriteFile(p+".pid", raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := Open(p); err == nil {
+		s.Close()
+		t.Fatal("held database lock ignored")
+	}
+	got, err := os.ReadFile(p + ".pid")
+	if err != nil || !bytes.Equal(got, raw) {
+		t.Fatalf("locked pidfile changed: %q, %v", got, err)
 	}
 }
 
