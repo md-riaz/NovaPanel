@@ -89,8 +89,9 @@ removes domains or regenerates SANs.
 
 TLS promotion must validate the actual installed pair against the full persisted domain set,
 stage the same pair under the new primary while preserving the old path, then coordinate nginx,
-SQLite and recovery through a durable publication journal. The current bounded implementation
-supports HTTP-only promotion and refuses TLS promotion with `precondition_failed` before changes.
+SQLite and recovery through a durable publication journal. TLS promotion is supported by the
+version-2 journal binding old/new primary IDs, unchanged domains, both recovery tokens and the
+nginx snapshot. The old path is retained; metadata and the replay marker commit only after probing.
 A metadata-only TLS promotion is not an implementation of re-keying. `site.get` redirects and
 `ssl.status` auto-renew read fields remain separate contract decisions, not additions in this amendment.
 

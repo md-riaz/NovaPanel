@@ -177,10 +177,12 @@ post-reload request probe is the real safety net.
   in canonical 03, retaining existing-domain IDs, admin/sites:write/slow/non-effectful authorization,
   `site:<site_id>` locking and the owner-only HSTS gate. Admission and execution validate active
   lifecycle, same-site target, ≥1 domains and exactly one primary; the store checks atomically too.
-  Same-primary is a no-op. HTTP-only promotion is implemented; TLS promotion remains fail-closed
-  (`precondition_failed`) pending a journal that binds old/new primary, installed-pair coverage,
-  preserved old path, nginx and SQLite. The ssl.upload journal binds an unchanged primary and cannot
-  safely be reused unchanged. No SAN regeneration or metadata-only TLS promotion is permitted.
+  Same-primary is a no-op. HTTP-only and TLS promotion are implemented. TLS promotion validates
+  installed-pair coverage and uses a version-2 journal binding old/new primary IDs, unchanged
+  domains, both recovery tokens and the nginx snapshot. It preserves the old path and commits
+  SQLite metadata plus the replay marker only after probing, with rollback/restart recovery.
+  The unchanged-primary version-1 journal is not reused unchanged. No SAN regeneration or
+  metadata-only TLS promotion is permitted.
   The console selects an existing domain and calls site.update, never a new verb.
 - **site.delete scope.** Retry-safe ensure-absent order: (1) remove the nginx config + reload (stop
   serving), (2) remove certs (files + `domains` cert state), (3) if `purge_files` remove the docroot/home

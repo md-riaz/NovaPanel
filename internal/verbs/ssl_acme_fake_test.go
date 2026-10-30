@@ -34,11 +34,12 @@ type fakeCA struct {
 	replacements                                []string
 	orders, registrations, challenges, requests int
 	fail                                        bool
+	lifetime                                    time.Duration
 }
 
 func newFakeCA(t *testing.T, root string) *fakeCA {
 	t.Helper()
-	f := &fakeCA{root: root}
+	f := &fakeCA{root: root, lifetime: 12 * time.Hour}
 	key, e := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if e != nil {
 		t.Fatal(e)
@@ -153,7 +154,7 @@ func newFakeCA(t *testing.T, root string) *fakeCA {
 			if !reflect.DeepEqual(csr.DNSNames, f.domains) {
 				t.Errorf("CSR SANs %v != order %v", csr.DNSNames, f.domains)
 			}
-			leaf := &x509.Certificate{SerialNumber: big.NewInt(int64(f.orders + 10)), Subject: csr.Subject, DNSNames: csr.DNSNames, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(12 * time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, AuthorityKeyId: ca.SubjectKeyId}
+			leaf := &x509.Certificate{SerialNumber: big.NewInt(int64(f.orders + 10)), Subject: csr.Subject, DNSNames: csr.DNSNames, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(f.lifetime), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, AuthorityKeyId: ca.SubjectKeyId}
 			issued, e := x509.CreateCertificate(rand.Reader, leaf, ca, csr.PublicKey, key)
 			if e != nil {
 				t.Error(e)

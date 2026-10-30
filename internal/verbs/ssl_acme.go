@@ -12,6 +12,7 @@ import (
 
 	"novapanel/internal/agent"
 	"novapanel/internal/jobs"
+	"novapanel/internal/render/nginx"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
 	certs "novapanel/internal/tls"
@@ -157,7 +158,43 @@ func (x acmeExecutor) execute(ctx context.Context, j *jobs.Job, verb string, tra
 		return e
 	}
 	if noop && len(intent) == 0 {
-		return nil
+		return a.Nginx.Transaction(ctx, func(_ *nginx.Transaction) error {
+			intent, err := a.Store.TLSIntent(ctx)
+			if err != nil {
+				return err
+			}
+			if len(intent) != 0 {
+				return rpc.Errf("precondition_failed", "Unresolved TLS recovery intent")
+			}
+			_, ds, err := (sslState{a.Store}).active(ctx, v.SiteID)
+			if err != nil {
+				return err
+			}
+			names, primary := sslNames(ds)
+			pair, err := certs.Load(a.Cfg.TLSDir, primary, names, time.UnixMilli(a.Now()))
+			if err != nil {
+				return err
+			}
+			var result any = struct {
+				NotAfter int64 `json:"not_after"`
+			}{pair.NotAfter.UnixMilli()}
+			if verb == "ssl.issue" {
+				result = struct {
+					FQDNs    []string `json:"fqdns"`
+					NotAfter int64    `json:"not_after"`
+				}{names, pair.NotAfter.UnixMilli()}
+			}
+			durable.Result, err = json.Marshal(result)
+			if err != nil {
+				return err
+			}
+			durable.Step = "tls_committed"
+			if err = a.Store.UpdateJob(ctx, durable); err != nil {
+				return err
+			}
+			j.Step, j.Result = durable.Step, append(json.RawMessage(nil), durable.Result...)
+			return nil
+		})
 	}
 	env, directory := acme.Staging, a.Cfg.ACMEDirectoryStaging
 	if !*v.Staging {
