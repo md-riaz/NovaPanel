@@ -61,7 +61,7 @@ panel.backup_config{repo_id}                            → job → {snapshot_id
 ```
 site.create{name?, type:'static'|'php'|'wordpress', primary_domain, php_version?} → job → {site_id}
                                                         # name generated from the domain if omitted
-site.update{site_id, php_version?, force_https?:bool, hsts_max_age?:int, maintenance?:bool} → job → {}
+site.update{site_id, primary_domain_id?:string, php_version?, force_https?:bool, hsts_max_age?:int, maintenance?:bool} → job → {}
 site.delete{site_id, purge_files?:bool}                 → job → {}      # MFA; removes user/docroot/certs/DB rows per flags
 site.list{}                                            → {sites:[{id,name,type,primary_domain,status,php_version}]}
 site.get{site_id}                                       → {site:{…}, domains:[…], cert:{state,not_after}}
@@ -77,6 +77,22 @@ php.list{}                                              → {versions:[string], 
 redirect.add{site_id, source, target, code:301|302}     → job → {redirect_id}   # source/target validated (F9)
 redirect.remove{redirect_id}                            → job → {}
 ```
+
+### Primary promotion amendment
+`site.update.primary_domain_id` names an existing domain ULID belonging to the site, not a new FQDN.
+The registry remains admin, `sites:write`, slow, non-effectful, with `site:<site_id>` locking.
+HSTS changes still require an owner. Before enqueue and again in execution under the site lock,
+validate active lifecycle, same-site target, at least one domain and exactly one current primary.
+The store repeats these checks in the metadata transaction. A same-primary request makes no
+primary or timestamp change; other requested settings still apply. Promotion never creates or
+removes domains or regenerates SANs.
+
+TLS promotion must validate the actual installed pair against the full persisted domain set,
+stage the same pair under the new primary while preserving the old path, then coordinate nginx,
+SQLite and recovery through a durable publication journal. The current bounded implementation
+supports HTTP-only promotion and refuses TLS promotion with `precondition_failed` before changes.
+A metadata-only TLS promotion is not an implementation of re-keying. `site.get` redirects and
+`ssl.status` auto-renew read fields remain separate contract decisions, not additions in this amendment.
 
 ## databases (Phase 4)
 ```
