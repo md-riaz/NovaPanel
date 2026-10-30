@@ -127,6 +127,12 @@ post-reload request probe is the real safety net.
 - **Renewal forces a reload:** `ssl.renew` swaps the `current` symlink (bytes unchanged) so it
   **always reloads nginx** (the skip-if-hash-unchanged rule does not apply to a cert swap). The F18
   scheduler runs renewal daily (within 30 days of expiry) and flips `cert_state`.
+- **SSL is its own UI section, separate from Domains** (per the prototype). Three cert sources on a
+  site (`sites.cert_source`): **automatic** (Let's Encrypt via `ssl.issue`/`ssl.renew`, auto-renew
+  governed by `ssl.auto_set`), **manual** (`ssl.upload{cert_pem,key_pem}` — MFA; the agent validates
+  the key matches the leaf and the dates are current, then installs into the same versioned-dir +
+  `current` symlink; the scheduler **never** auto-renews a manual cert), and **none**. **Force-HTTPS
+  lives in the SSL section** and is the `site.update{force_https}` field, still gated on a valid cert.
 - **Maintenance mode** renders a `return 503` + a static maintenance page served from
   `/var/www/novapanel/maintenance.html`; it is a `sites.maintenance` field set by `site.update`.
 - **HSTS raise** is `site.update{hsts_max_age}` (owner), only in state 3; never auto-`preload`.

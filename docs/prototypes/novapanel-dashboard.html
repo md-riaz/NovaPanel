@@ -287,6 +287,7 @@ table.tbl tbody tr:hover{background:var(--surface-2)}
 .input,select.input{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--border-strong);background:var(--surface-2);
   color:var(--fg);font:inherit;font-size:13.5px;outline:none}
 .input:focus{border-color:var(--accent)}
+textarea.input{resize:vertical;min-height:40px;line-height:1.4}
 .seg{display:flex;gap:6px;flex-wrap:wrap}
 .seg .opt{flex:1;min-width:120px;border:1px solid var(--border-strong);border-radius:10px;padding:11px 12px;cursor:pointer;background:var(--surface-2)}
 .seg .opt.sel{border-color:var(--accent);background:var(--accent-weak)}
@@ -589,8 +590,8 @@ function vWebsites(){
 
 function vSite(id){
   const s=siteBy(id); if(!s)return `<div class="empty">Site not found.</div>`;
-  const tabs=["Overview","Domains & TLS","Database","Deploy","Files","Cron","Logs"];
-  const manage=(t,icn,d,act)=>`<div class="card"><div class="card-pad flex col" style="gap:10px;align-items:flex-start">
+  const tabs=["Overview","Domains","SSL / HTTPS","Database","Deploy","Files","Cron","Logs"];
+  const manage=(t,icn,d,act,onclick)=>`<div class="card" ${onclick?`onclick="${onclick}" style="cursor:pointer"`:""}><div class="card-pad flex col" style="gap:10px;align-items:flex-start">
      <div class="flex" style="gap:10px;width:100%"><span class="li" style="width:34px;height:34px;border-radius:9px;display:grid;place-items:center;background:var(--accent-weak);color:var(--accent);flex:none">${ic(icn)}</span>
        <div style="min-width:0"><div style="font-weight:800">${t}</div><div style="font-size:12px;color:var(--muted)">${d}</div></div></div>
      <button class="btn btn-sm btn-ghost mla">${act} ${ic("chevr","ic")}</button></div></div>`;
@@ -627,12 +628,13 @@ function vSite(id){
   </div>
 
   <div class="grid cards-2">
-    ${manage("Domains &amp; TLS","globe","Add domains, issue or renew SSL certificates, force HTTPS","Manage")}
-    ${manage("PHP version &amp; limits","cpu","Choose the PHP version, memory limit and upload size","Configure")}
-    ${manage("Git deploy","git",s.deploy?`${s.deploy.repo} · last deploy ${s.deploy.when}`:"Connect a repository to deploy","Deploy")}
-    ${manage("Backups &amp; restore","save","Back up this site, verify and restore a snapshot","View")}
-    ${manage("File manager","file","Browse the "+s.size+" in this site's folder","Browse")}
-    ${manage("Scheduled tasks","clock","Schedule commands to run on a timer","Edit")}
+    ${manage("Domains","globe",`${s.domains} domain${s.domains>1?"s":""} · add, remove, set the primary domain`,"Manage",`domainsPanel('${s.id}')`)}
+    ${manage("SSL / HTTPS","lock","Automatic Let's Encrypt, install your own cert, force HTTPS","Open",`sslPanel('${s.id}')`)}
+    ${manage("PHP version &amp; limits","cpu","Choose the PHP version, memory limit and upload size","Configure","toast('PHP settings (demo)')")}
+    ${manage("Git deploy","git",s.deploy?`${s.deploy.repo} · last deploy ${s.deploy.when}`:"Connect a repository to deploy","Deploy","toast('Git deploy (demo)')")}
+    ${manage("Backups &amp; restore","save","Back up this site, verify and restore a snapshot","View","location.hash='backups'")}
+    ${manage("File manager","file","Browse the "+s.size+" in this site's folder","Browse","toast('File manager (demo)')")}
+    ${manage("Scheduled tasks","clock","Schedule commands to run on a timer","Edit","toast('Scheduled tasks (demo)')")}
   </div>`;
 }
 
@@ -872,6 +874,49 @@ function restoreFlow(target){modal(`<div class="modal-h">${ic("save")}<h3>Restor
   </div>
   <div class="modal-f"><button class="btn" onclick="closeModal()">Cancel</button>
     <button class="btn btn-danger" onclick="closeModal();toast('Restore job queued with pre-restore snapshot (demo)')">Restore</button></div>`);}
+
+/* domains panel */
+function domainsPanel(id){const s=siteBy(id);if(!s)return;const apex=s.domain.split(".").slice(-2).join(".");
+  const list=[{d:s.domain,primary:1}]; if(s.domains>1)list.push({d:"www."+apex,primary:0});
+  modal(`<div class="modal-h">${ic("globe")}<h3>Domains — ${esc(s.domain)}</h3>
+    <button class="tb-btn" style="margin-left:auto;width:32px;height:32px" onclick="closeModal()">${ic("x","ic")}</button></div>
+  <div class="modal-b">
+    ${list.map(x=>`<div class="flex" style="gap:10px;padding:11px 13px;border:1px solid var(--border);border-radius:10px">
+      ${ic("globe")}<span class="mono" style="font-weight:700">${esc(x.d)}</span>
+      ${x.primary?'<span class="badge accent">primary</span>':'<span class="badge good"><span class="dt"></span>on cert</span>'}
+      <button class="btn btn-sm btn-ghost mla" ${x.primary?"disabled":""} onclick="toast('Domain removed (demo)')">Remove</button></div>`).join("")}
+    <div class="field"><label>Add a domain</label><div class="flex gap6" style="align-items:stretch">
+      <input class="input mono" placeholder="store.${esc(apex)}">
+      <button class="btn btn-primary" style="flex:none" onclick="toast('Domain added — it will be added to the SSL certificate (demo)')">Add</button></div>
+      <div class="hint">New domains must point to ${server.ip}. They're added to this site's SSL certificate automatically.</div></div>
+  </div>
+  <div class="modal-f"><button class="btn" onclick="closeModal()">Close</button></div>`);}
+
+/* ssl / https panel */
+function sslPanel(id){const s=siteBy(id);if(!s)return;const has=s.cert!=="none";const forced=s.cert==="force";
+  modal(`<div class="modal-h">${ic("lock")}<h3>SSL / HTTPS — ${esc(s.domain)}</h3>
+    <button class="tb-btn" style="margin-left:auto;width:32px;height:32px" onclick="closeModal()">${ic("x","ic")}</button></div>
+  <div class="modal-b">
+    <div class="card"><div class="card-pad flex col" style="gap:11px;align-items:stretch">
+      <div class="flex gap6"><span style="font-weight:800">Automatic SSL</span><span class="tag">Let's Encrypt · free</span><span class="mla">${certBadge(s)}</span></div>
+      <div style="font-size:12.5px;color:var(--muted)">${has?`Issued and renews itself automatically within 30 days of expiry${s.certDays?` · ${s.certDays} days left`:""}.`:"No certificate yet. Issue one over HTTP-01 — the domain must already point to this server."}</div>
+      <div class="flex gap6"><label class="flex gap6" style="font-weight:700;font-size:12.5px">Auto-renew <span class="sw ${has?"on":""}" onclick="this.classList.toggle('on');toast('Auto-renew '+(this.classList.contains('on')?'on':'off')+' (demo)')"></span></label>
+        <button class="btn btn-sm btn-primary mla" onclick="toast('${has?"Renewal queued":"Issuing certificate over HTTP-01"} (demo)')">${has?"Renew now":"Issue certificate"}</button></div>
+    </div></div>
+    <div class="card"><div class="card-pad flex col" style="gap:11px;align-items:stretch">
+      <div class="flex gap6"><span style="font-weight:800">Install your own certificate</span><span class="tag">manual</span></div>
+      <div style="font-size:12.5px;color:var(--muted)">Already bought a certificate? Paste it here. We check the private key matches and the dates are valid before installing.</div>
+      <div class="field"><label>Certificate (PEM, including the chain)</label><textarea class="input mono" rows="2" placeholder="-----BEGIN CERTIFICATE-----"></textarea></div>
+      <div class="field"><label>Private key (PEM)</label><textarea class="input mono" rows="2" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
+      <button class="btn btn-sm mla" onclick="toast('Key + chain validated · certificate installed (demo)')">Install certificate</button>
+    </div></div>
+    <div class="card"><div class="card-pad flex" style="gap:12px;align-items:center">
+      <div style="min-width:0"><div style="font-weight:800">Force HTTPS redirect</div>
+        <div style="font-size:12.5px;color:var(--muted)">Send every HTTP visitor to HTTPS.${has?"":" Install a certificate first."}</div></div>
+      <span class="sw ${forced?"on":""} mla" style="${has?"":"opacity:.45;cursor:not-allowed"}"
+        onclick="${has?"this.classList.toggle('on');toast('Force HTTPS '+(this.classList.contains('on')?'on':'off')+' (demo)')":"toast('Install a certificate before forcing HTTPS (demo)')"}"></span></div></div>
+  </div>
+  <div class="modal-f"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>`);}
 
 /* create-site wizard */
 let wz={step:0,type:"wordpress"};

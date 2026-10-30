@@ -166,6 +166,8 @@ CREATE TABLE sites (
   php_version  TEXT,                  -- NULL for static
   force_https  INTEGER NOT NULL DEFAULT 0,
   hsts_max_age INTEGER NOT NULL DEFAULT 0,  -- 0 = no HSTS; set by site.update (owner), only served in render state 3
+  cert_source  TEXT NOT NULL DEFAULT 'none' CHECK (cert_source IN ('none','letsencrypt','manual')),
+  ssl_auto     INTEGER NOT NULL DEFAULT 1,  -- Let's Encrypt auto-renew; always ignored for a manual cert
   maintenance  INTEGER NOT NULL DEFAULT 0,
   config_hash  TEXT,                  -- hash of the last rendered nginx config (skip-reload compare)
   created      INTEGER NOT NULL,

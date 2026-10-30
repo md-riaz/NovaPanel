@@ -42,6 +42,8 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 | `site.delete` | | A | | sites:write | ✓ | | ✓ | `site:<name>` (ensure-absent) |
 | `domain.add` / `domain.remove` | | A | | sites:write | ✓ | | | `site:<name>` |
 | `ssl.issue` / `ssl.renew` | | A | | sites:write | ✓ | ✓ | | `site:<name>` (ACME, rate-limited) |
+| `ssl.upload` | | A | | sites:write | ✓ | | ✓ | `site:<name>` — install a user-supplied cert+key (manual) |
+| `ssl.auto_set` | | A | | sites:write | | | | `site:<name>` — turn Let's Encrypt auto-renew on/off |
 | `ssl.status` | | RO | ✓ | sites:read | | | | |
 | `php.set` | | A | | sites:write | ✓ | | | `site:<name>` |
 | `php.list` | | RO | ✓ | sites:read | | | | |

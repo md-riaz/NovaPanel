@@ -68,7 +68,9 @@ domain.add{site_id, fqdn}                               → job → {domain_id}
 domain.remove{domain_id}                                → job → {}
 ssl.issue{site_id, staging?:bool, wildcard?:bool}       → job → {fqdns:[string], not_after}
 ssl.renew{site_id}                                      → job → {not_after}
-ssl.status{site_id}                                     → {domains:[{fqdn,cert_state,not_after}]}
+ssl.upload{site_id, cert_pem, key_pem}                  → job → {fqdns:[string], not_after}  # MFA; validates key↔cert + dates
+ssl.auto_set{site_id, enabled:bool}                     → {}        # Let's Encrypt auto-renew on/off
+ssl.status{site_id}                                     → {source:'letsencrypt'|'manual'|'none', force_https:bool, domains:[{fqdn,cert_state,not_after}]}
 php.set{site_id, version, limits?:{memory_mb?,upload_mb?,max_exec_sec?}} → job → {}
 php.list{}                                              → {versions:[string], default}
 redirect.add{site_id, source, target, code:301|302}     → job → {redirect_id}   # source/target validated (F9)
