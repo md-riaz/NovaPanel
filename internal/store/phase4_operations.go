@@ -59,7 +59,7 @@ type Operation struct {
 
 func (o Operation) Keys() []string {
 	if o.Kind == WordPressInstall {
-		return OrderedOperationKeys([]string{"site:" + o.SiteID, "site:" + o.Identity.WordPress.Input.SiteName, "db:" + o.DatabaseID, "db:" + o.Identity.Database.Name})
+		return OrderedOperationKeys([]string{"site:" + o.SiteID, "site:" + o.Identity.WordPress.Input.SiteName, "db:" + o.DatabaseID, "db:" + o.Identity.Database.Name, "domain:" + o.Identity.WordPress.DomainID, "domain:" + o.Identity.WordPress.Input.PrimaryDomain})
 	}
 	if o.Kind == SiteDelete {
 		keys := []string{"site:" + o.SiteID}

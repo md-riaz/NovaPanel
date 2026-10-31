@@ -27,7 +27,7 @@ func TestWordPressReservationBeforeResourceRows(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if len(op.Keys()) != 4 || op.Identity.WordPress.Input.DatabaseID != r.DatabaseID {
+	if len(op.Keys()) != 6 || op.Identity.WordPress.Input.DatabaseID != r.DatabaseID {
 		t.Fatalf("reservation: %+v", op)
 	}
 	if _, e = s.SiteByID(ctx, r.SiteID); !errors.Is(e, sql.ErrNoRows) {
@@ -46,6 +46,22 @@ func TestWordPressReservationBeforeResourceRows(t *testing.T) {
 	_, e = s.PrepareOperation(ctx, j, JobClaim{JobID: j.ID, ClaimHash: "other"}, r, []byte{1}, []byte{2})
 	if !errors.Is(e, ErrOperationLocked) {
 		t.Fatalf("reservation collision: %v", e)
+	}
+	// A different site name must not reserve the same domain before rows exist.
+	r.WordPress.Input.SiteName = "other"
+	r.WordPress.DomainID = "01K8WMXZF57CGNZKX1FZ38DZMF"
+	_, e = s.PrepareOperation(ctx, j, JobClaim{JobID: j.ID, ClaimHash: "other"}, r, []byte{1}, []byte{2})
+	if !errors.Is(e, ErrOperationLocked) {
+		t.Fatalf("primary domain reservation collision: %v", e)
+	}
+	r.WordPress.Input.PrimaryDomain = "other.test"
+	r.WordPress.DomainID = op.Identity.WordPress.DomainID
+	_, e = s.PrepareOperation(ctx, j, JobClaim{JobID: j.ID, ClaimHash: "other"}, r, []byte{1}, []byte{2})
+	if !errors.Is(e, ErrOperationLocked) {
+		t.Fatalf("domain ID reservation collision: %v", e)
+	}
+	if _, e = s.GetJob(ctx, j.ID); !errors.Is(e, sql.ErrNoRows) {
+		t.Fatalf("rejected reservation published a job: %v", e)
 	}
 	r.SiteID = op.SiteID
 	r.DatabaseID = op.DatabaseID
