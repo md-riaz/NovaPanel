@@ -37,7 +37,13 @@ func VerifyStaged(ctx context.Context, p StagedPaths, r runner.Runner) (Artifact
 	return verifyStaged(ctx, p, r, ApprovedArtifacts(), 0, false)
 }
 
-func verifyStaged(ctx context.Context, p StagedPaths, r runner.Runner, m Manifest, owner uint32, fixture bool) (e ArtifactEvidence, err error) {
+func verifyStaged(ctx context.Context, p StagedPaths, r runner.Runner, m Manifest, owner uint32, fixture bool) (ArtifactEvidence, error) {
+	return consumeStaged(ctx, p, r, m, owner, fixture, nil)
+}
+
+// consume is private and runs before verified descriptors close. No exported
+// callback can turn metadata evidence into a substitute for held bytes.
+func consumeStaged(ctx context.Context, p StagedPaths, r runner.Runner, m Manifest, owner uint32, fixture bool, consume func(context.Context, *os.File, ArtifactEvidence) error) (e ArtifactEvidence, err error) {
 	defer func() {
 		if err != nil {
 			e = ArtifactEvidence{}
@@ -140,6 +146,11 @@ func verifyStaged(ctx context.Context, p StagedPaths, r runner.Runner, m Manifes
 	}
 	e.SignatureVerified = true
 	e.SignerFingerprint = m.CLISignerFingerprint
+	if consume != nil {
+		if err := consume(ctx, archive, e); err != nil {
+			return e, err
+		}
+	}
 	return e, nil
 }
 
