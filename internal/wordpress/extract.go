@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 	runner "novapanel/internal/exec"
@@ -59,6 +60,26 @@ func extractStaged(ctx context.Context, p StagedPaths, r runner.Runner, root str
 			return err
 		}
 		defer stage.Close()
+		// Serialize held directory inodes, including independent callers/processes
+		// and lexical aliases. Readers must not observe another writer's 0400
+		// partial files. Nonblocking acquisition keeps cancellation cooperative.
+		for {
+			if err = ctx.Err(); err != nil {
+				return err
+			}
+			err = unix.Flock(int(stage.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+			if err == nil {
+				break
+			}
+			if err != unix.EWOULDBLOCK && err != unix.EINTR {
+				return err
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
 		record, _ := json.Marshal(struct {
 			Binding  StageBinding
 			Evidence ArtifactEvidence

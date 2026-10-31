@@ -4,9 +4,10 @@ package jobs
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -49,9 +50,85 @@ func stageOfficialWait[T any](t *testing.T, ch <-chan T) T {
 	return zero
 }
 
+// stageOfficialReadBarrier holds actual extraction in its final byte comparison.
+// Only the private scratch directory is marked. Unlike a file lease, a fanotify
+// permission event blocks even an O_NONBLOCK open/read. Closing the group releases
+// pending events on every failure path. No production callback or pin is changed.
+func stageOfficialReadBarrier(parent string, entered chan<- struct{}, release <-chan struct{}, done chan<- error) (func(), error) {
+	fd, err := unix.FanotifyInit(unix.FAN_CLASS_CONTENT|unix.FAN_CLOEXEC|unix.FAN_NONBLOCK, unix.O_RDONLY|unix.O_CLOEXEC)
+	if err != nil {
+		return nil, err
+	}
+	if err = unix.FanotifyMark(fd, unix.FAN_MARK_ADD, unix.FAN_ACCESS_PERM|unix.FAN_EVENT_ON_CHILD, unix.AT_FDCWD, parent); err != nil {
+		unix.Close(fd)
+		return nil, err
+	}
+	var once sync.Once
+	closeGroup := func() { once.Do(func() { unix.Close(fd) }) }
+	go func() {
+		var result error
+		defer func() { done <- result }()
+		buf := make([]byte, 4096)
+		for {
+			n, err := unix.Read(fd, buf)
+			if err == unix.EAGAIN {
+				select {
+				case <-release:
+					return
+				case <-time.After(time.Millisecond):
+					continue
+				}
+			}
+			if err != nil {
+				result = err
+				return
+			}
+			for off := 0; off < n; {
+				if n-off < 24 {
+					result = errors.New("short fanotify event")
+					return
+				}
+				event := buf[off:]
+				length := int(binary.NativeEndian.Uint32(event))
+				if length < 24 || length > n-off || event[4] != unix.FANOTIFY_METADATA_VERSION {
+					result = errors.New("invalid fanotify event")
+					return
+				}
+				off += length
+				file := int(int32(binary.NativeEndian.Uint32(event[16:])))
+				if file < 0 {
+					result = errors.New("fanotify overflow")
+					return
+				}
+				name, e := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", file))
+				if e == nil && filepath.Base(name) == "version.php" {
+					var st unix.Stat_t
+					if e = unix.Fstat(file, &st); e == nil && st.Mode&07777 != 0444 {
+						e = errors.New("extraction file was not completed before comparison")
+					}
+					if e == nil {
+						entered <- struct{}{}
+						<-release
+					}
+				}
+				var response [8]byte
+				binary.NativeEndian.PutUint32(response[:], uint32(file))
+				binary.NativeEndian.PutUint32(response[4:], unix.FAN_ALLOW)
+				_, writeErr := unix.Write(fd, response[:])
+				unix.Close(file)
+				if e != nil || writeErr != nil {
+					result = errors.Join(e, writeErr)
+					return
+				}
+			}
+		}
+	}()
+	return closeGroup, nil
+}
+
 // These are original Queue.Run tests with real canonical bytes and SQLite/audit.
-// The extraction case stalls a held-file comparison inside the real extractor;
-// it does not claim a hard deadline for a blocked filesystem syscall.
+// Extraction rewrites a missing official file, then holds its final comparison.
+// This does not claim a hard deadline for a blocked filesystem syscall.
 func TestWordPressStageOfficialLifetime(t *testing.T) {
 	artifacts := os.Getenv("NOVAPANEL_WP_STAGED_ARTIFACTS")
 	if artifacts == "" {
@@ -115,14 +192,19 @@ func TestWordPressStageOfficialLifetime(t *testing.T) {
 				var endOnce sync.Once
 				end := func() { endOnce.Do(func() { close(endWorker) }) }
 				run, cancel := context.WithCancel(ctx)
-				var lease *os.File
-				var original os.FileInfo
-				var signals chan os.Signal
+				roots := []string{custody, filepath.Join(root, "stages-second")}
+				if err := os.Mkdir(roots[1], 0700); err != nil {
+					t.Fatal(err)
+				}
+				extractRelease := make(chan struct{})
+				var extractOnce sync.Once
+				releaseExtraction := func() { extractOnce.Do(func() { close(extractRelease) }) }
+				extractEntered := make(chan struct{}, 2)
+				var barriers []func()
+				var barrierDone []chan error
 				unlock := func() {
-					if lease != nil {
-						unix.FcntlInt(lease.Fd(), unix.F_SETLEASE, unix.F_UNLCK)
-						lease.Close()
-						lease = nil
+					for _, closeGroup := range barriers {
+						closeGroup()
 					}
 				}
 				// Release every fixture barrier and join Queue.Run even on an intentional RED.
@@ -130,46 +212,42 @@ func TestWordPressStageOfficialLifetime(t *testing.T) {
 					cancel()
 					end()
 					unblock()
+					releaseExtraction()
+					for _, done := range barrierDone {
+						stageOfficialWait(t, done)
+					}
 					unlock()
 					stageOfficialWait(t, workerDone)
 					stages.Wait()
-					if signals != nil {
-						signal.Stop(signals)
-					}
 				}()
 				q.SetRunner(func(w context.Context, j *Job) error {
 					if err := s.CheckpointOperation(w, j.ID, "prepared", "db_applied"); err != nil {
 						return err
 					}
 					if boundary == "extraction" {
-						if err := q.StageWordPress(w, j.ID, custody, p, runner.Real{}); err != nil {
-							return err
-						}
-						target := filepath.Join(custody, j.ID, "tree", "wp-includes", "version.php")
-						var err error
-						original, err = os.Stat(target)
-						if err != nil {
-							return err
-						}
-						lease, err = os.OpenFile(target, os.O_RDONLY, 0)
-						if err != nil {
-							return err
-						}
-						signals = make(chan os.Signal, 4)
-						signal.Notify(signals, unix.SIGIO)
-						if _, err = unix.FcntlInt(lease.Fd(), unix.F_SETOWN, os.Getpid()); err != nil {
-							return err
-						}
-						if _, err = unix.FcntlInt(lease.Fd(), unix.F_SETLEASE, unix.F_WRLCK); err != nil {
-							return err
+						for _, stageRoot := range roots {
+							target := filepath.Join(stageRoot, j.ID, "tree", "wp-includes", "version.php")
+							// Only empty directories are prepared. Every file, including
+							// identity.json and version.php, is freshly written by StageWordPress.
+							if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+								return err
+							}
+							done := make(chan error, 1)
+							closeGroup, err := stageOfficialReadBarrier(filepath.Dir(target), extractEntered, extractRelease, done)
+							if err != nil {
+								return fmt.Errorf("scratch fanotify permission barrier requires CAP_SYS_ADMIN: %w", err)
+							}
+							barriers = append(barriers, closeGroup)
+							barrierDone = append(barrierDone, done)
 						}
 					}
 					retained <- context.WithoutCancel(w)
 					for i := 0; i < 2; i++ {
 						stages.Add(1)
+						stageRoot := roots[i]
 						go func() {
 							defer stages.Done()
-							stageDone <- q.StageWordPress(context.WithoutCancel(w), j.ID, custody, p, verifier)
+							stageDone <- q.StageWordPress(context.WithoutCancel(w), j.ID, stageRoot, p, verifier)
 						}()
 					}
 					close(started)
@@ -196,8 +274,10 @@ func TestWordPressStageOfficialLifetime(t *testing.T) {
 				if boundary == "extraction" {
 					// Both admitted calls have verified every official byte and real signature.
 					unblock()
-					// A lease-break notification proves the real extractor attempted the file open.
-					stageOfficialWait(t, signals)
+					// Both calls have actually rewritten version.php and reached a read
+					// comparison of those completed official bytes before cancellation.
+					stageOfficialWait(t, extractEntered)
+					stageOfficialWait(t, extractEntered)
 				}
 				if ending == "cancel" {
 					cancel()
@@ -242,23 +322,49 @@ func TestWordPressStageOfficialLifetime(t *testing.T) {
 					}()
 				}
 				refused.Wait()
-				// Shutdown before releasing the filesystem barrier preserves the original
-				// running journal for recovery, independent of terminal scheduling.
-				cancel()
+				// Cancel cases retain the running journal. Return/panic cases must
+				// finish without queue cancellation and expire their sealed inputs.
 				unblock()
+				releaseExtraction()
+				for _, done := range barrierDone {
+					if err := stageOfficialWait(t, done); err != nil {
+						t.Fatal("extraction barrier", err)
+					}
+					done <- nil
+				}
 				unlock()
 				for i := 0; i < 2; i++ {
 					if err := stageOfficialWait(t, stageDone); !errors.Is(err, context.Canceled) {
 						t.Errorf("stage cancellation = %v", err)
 					}
 				}
-				// Return/panic can finish terminal handling; cancel stops the queue directly.
-				cancel()
-				if err := stageOfficialWait(t, workerDone); err != nil {
-					t.Fatal(err)
+				if ending != "cancel" {
+					deadline := time.After(5 * time.Second)
+					for {
+						j, err = s.GetJob(ctx, en.Job.ID)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if j.State == "failed" {
+							break
+						}
+						select {
+						case <-deadline:
+							t.Fatal("uncanceled worker did not publish terminal failure")
+						case <-time.After(time.Millisecond):
+						}
+					}
+					op, err = s.LoadOperation(ctx, en.Job.ID)
+					if err != nil || op.Checkpoint != "expired" || len(op.Ciphertext) != 0 {
+						t.Fatal("terminal worker retained sealed inputs", err)
+					}
 				}
-				// Keep the cleanup join idempotent after this successful receive.
+				cancel()
+				workerErr := stageOfficialWait(t, workerDone)
 				workerDone <- nil
+				if workerErr != nil && (ending == "cancel" || !errors.Is(workerErr, ErrRecoveryBlocked)) {
+					t.Fatal(workerErr)
+				}
 				if err := q.StageWordPress(heldCtx, en.Job.ID, custody, p, runner.Real{}); err == nil {
 					t.Fatal("retained stage admitted after worker exit")
 				}
@@ -277,6 +383,26 @@ func TestWordPressStageOfficialLifetime(t *testing.T) {
 					t.Fatal(err)
 				}
 				q = NewQueue(s, seal, a)
+				if ending != "cancel" {
+					unexpected := make(chan struct{}, 1)
+					q.SetRunner(func(context.Context, *Job) error { unexpected <- struct{}{}; return errors.New("terminal replay") })
+					restart, stop := context.WithTimeout(ctx, 300*time.Millisecond)
+					defer stop()
+					if err := q.Run(restart); err != nil && !errors.Is(err, ErrRecoveryBlocked) {
+						t.Fatal("terminal restart", err)
+					}
+					select {
+					case <-unexpected:
+						t.Fatal("terminal job replayed after SQLite/audit reopen")
+					default:
+					}
+					j, err = s.GetJob(ctx, en.Job.ID)
+					if err != nil || j.State != "failed" {
+						t.Fatal("terminal state changed on restart", err)
+					}
+					t.Log("canonical bytes, real gpgv, canceled drain, retained refusal, uncanceled terminal failure and SQLite/audit reopen no-replay passed; no PHP or live publication")
+					return
+				}
 				reached := make(chan error, 1)
 				q.SetRunner(func(w context.Context, j *Job) error {
 					if j.ID != en.Job.ID {
@@ -299,12 +425,7 @@ func TestWordPressStageOfficialLifetime(t *testing.T) {
 					t.Fatal(err)
 				}
 				retryDone <- nil
-				if original != nil {
-					again, err := os.Stat(filepath.Join(custody, en.Job.ID, "tree", "wp-includes", "version.php"))
-					if err != nil || !os.SameFile(original, again) {
-						t.Fatal("recovery replaced extracted official file", err)
-					}
-				}
+				// Recovery above revalidates the complete real official tree.
 				op, err = s.LoadOperation(ctx, en.Job.ID)
 				if err != nil || op.Checkpoint != "db_applied" || len(op.Ciphertext) == 0 {
 					t.Fatal("staging advanced checkpoint or destroyed input", err)

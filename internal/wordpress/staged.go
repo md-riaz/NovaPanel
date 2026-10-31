@@ -44,11 +44,15 @@ func verifyStaged(ctx context.Context, p StagedPaths, r runner.Runner, m Manifes
 // consume is private and runs before verified descriptors close. No exported
 // callback can turn metadata evidence into a substitute for held bytes.
 func consumeStaged(ctx context.Context, p StagedPaths, r runner.Runner, m Manifest, owner uint32, fixture bool, consume func(context.Context, *os.File, ArtifactEvidence) error) (e ArtifactEvidence, err error) {
+	parent := ctx
+	var contextErr error
 	defer func() {
 		if err != nil {
 			e = ArtifactEvidence{}
-			if ctx.Err() != nil {
-				err = ctx.Err()
+			if contextErr != nil {
+				err = contextErr
+			} else if parent.Err() != nil {
+				err = parent.Err()
 			} else {
 				err = errStaged
 			}
@@ -65,6 +69,9 @@ func consumeStaged(ctx context.Context, p StagedPaths, r runner.Runner, m Manife
 	}
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
+	// Capture the live deadline result before cleanup cancellation so genuine
+	// custody or filesystem failures cannot become context.Canceled.
+	defer func() { contextErr = ctx.Err() }()
 	var held []*os.File
 	defer func() {
 		for _, f := range held {
