@@ -113,6 +113,7 @@ def main():
         if created:
             cmd('docker', 'rm', '-f', NAME)
             assert cmd('docker', 'inspect', NAME, check=False).returncode != 0
+        cmd('docker', 'image', 'rm', image)
         print('Evidence:', EVIDENCE)
 
 if __name__ == '__main__':

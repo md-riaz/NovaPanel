@@ -15,7 +15,7 @@ import (
 	"novapanel/internal/wordpress/configcustody"
 )
 
-var refused = errors.New("offline WordPress runtime refused")
+var errRuntimeRefused = errors.New("offline WordPress runtime refused")
 
 func verify(ctx context.Context, r runner.Runner) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -24,7 +24,7 @@ func verify(ctx context.Context, r runner.Runner) error {
 	defer clear(out)
 	defer clear(errout)
 	if err != nil || code != 0 || len(out) >= 16384 || len(errout) >= 16384 || !bytes.Contains(out, []byte("Success: WordPress installation verifies against checksums.")) {
-		return refused
+		return errRuntimeRefused
 	}
 	return nil
 }
@@ -34,7 +34,7 @@ func localConfig() ([]byte, error) {
 	for i := range salts {
 		b := make([]byte, 32)
 		if _, err := rand.Read(b); err != nil {
-			return nil, refused
+			return nil, errRuntimeRefused
 		}
 		salts[i] = base64.RawURLEncoding.EncodeToString(b)
 		clear(b)
@@ -44,7 +44,7 @@ func localConfig() ([]byte, error) {
 
 func run(ctx context.Context, r runner.Runner) error {
 	if os.Getuid() != 23041 || os.Getgid() != 23041 {
-		return refused
+		return errRuntimeRefused
 	}
 	if err := verify(ctx, r); err != nil {
 		return err
@@ -52,15 +52,15 @@ func run(ctx context.Context, r runner.Runner) error {
 	// The unchanged official command must reject changed core bytes.
 	f, err := os.OpenFile("/scratch/public/wp-includes/version.php", os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
-		return refused
+		return errRuntimeRefused
 	}
 	_, err = f.WriteString("\n// deliberate lab checksum corruption\n")
 	closeErr := f.Close()
 	if err != nil || closeErr != nil {
-		return refused
+		return errRuntimeRefused
 	}
 	if verify(ctx, r) == nil {
-		return refused
+		return errRuntimeRefused
 	}
 	raw, err := localConfig()
 	if err != nil {
@@ -68,21 +68,21 @@ func run(ctx context.Context, r runner.Runner) error {
 	}
 	defer clear(raw)
 	if err = os.Mkdir("/scratch/config", 0700); err != nil {
-		return refused
+		return errRuntimeRefused
 	}
 	if err = os.WriteFile("/scratch/config/wp-config.php", raw, 0400); err != nil {
-		return refused
+		return errRuntimeRefused
 	}
 	// Only this fixed lab settings file is loaded, never WordPress settings.
 	settings := []byte(`<?php if (DB_NAME !== 'd_lab' || DB_USER !== 'u_lab' || DB_HOST !== '127.0.0.1' || $table_prefix !== 'wp_' || strlen(NONCE_SALT) !== 43) { exit(92); } echo 'config data PASS';`)
 	if err = os.WriteFile("/scratch/config/wp-settings.php", settings, 0400); err != nil {
-		return refused
+		return errRuntimeRefused
 	}
 	out, stderr, code, err := r.Run(ctx, "/usr/local/bin/php", []string{"-n", "/scratch/config/wp-config.php"}, runner.RunOpts{Dir: "/lab/cwd", Env: []string{"LANG=C"}, Groups: []uint32{}, MaxOutput: 1024})
 	defer clear(out)
 	defer clear(stderr)
 	if err != nil || code != 0 || !bytes.Equal(out, []byte("config data PASS")) {
-		return refused
+		return errRuntimeRefused
 	}
 	return nil
 }
