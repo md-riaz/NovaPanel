@@ -71,7 +71,7 @@ commit after cancellation, and SIGKILL a child before preparation directory sync
 These prove process-death replay, not filesystem power-loss behavior.
 
 Not proved: power-loss or injected fsync/rename failures at every boundary,
-real snapshot capture/verification, actual SQLite reconciliation/deduplication,
+real snapshot capture or UFW runtime acceptance, actual SQLite reconciliation/deduplication,
 boot/retry policy and wall-clock rollback/reboot handling, timer ownership,
 apply-before-arm ordering, daemon cgroup isolation or real UFW restoration.
 Root/agent UID is trusted; file integrity is not cryptographic authenticity against
@@ -80,12 +80,44 @@ replacement followed by all participants reopening. Keep live apply disabled and
 public confirmation unsupported pending independent review and disposable-VM
 production adapter acceptance. No CLI/RPC wiring changed.
 
+## Immutable snapshot custody
+
+`OpenSnapshotCustody`, `Put` and `Verify` implement the separate internal custody
+boundary for already captured bytes. The canonical phase-6 custody amendment pins
+the six UFW before/user/after family files, three nonempty diagnostic captures,
+generated enabled marker, limits and exact manifest digest. Missing IPv6 artifacts
+are refused even for inactive UFW. This conservative policy is newly decided,
+not inferred from the old wildcard or the dashboard prototype.
+
+The preprovisioned same-owner 0700 root has strictly nonwritable, trusted,
+no-follow ancestry. Unlike the journal's sticky-directory exception, custody
+refuses writable ancestors. Files are no-follow, 0600, single-link and regular.
+Publication copies bounded input, fsyncs every file and staged directory, uses
+Linux `RENAME_NOREPLACE`, then syncs root. Failed staging remains refused, not
+cleaned or adopted. A final-sync failure may leave a complete visible snapshot;
+identical retry revalidates and syncs directories, while different content refuses.
+`Verify` checks the canonical exact manifest, ID, prior enabled state and complete
+inventory before returning package-private read-only descriptors at offset zero.
+Consumers must use these descriptors and never reopen unchecked paths. Trusted
+UID must not modify custody bytes or paths concurrently; hashes are not
+protection against that UID. No commands, capture or restore adapter are added.
+
+Tests use real scratch files and fake descriptor consumers only. They cover
+independent reopen, byte/mode checks, copied inputs, bounds, missing IPv6,
+tampering, manifest malformation, extra entries, links, permissions/owners,
+root replacement, concurrent no-replace publication, cancellation and failures
+at every publication file/directory sync plus rename. Journal Revert/Fire test
+callbacks refuse tampered custody before a fake consumer and retain reverting;
+repair/reopen permits same-ID replay after expiry. No production marker policy
+or power-loss safety is claimed. RED evidence and final-SHA gate logs are kept
+outside the repository for independent review.
+
 ## Consumer work not implemented here
 
 1. Keep canonical 01 authorization at the privileged dispatch boundary. Apply is slow/effectful, admin+, MFA, `firewall:write`, object key `firewall`. Confirm/revert are synchronous, MFA-gated and automation-token reachable. This package is not an authorization layer.
 2. Use 03's exact apply shape. `Desired.DefaultIncoming` is a trusted planning option, not a new RPC argument: 03 currently omits `default_incoming`, despite phase prose including it. Do not expose it without a canonical amendment. Read SSH port and timer defaults from config.
 3. `store.CreateFirewallPending` and `store.WithPending` implement singleton reservation and one-shot transaction consumption with a SQLite writer lock held through the callback. Tests prove reopen durability, concurrency, deadline refusal and restore retry. The canonical DDL exists only in `internal/store/testdata/firewall_pending.sql`, matched exactly to 02. No migration is added because Phase 4 reserves 0006 and combined Phase 6 numbering needs integration-owner approval. Production calls therefore fail closed on the absent table. Independent process access remains blocked by the daemon lifetime flock. Confirmation now refuses before stopping the timer. A scratch replay matrix covers restoration, audit-marker, DELETE and actual COMMIT failures; it is not a process-kill or power-loss test. A real Store open test confirms that the lifetime flock blocks an independent opener until the daemon closes its store.
-4. Capture a confined root-owned snapshot directory with UFW rules, prior enabled state, iptables-save, ip6tables-save and numbered status. Implement no-follow safe restore plus durable audit marker before pending consumption. Reconcile markers on daemon startup. No filesystem snapshot adapter is supplied here.
+4. Capture a confined root-owned snapshot with the exact inventory admitted by internal custody. Capture, no-follow safe restore plus durable audit marker and daemon startup reconciliation remain absent; only the already-captured-byte custody writer/verifier is supplied here.
 5. Apply requires full desired-set replacement, dry-run, persisted pending plus independently armed transient timer BEFORE risky commands, SSH-first application and rule verification. Rendered argv are not an append-to-live implementation, and there is deliberately no live apply API in this slice.
 6. Root `panel-agent fw-revert` must work with the daemon down. Its locking/DB ownership must be reconciled with the existing daemon lifetime lock. Cancel/fire races must use the same cross-process pending lock. Manual revert may leave a harmless timer which later finds no row; never reuse IDs or delete snapshots before the timer can no longer need them.
 7. Fresh authenticated confirm HTTP requests need `Cache-Control: no-store` and `Connection: close`. Do not claim external reachability from an internal probe. Audit actor/resolved principal through the existing audit path.

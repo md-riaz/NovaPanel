@@ -165,6 +165,51 @@ flock. The earlier row-deletion wording means daemon reconciliation, not helper 
   snapshot custody and disposable-VM UFW/systemd acceptance remain required.
   No production adapter, CLI, RPC wiring, migration or live apply is enabled.
 
+**Approved internal immutable snapshot custody, not live recovery.**
+The delegated custody decision narrows the earlier wildcard; it does not claim
+that the repository previously specified an inventory. F0a targets Ubuntu 24.04.
+Ubuntu noble's [ufw-framework(8)](https://manpages.ubuntu.com/manpages/noble/en/man8/ufw-framework.8.html)
+identifies before/user/after rule files for each address family. Together with
+B-D7's captures, the closed, bytewise-sorted artifact inventory is:
+`enabled`, `ip6tables-save`, `iptables-save`, `ufw-status-numbered`,
+`ufw/after.rules`, `ufw/after6.rules`, `ufw/before.rules`, `ufw/before6.rules`,
+`ufw/user.rules`, `ufw/user6.rules`. All six rule files and three diagnostic
+captures must be supplied and nonempty, even when UFW or IPv6 is disabled.
+Missing IPv6 files/capture is refused, never inferred as disabled or replaced
+with empty bytes. This is a conservative custody admission policy, not a claim
+that every installation has IPv6 support. Unsupported layouts remain refused.
+`enabled` is generated as `true\n` or `false\n` from prior active state, not parsed
+from localized status. Defaults, sysctl, init hooks and other configuration are
+not restored by this custody API; their runtime policy remains separate.
+
+- Input is already captured bytes, copied by Put. Each artifact is at most 4 MiB;
+  total artifact bytes are at most 16 MiB; canonical manifest is at most 4096 bytes.
+  Unknown rule names and absent artifacts fail before any publication.
+- `manifest.json` is compact Go JSON in field order `version`, `id`,
+  `prior_enabled`, `artifacts`. Version is 1; each sorted entry has `name`, `size`,
+  `sha256`, with lowercase SHA-256 hex. No omitted fields or trailing newline.
+  Journal `SnapshotSHA256` is SHA-256 of these exact canonical manifest bytes;
+  the manifest binds ID, enabled state, lengths and hashes of every artifact.
+- Custody root is preprovisioned, same-effective-UID 0700 under no-follow,
+  root-or-agent-owned ancestors with no group/other write permission. No sticky
+  exception, chmod repair or pathname supplied by RPC/SQL. Files are single-link
+  owner-only 0600 regular files; snapshot/ufw directories are 0700. Held root
+  identity, complete inventory, sizes and hashes are revalidated on each open.
+  Root/agent UID is trusted not to mutate paths or descriptor bytes concurrently.
+- Publication exclusively stages `<id>.next`, fsyncs every file and both staged
+  directories, then uses atomic no-replace rename to `<id>` and fsyncs root.
+  Incomplete staging is refused, never adopted, repaired or archived. Same-ID
+  identical complete retry succeeds only after full revalidation and fsync of
+  its directories and root. Different content never replaces the original.
+  A post-rename root-sync error can leave a complete visible directory; a retry
+  establishes durability of that same content, never replaces it. Verify also
+  syncs directories before returning read-only, already-verified descriptors.
+- This API does not capture, restore, arm, reconcile or publish an audit marker.
+  A future restore adapter must consume verified descriptors without reopening
+  unchecked paths and still implement the separately reviewed rules/enabled,
+  durable marker and runtime acceptance contracts. No public wiring, schema,
+  Runner change, archive, deletion or terminal reuse is authorized.
+
 **Firewall confirmation crash-safety gate.** SQLite and systemd do not share a
 transaction. Stopping the timer inside a pending-row transaction can leave an
 unconfirmed row without a timer if deletion or commit fails, or the process dies.
