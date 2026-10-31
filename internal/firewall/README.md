@@ -127,6 +127,27 @@ expiry. Descriptors close on success and ordinary error. The consumer still owns
 idempotent rules/enabled restoration and its durable audit marker. These methods
 are internal integration gates, not a production restore adapter or public wiring.
 
+## Confined descriptor restoration
+
+`OpenConfinedRestore` supplies an internal descriptor consumer for an explicitly
+preprovisioned private destination root with `ufw` and `markers` subdirectories.
+`Restore(ctx, record, snapshot)` composes with FireVerified/RevertVerified through
+a context-bound callback. It consumes retained descriptors, publishes the six
+approved rule files with file/directory fsync, invokes fixed enabled-state argv
+through the existing injected Runner, then durably publishes an ID/digest/enabled
+bound marker. Matching markers do not skip replay. Destination-root flock and
+identity checks serialize restoration without changing Store lifetime ownership.
+The new delegated ruling is in `docs/phase6-confined-restoration.md`.
+
+This is real scratch-file restoration with fake commands, not host UFW acceptance.
+There is no production path default, capture, startup/RPC wiring or migration.
+Mutable restoration staging is admitted and rewritten on interrupted retry;
+immutable snapshot custody retains its existing incomplete-staging refusal.
+Failures retain journal reverting and same-ID retry, including after expiry.
+VM/power-loss acceptance remains deferred to product finish. Earlier sections'
+statements about absent adapters describe their original bounded slices; this
+section adds only the confined adapter, not production activation.
+
 ## Consumer work not implemented here
 
 1. Keep canonical 01 authorization at the privileged dispatch boundary. Apply is slow/effectful, admin+, MFA, `firewall:write`, object key `firewall`. Confirm/revert are synchronous, MFA-gated and automation-token reachable. This package is not an authorization layer.

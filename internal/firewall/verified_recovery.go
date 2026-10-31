@@ -9,8 +9,8 @@ import (
 // VerifiedRestore consumes only descriptors admitted by snapshot custody. It must
 // restore rules and PriorEnabled idempotently and durably record the ID-bound
 // audit marker before returning nil. Descriptors are borrowed for this call and
-// must not be retained or replaced by reopening paths. No runtime adapter is
-// supplied here.
+// must not be retained or replaced by reopening paths. ConfinedRestore supplies
+// an unwired implementation for explicitly admitted destination directories.
 type VerifiedRestore func(JournalRecord, *VerifiedSnapshot) error
 
 func verifiedRecovery(ctx context.Context, custody *SnapshotCustody, restore VerifiedRestore) (func(JournalRecord) error, error) {
