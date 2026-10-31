@@ -56,8 +56,19 @@ Signals request cancellation rather than raising inside subprocess setup. A
 build/create/start already admitted drains to completion within its 180-second
 command deadline, so cleanup can inspect a resource even if cancellation arrived
 before its ID was returned. Other commands are killed and reaped on cancellation.
-Cleanup has a shared 20-second budget, survives repeated handled signals, checks
-the exact name and label, removes by immutable ID, and reads back ID absence.
+Cleanup has a shared 20-second command budget, survives repeated handled signals,
+and checks ownership labels before removal. Build/create use `--iidfile` and
+`--cidfile`; returned full IDs are fsynced into `owner.json` before cancellation
+is propagated. Cleanup reads these original IDs, not the current mutable tag or
+name, removes the label-owned resource by ID and reads back ID absence. Image
+removal uses force to remove extra references to that same owned image, never a
+replacement image under the old tag. Pre-ID recovery checks the exact launch name
+and, if absent, the exact ownership-label filter. Ambiguous matches fail closed.
+Each command owns a new session. Timeout/cancellation kills only that session's
+process group, bounds output draining and direct-child reaping, and closes pipes
+rather than waiting indefinitely for descendants. An escaped descendant is not
+claimed killed. Drain/reap has at most two 200ms bounded waits outside a normal
+command deadline, clamped to the remaining shared budget during cleanup.
 Container failure does not suppress the image cleanup attempt. Errors are retained
 in `cleanup-errors.log` and `cleanup.json`; signal exits are 143/130. No global
 prune, image search, foreign artifact removal or host service changes are used.
@@ -69,8 +80,11 @@ mutation has settled, explicitly retry only the retained record with
 `python3 tools/phase4_wp_offline_lab.py --reap /exact/evidence/owner.json`.
 This validates the recorded name and current ownership labels, then uses the same
 bounded ID-based cleanup. It never scans other launches or automatically reaps a
-possibly active run. The evidence directory must be trusted local input. A
-missing resource at one instant is not proof that an unsettled daemon operation
+possibly active run. The evidence directory and record must be trusted local input.
+Record owner, mode, symlink and ancestor custody are operator preconditions, not
+checks enforced by this launcher. An interrupted Docker mutation marks cleanup as
+unsettled even if immediate readback is absent, so it cannot report false clean.
+A missing resource at one instant is not proof that an unsettled daemon operation
 will not create it later. This limitation is not a power-loss cleanup guarantee.
 
 `make ci` runs the non-Docker lifecycle failure/ownership regressions. With the

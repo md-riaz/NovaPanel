@@ -25,6 +25,38 @@ CLEANING = False
 COMMAND_TIMEOUT = 180
 CLEANUP_TIMEOUT = 20
 CLEANUP_DEADLINE = None
+IDENTITIES = {}
+UNSETTLED_MUTATION = False
+
+
+def save_owner():
+    temporary = EVIDENCE / 'owner.pending'
+    with temporary.open('w') as record:
+        json.dump({'name': NAME, 'label': OWNER_LABEL, 'identities': IDENTITIES}, record)
+        record.write('\n')
+        record.flush()
+        os.fsync(record.fileno())
+    os.replace(temporary, EVIDENCE / 'owner.json')
+    directory = os.open(EVIDENCE, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def capture_ids():
+    import re
+    for kind, pattern in (('image', r'sha256:[a-f0-9]{64}'), ('container', r'[a-f0-9]{64}')):
+        path = EVIDENCE / (kind + '.id')
+        if path.exists():
+            identity = path.read_text().strip()
+            if not re.fullmatch(pattern, identity):
+                raise ValueError('invalid immutable ' + kind + ' identity')
+            if kind in IDENTITIES and IDENTITIES[kind] != identity:
+                raise ValueError('immutable identity changed')
+            IDENTITIES[kind] = identity
+    save_owner()
+
 
 
 class Cancelled(Exception):
@@ -45,30 +77,64 @@ def cancellation(signum, _frame):
 
 
 def cmd(*args, data=None, check=True):
+    global UNSETTLED_MUTATION
     check_cancelled()
     mutation = args[:2] in (('docker', 'build'), ('docker', 'create'), ('docker', 'start'))
+    identity_kind = {'build': 'image', 'create': 'container'}.get(args[1]) if mutation else None
+    if identity_kind:
+        flag = '--iidfile' if identity_kind == 'image' else '--cidfile'
+        args = (*args[:2], flag, str(EVIDENCE / (identity_kind + '.id')), *args[2:])
     timeout = COMMAND_TIMEOUT
     if CLEANUP_DEADLINE is not None:
         timeout = max(.01, CLEANUP_DEADLINE - time.monotonic())
-    with subprocess.Popen(args, stdin=subprocess.PIPE if data is not None else subprocess.DEVNULL,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=ROOT) as child:
-        deadline = time.monotonic() + timeout
-        first = True
-        try:
-            while True:
+    # A fresh session makes only this command's process group ours to terminate.
+    child = subprocess.Popen(args, stdin=subprocess.PIPE if data is not None else subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=ROOT,
+                             start_new_session=True)
+    deadline = time.monotonic() + timeout
+    first = True
+    finished = False
+    try:
+        while True:
+            try:
+                out, err = child.communicate(input=data if first else None, timeout=min(.1, max(.01, deadline - time.monotonic())))
+                finished = True
+                break
+            except subprocess.TimeoutExpired:
+                first = False
+                if time.monotonic() >= deadline or (CANCEL_SIGNAL and not CLEANING and not mutation):
+                    raise RuntimeError(f'{args[0]} command interrupted or timed out; evidence={EVIDENCE}')
+    finally:
+        if finished:
+            for stream in (child.stdin, child.stdout, child.stderr):
+                if stream is not None:
+                    stream.close()
+        if not finished:
+            if mutation:
+                UNSETTLED_MUTATION = True
+            # Kill the owned group even if the direct child already exited.
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            # Descendants can escape the session. Never wait for their pipes.
+            drain = .2
+            if CLEANUP_DEADLINE is not None:
+                drain = max(.001, min(drain, CLEANUP_DEADLINE - time.monotonic()))
+            try:
+                child.communicate(timeout=drain)
+            except subprocess.TimeoutExpired:
+                pass
+            finally:
+                for stream in (child.stdin, child.stdout, child.stderr):
+                    if stream is not None:
+                        stream.close()
                 try:
-                    out, err = child.communicate(input=data if first else None, timeout=min(.1, max(.01, deadline - time.monotonic())))
-                    break
+                    child.wait(timeout=drain)
                 except subprocess.TimeoutExpired:
-                    first = False
-                    if time.monotonic() >= deadline or (CANCEL_SIGNAL and not CLEANING and not mutation):
-                        child.kill()
-                        out, err = child.communicate()
-                        raise RuntimeError(f'command interrupted or timed out; evidence={EVIDENCE}')
-        finally:
-            if child.poll() is None:
-                child.kill()
-                child.communicate()
+                    raise RuntimeError(f'{args[0]} child reap deadline exceeded; evidence={EVIDENCE}')
+    if identity_kind:
+        capture_ids()
     p = subprocess.CompletedProcess(args, child.returncode, out, err)
     with (EVIDENCE / 'commands.log').open('ab') as log:
         log.write((' '.join(args) + '\n').encode() + out + err)
@@ -83,15 +149,7 @@ class OwnedResources:
         self.handlers = {s: signal.signal(s, cancellation) for s in (signal.SIGTERM, signal.SIGINT)}
         # Retained even on SIGKILL. Reap only this explicit record, never scan
         # other launches, tags, images or containers.
-        with (EVIDENCE / 'owner.json').open('x') as record:
-            record.write(json.dumps({'name': NAME, 'label': OWNER_LABEL}) + '\n')
-            record.flush()
-            os.fsync(record.fileno())
-        directory = os.open(EVIDENCE, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        save_owner()
         return self
 
     def cleanup(self):
@@ -101,18 +159,38 @@ class OwnedResources:
         errors = []
         removed = []
         try:
-            for kind, target in (('container', NAME), ('image', NAME + ':local')):
+            capture_ids()
+            for kind, name in (('container', NAME), ('image', NAME + ':local')):
+                target = IDENTITIES.get(kind, name)
                 try:
                     p = cmd('docker', kind, 'inspect', target, check=False)
                     if p.returncode:
                         if b'No such' in p.stderr:
-                            continue
-                        raise RuntimeError('inspect failed, absence not established')
+                            if kind not in IDENTITIES:
+                                # A client can die before writing its ID file.
+                                # Reconcile only this launch's exact label, never
+                                # a broad prune. Daemon settlement is still an
+                                # explicit prerequisite for final absence.
+                                found = cmd('docker', kind, 'ls', '--all', '--quiet', '--no-trunc',
+                                            '--filter', 'label=' + OWNER_LABEL + '=' + NAME).stdout.split()
+                                if found:
+                                    if len(set(found)) != 1:
+                                        raise RuntimeError('ambiguous pre-ID ownership; explicit reconciliation required')
+                                    target = found[0].decode()
+                                    p = cmd('docker', kind, 'inspect', target)
+                                else:
+                                    continue
+                            else:
+                                continue
+                        else:
+                            raise RuntimeError('inspect failed, absence not established')
                     item = json.loads(p.stdout)[0]
                     if item['Config'].get('Labels', {}).get(OWNER_LABEL) != NAME:
                         raise RuntimeError('ownership label mismatch')
                     identity = item['Id']
-                    args = ('docker', kind, 'rm', '-f', identity) if kind == 'container' else ('docker', kind, 'rm', identity)
+                    IDENTITIES[kind] = identity
+                    save_owner()
+                    args = ('docker', kind, 'rm', '-f', identity)
                     cmd(*args)
                     # Immutable-ID readback, not just disappearance of a tag.
                     p = cmd('docker', kind, 'inspect', identity, check=False)
@@ -121,6 +199,8 @@ class OwnedResources:
                     removed.append({'kind': kind, 'id': identity})
                 except Exception as exc:
                     errors.append(f'{kind} {target}: {exc}')
+            if UNSETTLED_MUTATION:
+                errors.append('Docker mutation did not settle; explicit trusted-record reap required after daemon settlement')
             (EVIDENCE / 'cleanup.json').write_text(json.dumps({'removed': removed, 'errors': errors}) + '\n')
             if errors:
                 (EVIDENCE / 'cleanup-errors.log').write_text('\n'.join(errors) + '\n')
@@ -140,12 +220,23 @@ class OwnedResources:
 
 
 def reap(record):
-    global NAME
+    global NAME, IDENTITIES
     import re
-    item = json.loads(Path(record).read_text())
+    # Explicit operator-trusted record and directory only. This does not attest
+    # owner/mode/symlink custody or that the original launcher/daemon has settled.
+    source = Path(record)
+    item = json.loads(source.read_text())
     if item.get('label') != OWNER_LABEL or not re.fullmatch(r'novapanel-(?:wp|reviewcancel)-[a-f0-9]{12}', item.get('name', '')):
         raise ValueError('invalid explicit ownership record')
     NAME = item['name']
+    IDENTITIES = item.get('identities', {})
+    for kind, pattern in (('image', r'sha256:[a-f0-9]{64}'), ('container', r'[a-f0-9]{64}')):
+        path = source.parent / (kind + '.id')
+        identity = path.read_text().strip() if path.exists() else IDENTITIES.get(kind)
+        if identity is not None:
+            if not re.fullmatch(pattern, identity) or (kind in IDENTITIES and IDENTITIES[kind] != identity):
+                raise ValueError('invalid immutable ownership identity')
+            IDENTITIES[kind] = identity
     with OwnedResources():
         pass
 

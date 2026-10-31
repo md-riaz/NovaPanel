@@ -71,6 +71,81 @@ class LifecycleTests(unittest.TestCase):
             lab.cmd(sys.executable, '-c', 'import time; time.sleep(30)')
         self.assertLess(time.monotonic() - started, 2)
 
+    def test_descendant_pipe_timeout_is_bounded(self):
+        # An outer process bounds the regression even on the broken launcher.
+        with tempfile.TemporaryDirectory(dir=os.environ['TMPDIR']) as td:
+            pidfile = Path(td) / 'descendant'
+            code = '''
+import importlib.util,sys
+s=importlib.util.spec_from_file_location('lab',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+m.COMMAND_TIMEOUT=.15
+try:
+ m.cmd(sys.executable,'-c',"import os,time; p=os.fork(); open("+repr(sys.argv[2])+",'w').write(str(os.getpid())) if p==0 else None; time.sleep(30)")
+except RuntimeError: pass
+'''
+            p = subprocess.Popen([sys.executable, '-c', code, str(MODULE), str(pidfile)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                p.communicate(timeout=2)
+                self.assertEqual(p.returncode, 0)
+            finally:
+                if pidfile.exists():
+                    try: os.kill(int(pidfile.read_text()), signal.SIGKILL)
+                    except ProcessLookupError: pass
+                if p.poll() is None: p.kill()
+                p.communicate(timeout=3)
+
+    @unittest.skipUnless(os.environ.get('NOVAPANEL_WP_DOCKER_TEST') == '1', 'local Docker opt-in')
+    def test_original_image_id_survives_tag_removal_and_foreign_replacement(self):
+        for replacement in (False, True):
+            with self.subTest(replacement=replacement):
+                lab = load()
+                identity = None
+                try:
+                    with lab.OwnedResources():
+                        pack = io.BytesIO()
+                        with tarfile.open(fileobj=pack, mode='w') as tar:
+                            data = ('FROM '+lab.IMAGE+'\nLABEL fixture='+lab.NAME+'\n').encode()
+                            ent = tarfile.TarInfo('Dockerfile'); ent.size = len(data); tar.addfile(ent, io.BytesIO(data))
+                        lab.cmd('docker', 'build', '--network=none', '--pull=false', '--force-rm', '--label', lab.OWNER_LABEL+'='+lab.NAME, '-t', lab.NAME+':local', '-', data=pack.getvalue())
+                        identity = json.loads(lab.cmd('docker', 'image', 'inspect', lab.NAME+':local').stdout)[0]['Id']
+                        lab.cmd('docker', 'image', 'tag', identity, lab.NAME+':retained')
+                        lab.cmd('docker', 'image', 'rm', lab.NAME+':local')
+                        if replacement:
+                            lab.cmd('docker', 'image', 'tag', lab.IMAGE, lab.NAME+':local')
+                    self.assertNotEqual(subprocess.run(['docker', 'image', 'inspect', identity], capture_output=True).returncode, 0)
+                    if replacement:
+                        foreign = json.loads(subprocess.check_output(['docker', 'image', 'inspect', lab.NAME+':local']))[0]
+                        self.assertNotEqual(foreign['Id'], identity)
+                finally:
+                    if identity:
+                        result = subprocess.run(['docker', 'image', 'inspect', identity], capture_output=True)
+                        if not result.returncode:
+                            self.assertEqual(json.loads(result.stdout)[0]['Config']['Labels'][lab.OWNER_LABEL], lab.NAME)
+                            subprocess.run(['docker', 'image', 'rm', '-f', identity], check=True, capture_output=True)
+                    if replacement:
+                        # Remove only our extra reference to the unchanged local base.
+                        subprocess.run(['docker', 'image', 'rm', lab.NAME+':local'], capture_output=True)
+
+    def test_pre_id_label_reconciliation_and_unsettled_refusal(self):
+        lab = load()
+        identity = 'sha256:' + 'a' * 64
+        removed = []
+        def command(*args, **kwargs):
+            if args[2] == 'ls':
+                return subprocess.CompletedProcess(args, 0, (identity+'\n').encode() if args[1] == 'image' else b'', b'')
+            if args[2] == 'rm':
+                removed.append(args[-1])
+                return subprocess.CompletedProcess(args, 0, b'', b'')
+            if args[-1] == identity and identity not in removed:
+                return subprocess.CompletedProcess(args, 0, json.dumps([{'Id': identity, 'Config': {'Labels': {lab.OWNER_LABEL: lab.NAME}}}]).encode(), b'')
+            return subprocess.CompletedProcess(args, 1, b'', b'No such resource')
+        lab.cmd = command
+        lab.UNSETTLED_MUTATION = True
+        with self.assertRaisesRegex(RuntimeError, 'cleanup failed'):
+            lab.OwnedResources().cleanup()
+        self.assertEqual(removed, [identity])
+        self.assertIn('did not settle', (lab.EVIDENCE / 'cleanup-errors.log').read_text())
+
     def test_reap_record_validation(self):
         lab = load()
         record = lab.EVIDENCE / 'invalid.json'
