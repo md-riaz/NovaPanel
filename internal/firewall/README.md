@@ -148,6 +148,23 @@ VM/power-loss acceptance remains deferred to product finish. Earlier sections'
 statements about absent adapters describe their original bounded slices; this
 section adds only the confined adapter, not production activation.
 
+## Production UFW source capture
+
+`OpenUFWSource(runner)` pins root-owned `/etc/ufw`; its unexported test seam substitutes
+only the source root and owner. `Capture` reads the closed six-rule inventory through
+no-follow descriptors, captures fixed diagnostic argv with a deterministic locale,
+and derives prior enabled state from an exact status header. It rejects source/root
+replacement, changed bytes, unsafe ownership/modes, missing IPv6, command failure,
+truncation and aggregate overflow. Repeated status output must match. Capture returns
+SnapshotInput for existing immutable custody publication; changed recapture cannot
+overwrite an existing pending ID. See `docs/phase6-ufw-source-capture.md` for the
+before-implementation delegated policy and limits. Tests use only scratch files
+and fake Runner calls. No public runtime path calls this API yet.
+
+Production destination mapping and independent helper/timer/startup ownership remain
+absent. The source checks do not provide an atomic kernel/filesystem snapshot against
+concurrent trusted-root changes. No real UFW or systemd acceptance is claimed.
+
 ## Consumer work not implemented here
 
 1. Keep canonical 01 authorization at the privileged dispatch boundary. Apply is slow/effectful, admin+, MFA, `firewall:write`, object key `firewall`. Confirm/revert are synchronous, MFA-gated and automation-token reachable. This package is not an authorization layer.
