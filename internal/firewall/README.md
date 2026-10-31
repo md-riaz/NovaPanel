@@ -16,6 +16,46 @@ No firewall test invokes UFW, systemd, iptables, SSH or a network probe.
 - `Recovery.Confirm` fails closed with `unsupported` for live pending IDs before any cancellation or consumption. Unknown/expired IDs still return `not_found`. There is no unsafe injected-runner bypass. A best-effort re-arm cannot close a process-death window.
 - `SnapshotRecovery.RestoreAndMark` is an injected, idempotent recovery contract bound to the same pending ID. It must restore rules and prior enabled state and durably publish the audit marker before consumption. Tests write scratch markers, not system firewall files. Restoration, marker, deletion and actual deferred-constraint COMMIT failures retain pending state and replay after close/reopen.
 
+## Confined journal foundation
+
+`journal.go` is an unwired alternative authority, not a `PendingStore` adapter.
+It never imports or opens SQLite. The approved phase-6 amendment supersedes the
+old direct-DB helper contract. `Arm` retains a single record permanently and
+refuses rearming even after acknowledgement. Production admission/archival is
+intentionally absent. Provision the root and stable empty lock before opening;
+this package never creates or replaces the lock.
+
+`Confirm` samples its injected clock under the cross-process flock, publishes
+confirmed intent durably, then calls the timer adapter. `Fire` publishes reverting
+before the idempotent recovery adapter and reverted afterwards. Terminal records
+remain until daemon-only `Reconcile` invokes a successful durable DB/audit commit
+and publishes acknowledgement. The commit callback must deduplicate by ID.
+These callbacks are trusted seams, not implemented production adapters.
+
+Metadata contains only version, ID, fixed unit, deadline, prior enabled state,
+snapshot digest and state. The snapshot itself must remain in separate private
+custody; UFW snapshots can contain sensitive topology/comments and must never be
+logged or copied into JSON. The recovery adapter must bind the full snapshot to
+both ID and digest and restore rules plus enabled state before durable audit.
+
+Tests use real scratch files, fixed clocks, private files and fake restoration.
+Two actual helper processes contend on flock. SIGKILL after durable confirmation
+before cancellation leaves fire harmless; SIGKILL after fake restoration/marker
+before terminal publication leaves reverting and replays the same ID on reopen.
+Strict canonical bounded JSON rejects duplicate/unknown/missing fields. Tests
+reject symlinks, hard links, foreign ownership, weak permissions, replaced lock
+and tampered version/unit, and recover an interrupted private temporary file.
+
+Not proved: power-loss or injected fsync/rename failures at every boundary,
+real snapshot capture/verification, actual SQLite reconciliation/deduplication,
+boot/retry policy and wall-clock rollback/reboot handling, timer ownership,
+apply-before-arm ordering, daemon cgroup isolation or real UFW restoration.
+Root/agent UID is trusted; file integrity is not cryptographic authenticity against
+that UID. Lock replacement is detected for open handles, not across trusted-UID
+replacement followed by all participants reopening. Keep live apply disabled and
+public confirmation unsupported pending independent review and disposable-VM
+production adapter acceptance. No CLI/RPC wiring changed.
+
 ## Consumer work not implemented here
 
 1. Keep canonical 01 authorization at the privileged dispatch boundary. Apply is slow/effectful, admin+, MFA, `firewall:write`, object key `firewall`. Confirm/revert are synchronous, MFA-gated and automation-token reachable. This package is not an authorization layer.

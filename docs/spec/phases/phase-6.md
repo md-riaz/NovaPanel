@@ -94,8 +94,9 @@ recoverable out-of-band** — never store the only copy inside the repo they unl
   stops the transient `.timer` unit + deletes the `fw_pending` row; **`firewall.revert{pending_id}`**
   runs the revert now + deletes the row. Both are MFA-gated and carry `firewall:write` so an
   automation-grant apply can be confirmed. **When the timer fires on its own**, the root
-  `panel-agent fw-revert` subcommand restores state **and deletes the `fw_pending` row itself** (it
-  opens the DB directly — it must work with the daemon down) and writes a revert marker file; the agent
+  `panel-agent fw-revert` subcommand restores state and publishes a terminal journal
+  outcome. The daemon alone reconciles and deletes the `fw_pending` row after
+  durable DB/audit commit. The helper never opens SQLite. The agent
   turns that marker into an audit event on next start (a fired revert is never silently unlogged, and
   never leaves a stale armed row that would `conflict` future applies).
 - **Confirmation is a fresh client round-trip, not an agent self-probe** (the agent cannot prove
@@ -115,6 +116,35 @@ recoverable out-of-band** — never store the only copy inside the repo they unl
   token) may `firewall.confirm`/`revert` the **single** armed pending — `firewall.apply` returns
   `conflict` if one is already armed, so there is never ambiguity about which; an unknown or expired
   `pending_id` → `not_found`; every confirm/revert is audited with its actor.
+
+**Approved confined journal foundation, superseding direct-DB helper ownership.**
+The journal is the recovery authority. Only the daemon writes SQLite; `fw_pending`
+is a projection. The independent helper never opens the DB or bypasses its lifetime
+flock. The earlier row-deletion wording means daemon reconciliation, not helper SQL.
+
+- A preprovisioned private 0700 owner-controlled root contains one stable 0600
+  lock inode and one bounded version-1 state file. All components open no-follow;
+  writable/foreign ancestors and nonregular, linked or incorrectly owned files
+  fail closed. Root/agent UID is trusted and must not mutate paths concurrently.
+- State binds the existing pending ID, exact timer unit, deadline, prior enabled
+  state and SHA-256 of an independently held immutable snapshot. Journal JSON
+  contains no snapshot bytes, rule comments, credentials or arbitrary paths.
+  Snapshot capture/verification/restoration remains a separately reviewed adapter.
+- Every decision locks the stable inode and rereads state. Publication uses an
+  exclusive temporary file, file fsync, atomic rename and directory fsync. Live
+  confirm publishes `confirmed` durably before timer cancellation. Stop failure
+  retains confirmed intent; fire never restores confirmed state. Exact-deadline
+  confirm returns `not_found`. Recovery first publishes `reverting`, then invokes
+  idempotent rules-plus-enabled restoration with a durable ID-bound audit marker,
+  then publishes `reverted`. Interrupted reverting replays the same ID.
+- Terminal state remains until daemon-only DB/audit reconciliation commits and a
+  durable acknowledgement is published. Failed reconciliation retries by ID.
+  This foundation deliberately refuses all further arms, including terminal reuse;
+  reviewed archival/retention and new-apply admission are not implemented.
+- Scratch subprocess kills and fixed-clock races prove orchestration on a real
+  filesystem only. Boot scheduling, power-loss, daemon cgroup isolation, real
+  snapshot custody and disposable-VM UFW/systemd acceptance remain required.
+  No production adapter, CLI, RPC wiring, migration or live apply is enabled.
 
 **Firewall confirmation crash-safety gate.** SQLite and systemd do not share a
 transaction. Stopping the timer inside a pending-row transaction can leave an
