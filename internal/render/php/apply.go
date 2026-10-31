@@ -1,6 +1,7 @@
 package php
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -95,6 +96,12 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 		return rpcerr.Errf("precondition_failed", "Unmanaged PHP pool")
 	}
 	b = append(marker, b...)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if exists && bytes.Equal(good, b) && bytes.Equal(live, b) {
+		return nil
+	}
 	if err = poolWrite(root, name, b); err != nil {
 		return err
 	}

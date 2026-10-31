@@ -1,6 +1,7 @@
 package nginx
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"time"
@@ -31,12 +32,16 @@ func (a *Applier) ApplyPHP(ctx context.Context, pools *php.Applier, d Desired, c
 		if err != nil {
 			return err
 		}
+		unchanged := old.Enabled && old.LKG != nil && bytes.Equal(old.Config, b) && bytes.Equal(old.LKG, b)
 		// Live bytes are not proof of health after an interrupted publication.
 		old.Config = old.LKG
 		if old.LKG == nil {
 			old.Enabled = false
 		}
 		return pools.Transaction(ctx, *d.PHP, func(p *php.Transaction) (result error) {
+			if unchanged && p.Unchanged() {
+				return commit(ctx)
+			}
 			reloadAttempted := false
 			defer func() {
 				if result == nil {

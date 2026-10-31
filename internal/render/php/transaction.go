@@ -1,6 +1,7 @@
 package php
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ type Transaction struct {
 	name    string
 	good    []byte
 	desired []byte
+	live    []byte
 }
 
 func (a *Applier) Transaction(ctx context.Context, d Desired, fn func(*Transaction) error) error {
@@ -88,7 +90,12 @@ func (a *Applier) Transaction(ctx context.Context, d Desired, fn func(*Transacti
 	if e == nil && good == nil && !strings.HasPrefix(string(live), marker) {
 		return rpcerr.Errf("precondition_failed", "Unmanaged PHP pool")
 	}
-	return fn(&Transaction{a: a, root: root, name: name, good: good, desired: append([]byte(marker), b...)})
+	return fn(&Transaction{a: a, root: root, name: name, good: good, live: live, desired: append([]byte(marker), b...)})
+}
+
+// Unchanged requires both live bytes and the separately proven LKG.
+func (t *Transaction) Unchanged() bool {
+	return t.good != nil && bytes.Equal(t.good, t.desired) && bytes.Equal(t.live, t.desired)
 }
 
 func (t *Transaction) Stage() error {
