@@ -48,3 +48,24 @@ unconditional success implementation would not satisfy the remaining runtime gat
 
 Final checks must run after committing this document and source. Exact-head logs
 are kept outside the repository. Opt-in official artifacts are not copied into git.
+
+## Next runtime dependency
+
+`tools/phase4_wp_offline_lab.py` and `tools/phase4wpoffline` now exercise the
+unchanged official checksum command with retained canonical artifacts under PHP
+8.3 and a pinned lab-only exact-URL Requests transport. See
+`phase4-offline-runtime-policy.md` for the bounded ruling. The lab uses `-n`,
+fixed directives, replacement environment, controlled read-only bootstrap/cwd,
+nonroot numeric identity and internal/exec. It requires checksum success before
+changing version.php and requiring refusal. It separately executes the existing
+typed local config composer with a fixed data-only lab settings file. Site
+wp-config, YAML, mu-plugin and ambient ini fixtures must not run.
+
+This closes the missing confined PHP/checksum compatibility dependency only.
+It does not wire PHP into Queue.Run or attest stage-to-live ownership, physical
+quiescence, production Ubuntu ini/extensions, privileged credential drop,
+core-download cache, DB/install orchestration or journal advancement. Those
+remain source gaps. Existing original-ID queue cancellation/reopen and protected
+config callback recovery tests are preserved, not replaced by this lab. Final VM
+acceptance and publication remain unpassed.
+
