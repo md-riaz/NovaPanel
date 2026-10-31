@@ -117,6 +117,16 @@ repair/reopen permits same-ID replay after expiry. No production marker policy
 or power-loss safety is claimed. RED evidence and final-SHA gate logs are kept
 outside the repository for independent review.
 
+## Verified recovery gate
+
+`Journal.FireVerified` and `Journal.RevertVerified` compose the existing journal
+protocol with snapshot custody verification before invoking a borrowed-descriptor
+consumer. Missing dependencies refuse before recovery intent. Missing or tampered
+custody and consumer failure retain `reverting`; same-ID retry can finish after
+expiry. Descriptors close on success and ordinary error. The consumer still owns
+idempotent rules/enabled restoration and its durable audit marker. These methods
+are internal integration gates, not a production restore adapter or public wiring.
+
 ## Consumer work not implemented here
 
 1. Keep canonical 01 authorization at the privileged dispatch boundary. Apply is slow/effectful, admin+, MFA, `firewall:write`, object key `firewall`. Confirm/revert are synchronous, MFA-gated and automation-token reachable. This package is not an authorization layer.
