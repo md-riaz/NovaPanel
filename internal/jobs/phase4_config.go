@@ -39,6 +39,31 @@ type configWorkerLease struct {
 	queue  *Queue
 	job    string
 	active atomic.Bool
+	ctx    context.Context
+	cancel context.CancelFunc
+	mu     sync.Mutex
+	runs   sync.WaitGroup
+}
+
+// Admission and revocation share a lock so no Add can race the drain's Wait.
+func (l *configWorkerLease) admit(ctx context.Context) (context.Context, func(), bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.active.Load() || l.ctx.Err() != nil || ctx.Err() != nil {
+		return nil, nil, false
+	}
+	l.runs.Add(1)
+	call, cancel := context.WithCancel(l.ctx)
+	stop := context.AfterFunc(ctx, cancel)
+	return call, func() { stop(); cancel(); l.runs.Done() }, true
+}
+
+func (l *configWorkerLease) close() {
+	l.mu.Lock()
+	l.active.Store(false)
+	l.cancel()
+	l.mu.Unlock()
+	l.runs.Wait()
 }
 
 // ConfigIsolation is a trusted runtime dependency, never an RPC argument. It must

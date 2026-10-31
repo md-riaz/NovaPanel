@@ -19,6 +19,11 @@ func (q *Queue) WordPressSiteRunner(ctx context.Context, jobID string, boundary 
 	if lease == nil || lease.queue != q || lease.job != jobID || !lease.active.Load() || boundary == nil || q.healthy() != nil {
 		return nil, refuse
 	}
+	ctx, done, admitted := lease.admit(ctx)
+	if !admitted {
+		return nil, refuse
+	}
+	defer done()
 	s, ok := q.store.(operationStore)
 	if !ok {
 		return nil, refuse
@@ -50,6 +55,11 @@ func (r *wordPressSiteRunner) Run(ctx context.Context, p string, a []string, o r
 	if lease != r.lease || !r.lease.active.Load() || r.q.healthy() != nil {
 		return nil, nil, -1, errors.New("jobs: WordPress site runner refused")
 	}
+	ctx, done, admitted := r.lease.admit(ctx)
+	if !admitted {
+		return nil, nil, -1, errors.New("jobs: WordPress site runner refused")
+	}
+	defer done()
 	if _, err := r.q.OpenWordPressCredentials(ctx, r.lease.job); err != nil {
 		return nil, nil, -1, errors.New("jobs: WordPress site runner refused")
 	}
