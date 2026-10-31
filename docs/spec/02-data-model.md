@@ -359,7 +359,29 @@ CREATE TABLE dns_zones (
   zone          TEXT NOT NULL,
   provider_zone_id TEXT NOT NULL
 );
+CREATE TABLE integration_owners (
+  integration_id TEXT PRIMARY KEY REFERENCES integrations(id) ON DELETE CASCADE,
+  user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
+  local_root INTEGER NOT NULL CHECK(local_root IN (0,1)),
+  CHECK ((user_id IS NULL AND local_root=1) OR (user_id IS NOT NULL AND local_root=0))
+);
 ```
+
+The integration ULID is its immutable credential lifetime. Each new admission generates a
+fresh ID, including removal and re-add of identical zones. The ownership companion's exact
+FK parent is `integrations(id)`; deleting that parent cascades both ownership and zone rows.
+Credential cleanup uses the typed transactional delete API because `secrets.name` is
+polymorphic. A missing ownership companion denies credential access rather than adopting
+legacy rows. Existing `config_json` and provider entries are never overwritten or deleted.
+
+Zone names are deliberately not globally unique. Multiple integrations may name the same
+zone. Credential reads must supply the exact integration lifetime and zone, never select an
+arbitrary first match. Future zone-only dispatch must refuse ambiguous matches with
+`conflict` before provider access. Consumers must retain this binding across queue admission
+and execution and share removal locks; snapshot checks alone cannot authorize a later write.
+
+This DDL is the canonical target, not a production migration. Scratch tests execute it
+explicitly. Phase 7 must not ship migration `0008` before the approved `0006` and `0007`.
 
 ## Phase 8 — webhooks
 

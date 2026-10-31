@@ -377,6 +377,8 @@ revert           → on probe failure restore <target>.lkg + reload; return code
 
 `internal/validate` — the single place names/paths/urls are checked; verbs call it, never re-implement.
 
+- **DNS record owner only:** `V.DNSOwner` accepts 1..253 ASCII bytes, dot-separated labels of 1..63 bytes containing letters, digits, hyphens and underscores, with no leading/trailing hyphen. Underscores support `_acme-challenge`, `_dmarc` and selectors under `_domainkey`. Reject empty labels, leading/trailing dots, wildcards, whitespace, controls, non-ASCII and all other punctuation. This is not a web hostname validator. Zones, resolver domains and CNAME/MX targets continue to use `Hostname` unchanged. Record owners must equal the authorized zone or end in its dot-delimited suffix, case-insensitively.
+
 - **Hostname/domain:** RFC-1123 labels, total ≤ 253, no leading/trailing dot, IDN pre-encoded to
   punycode, reject `..`, whitespace, and `_` in hostnames; a wildcard only where the verb allows it.
 - **Site/unix-user name:** `^[a-z][a-z0-9-]{1,30}$`; never a reserved name; maps 1:1 to a system user.
