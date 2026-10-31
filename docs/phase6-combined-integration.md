@@ -38,3 +38,8 @@ Canonical section 02 places `webhook_deliveries` in Phase 6 even though Phase 8 
 The combined package corpus includes updater, firewall, backup, store, verbs and RPC architecture tests. `make phase6-test` runs that corpus uncached with the race detector and is part of the existing Go CI workflow. `make ci` remains the whole-repository build, formatting, vet, staticcheck, tests, architecture backstop, vulnerability and systemd gate. Opt-in production-like integrations are separate acceptance, not implied by unit CI.
 
 The reserved-schema regression was observed failing for the missing test fixture before the fixture was added, then passed. Integration does not retrospectively claim test-first development for the carried worker commits.
+
+The first whole-repository `make ci` on `4c5ef5b` exposed a test import cycle: the in-package secret tests imported store, whose repository adapter now imports secret. Commit `f7b63eb` moved only that existing test to `secret_test` with qualified public calls. No production API changed. On `f7b63eb`, `make ci`, `make phase6-test` and `go test -race -count=1 ./...` passed. Govulncheck reported no called vulnerabilities and four vulnerabilities in required modules not reached by this code.
+
+The signed updater dispatch opt-in test also passed with the deterministic test seed's public key derived by Node's Ed25519 implementation. An earlier invocation used the wrong test public key and correctly failed signature verification; Python key derivation was unavailable because cryptography was not installed. No key was persisted or injected into the production candidate. Ordinary race runs skip this opt-in test and production-like integration gates unless their environment flags are set.
+
