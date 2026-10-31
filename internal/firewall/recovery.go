@@ -18,7 +18,8 @@ type Pending struct {
 
 // PendingStore must serialize this callback across ALL processes, including the
 // independent root deadman, and durably delete the row only when consume is true.
-// A restore/cancel or persistence failure must retain recoverable pending state.
+// A restore or persistence failure must retain recoverable pending state.
+// The callback must not cancel timers: SQL rollback cannot re-arm them.
 // Do not implement this with a daemon-only mutex.
 type PendingStore interface {
 	WithPending(context.Context, string, func(Pending) (consume bool, err error)) error
@@ -26,7 +27,8 @@ type PendingStore interface {
 
 // SnapshotRecovery restores the saved UFW rules AND enabled/disabled state,
 // then durably writes the revert audit marker before returning success. It must
-// be idempotent and validate snapshot paths against the agent-owned snapshot root.
+// be idempotent by pending ID even after restore/marker success followed by SQL
+// deletion or commit failure. Validate paths against the agent-owned snapshot root.
 type SnapshotRecovery interface {
 	RestoreAndMark(context.Context, Pending) error
 }
@@ -47,11 +49,9 @@ func (r *Recovery) Confirm(ctx context.Context, pendingID string) error {
 		if !r.Now().Before(p.Deadline) {
 			return false, notFound()
 		}
-		_, _, exit, err := r.Runner.Run(ctx, "/usr/bin/systemctl", []string{"stop", p.RevertUnit + ".timer"}, execpkg.RunOpts{})
-		if err != nil || exit != 0 {
-			return false, rpcerr.Errf("agent_error", "firewall timer cancellation failed")
-		}
-		return true, nil
+		// A stopped timer cannot be rolled back with SQLite. Keep it armed until
+		// durable confirmation intent and independent reconciliation exist.
+		return false, rpcerr.Errf("unsupported", "Crash-safe firewall confirmation is not configured")
 	})
 }
 func (r *Recovery) Revert(ctx context.Context, pendingID string) error {

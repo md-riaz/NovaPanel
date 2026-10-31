@@ -65,6 +65,12 @@ func TestFirewallDispatchAuthorizationAndSynchronousRecovery(t *testing.T) {
 					}
 					return
 				}
+				if verb == "firewall.confirm" {
+					if got.Code != "unsupported" || pending.p == nil || len(run.calls)+snap.calls != 0 {
+						t.Fatalf("unsafe confirmation %+v", got)
+					}
+					return
+				}
 				if !got.OK || pending.p != nil || len(run.calls)+snap.calls != 1 {
 					t.Fatalf("recovery %+v", got)
 				}
@@ -100,15 +106,23 @@ func TestFirewallDispatchDurableAdapter(t *testing.T) {
 	snap := &firewallSnapshot{}
 	a.FirewallRecovery = &firewall.Recovery{Store: s, Runner: run, Snapshot: snap, Now: func() time.Time { return time.UnixMilli(a.Now()) }}
 	server := rpc.NewServer(a)
-	req := rpc.Request{Verb: "firewall.confirm", Args: json.RawMessage(`{"pending_id":"` + p.ID + `"}`)}
+	req := rpc.Request{Verb: "firewall.revert", Args: json.RawMessage(`{"pending_id":"` + p.ID + `"}`)}
 	ctx = rpc.WithCaller(ctx, rpc.Caller{Kind: "token", Scopes: []string{"firewall:write"}, Automation: true})
+	confirm := req
+	confirm.Verb = "firewall.confirm"
+	if got := server.Dispatch(ctx, confirm); got.Code != "unsupported" {
+		t.Fatalf("unsafe durable confirmation %+v", got)
+	}
+	if len(run.calls) != 0 || snap.calls != 0 {
+		t.Fatal("unsupported confirmation performed side effects")
+	}
 	if got := server.Dispatch(ctx, req); !got.OK {
-		t.Fatalf("confirm %+v", got)
+		t.Fatalf("revert %+v", got)
 	}
 	if got := server.Dispatch(ctx, req); got.Code != "not_found" {
 		t.Fatalf("replay %+v", got)
 	}
-	if len(run.calls) != 1 || snap.calls != 0 {
+	if len(run.calls) != 0 || snap.calls != 1 {
 		t.Fatal(run.calls, snap.calls)
 	}
 }

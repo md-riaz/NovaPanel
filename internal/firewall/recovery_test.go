@@ -63,14 +63,14 @@ func fixture(t *testing.T) (*Recovery, *memoryPending, *recordingRunner, *scratc
 	snap := &scratchSnapshot{path: filepath.Join(t.TempDir(), "reverted")}
 	return &Recovery{Store: store, Runner: runner, Snapshot: snap, Now: func() time.Time { return now }}, store, runner, snap, &now
 }
-func TestConfirmCancelsExactTimerOnce(t *testing.T) {
+func TestRevertConsumesOnceWithoutCancellingTimer(t *testing.T) {
 	r, s, run, snap, _ := fixture(t)
 	id := s.p.ID
-	if err := r.Confirm(context.Background(), id); err != nil {
+	if err := r.Revert(context.Background(), id); err != nil {
 		t.Fatal(err)
 	}
-	if s.p != nil || snap.restores != 0 || len(run.calls) != 1 || run.calls[0][0] != "/usr/bin/systemctl" || run.calls[0][1] != "stop" || run.calls[0][2] != "novapanel-fwrevert-"+id+".timer" {
-		t.Fatal("incorrect cancellation", run.calls)
+	if s.p != nil || snap.restores != 1 || len(run.calls) != 0 {
+		t.Fatal("incorrect restoration", run.calls)
 	}
 	if err := r.Confirm(context.Background(), id); err == nil {
 		t.Fatal("replay accepted")
@@ -88,7 +88,7 @@ func TestFailuresRetainPendingForRecovery(t *testing.T) {
 		t.Fatal("restore failure lost pending")
 	}
 	*now = s.p.Deadline
-	if err := r.Confirm(context.Background(), id); err == nil || len(run.calls) != 1 {
+	if err := r.Confirm(context.Background(), id); err == nil || len(run.calls) != 0 {
 		t.Fatal("expired confirm cancelled timer")
 	}
 	if err := r.Revert(context.Background(), id); err == nil {

@@ -36,8 +36,9 @@ func (s *Store) CreateFirewallPending(ctx context.Context, p firewall.Pending) e
 
 // WithPending holds the SQLite writer lock through the callback and consumption.
 // This does not solve independent process access while Store holds its lifetime
-// flock, or cancellation succeeding before the database commit fails. Live apply
-// must remain disabled until those recovery protocols are implemented.
+// flock. Callbacks must never cancel the deadman: SQLite cannot roll that back.
+// Recovery.Confirm refuses until a durable confirmation protocol exists; live
+// apply remains disabled.
 func (s *Store) WithPending(ctx context.Context, pendingID string, fn func(firewall.Pending) (bool, error)) error {
 	if !id.Valid(pendingID) {
 		return rpcerr.Errf("not_found", "Firewall pending not found or expired")

@@ -37,7 +37,7 @@ func firewallFixture(t *testing.T, s *Store) {
 func pendingFixture() firewall.Pending {
 	return firewall.Pending{ID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", SnapshotPath: "/agent-owned/snapshot", RevertUnit: "novapanel-fwrevert-01ARZ3NDEKTSV4RRFFQ69G5FAV", Deadline: time.UnixMilli(2000000)}
 }
-func TestFirewallCancellationBeforeCommitFailureRetainsRow(t *testing.T) {
+func TestFirewallConfirmRefusesBeforeCancellationWithDeleteFailure(t *testing.T) {
 	s, err := Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -58,17 +58,16 @@ func TestFirewallCancellationBeforeCommitFailureRetainsRow(t *testing.T) {
 	run := &pendingRunner{}
 	snap := &pendingSnapshot{}
 	recovery := firewall.Recovery{Store: s, Runner: run, Snapshot: snap, Now: func() time.Time { return p.Deadline.Add(-time.Second) }}
-	if err := recovery.Confirm(ctx, p.ID); err == nil {
-		t.Fatal("delete failure ignored")
+	if err := recovery.Confirm(ctx, p.ID); firewallCode(err) != "unsupported" {
+		t.Fatal("unsafe confirmation accepted", err)
 	}
-	if run.calls != 1 {
-		t.Fatal("cancellation not exercised")
+	if run.calls != 0 {
+		t.Fatal("unsupported confirmation cancelled timer")
 	}
 	if err := s.WithPending(ctx, p.ID, func(firewall.Pending) (bool, error) { return false, nil }); err != nil {
 		t.Fatal("recoverable row lost", err)
 	}
-	// The row survives, but its timer was already stopped. This test documents the
-	// unresolved crash window; it is not proof that live confirm is crash-safe.
+	// No cancellation occurred and the original pending ID remains recoverable.
 }
 func TestFirewallDurableDeadmanDeadlineAndRetry(t *testing.T) {
 	s, err := Open(":memory:")

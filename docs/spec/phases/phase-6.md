@@ -116,6 +116,18 @@ recoverable out-of-band** — never store the only copy inside the repo they unl
   `conflict` if one is already armed, so there is never ambiguity about which; an unknown or expired
   `pending_id` → `not_found`; every confirm/revert is audited with its actor.
 
+**Firewall confirmation crash-safety gate.** SQLite and systemd do not share a
+transaction. Stopping the timer inside a pending-row transaction can leave an
+unconfirmed row without a timer if deletion or commit fails, or the process dies.
+Until a durable confirmation/reconciliation protocol and independent deadman DB
+ownership are implemented and crash-tested, confirmation must return `unsupported`
+for a live pending ID **before cancelling anything**. Unknown/expired IDs retain
+`not_found`; live apply remains unsupported. A rollback or a best-effort re-arm
+alone is not process-death safety. Restore is idempotent by pending ID and must
+restore rules plus enabled state and durably publish its audit marker before row
+consumption. A failed deletion/commit retains the same ID for replay, never a new
+nonce. No new RPC fields or schema are introduced by this gate.
+
 **MariaDB restore swap (no RENAME DATABASE).** Steps: (1) take a **pre-restore safety dump** of the
 live DB to the panel repo first (so the current state is always recoverable); (2) create a **scratch
 DB** `<db>__r<shortts>` (name bounded to MariaDB's 64-char limit — truncate `<db>` and keep a short
