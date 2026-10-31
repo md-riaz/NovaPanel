@@ -241,6 +241,10 @@ func firewallTerminalSinkFailures(t *testing.T, terminal string) {
 }
 
 func TestFirewallTerminalMissingSchema(t *testing.T) {
+	if os.Getenv("NP_PRIOR_SCHEMA") != "yes" {
+		testPriorFirewallSchema(t)
+		return
+	}
 	a, j, r, close := terminalAgent(t, false)
 	defer close()
 	if a.CommitFirewallTerminal(t.Context()) == nil {

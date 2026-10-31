@@ -2,14 +2,12 @@ package verbs
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"novapanel/internal/agent"
 	"novapanel/internal/firewall"
 	"novapanel/internal/jobs"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -88,13 +86,6 @@ func TestFirewallDispatchDurableAdapter(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	ddl, err := os.ReadFile("../store/testdata/firewall_pending.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Tx(ctx, func(tx *sql.Tx) error { _, err := tx.Exec(string(ddl)); return err }); err != nil {
-		t.Fatal(err)
-	}
 	p := firewall.Pending{ID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", SnapshotPath: t.TempDir(), RevertUnit: "novapanel-fwrevert-01ARZ3NDEKTSV4RRFFQ69G5FAV", Deadline: time.UnixMilli(2060000)}
 	if err := s.CreateFirewallPending(ctx, p); err != nil {
 		t.Fatal(err)

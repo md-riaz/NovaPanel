@@ -11,9 +11,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -159,6 +161,39 @@ func (s *Store) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
 	}
 	return nil
 }
+func validateMigrationInventory(source fs.FS, entries []fs.DirEntry, hashes map[string]string) error {
+	pattern := regexp.MustCompile(`^[0-9]{4}_[a-z][a-z0-9_]*\.sql$`)
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == "hashes.json" && !entry.IsDir() {
+			continue
+		}
+		if entry.IsDir() || !pattern.MatchString(name) {
+			return fmt.Errorf("migration inventory invalid filename %s", name)
+		}
+		version := name[:4]
+		if version == "0000" || seen[version] {
+			return fmt.Errorf("migration inventory duplicate or invalid version %s", version)
+		}
+		seen[version] = true
+		b, e := fs.ReadFile(source, "migrations/"+name)
+		if e != nil {
+			return e
+		}
+		sum := sha256.Sum256(b)
+		if hashes[version] != hex.EncodeToString(sum[:]) {
+			return fmt.Errorf("migration inventory %s fixture hash mismatch", version)
+		}
+	}
+	for version := range hashes {
+		if !seen[version] {
+			return fmt.Errorf("migration inventory orphan hash %s", version)
+		}
+	}
+	return nil
+}
+
 func (s *Store) migrate() error {
 	entries, e := migrations.ReadDir("migrations")
 	if e != nil {
@@ -170,6 +205,9 @@ func (s *Store) migrate() error {
 	}
 	var hashes map[string]string
 	if e = json.Unmarshal(raw, &hashes); e != nil {
+		return e
+	}
+	if e = validateMigrationInventory(migrations, entries, hashes); e != nil {
 		return e
 	}
 	return s.Tx(context.Background(), func(tx *sql.Tx) error {

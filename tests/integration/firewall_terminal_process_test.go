@@ -19,7 +19,9 @@ import (
 // TestFirewallTerminalCommitProcess connects real OpenState and ordinary replay
 // to owned child death at real file/SQL boundaries. Only paths, runners and
 // scheduling barriers are overlaid. Recovery, audit and SQL logic are retained.
-func TestFirewallTerminalCommitProcess(t *testing.T) {
+func TestFirewallTerminalCommitProcess(t *testing.T) { firewallTerminalMigratedProcess(t, 0) }
+
+func firewallTerminalMigratedProcess(t *testing.T, prefix int) {
 	if os.Geteuid() != 0 || os.Getegid() != 0 {
 		t.Skip("installed recovery needs root UID/GID fixture")
 	}
@@ -122,13 +124,16 @@ func TerminalFixtureJournal(a *Agent,root string){a.firewallTerminalJournal=func
 					must(j.Arm(t.Context(), r))
 					must(j.Close())
 					db := root + "/state/panel.db"
-					st, e := store.Open(db)
-					must(e)
-					ddl, e := os.ReadFile(repo + "/internal/store/testdata/0007_phase6.sql")
-					must(e)
-					must(st.Tx(t.Context(), func(tx *sql.Tx) error { _, e := tx.Exec(string(ddl)); return e }))
-					must(st.CreateFirewallPending(t.Context(), firewall.Pending{ID: id, SnapshotPath: "/not-opened", RevertUnit: r.Unit, Deadline: time.Unix(100, 0)}))
-					must(st.Close())
+					if prefix > 0 {
+						buildTerminalPrefix(t, repo, db, prefix)
+					}
+					if prefix == 0 {
+						st, e := store.Open(db)
+						must(e)
+						must(st.CreateFirewallPending(t.Context(), firewall.Pending{ID: id, SnapshotPath: "/not-opened", RevertUnit: r.Unit, Deadline: time.Unix(100, 0)}))
+						must(st.Close())
+					}
+					var st *store.Store
 					run := func(barrier string) {
 						childCtx, kill := context.WithTimeout(t.Context(), 20*time.Second)
 						defer kill()
@@ -153,7 +158,7 @@ func TerminalFixtureJournal(a *Agent,root string){a.firewallTerminalJournal=func
 								}
 							}()
 						}
-						o, er, c, e := (execpkg.Recovery{}).Run(childCtx, build+"/child", []string{"-test.run=^TestTerminalFixtureChild$"}, execpkg.RunOpts{Env: []string{"NP_TERMINAL_ROOT=" + root, "NP_TERMINAL_OUTCOME=" + outcome, "NP_TERMINAL_BARRIER=" + barrier}})
+						o, er, c, e := (execpkg.Recovery{}).Run(childCtx, build+"/child", []string{"-test.run=^TestTerminalFixtureChild$"}, execpkg.RunOpts{Env: []string{"NP_TERMINAL_ROOT=" + root, "NP_TERMINAL_OUTCOME=" + outcome, "NP_TERMINAL_BARRIER=" + barrier, fmt.Sprintf("NP_TERMINAL_PREFIX=%d", prefix)}})
 						if barrier == "none" {
 							if e != nil || c != 0 {
 								t.Fatalf("child %v %d %s %s", e, c, o, er)
@@ -167,7 +172,14 @@ func TerminalFixtureJournal(a *Agent,root string){a.firewallTerminalJournal=func
 							}
 						}
 					}
-					run(barrier)
+					if outcome == "helper" && barrier == "helper" {
+						held, e := store.Open(db)
+						must(e)
+						run(barrier) // Helper publishes while daemon's lifetime Store lock is held.
+						must(held.Close())
+					} else {
+						run(barrier)
+					}
 					if barrier != "none" {
 						// Independent reopen after abrupt child death. File-only evidence has not
 						// consumed SQL; committed SQL has. Ordinary child OpenState then replays it.
@@ -179,7 +191,7 @@ func TerminalFixtureJournal(a *Agent,root string){a.firewallTerminalJournal=func
 								return e
 							}
 							want := 1
-							if barrier == "sql" {
+							if barrier == "sql" || (prefix > 0 && barrier == "helper") {
 								want = 0
 							}
 							if n != want {
@@ -209,6 +221,18 @@ func TerminalFixtureJournal(a *Agent,root string){a.firewallTerminalJournal=func
 					st, e = store.Open(db)
 					must(e)
 					defer st.Close()
+					if prefix > 0 {
+						must(st.Tx(t.Context(), func(tx *sql.Tx) error {
+							var value string
+							if e := tx.QueryRow("SELECT value_json FROM settings WHERE key='old-prefix'").Scan(&value); e != nil {
+								return e
+							}
+							if value != "preserved" {
+								t.Fatal("upgrade lost old data", value)
+							}
+							return nil
+						}))
+					}
 					must(st.Tx(t.Context(), func(tx *sql.Tx) error {
 						var n int
 						if e := tx.QueryRow("SELECT count(*) FROM fw_pending").Scan(&n); e != nil {
@@ -276,20 +300,24 @@ func TerminalFixtureJournal(a *Agent,root string){a.firewallTerminalJournal=func
 }
 
 const terminalProcessChild = `package main
-import("context";"errors";"os";"testing";"strings";"novapanel/internal/agent";"novapanel/internal/config";"novapanel/internal/firewall";execpkg "novapanel/internal/exec")
+import("context";"errors";"os";"testing";"strings";"time";"novapanel/internal/agent";"novapanel/internal/config";"novapanel/internal/firewall";execpkg "novapanel/internal/exec")
 type terminalRunner struct{}
 func(terminalRunner)Run(ctx context.Context,p string,a []string,o execpkg.RunOpts)([]byte,[]byte,int,error){if p=="/usr/bin/chattr"&&len(a)==2&&a[0]=="+a"{return nil,nil,0,nil};if p=="/usr/bin/systemctl"&&len(a)==3&&a[1]=="stop"&&strings.HasSuffix(a[2],".timer"){if os.Getenv("NP_TERMINAL_OUTCOME")=="confirm-stop"{return nil,nil,1,errors.New("manager stop failed")};return nil,nil,0,nil};if p=="/usr/bin/busctl"{return []byte("{\"type\":\"a(ssssssouso)\",\"data\":[[]]}"),nil,0,nil};if p=="/usr/sbin/ufw"{if os.Getenv("NP_TERMINAL_OUTCOME")=="revert-retry"&&os.Getenv("NP_TERMINAL_RETRY")!="yes"{return nil,nil,1,errors.New("interrupted restoration")};f,e:=os.OpenFile(os.Getenv("NP_TERMINAL_ROOT")+"/commands",os.O_APPEND|os.O_CREATE|os.O_WRONLY,0600);if e!=nil{return nil,nil,1,e};defer f.Close();_,e=f.WriteString(strings.Join(a," ")+"\n");return nil,nil,0,e};return nil,nil,1,errors.New("unexpected command")}
 func TestTerminalFixtureChild(t *testing.T){root:=os.Getenv("NP_TERMINAL_ROOT");if root==""{t.Fatal("missing root")};const id="01ARZ3NDEKTSV4RRFFQ69G5FAV";runner:=terminalRunner{}
  cfg:=config.Defaults();cfg.DBPath=root+"/state/panel.db";cfg.SealKeyPath=root+"/state/seal.key";cfg.LogDir=root+"/logs";cfg.SocketPath=root+"/run/agent.sock";cfg.SitesRoot=root+"/sites";cfg.ACMEWebroot=root+"/acme";cfg.TLSDir=root+"/tls"
  a:=agent.NewWithDependencies(cfg,runner,nil)
- open:=func(){cleanup,e:=a.OpenState(t.Context());if e!=nil{t.Fatal(e)};t.Cleanup(func(){if e:=cleanup();e!=nil{t.Error(e)}});agent.TerminalFixtureJournal(a,root)}
+ open:=func(){cleanup,e:=a.OpenState(t.Context());if e!=nil{t.Fatal(e)};t.Cleanup(func(){if e:=cleanup();e!=nil{t.Error(e)}});agent.TerminalFixtureJournal(a,root)
+ if os.Getenv("NP_TERMINAL_PREFIX")=="6" {events,e:=a.Store.ListEvents(t.Context(),100,"");if e!=nil{t.Fatal(e)};found:=false;for _,ev:=range events{if ev.ID==id{found=true}};if !found {if e=a.Store.WithPending(t.Context(),id,func(firewall.Pending)(bool,error){return false,nil});e!=nil{if e=a.Store.CreateFirewallPending(t.Context(),firewall.Pending{ID:id,SnapshotPath:"/not-opened",RevertUnit:"novapanel-fwrevert-"+id,Deadline:time.Unix(100,0)});e!=nil{t.Fatal(e)}}} }
+ }
  if os.Getenv("NP_TERMINAL_OUTCOME")!="helper"{open()}
  j,e:=firewall.OpenJournal(root+"/journal");if e!=nil{t.Fatal(e)};record,_,e:=j.Inspect(t.Context());j.Close();if e!=nil{t.Fatal(e)}
  if record.State=="armed"{if os.Getenv("NP_TERMINAL_OUTCOME")=="helper"{handled,e:=dispatchFirewallRevert(t.Context(),[]string{"fw-revert","/var/lib/novapanel/firewall/snapshots/"+id},os.Geteuid(),os.Getegid(),func(ctx context.Context,id string)error{return firewall.TerminalFixtureFire(ctx,root,id,runner)});if !handled||e!=nil{t.Fatal(handled,e)}}else{if e=firewall.TerminalFixtureRecover(t.Context(),root,id,runner,strings.HasPrefix(os.Getenv("NP_TERMINAL_OUTCOME"),"confirm"));e!=nil{if !errors.Is(e,firewall.ErrConfirmationCommitted)&&os.Getenv("NP_TERMINAL_OUTCOME")!="revert-retry"{t.Fatal(e)}}}}
  if os.Getenv("NP_TERMINAL_BARRIER")=="helper"{if e=os.WriteFile(root+"/ready",[]byte("terminal before state"),0600);e!=nil{t.Fatal(e)};select{}}
  if os.Getenv("NP_TERMINAL_OUTCOME")=="helper"{open()}
  if os.Getenv("NP_TERMINAL_OUTCOME")=="revert-retry"&&record.State=="armed" {if a.CommitFirewallTerminal(t.Context())==nil{t.Fatal("incomplete recovery consumed SQL")};if e=os.Setenv("NP_TERMINAL_RETRY","yes");e!=nil{t.Fatal(e)};if e=firewall.TerminalFixtureRecover(t.Context(),root,id,runner,false);e!=nil{t.Fatal(e)}}
+ before,e:=os.ReadFile(root+"/journal/state");if e!=nil{t.Fatal(e)}
  if e=a.CommitFirewallTerminal(t.Context());e!=nil{t.Fatal(e)}
+ after,e:=os.ReadFile(root+"/journal/state");if e!=nil||string(before)!=string(after){t.Fatal("terminal bytes changed",e)}
  if !errors.Is(firewall.TerminalFixturePreflight(t.Context(),root),firewall.ErrFirewallRecoveryPending){t.Fatal("SQL consumption enabled startup")}
  if a.FirewallRecovery!=nil{t.Fatal("public recovery activated")}
 }

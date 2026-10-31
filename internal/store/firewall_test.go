@@ -30,9 +30,6 @@ func firewallFixture(t *testing.T, s *Store) {
 	if !strings.Contains(string(spec), strings.TrimSpace(string(b))) {
 		t.Fatal("fixture differs from canonical DDL")
 	}
-	if err := s.Tx(context.Background(), func(tx *sql.Tx) error { _, err := tx.Exec(string(b)); return err }); err != nil {
-		t.Fatal(err)
-	}
 }
 func pendingFixture() firewall.Pending {
 	return firewall.Pending{ID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", SnapshotPath: "/agent-owned/snapshot", RevertUnit: "novapanel-fwrevert-01ARZ3NDEKTSV4RRFFQ69G5FAV", Deadline: time.UnixMilli(2000000)}

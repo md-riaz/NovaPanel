@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -29,11 +28,6 @@ func terminalAgent(t *testing.T, schema bool, terminal ...string) (*Agent, *fire
 	mustTerminal(t, os.MkdirAll(filepath.Dir(cfg.DBPath), 0700))
 	s, e := store.Open(cfg.DBPath)
 	mustTerminal(t, e)
-	if schema {
-		ddl, e := os.ReadFile("../store/testdata/0007_phase6.sql")
-		mustTerminal(t, e)
-		mustTerminal(t, s.Tx(t.Context(), func(tx *sql.Tx) error { _, e := tx.Exec(string(ddl)); return e }))
-	}
 	mustTerminal(t, s.Close())
 	a := NewWithDependencies(cfg, &startupRunner{}, nil)
 	cleanup, e := a.OpenState(t.Context())

@@ -29,9 +29,6 @@ func TestFirewallTerminalCommitReplay(t *testing.T) {
 						t.Fatal(e)
 					}
 				}
-				ddl, e := os.ReadFile("../store/testdata/0007_phase6.sql")
-				must(e)
-				must(s.Tx(ctx, func(tx *sql.Tx) error { _, e := tx.Exec(string(ddl)); return e }))
 				r := firewall.JournalRecord{Version: 1, ID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Unit: "novapanel-fwrevert-01ARZ3NDEKTSV4RRFFQ69G5FAV", Deadline: 100, SnapshotSHA256: strings.Repeat("a", 64), State: "armed"}
 				must(s.CreateFirewallPending(ctx, firewall.Pending{ID: r.ID, RevertUnit: r.Unit, Deadline: time.Unix(100, 0), SnapshotPath: "/ignored"}))
 				must(os.Mkdir(root+"/journal", 0700))

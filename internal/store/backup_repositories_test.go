@@ -12,16 +12,6 @@ import (
 	"novapanel/internal/secret"
 )
 
-// Canonical Phase 6 DDL fixture only. No production migration number is allocated.
-const repositoryDDL = `CREATE TABLE repos (
- id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE,
- kind TEXT NOT NULL CHECK(kind IN ('local','sftp','s3')),
- role TEXT NOT NULL DEFAULT 'site' CHECK(role IN ('site','panel')),
- location TEXT NOT NULL,
- retention_json TEXT NOT NULL DEFAULT '{"keep_daily":7,"keep_weekly":4,"keep_monthly":6}',
- created INTEGER NOT NULL);
- CREATE UNIQUE INDEX repos_one_panel ON repos(role) WHERE role='panel';`
-
 func TestRepositoryMetadataAtomicConflictAndReopen(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "panel.db")
@@ -30,9 +20,6 @@ func TestRepositoryMetadataAtomicConflictAndReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if err = s.Tx(ctx, func(tx *sql.Tx) error { _, e := tx.Exec(repositoryDDL); return e }); err != nil {
-		t.Fatal(err)
-	}
 	seal, _ := secret.New(make([]byte, 32))
 	password, _ := seal.Seal([]byte("out-of-band-recovery-password"))
 	r := backup.Repository{ID: "panel1", Name: "recovery", Kind: "local", Role: "panel", Location: "/srv/recovery"}
@@ -73,17 +60,11 @@ func TestRepositoryMetadataAtomicConflictAndReopen(t *testing.T) {
 	}
 }
 
-func TestRepositoryMissingSchemaAndConcurrentPanelPublication(t *testing.T) {
+func TestRepositoryConcurrentPanelPublication(t *testing.T) {
 	ctx := context.Background()
 	s := fresh(t)
 	sealed := secret.Sealed{Nonce: make([]byte, 12), Ciphertext: make([]byte, 16)}
 	r := backup.Repository{ID: "first", Name: "first", Role: "panel", Kind: "local", Location: "/srv/recovery"}
-	if err := s.CreateRepository(ctx, r, sealed); !errors.Is(err, ErrRepositoryMetadata) {
-		t.Fatal(err)
-	}
-	if err := s.Tx(ctx, func(tx *sql.Tx) error { _, e := tx.Exec(repositoryDDL); return e }); err != nil {
-		t.Fatal(err)
-	}
 	results := make(chan error, 2)
 	go func() { results <- s.CreateRepository(ctx, r, sealed) }()
 	r2 := r

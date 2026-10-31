@@ -29,13 +29,6 @@ func TestFirewallTerminalReconciliation(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { s.Close() }()
-			ddl, err := os.ReadFile("../store/testdata/firewall_pending.sql")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err = s.Tx(ctx, func(tx *sql.Tx) error { _, e := tx.Exec(string(ddl)); return e }); err != nil {
-				t.Fatal(err)
-			}
 			p := firewall.Pending{ID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", SnapshotPath: "/not-opened", RevertUnit: "novapanel-fwrevert-01ARZ3NDEKTSV4RRFFQ69G5FAV", Deadline: time.Unix(2000, 0)}
 			if err = s.CreateFirewallPending(ctx, p); err != nil {
 				t.Fatal(err)

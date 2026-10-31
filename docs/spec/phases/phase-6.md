@@ -228,8 +228,9 @@ contract, provisioning, tested scope and remaining coverage are recorded in
 adapter and mandatory pre-OpenState startup consumer now inspect the authoritative
 journal, schedule and verify independent recovery, and block daemon startup for
 all retained pending or terminal records. Only a valid absent state permits serve.
-No production migration, SQL reconciliation bypass, RPC activation or public apply
-is supplied by this amendment. The internal context-aware JournalRecovery consumer
+The approved schema-only stack now supplies exact Phase 4 migration 0006 and full
+canonical production 0007 through ordinary Store.Open. No Phase 4 runtime, SQL
+reconciliation bypass, RPC activation or public apply is supplied. The internal context-aware JournalRecovery consumer
 now confirms through durable journal publication and bounded detached timer-only
 stop/readback, and manually reverts through the same lazy InstalledRestore as Fire.
 It remains unwired to public operations and legacy FirewallRecovery. Details and
@@ -238,7 +239,7 @@ The internal Agent.CommitFirewallTerminal operation now connects terminal outcom
 to the ordinary replayed audit file and exact SQLite transaction without
 acknowledgement. It is callable only after explicit state initialization and is
 not installed in ordinary startup. Confirmed/reverted evidence remains retained;
-all retained states still block serve before OpenState. Migration, terminal
+all retained states still block serve before OpenState. Terminal startup,
 retention/reuse and public activation remain gated. See
 `docs/phase6-daemon-terminal-commit.md`.
 Real cgroup cleanup/UFW/reboot/power-loss acceptance remains deferred VM work.
