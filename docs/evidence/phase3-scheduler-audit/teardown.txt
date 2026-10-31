@@ -1,0 +1,1 @@
+Owned container absent after removal

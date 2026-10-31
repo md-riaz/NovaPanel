@@ -7,6 +7,7 @@ import (
 	"novapanel/internal/id"
 	"novapanel/internal/rpcerr"
 	"novapanel/internal/store"
+	"strings"
 	"sync"
 	"time"
 )
@@ -38,6 +39,12 @@ func NewScheduler(q *Queue, c Clock, policies map[string]SchedulePolicy) *Schedu
 	return &Scheduler{q: q, clock: c, policies: copy}
 }
 func (s *Scheduler) policy(verb string) (SchedulePolicy, error) {
+	if verb == "ssl.renew" {
+		if p, ok := s.policies[verb]; ok {
+			return p, nil
+		}
+		return automaticACMEPolicy(), nil
+	}
 	switch verb {
 	// The site-level cron surface is deferred to Phase 5, not guessed here.
 	case "ssl.renew", "backup.create", "backup.verify", "update.check", "reconcile":
@@ -61,6 +68,9 @@ func (s *Scheduler) Set(ctx context.Context, r ScheduleRequest) (store.Schedule,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m, e := scheduleOwner(ctx)
+	if strings.HasPrefix(r.ID, "acme:auto:") {
+		return store.Schedule{}, rpcerr.Errf("forbidden", "Automatic schedule is agent owned")
+	}
 	if e != nil {
 		return store.Schedule{}, e
 	}
@@ -141,12 +151,22 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 		return e
 	}
 	now := s.clock.Now()
+	if automatic, ok := s.q.store.(interface {
+		PrepareACMESchedules(context.Context, int64) error
+	}); ok {
+		if e := automatic.PrepareACMESchedules(ctx, now); e != nil {
+			return e
+		}
+	}
 	rows, e := s.q.store.DueSchedules(ctx, now)
 	if e != nil {
 		return e
 	}
 	for _, row := range rows {
 		p, e := s.policy(row.Verb)
+		if strings.HasPrefix(row.ID, "acme:auto:") && row.Verb == "ssl.issue" {
+			p, e = automaticACMEPolicy(), nil
+		}
 		if e != nil {
 			return e
 		}

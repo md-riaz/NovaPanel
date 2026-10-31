@@ -18,7 +18,30 @@ import (
 	"time"
 )
 
+// Principal contains resolved identifiers only, never transport credentials or hashes.
+type Principal struct {
+	Kind      string `json:"kind"`
+	UserID    string `json:"user_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	TokenID   string `json:"token_id,omitempty"`
+}
+
+// JobPrincipal projects only the authority preserved by the existing job schema.
+func JobPrincipal(createdBy, role string, scopes []string) Principal {
+	if createdBy == "local-root" {
+		return Principal{Kind: "local-root"}
+	}
+	if createdBy == "" {
+		return Principal{Kind: "unresolved"}
+	}
+	if role == "token" || (role == "" && len(scopes) > 0) {
+		return Principal{Kind: "token", TokenID: createdBy}
+	}
+	return Principal{Kind: "user", SessionID: createdBy}
+}
+
 type Event struct {
+	Principal                                   Principal
 	Actor, Role, Verb, ObjectKey, Outcome, Code string
 	Detail                                      map[string]any
 }
@@ -29,7 +52,7 @@ func (ev Event) validate() error {
 	}
 	if stage, ok := ev.Detail["stage"]; ok {
 		switch stage {
-		case "authz", "enqueue", "exec", "claim":
+		case "authz", "resolve", "enqueue", "exec", "claim":
 		default:
 			return errors.New("invalid audit stage")
 		}
@@ -112,7 +135,21 @@ func (l *Log) Record(ev Event) error {
 	if e != nil {
 		return fail(e)
 	}
-	detail, e := json.Marshal(secret.Redact(ev.Detail))
+	redacted := secret.Redact(ev.Detail)
+	if ev.Principal.Kind != "" {
+		// This typed, trusted projection bypasses key-name redaction for token_id
+		// only. Values still pass free-text secret redaction; arbitrary detail does not.
+		p := ev.Principal
+		p.Kind = secret.RedactText(p.Kind)
+		p.UserID = secret.RedactText(p.UserID)
+		p.SessionID = secret.RedactText(p.SessionID)
+		p.TokenID = secret.RedactText(p.TokenID)
+		if redacted == nil {
+			redacted = map[string]any{}
+		}
+		redacted["principal"] = p
+	}
+	detail, e := json.Marshal(redacted)
 	if e != nil {
 		return fail(e)
 	}

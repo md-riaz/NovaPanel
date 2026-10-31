@@ -2,11 +2,15 @@
 package agent
 
 import (
+	"context"
 	"novapanel/internal/audit"
 	"novapanel/internal/auth"
 	"novapanel/internal/config"
 	"novapanel/internal/exec"
 	"novapanel/internal/jobs"
+	"novapanel/internal/platform"
+	"novapanel/internal/render/nginx"
+	"novapanel/internal/rpcerr"
 	"novapanel/internal/secret"
 	"novapanel/internal/store"
 	"novapanel/internal/validate"
@@ -19,6 +23,8 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Agent struct {
+	ProvisionSite    func(context.Context, string) error
+	Nginx            *nginx.Applier
 	PasswordFailures auth.FailureBudgets
 	UnknownFailures  auth.FailureBudgets
 	MFAFailures      auth.FailureBudgets
@@ -37,7 +43,26 @@ type Agent struct {
 func New() *Agent { return NewWithDependencies(config.Defaults(), exec.Real{}, &validate.V{}) }
 func NewWithDependencies(cfg config.Config, runner exec.Runner, v *validate.V) *Agent {
 	c := realClock{}
-	return &Agent{Cfg: cfg, Exec: runner, Validate: v, Clock: c, Started: c.Now()}
+	a := &Agent{Cfg: cfg, Exec: runner, Validate: v, Clock: c, Started: c.Now(),
+		ProvisionSite: func(ctx context.Context, name string) error {
+			return platform.EnsureSite(ctx, runner, cfg.SitesRoot, cfg.ACMEWebroot, name)
+		},
+		Nginx: &nginx.Applier{Root: platform.NginxRoot, Runner: runner, Probe: nginx.StateProbe("http://127.0.0.1:80", "https://127.0.0.1:443", nil)},
+	}
+	a.Nginx.Guard = func(ctx context.Context) error {
+		if a.Store == nil {
+			return nil
+		}
+		b, err := a.Store.TLSIntent(ctx)
+		if err != nil {
+			return err
+		}
+		if len(b) > 0 {
+			return rpcerr.Errf("precondition_failed", "Unresolved TLS publication")
+		}
+		return nil
+	}
+	return a
 }
 func (a *Agent) Now() int64 {
 	if a.Clock != nil {

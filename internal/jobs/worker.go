@@ -31,7 +31,33 @@ func (q *Queue) Run(ctx context.Context) error {
 	if e := q.audit.Healthy(); e != nil {
 		return e
 	}
+	for q.startup != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		j, err := q.startup(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return errors.Join(ErrRecoveryBlocked, err)
+		}
+		if j == nil {
+			break
+		}
+		if j != nil {
+			if err = q.recoverPublication(ctx, *j); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				return errors.Join(ErrRecoveryBlocked, err)
+			}
+		}
+	}
 	if e := q.store.RecoverJobs(ctx, q.clock.Now()); e != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		return e
 	}
 	tick := time.NewTicker(100 * time.Millisecond)
@@ -86,11 +112,17 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 	if ctx.Err() != nil {
 		return nil
 	} // leave running for restart's effectful/idempotent recovery
+	return q.finish(ctx, j, err)
+}
+
+func (q *Queue) finish(ctx context.Context, j Job, err error) error {
 	now := q.clock.Now()
 	j.Updated = now
 	j.Finished = &now
 	outcome := "ok"
 	j.State = "done"
+	j.Code = ""
+	j.Error = ""
 	j.Progress = 1
 	if err != nil {
 		outcome = "error"
@@ -103,7 +135,7 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 		}
 	}
 	// Do not persist external error text or panic payloads, which can contain secrets.
-	if e = q.record(j, outcome, j.Code, "exec"); e != nil {
+	if e := q.record(j, outcome, j.Code, "exec"); e != nil {
 		return e
 	}
 	eid, e := id.New()
