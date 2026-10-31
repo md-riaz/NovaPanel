@@ -14,6 +14,12 @@ The integration merges only the original PR80 documentation commit `193a13c76db0
 | d03dd25 | 587dba5 | WAL-consistent private snapshot |
 | fad858624 | e3ab110 | Sealed repository metadata and injected restic contract |
 | 9c73f307 | 8788943 | Updater RPC integration owned by the updater worker |
+| 65bcc2b | 70b06f6 | Stable snapshot ancestry and consumption identity checks |
+| fe860d8 | a2f468d | Fail-closed firewall confirmation and durable replay regressions |
+
+The safety follow-up starts at exact remote PR80 head `f474346321a39496a1b6632ac8db7c7c7f51422e` in an exclusive worktree. Snapshot parent `fad8586` and firewall parent `c053a75` have matching stable patch IDs with their already-integrated counterparts. The snapshot source's secret-test external-package conversion was already byte-identical at PR80 head and was not duplicated; all other snapshot source changes are preserved. The firewall patch is unchanged. Before applying the fixes, snapshot writable-parent/rename regressions and firewall pre-cancellation refusal were run through overlays and failed for the expected unsafe behavior.
+
+Final acceptance must run after the documentation commit, with no later tracked edits. Evidence is kept outside the tree at `/root/.hermes/cache/scratch/phase6-pr80-safety-evidence-v2/`, including exact HEAD, command exit codes, whole-repository CI, uncached full race JSON, phase6-test, signed dispatcher and independent snapshot overlay results. The PR body records actual results and final SHA after execution, not a claim of production acceptance.
 
 The first five source/destination stable patch IDs match. Updater base `1fe8b9e` is equivalent to `ceb4e653` and was not applied twice. The updater RPC commit required one integration conflict resolution in `internal/rpc/arch_test.go`: retain both updater verbs and all three firewall verbs. Its remaining changes are unchanged. Worker source worktrees were not edited.
 
@@ -28,9 +34,9 @@ Canonical section 02 places `webhook_deliveries` in Phase 6 even though Phase 8 
 ## Runtime limits
 
 - The compiled updater release key is unset. `update.check` and `update.apply` fail closed with `unsupported` before network access. Signed-check execution is tested with an injected test key and HTTP server. Apply remains unsupported because independent helper lifetime and durable recovery are not wired.
-- `firewall.apply` remains unsupported. Confirm/revert operate only with an explicitly injected recovery dependency. Production startup does not arm a deadman, install a real ruleset or recover a pending change. The pending store adapter fails closed while its production schema is deferred.
+- `firewall.apply` remains unsupported. With an injected recovery dependency, confirm now returns `unsupported` for live pending IDs before cancelling the timer or consuming the ID; unknown/expired IDs retain `not_found`. Revert/Fire remain injected restoration contracts. Production startup does not arm a deadman, install a real ruleset or recover a pending change. The pending store adapter fails closed while its production schema is deferred. Scratch replay tests cover restore, audit-marker, DELETE and actual deferred-constraint COMMIT failures across reopen; they do not establish process-death recovery or independent deadman DB ownership.
 - Repository metadata and private SQLite snapshots are internal contracts. `repo.create` and `panel.backup_config` workers are not registered. No complete panel backup, config/key archive, restore drill, snapshot ID publication or real restic success is claimed.
-- Snapshot safety currently assumes trusted callers do not mutate the scratch ancestry. The sibling snapshot race/ancestry review remains pending; a passing scratch snapshot test is not proof against a mutable same-owner parent. Preserve that limitation until its reviewed fix is integrated.
+- Snapshot ancestry admission now rejects untrusted ownership and group/other-writable ancestors before SQL, with a root-owned sticky-directory exception and independent descendant checks. Creation and restic consumption revalidate path identities. Root and the agent UID must still keep exclusive custody during child pathname consumption; this is not descriptor-based child consumption or protection against a malicious trusted owner after validation.
 - Site and MariaDB backup/restore still depend on Phase 4. No host services, production paths or public CA are touched by this integration.
 
 ## Verification
