@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 
 	"golang.org/x/sys/unix"
@@ -71,11 +72,14 @@ func removeConfigRecord(ctx context.Context, custody string, b ConfigBinding, se
 		f := os.NewFile(uintptr(fd), name)
 		defer f.Close()
 		var held unix.Stat_t
-		if unix.Fstat(fd, &held) != nil {
+		if unix.Fstat(fd, &held) != nil || held.Mode&unix.S_IFMT != unix.S_IFREG || held.Mode&07777 != 0600 || held.Uid != owner || held.Nlink != 1 || held.Size > 2<<20 {
 			return errConfigCustody
 		}
-		raw, found, e := readConfigFile(dir, name, owner, 0, 0600, false)
-		if e != nil || !found {
+		if err = ops.check(ctx, "cleanup-read"); err != nil {
+			return err
+		}
+		raw, e := io.ReadAll(io.LimitReader(f, (2<<20)+1))
+		if e != nil || len(raw) > 2<<20 {
 			return errConfigCustody
 		}
 		var envelope secret.Sealed

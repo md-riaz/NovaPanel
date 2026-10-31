@@ -503,6 +503,24 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 	q = NewQueue(s, seal, auditSink)
 	q.SetConfigCustody(custody)
 	q.SetRunner(func(context.Context, *Job) error { t.Error("historical effects replayed"); return nil })
+	// Acknowledgement retires only the live binding check, never terminal audit.
+	if err = s.Tx(ctx, func(tx *sql.Tx) error {
+		_, e := tx.ExecContext(ctx, `UPDATE events SET detail_json='{}' WHERE json_extract(detail_json,'$.job_id')=? AND json_extract(detail_json,'$.stage')='exec'`, en.Job.ID)
+		return e
+	}); err != nil {
+		t.Fatal(err)
+	}
+	blockedAudit, stopAudit := context.WithTimeout(ctx, time.Second)
+	if err = q.Run(blockedAudit); err == nil {
+		t.Fatal("acknowledgement bypassed terminal audit evidence")
+	}
+	stopAudit()
+	if err = s.Tx(ctx, func(tx *sql.Tx) error {
+		_, e := tx.ExecContext(ctx, `UPDATE events SET detail_json=? WHERE detail_json='{}' AND verb='site.create' AND outcome='ok'`, saved)
+		return e
+	}); err != nil {
+		t.Fatal(err)
+	}
 	// Reappearing records after acknowledgement must block real startup, even
 	// authentic old records. They must not be silently ignored or removed.
 	for _, raw := range [][]byte{record, []byte("unmanaged")} {
@@ -537,5 +555,19 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 	if e != nil || finalOp.Checkpoint != "done" || finalOp.Identity.ConfigCleanup != "acknowledged" || len(finalOp.Ciphertext) != 0 {
 		t.Fatal("lost terminal acknowledgement", e)
 	}
+	// Model a historical install completed without configured custody. Absence
+	// after deletion cannot invent the initial live-binding authorization.
+	if err = s.Tx(ctx, func(tx *sql.Tx) error {
+		_, e := tx.ExecContext(ctx, `UPDATE phase4_operations SET identities_json=json_remove(identities_json,'$.ConfigCleanup') WHERE job_id=?`, en.Job.ID)
+		return e
+	}); err != nil {
+		t.Fatal(err)
+	}
+	legacyRun, stopLegacy := context.WithTimeout(ctx, time.Second)
+	defer stopLegacy()
+	if err = q.Run(legacyRun); err == nil {
+		t.Fatal("retired unowned historical record without initial binding authorization")
+	}
+	t.Log("historical unowned cleanup after deletion refuses per canonical ruling; retirement needs a new ruling")
 
 }
