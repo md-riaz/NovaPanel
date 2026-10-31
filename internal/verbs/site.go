@@ -6,6 +6,7 @@ import (
 	"errors"
 	"novapanel/internal/agent"
 	"novapanel/internal/id"
+	php "novapanel/internal/render/php"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
 )
@@ -105,12 +106,24 @@ func siteGet(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	for _, r := range rs {
 		redirects = append(redirects, siteRedirect{r.ID, r.Source, r.Target, r.Code})
 	}
+	var limits *php.Limits
+	if v.Type == "php" || v.Type == "wordpress" {
+		persisted, err := a.Store.GetPHPLimits(ctx, v.ID)
+		if err == nil {
+			limits = &persisted
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		// A creating/failed site can lack committed desired limits. Do not
+		// invent defaults or infer state from a pool that may not be published.
+	}
 	return struct {
 		Site      siteSummary    `json:"site"`
 		Domains   []siteDomain   `json:"domains"`
 		Redirects []siteRedirect `json:"redirects"`
 		Cert      any            `json:"cert"`
-	}{summarizeSite(v, domains), out, redirects, cert}, nil
+		PHPLimits *php.Limits    `json:"php_limits"`
+	}{summarizeSite(v, domains), out, redirects, cert, limits}, nil
 }
 func siteError(e error) error {
 	switch {
