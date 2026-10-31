@@ -13,6 +13,7 @@ import (
 type OperationKind string
 
 const (
+	SiteDelete         OperationKind = "site_delete"
 	DatabaseCreate     OperationKind = "database_create"
 	DatabaseRotate     OperationKind = "database_rotate"
 	DBUserCreate       OperationKind = "dbuser_create"
@@ -26,13 +27,22 @@ const (
 type OperationRequest struct {
 	Kind                       OperationKind
 	SiteID, DatabaseID, UserID string
+	PurgeFiles, PurgeDatabases bool
+}
+type OperationDatabase struct {
+	Database Database
+	Accounts []OperationAccount
 }
 type OperationAccount struct{ ID, Username, Host string }
 type OperationIdentity struct {
-	Version      int
-	Database     Database
-	Accounts     []OperationAccount
-	TargetUserID string
+	Version                    int
+	Database                   Database
+	Accounts                   []OperationAccount
+	TargetUserID               string
+	Site                       *Site               `json:",omitempty"`
+	Attached                   []OperationDatabase `json:",omitempty"`
+	BindingID                  string              `json:",omitempty"`
+	PurgeFiles, PurgeDatabases bool
 }
 type Operation struct {
 	JobID, Owner                   string
@@ -45,6 +55,13 @@ type Operation struct {
 }
 
 func (o Operation) Keys() []string {
+	if o.Kind == SiteDelete {
+		keys := []string{"site:" + o.SiteID}
+		for _, db := range o.Identity.Attached {
+			keys = append(keys, "db:"+db.Database.ID)
+		}
+		return OrderedOperationKeys(keys)
+	}
 	keys := []string{"db:" + o.DatabaseID}
 	if o.SiteID != "" {
 		keys = append(keys, "site:"+o.SiteID)
@@ -95,6 +112,9 @@ func scanOperation(row scanner) (o Operation, err error) {
 }
 
 func validOperationIdentity(o Operation) bool {
+	if o.Kind == SiteDelete {
+		return validSiteDeleteIdentity(o)
+	}
 	d := o.Identity.Database
 	if operationVerb(o.Kind) == "" || o.Owner == "" || o.Identity.Version != 1 || !phase4ResourceID.MatchString(d.ID) || d.ID != o.DatabaseID || d.SiteID != o.SiteID || d.Name != "d_"+strings.ToLower(d.ID) || d.Engine != "mariadb" || !phase4ResourceID.MatchString(d.PrimaryUserID) || len(o.Identity.Accounts) == 0 {
 		return false
@@ -128,6 +148,8 @@ func loadOperation(ctx context.Context, tx *sql.Tx, jid string) (Operation, erro
 }
 func operationVerb(k OperationKind) string {
 	switch k {
+	case SiteDelete:
+		return "site.delete"
 	case DatabaseCreate:
 		return "database.create"
 	case DatabaseRotate:
@@ -148,6 +170,9 @@ func operationSecrets(k OperationKind) bool {
 // PrepareOperation atomically reserves immutable identities, job authority and claim hash.
 // No runtime effect or resource lock is taken while SQLite is held.
 func (s *Store) PrepareOperation(ctx context.Context, j Job, c JobClaim, r OperationRequest, nonce, ciphertext []byte) (op Operation, err error) {
+	if r.Kind == SiteDelete {
+		return s.prepareSiteDelete(ctx, j, r, nonce, ciphertext)
+	}
 	err = s.Tx(ctx, func(tx *sql.Tx) error {
 		if operationVerb(r.Kind) == "" || j.Verb != operationVerb(r.Kind) || j.CreatedBy == "" || j.State != "queued" || !phase4ResourceID.MatchString(r.DatabaseID) {
 			return ErrSiteInvalid
@@ -313,6 +338,9 @@ func (s *Store) CheckOperation(ctx context.Context, jid string) error {
 		if e = operationBlocked(ctx, tx, op); e != nil {
 			return e
 		}
+		if op.Kind == SiteDelete {
+			return checkSiteDelete(ctx, tx, op)
+		}
 		if op.Kind == DatabaseCreate {
 			if e = checkOperationSite(ctx, tx, op); e != nil {
 				return e
@@ -457,8 +485,20 @@ func (s *Store) CompleteOperation(ctx context.Context, jid string, claim *JobCla
 		if op.Checkpoint == "expired" || now >= op.Expires {
 			return ErrOperationExpired
 		}
-		if op.Checkpoint != "verified" && !((op.Kind == DatabaseDelete || op.Kind == DBUserDelete) && op.Checkpoint == "db_applied") {
+		if op.Checkpoint != "verified" && !((op.Kind == DatabaseDelete || op.Kind == DBUserDelete || op.Kind == SiteDelete) && op.Checkpoint == "db_applied") {
 			return ErrSitePrecondition
+		}
+		if op.Kind == SiteDelete {
+			if claim != nil {
+				return ErrSiteInvalid
+			}
+			if e = checkSiteDelete(ctx, tx, op); e != nil {
+				return e
+			}
+			if e = completeSiteDelete(ctx, tx, op); e != nil {
+				return e
+			}
+			return finishOperation(ctx, tx, op, now, []byte(`{}`))
 		}
 		if e = checkOperationSite(ctx, tx, op); e != nil {
 			return e
@@ -509,11 +549,15 @@ func (s *Store) CompleteOperation(ctx context.Context, jid string, claim *JobCla
 		if e != nil {
 			return e
 		}
-		r, e := tx.ExecContext(ctx, `UPDATE jobs SET state='done',step='phase4_committed',progress=1,result_json=?,error=NULL,code=NULL,updated=?,finished=? WHERE id=? AND state='running'`, string(raw), now, now, jid)
-		if e = affected(r, e); e != nil {
-			return e
-		}
-		_, e = tx.ExecContext(ctx, "UPDATE phase4_operations SET checkpoint='done',nonce=NULL,ciphertext=NULL,updated=? WHERE job_id=?", now, jid)
-		return e
+		return finishOperation(ctx, tx, op, now, raw)
 	})
+}
+
+func finishOperation(ctx context.Context, tx *sql.Tx, op Operation, now int64, raw []byte) error {
+	r, e := tx.ExecContext(ctx, `UPDATE jobs SET state='done',step='phase4_committed',progress=1,result_json=?,error=NULL,code=NULL,updated=?,finished=? WHERE id=? AND state='running'`, string(raw), now, now, op.JobID)
+	if e = affected(r, e); e != nil {
+		return e
+	}
+	_, e = tx.ExecContext(ctx, "UPDATE phase4_operations SET checkpoint='done',nonce=NULL,ciphertext=NULL,updated=? WHERE job_id=?", now, op.JobID)
+	return e
 }

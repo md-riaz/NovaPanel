@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"novapanel/internal/rpcerr"
 	"novapanel/internal/store"
@@ -44,6 +45,15 @@ func (q *Queue) lockAttachedDatabases(ctx context.Context, siteID string) ([]sto
 }
 
 func (q *Queue) lockJob(ctx context.Context, j Job) (func(), error) {
+	if s, ok := q.store.(operationStore); ok {
+		op, err := s.LoadOperation(ctx, j.ID)
+		if err == nil {
+			return q.locks.lockSet(op.Keys()), nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+	}
 	if j.Verb == "site.delete" && strings.HasPrefix(j.ObjectKey, "site:") {
 		dbs, release, err := q.lockAttachedDatabases(ctx, strings.TrimPrefix(j.ObjectKey, "site:"))
 		if err != nil {

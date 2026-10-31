@@ -69,7 +69,7 @@ func (q *Queue) EnqueueOperation(ctx context.Context, r store.OperationRequest, 
 	if e := q.healthy(); e != nil {
 		return out, e
 	}
-	verbs := map[store.OperationKind]string{store.DatabaseCreate: "database.create", store.DatabaseRotate: "database.rotate_password", store.DBUserCreate: "dbuser.create", store.DatabaseDelete: "database.delete", store.DBUserDelete: "dbuser.delete"}
+	verbs := map[store.OperationKind]string{store.SiteDelete: "site.delete", store.DatabaseCreate: "database.create", store.DatabaseRotate: "database.rotate_password", store.DBUserCreate: "dbuser.create", store.DatabaseDelete: "database.delete", store.DBUserDelete: "dbuser.delete"}
 	verb := verbs[r.Kind]
 	if verb == "" {
 		return out, rpcerr.Errf("invalid_argument", "operation kind unavailable")
@@ -97,6 +97,10 @@ func (q *Queue) EnqueueOperation(ctx context.Context, r store.OperationRequest, 
 	}
 	text := base64.RawURLEncoding.EncodeToString(token[:])
 	j := Job{ID: jid, Verb: verb, ObjectKey: "db:" + r.DatabaseID, Args: json.RawMessage(`{}`), CreatedBy: m.CreatedBy, Role: m.Role, Actor: m.Actor, Scopes: m.Scopes, Automation: m.Automation, State: "queued", Created: q.clock.Now(), Updated: q.clock.Now()}
+	if r.Kind == store.SiteDelete {
+		j.ObjectKey = "site:" + r.SiteID
+	}
+	j.Effectful = m.Effectful
 	var nonce, ciphertext []byte
 	needsSecret := r.Kind == store.DatabaseCreate || r.Kind == store.DatabaseRotate || r.Kind == store.DBUserCreate
 	if needsSecret {
@@ -122,6 +126,12 @@ func (q *Queue) EnqueueOperation(ctx context.Context, r store.OperationRequest, 
 		nonce, ciphertext = sealed.Nonce, sealed.Ciphertext
 	} else if fields != nil {
 		return out, errors.New("jobs: deletion cannot carry credentials")
+	}
+	// Discover and snapshot attached identities while holding the same site lock
+	// used by attachment and the worker. The worker reacquires the full durable set.
+	if r.Kind == store.SiteDelete {
+		release := q.locks.lock("site:" + r.SiteID)
+		defer release()
 	}
 	if _, e = s.PrepareOperation(ctx, j, store.JobClaim{JobID: jid, ClaimHash: claimHash(text)}, r, nonce, ciphertext); e != nil {
 		return out, operationError(e)
