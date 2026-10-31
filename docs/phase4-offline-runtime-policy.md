@@ -47,3 +47,36 @@ leave it. Bind retained inputs and exact source commit to evidence. Do not move
 the installation journal beyond `db_applied`, publish claims or fabricate an
 isolation callback. Live transfer, physical UID/FPM quiescence, config execution,
 DB orchestration and install remain source gaps, not deferred VM-only checks.
+
+## Launcher cancellation and exact ownership
+
+The launcher installs SIGTERM/SIGINT handlers before commands and records its
+unique name and ownership label in fsynced `owner.json` before Docker effects.
+Signals request cancellation rather than raising inside subprocess setup. A
+build/create/start already admitted drains to completion within its 180-second
+command deadline, so cleanup can inspect a resource even if cancellation arrived
+before its ID was returned. Other commands are killed and reaped on cancellation.
+Cleanup has a shared 20-second budget, survives repeated handled signals, checks
+the exact name and label, removes by immutable ID, and reads back ID absence.
+Container failure does not suppress the image cleanup attempt. Errors are retained
+in `cleanup-errors.log` and `cleanup.json`; signal exits are 143/130. No global
+prune, image search, foreign artifact removal or host service changes are used.
+The COPY-only build uses `--force-rm`; the pinned base must already exist locally.
+
+SIGKILL, power loss and a daemon that outlives a timed-out Docker mutation cannot
+be guaranteed to run cleanup or settle within the client deadline. After that
+mutation has settled, explicitly retry only the retained record with
+`python3 tools/phase4_wp_offline_lab.py --reap /exact/evidence/owner.json`.
+This validates the recorded name and current ownership labels, then uses the same
+bounded ID-based cleanup. It never scans other launches or automatically reaps a
+possibly active run. The evidence directory must be trusted local input. A
+missing resource at one instant is not proof that an unsettled daemon operation
+will not create it later. This limitation is not a power-loss cleanup guarantee.
+
+`make ci` runs the non-Docker lifecycle failure/ownership regressions. With the
+pinned image retained, `NOVAPANEL_WP_DOCKER_TEST=1 python3 -m unittest discover
+-s tools -p test_phase4_wp_offline_lab.py -v` also exercises real local images and
+containers at post-build, post-create pre-ID, post-start and running boundaries,
+SIGTERM/SIGINT repeated cancellation, and explicit SIGKILL record reaping. These
+fixtures do not execute the official PHP verification; the unchanged official
+lab remains a separate exact-commit acceptance command.
