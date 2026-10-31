@@ -140,7 +140,13 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 	if e := a.validate(recovery); e != nil {
 		return errors.Join(err, e)
 	}
-	return errors.Join(err, a.reload(recovery))
+	if e := a.reload(recovery); e != nil {
+		return errors.Join(err, e)
+	}
+	if exists {
+		return errors.Join(err, a.Probe(recovery, d))
+	}
+	return err
 }
 func (a *Applier) validate(ctx context.Context) error {
 	return a.command(ctx, "/usr/sbin/php-fpm8.3", []string{"-t", "--fpm-config", filepath.Join(a.Root, "novapanel-validate.ini")})

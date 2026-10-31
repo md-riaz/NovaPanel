@@ -40,7 +40,7 @@ func TestPHPTransactionFirstCreateAndRecoveryFailure(t *testing.T) {
 					t.Fatal("first-create file survived", f, err)
 				}
 			}
-			if probed == recoverFails {
+			if probed {
 				t.Fatal("restored service probe mismatch", events)
 			}
 			if recoverFails && (len(events) != 1 || events[0] != "fpm.validate") {

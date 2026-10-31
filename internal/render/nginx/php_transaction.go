@@ -13,7 +13,9 @@ import (
 
 // ApplyPHP coordinates in-process publication only. Caller holds ordered site
 // locks and must supply atomic durable metadata publication before wiring workers.
-// restoredProbe checks the prior service state, including first-create absence.
+// restoredProbe checks the prior enabled service after rollback reloads, never
+// first-create absence. It must verify both FPM and nginx using prior metadata.
+// Certificate pointers remain owned by the Phase 3 TLS publication transaction.
 func (a *Applier) ApplyPHP(ctx context.Context, pools *php.Applier, d Desired, commit func(context.Context) error, restoredProbe func(context.Context) error) error {
 	if pools == nil || d.PHP == nil || commit == nil || restoredProbe == nil || a.Runner == nil || a.Probe == nil {
 		return rpcerr.Errf("agent_error", "PHP transaction dependencies unavailable")
@@ -74,7 +76,9 @@ func (a *Applier) ApplyPHP(ctx context.Context, pools *php.Applier, d Desired, c
 					result = errors.Join(result, err)
 					return
 				}
-				result = errors.Join(result, restoredProbe(recovery))
+				if old.Enabled {
+					result = errors.Join(result, restoredProbe(recovery))
+				}
 			}()
 			if err := p.Stage(); err != nil {
 				return err
