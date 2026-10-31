@@ -39,8 +39,19 @@ no-follow checks, cross-UID refusal and no-overwrite behavior are unchanged.
 
 Once publication can have begun, failures return sanitized interrupted so the
 existing operation owner retains its sealed inputs and original claim reservation
-until recovery or the unchanged 24-hour expiry. A swallowed effect error cannot
-report success. The adapter does not delete files, including unmanaged entries.
+until recovery or the unchanged 24-hour expiry. Callback admission is synchronized
+and once-only. Duplicate calls latch a protocol failure even when isolation swallows
+the refusal. Isolation return revokes retained callbacks, cancels an in-flight
+asynchronous effect, and drains it before clearing plaintext. The retained callback
+no longer holds the operation effect closure. This containment cannot attest site
+quiescence if the trusted dependency itself releases protection too early.
+
+Effect or isolation panics after callback admission become sanitized interrupted
+failures. Startup requeues failed/interrupted jobs only when an active typed journal
+still owns them, preserving original IDs, inputs and claim reservations. Failures
+before any callback admission remain terminal, and expired journals never requeue.
+A swallowed effect error cannot report success. The adapter does not delete files,
+including unmanaged entries.
 It retains the authenticated file record as required by the approved helper.
 Terminal file-record reconciliation/removal is still a separate operation-owner
 integration requirement; this slice does not add a permanent credential vault or

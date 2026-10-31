@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"sync"
 	"sync/atomic"
 
 	"novapanel/internal/rpcerr"
@@ -91,37 +92,93 @@ func (q *Queue) CreateWordPressConfig(ctx context.Context, jobID, custody string
 		return refuse
 	}
 	defer clear(raw)
-	called := false
-	succeeded := false
-	err = isolate(ctx, binding, func(_ context.Context) error {
-		if called || !lease.active.Load() {
+	return runConfigIsolation(ctx, binding, isolate, func(effectCtx context.Context) error {
+		if !lease.active.Load() {
 			return refuse
 		}
-		called = true
-		if err := ctx.Err(); err != nil {
+		if err := effectCtx.Err(); err != nil {
 			return err
 		}
-		if err := s.CheckOperation(ctx, jobID); err != nil {
+		if err := s.CheckOperation(effectCtx, jobID); err != nil {
 			return refuse
 		}
-		if err := configcustody.PublishConfig(ctx, custody, binding, raw, seal); err != nil {
+		if err := configcustody.PublishConfig(effectCtx, custody, binding, raw, seal); err != nil {
 			return err
 		}
 		if op.Checkpoint == "db_applied" {
-			if err := s.CheckpointOperation(ctx, jobID, "db_applied", "config_published"); err != nil {
+			if err := s.CheckpointOperation(effectCtx, jobID, "db_applied", "config_published"); err != nil {
 				return err
 			}
 		}
-		succeeded = true
 		return nil
 	})
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
+}
+
+// runConfigIsolation admits one effect and revokes admission as soon as isolation
+// returns. A broken dependency cannot retain the effect's secrets or race buffer
+// clearing. An already admitted asynchronous effect is canceled and drained before
+// returning. This contains misuse, but cannot replace the dependency's obligation
+// to retain real site isolation until the synchronous callback has completed.
+func runConfigIsolation(ctx context.Context, binding configcustody.ConfigBinding, isolate ConfigIsolation, effect func(context.Context) error) error {
+	refuse := errors.New("jobs: WordPress config isolation refused")
+	effectCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var mu sync.Mutex
+	open, called, active, failed, succeeded := true, false, false, false, false
+	done := make(chan struct{})
+	callback := func(context.Context) (err error) {
+		mu.Lock()
+		if !open || called {
+			failed = true
+			mu.Unlock()
+			return refuse
 		}
-		return rpcerr.Errf("interrupted", "WordPress config recovery required")
+		called, active = true, true
+		mu.Unlock()
+		defer func() {
+			if recover() != nil {
+				err = refuse
+			}
+			mu.Lock()
+			active = false
+			succeeded = err == nil
+			failed = failed || err != nil
+			close(done)
+			mu.Unlock()
+		}()
+		return effect(effectCtx)
 	}
-	if !called || !succeeded {
+	isolationErr := func() (err error) {
+		defer func() {
+			if recover() != nil {
+				err = refuse
+			}
+		}()
+		return isolate(ctx, binding, callback)
+	}()
+	mu.Lock()
+	open = false
+	if active {
+		failed = true
+	}
+	wait := called
+	mu.Unlock()
+	cancel()
+	if wait {
+		<-done
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	// A retained callback captures only this revoked admission state, not the
+	// operation closure containing plaintext and store/descriptor dependencies.
+	effect = nil
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if !called {
+		return refuse // No effect began. Do not preserve arbitrary terminal failures.
+	}
+	if isolationErr != nil || failed || !succeeded {
 		return rpcerr.Errf("interrupted", "WordPress config recovery required")
 	}
 	return nil
