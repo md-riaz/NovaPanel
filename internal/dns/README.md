@@ -1,6 +1,6 @@
 # Phase 7 DNS adapter foundation
 
-This is a tested execution adapter, not complete Phase 7. No DNS verbs, token persistence, jobs or ACME consumers are wired.
+This is a tested execution adapter with a scratch-schema sealed-storage preparation slice, not complete Phase 7. No DNS verbs, production integration schema, jobs or ACME consumers are wired.
 
 ## Contracts
 
@@ -22,7 +22,7 @@ RED/GREEN exercised missing DNSOwner, service TXT refusal, Create result contrac
 ## Remaining API and acceptance gaps
 
 - No production Phase 7 migration number is assigned. integrations/dns_zones are absent from shipped migrations; the fixture is not a migration.
-- No typed integration storage/zone lookup, generated integration name policy, token scope probe, sealed credential publication, token opening owner or rotation lifecycle.
+- [Sealed integration preparation](../../docs/spec/phases/phase-7-sealed-preparation.md) adds typed scratch-schema storage and exact lifetime/zone lookup without registering any endpoint. Ownership DDL approval, token scope probe, point-of-use opening and rotation lifecycle remain outstanding.
 - No registry handlers, durable zone-locked ensure-state/recovery, ambiguous-create reconciliation, worker result projections, audit integration or web UI. RPC verbs remain unavailable.
 - F16 has no production expected-public-IP/resolver configuration contract. Verify accepts trusted injected dependencies only.
 - No lego DNS-01 glue, shared apex/wildcard exact-value cleanup or wildcard issuance acceptance. Existing HTTP-01 behavior is unchanged.
