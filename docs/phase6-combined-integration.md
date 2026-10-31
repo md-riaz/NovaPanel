@@ -39,6 +39,14 @@ Canonical section 02 places `webhook_deliveries` in Phase 6 even though Phase 8 
 - Snapshot ancestry admission now rejects untrusted ownership and group/other-writable ancestors before SQL, with a root-owned sticky-directory exception and independent descendant checks. Creation and restic consumption revalidate path identities. Root and the agent UID must still keep exclusive custody during child pathname consumption; this is not descriptor-based child consumption or protection against a malicious trusted owner after validation.
 - Site and MariaDB backup/restore still depend on Phase 4. No host services, production paths or public CA are touched by this integration.
 
+## Non-root Unix ping regression
+
+Both unit jobs at `2ebffc7bc62d10fe0acf09eebeef150237d870be` failed `TestPingRealSocketAndDeadline` with `update health unavailable`. The fixture left `Server.WebUID` at zero, so the canonical F1 peer gate correctly rejected the unprivileged CI process. The same test passed as root and failed as UID/GID 65534 with no supplementary groups before the fix. The fixture now explicitly trusts `uint32(os.Getuid())`; production peer authorization is unchanged.
+
+The unit workflow explicitly requires a non-root runner and runs the real Unix socket ping/deadline regression uncached before the full gates. It retains the successful RPC assertion and the stalled-peer `context.DeadlineExceeded` assertion without skipping either path. Local least-privilege verification executes the compiled test through inherited read-only binary and owned-directory descriptors, with an isolated UID-65534-owned 0700 scratch directory and no ancestor permission changes. No host configuration, service, public CA or production key is involved.
+
+This follow-up's exact-commit acceptance runs after this documentation is committed. Evidence is outside the tree at `/root/.hermes/cache/scratch/pr80-nonroot-evidence/`: root and UID-65534 ping/deadline runs, `make ci`, `make phase6-test`, and uncached full-repository race output. Remote checks must be read against the published SHA, not the preceding head; pending checks are not green.
+
 ## Verification
 
 The combined package corpus includes updater, firewall, backup, store, verbs and RPC architecture tests. `make phase6-test` runs that corpus uncached with the race detector and is part of the existing Go CI workflow. `make ci` remains the whole-repository build, formatting, vet, staticcheck, tests, architecture backstop, vulnerability and systemd gate. Opt-in production-like integrations are separate acceptance, not implied by unit CI.

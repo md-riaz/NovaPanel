@@ -5,6 +5,7 @@ import (
 	"net"
 	"novapanel/internal/agent"
 	"novapanel/internal/rpc"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -19,6 +20,8 @@ func TestPingRealSocketAndDeadline(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	s := rpc.NewServer(agent.New())
+	// Trust this fixture's client UID, including unprivileged CI runners.
+	s.WebUID = uint32(os.Getuid())
 	s.Registry = map[string]rpc.Verb{"ping": {Name: "ping", Public: true, ReadOnly: true, NewArgs: func() any { return &struct{}{} }, Run: func(context.Context, *agent.Agent, any) (any, error) {
 		return map[string]string{"version": "test"}, nil
 	}}}

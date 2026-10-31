@@ -17,6 +17,10 @@ jobs:
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
           go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+      - name: Unprivileged Unix health ping and deadline regression
+        run: |
+          test "$(id -u)" -ne 0
+          go test -count=1 ./internal/update -run '^TestPingRealSocketAndDeadline$' -v
       - run: make ci
       - name: Combined Phase 6 package and shared-boundary race tests
         run: make phase6-test
