@@ -45,6 +45,8 @@ Both unit jobs at `2ebffc7bc62d10fe0acf09eebeef150237d870be` failed `TestPingRea
 
 The unit workflow explicitly requires a non-root runner and runs the real Unix socket ping/deadline regression uncached before the full gates. It retains the successful RPC assertion and the stalled-peer `context.DeadlineExceeded` assertion without skipping either path. Local least-privilege verification executes the compiled test through inherited read-only binary and owned-directory descriptors, with an isolated UID-65534-owned 0700 scratch directory and no ancestor permission changes. No host configuration, service, public CA or production key is involved.
 
+The first acceptance on fixture-fix commit `ba40ed9` passed `make ci` and full race but exposed an existing deadline race in `make phase6-test` and repeated least-privilege runs. The socket deadline can return a timeout before the context timer publishes `ctx.Err()`. Ping now maps that RPC socket timeout to `context.DeadlineExceeded`, retaining context cancellation precedence and generic errors for other failures. The real stalled-peer assertion observed this failure before the timeout mapping was added.
+
 This follow-up's exact-commit acceptance runs after this documentation is committed. Evidence is outside the tree at `/root/.hermes/cache/scratch/pr80-nonroot-evidence/`: root and UID-65534 ping/deadline runs, `make ci`, `make phase6-test`, and uncached full-repository race output. Remote checks must be read against the published SHA, not the preceding head; pending checks are not green.
 
 ## Verification

@@ -2,6 +2,8 @@ package update
 
 import (
 	"context"
+	"errors"
+	"net"
 	"time"
 
 	"novapanel/internal/rpc"
@@ -27,6 +29,11 @@ func Ping(ctx context.Context, socket string, deadlineMs int) error {
 	reply, err := client.Call(ctx, "ping", struct{}{}, "")
 	if ctx.Err() != nil {
 		return ctx.Err()
+	}
+	// The socket deadline can expire before the context timer publishes its error.
+	var timeout net.Error
+	if errors.As(err, &timeout) && timeout.Timeout() {
+		return context.DeadlineExceeded
 	}
 	if err != nil || !reply.OK {
 		return rpcerr.Errf("agent_error", "update health unavailable")
