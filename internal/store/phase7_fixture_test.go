@@ -29,7 +29,7 @@ func TestPhase7CanonicalSchemaFixture(t *testing.T) {
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
-	if _, err = db.Exec("PRAGMA foreign_keys=ON;" + ddl); err != nil {
+	if _, err = db.Exec("PRAGMA foreign_keys=ON; CREATE TABLE users(id TEXT PRIMARY KEY);" + ddl); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = db.Exec(`INSERT INTO dns_zones VALUES ('zone','missing','example.com','provider')`); err == nil {

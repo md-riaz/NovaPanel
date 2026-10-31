@@ -1,35 +1,25 @@
 # Phase 7 sealed integration preparation
 
-This slice is not a live integration endpoint. It adds no production migration, registry handler, provider call, credential prompt or queue mutation.
+This slice integrates `5dfe663d249df51bed1e0ab1dcee88a9d1f15cc8` with fixed PR88 head `b50984e`. It does not complete Phase 7.
 
-## Internal contracts
+## Canonical schema and lifetime
 
-- `dns.IntegrationSpec.Validate` accepts only Cloudflare, 1..100 lowercase hostname zones, strict 32-character lowercase hexadecimal provider IDs and unique names/IDs. It rejects input rather than repairing identifiers.
-- `dns.NewIntegrationToken` owns an execution-only copy of a bounded printable token. Formatting and JSON return `[REDACTED]`. `ExecutionBytes` returns a caller-owned copy that must be cleared; `Destroy` clears the original.
-- `store.CreateDNSIntegration(ctx, authority, spec, sealed)` atomically creates a generated integration lifetime, generated nonsecret name, owner membership, zones and `secrets` entry named `integration:<id>:token`. There is no arbitrary config JSON or caller-supplied integration ID. The store cannot authenticate opaque ciphertext or prove provider scope.
-- `store.DNSIntegrationToken(ctx, authority, zone, integrationID)` requires exact zone membership and the exact original integration lifetime. Removing and re-adding the same zone creates a different lifetime, so an old job cannot resolve the replacement token. It returns only bounded ciphertext, with formatting and JSON redaction.
-- `store.DeleteDNSIntegration` atomically removes the credential and integration; zone and owner rows cascade. Deletion failures roll back secret cleanup.
-- Trusted authority is either local root or a current enabled admin/owner user. Non-root access must match the persisted owner. Local root can repair/remove any integration. These types are internal dependencies, not RPC arguments. MFA, session/PAT expiry, scopes and durable job authorization are not replaced by this check.
-- All SQL uses tracked transactions. Writes acquire the SQLite write lock before current authority checks and publication time. Closed-store admission precedes input validation; cancellation/deadline errors survive error sanitization. Other failures never expose driver strings.
+Canonical `02-data-model.md` now documents the minimal ownership companion. Its exact parent is `integrations(id)` with `ON DELETE CASCADE`; `user_id` references `users(id)` with `ON DELETE RESTRICT`. Exactly one user or local-root ownership mode is permitted. The generated integration ULID is the immutable credential lifetime. Credential reads require the exact lifetime and zone. Removing and re-adding the same zone never authorizes an old job against the replacement token.
 
-## Scratch schema proposal, not approved DDL
+Canonical zones are not globally unique. This slice preserves multiple provider entries and all existing `config_json`; it removes the preparation branch's extra unique-zone restriction. Future zone-only consumers must return `conflict` on ambiguous selection rather than pick the first integration. They must bind the chosen lifetime durably and serialize removal with provider execution.
 
-Tests load canonical `02-data-model.md` integrations/dns_zones DDL. A test-only `integration_owners` companion has an integration FK with cascade, a user FK with restrict and an exclusive local-root/user ownership check. A test-only unique zone-name index makes one zone belong to one integration. Store writes independently check duplicates under the write lock.
+Scratch fixtures execute canonical target DDL explicitly. There is no production migration `0008`, no modification to prior migrations or hashes, and no startup installation of Phase 7 tables. Phase 4 reserves `0006` and Phase 6 reserves `0007`.
 
-Canonical 02 does not yet define ownership or unique zone membership. These additions need head approval and canonical reconciliation before production use. Direct SQL deletion of an integration does not clean the polymorphic `secrets` table; use the typed delete API. The current API intentionally has no replace/rotate operation.
+## Admission contract
 
-Phase 4 reserves `0006`, Phase 6 reserves `0007`; Phase 7 may propose `0008` only after predecessors and canonical schema are approved. This PR must not ship a migration that skips missing predecessors. Existing migration files/hashes are unchanged.
+`integration.set` is registered with canonical 01 attributes: admin, synchronous, mutating, MFA, no PAT scope. Its public arguments and result match canonical 03 exactly. Unknown fields are rejected. Tokens, lowercase zone names and duplicates are validated before a trusted injected scope probe. The probe must attest Zone:Read, DNS:Edit and Cache Purge for exactly the requested zones without writes. The handler rejects wrong/extra bindings, sanitizes probe failures, seals execution-only token bytes and calls the atomic typed store publication API. Non-root authority must still be a current enabled admin/owner at publication.
 
-## Future scope-probe and worker boundary
+Production leaves `Agent.IntegrationProbe` nil and returns `unsupported`. There is no live Cloudflare scope probe. A trusted test fake is not evidence that Cloudflare permissions were actually verified. The existing record adapter uses a fixed Cloudflare origin, but its request path is not a scope-attestation API.
 
-Before `integration.set` can be registered, the agent must validate the token shape, use an injected probe to discover exact requested zone bindings and prove Zone:Read, DNS:Edit and Cache Purge scope without provider writes, then seal and atomically publish. Fake-provider tests must cover invalid/insufficient tokens, deadline expiry and zero publication on probe/seal failure. No live probe is implemented here; accepting stored bindings is not evidence of provider permissions.
+`integration.test` and `integration.delete` do not exist in canonical 01/03. Dispatcher tests explicitly verify they remain unreachable; deletion coverage uses the typed store API. Adding public forms requires head-approved attributes and shapes first. This is an API gap, not a completed deletion RPC.
 
-The proposed execution plan contains only the integration lifetime and zone membership, not token plaintext. Queue admission must persist resolved authority and bind that lifetime. Execution must reauthorize session/PAT/user state, acquire the zone lock, re-read membership and sealed token, open only at point of use and clear plaintext. Concurrent removal/rotation must use that same lock; a standalone snapshot lookup does not protect a subsequent provider write. Durable retries, ambiguous provider outcomes and terminal audit remain unimplemented.
+## Verification and remaining gates
 
-Do not add `integration.test` as an RPC. Canonical 01/03 define `integration.set`, not that verb. Future rejection tests should use a fake injected probe and the canonical endpoint, without real tokens or network. These credentials are supplied by the caller, not generated show-once output; F19 does not authorize returning them in claims, results or audit.
+Tests exercise production dispatch, scratch SQLite, file audit and its existing mirror, canonical argument rejection, role/MFA/PAT denial, unavailable production admission, fake-probe success/refusal, wrong/extra zone binding, deadline errors, transactional publication failure, token destruction, sealed round trips and removal. Store tests retain reopen, lifetime rebinding, owner FK, demotion/disable refusal, rollback and shutdown checks.
 
-## Verified and outstanding
-
-Tests exercise real scratch SQLite, AES-GCM round trips across close/reopen, ownership FKs, demotion/disable refusal, exact membership, stale lifetime refusal after removal/re-add, duplicate publication races, expired contexts, blocked admission cancellation on close, rollback on publication/deletion failure and formatting/JSON redaction. No tests use real provider credentials.
-
-Still required: canonical schema approval, full authority-bearing queue integration, fake-probe admission acceptance, token rotation and revocation, file/SQLite audit acceptance, all DNS handlers and job locks, resolver configuration, DNS-01 and privileged acceptance. PR88 stays draft; the Phase 7 completion gate is not met.
+Still required: a non-writing fixed-origin scope attestation backed by a trustworthy provider permission API, real session/PAT lifecycle integration acceptance, approved migration sequencing, authority-bearing queue integration, removal/rotation locking, durable recovery and publication, DNS consumers, resolver configuration and DNS-01. No DNS create/effectful consumer is enabled. There are no real provider calls, token prompts, service changes, public CA calls or pushes.

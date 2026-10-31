@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-// The ownership companion is a proposed Phase 7 addition, not shipped DDL.
+// The ownership companion is canonical target DDL, loaded only in scratch tests.
 func dnsFixture(t *testing.T) (*Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "store.db")
@@ -30,12 +30,7 @@ func dnsFixture(t *testing.T) (*Store, string) {
 	}
 	part := strings.SplitN(string(raw), "## Phase 7 — integrations (DNS)", 2)[1]
 	ddl := strings.SplitN(strings.SplitN(part, "```sql\n", 2)[1], "```", 2)[0]
-	_, e = s.db.Exec(ddl + `CREATE TABLE integration_owners (
- integration_id TEXT PRIMARY KEY REFERENCES integrations(id) ON DELETE CASCADE,
- user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
- local_root INTEGER NOT NULL CHECK(local_root IN (0,1)),
- CHECK ((user_id IS NULL AND local_root=1) OR (user_id IS NOT NULL AND local_root=0)));
- CREATE UNIQUE INDEX dns_zone_name_unique ON dns_zones(zone);`)
+	_, e = s.db.Exec(ddl)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -247,8 +242,8 @@ func TestDNSIntegrationExpiryAndConcurrentMembership(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	if success != 1 {
-		t.Fatal("duplicate zone publications", success)
+	if success != 2 {
+		t.Fatal("multiple integration entries must be preserved", success)
 	}
 }
 

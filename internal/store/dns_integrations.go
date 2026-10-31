@@ -113,14 +113,7 @@ func (s *Store) CreateDNSIntegration(ctx context.Context, a IntegrationAuthority
 			if e != nil {
 				return e
 			}
-			// Do not depend on an unapproved canonical unique index for membership safety.
-			var n int
-			if e = tx.QueryRowContext(ctx, "SELECT count(*) FROM dns_zones WHERE zone=?", z.Zone).Scan(&n); e != nil {
-				return e
-			}
-			if n != 0 {
-				return ErrDNSIntegration
-			}
+			// Canonical zones may occur in multiple explicitly bound integrations.
 			if _, e = tx.ExecContext(ctx, "INSERT INTO dns_zones(id,integration_id,zone,provider_zone_id) VALUES(?,?,?,?)", zoneID, integrationID, z.Zone, z.ProviderZoneID); e != nil {
 				return e
 			}

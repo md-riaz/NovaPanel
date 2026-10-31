@@ -1,6 +1,7 @@
 package dns
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,12 @@ import (
 
 var ErrIntegration = errors.New("invalid DNS integration")
 var providerZoneID = regexp.MustCompile(`^[a-f0-9]{32}$`)
+
+// IntegrationProbe must prove Zone:Read, DNS:Edit and Cache Purge on exactly
+// the requested zones without writes. Nil production configuration fails closed.
+type IntegrationProbe interface {
+	Probe(context.Context, *IntegrationToken, []string) (IntegrationSpec, error)
+}
 
 type ZoneBinding struct {
 	Zone           string `json:"zone"`
