@@ -1,5 +1,4 @@
 // Package cloudflare implements fixed-origin Cloudflare API requests.
-// It has no persistence and is not wired into the agent or public RPC.
 package cloudflare
 
 import (
@@ -18,8 +17,6 @@ import (
 
 var identifier = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
-// Client holds only an execution-lifetime token opened by its future agent owner.
-// New copies authorized zone bindings; there is no caller-controlled endpoint.
 type Client struct {
 	token string
 	zones map[string]string
@@ -27,8 +24,13 @@ type Client struct {
 }
 
 func New(token string, zones map[string]string, transport http.RoundTripper) (*Client, error) {
-	if token == "" || strings.ContainsAny(token, "\r\n\x00 \t") || len(zones) == 0 {
+	if token == "" || len(zones) == 0 {
 		return nil, rpcerr.Errf("invalid_argument", "Invalid Cloudflare configuration")
+	}
+	for _, b := range []byte(token) {
+		if b < 33 || b > 126 {
+			return nil, rpcerr.Errf("invalid_argument", "Invalid Cloudflare configuration")
+		}
 	}
 	bindings := make(map[string]string, len(zones))
 	for zone, id := range zones {
@@ -43,69 +45,112 @@ func New(token string, zones map[string]string, transport http.RoundTripper) (*C
 	}
 	return &Client{token: token, zones: bindings, http: &http.Client{Transport: transport, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
-
-// Create validates before any HTTP, then returns the provider-assigned ID.
-// It is a request adapter, not the F7 durable ensure-state worker; do not retry
-// creation automatically after an ambiguous response or expose it as a verb.
-func (c *Client) Create(ctx context.Context, zone string, r dns.Record) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
+func providerError() error { return rpcerr.Errf("agent_error", "Invalid Cloudflare response") }
+func (c *Client) zonePath(zone string) (string, error) {
+	if (&validate.V{}).Hostname(zone) != nil {
+		return "", rpcerr.Errf("invalid_argument", "Invalid zone")
 	}
-	if r.ID != "" {
-		return "", rpcerr.Errf("invalid_argument", "Create requires an empty record ID")
-	}
-	if err := r.Validate(zone); err != nil {
-		return "", err
-	}
-	zid, ok := c.zones[strings.ToLower(zone)]
+	id, ok := c.zones[strings.ToLower(zone)]
 	if !ok {
 		return "", rpcerr.Errf("forbidden", "Cloudflare zone is not authorized")
 	}
-	body := struct {
-		Type     string `json:"type"`
-		Name     string `json:"name"`
-		Content  string `json:"content"`
-		TTL      int    `json:"ttl"`
-		Priority *int   `json:"priority,omitempty"`
-		Proxied  bool   `json:"proxied"`
-	}{Type: r.Type, Name: r.Name, Content: r.Value, TTL: r.TTL, Proxied: r.Proxied}
-	if r.Type == "MX" {
-		body.Priority = &r.Priority
+	return "/zones/" + id, nil
+}
+
+// request never returns raw provider or transport errors. Unknown envelope fields
+// are ignored, but the success flag and typed result must validate independently.
+func (c *Client) request(ctx context.Context, method, path string, body any, out any) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return "", rpcerr.Errf("agent_error", "Cannot encode DNS record")
+	var payload []byte
+	if body != nil {
+		var err error
+		payload, err = json.Marshal(body)
+		if err != nil {
+			return providerError()
+		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.cloudflare.com/client/v4/zones/"+zid+"/dns_records", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, method, "https://api.cloudflare.com/client/v4"+path, bytes.NewReader(payload))
 	if err != nil {
-		return "", rpcerr.Errf("agent_error", "Cannot prepare DNS request")
+		return providerError()
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return "", ctx.Err()
+			return ctx.Err()
 		}
-		return "", rpcerr.Errf("agent_error", "Cloudflare request failed")
+		return providerError()
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", rpcerr.Errf("agent_error", "Cloudflare rejected DNS request")
+		return providerError()
 	}
-	const maxResponse = 1 << 20
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
-	if err != nil || len(raw) > maxResponse {
-		return "", rpcerr.Errf("agent_error", "Invalid Cloudflare response")
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+	if err != nil || len(raw) > 1<<20 {
+		return providerError()
 	}
-	var envelope struct {
-		Success bool `json:"success"`
-		Result  struct {
-			ID string `json:"id"`
-		} `json:"result"`
+	if json.Unmarshal(raw, out) != nil {
+		return providerError()
 	}
-	if json.Unmarshal(raw, &envelope) != nil || !envelope.Success || !identifier.MatchString(envelope.Result.ID) {
-		return "", rpcerr.Errf("agent_error", "Invalid Cloudflare response")
+	return nil
+}
+
+type wireRecord struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Name     string `json:"name"`
+	Content  string `json:"content"`
+	TTL      int    `json:"ttl"`
+	Priority *int   `json:"priority,omitempty"`
+	Proxied  bool   `json:"proxied"`
+}
+
+func wire(r dns.Record) wireRecord {
+	w := wireRecord{Type: r.Type, Name: strings.ToLower(r.Name), Content: r.Value, TTL: r.TTL, Proxied: r.Proxied}
+	if r.Type == "MX" {
+		w.Priority = &r.Priority
 	}
-	return envelope.Result.ID, nil
+	return w
+}
+func (w wireRecord) record(zone string) (dns.Record, error) {
+	r := dns.Record{ID: w.ID, Type: w.Type, Name: strings.ToLower(w.Name), Value: w.Content, TTL: w.TTL, Proxied: w.Proxied}
+	if w.Priority != nil {
+		r.Priority = *w.Priority
+	}
+	if !identifier.MatchString(r.ID) || r.Validate(zone) != nil {
+		return dns.Record{}, providerError()
+	}
+	return r, nil
+}
+
+// Create is not a durable ensure-state worker. Never retry ambiguous creation.
+func (c *Client) Create(ctx context.Context, zone string, r dns.Record) (dns.Record, error) {
+	if r.ID != "" {
+		return dns.Record{}, rpcerr.Errf("invalid_argument", "Create requires an empty record ID")
+	}
+	if err := r.Validate(zone); err != nil {
+		return dns.Record{}, err
+	}
+	path, err := c.zonePath(zone)
+	if err != nil {
+		return dns.Record{}, err
+	}
+	var env struct {
+		Success bool       `json:"success"`
+		Result  wireRecord `json:"result"`
+	}
+	if err = c.request(ctx, "POST", path+"/dns_records", wire(r), &env); err != nil {
+		return dns.Record{}, err
+	}
+	if !env.Success {
+		return dns.Record{}, providerError()
+	}
+	result, err := env.Result.record(zone)
+	if err != nil || result.Type != r.Type || !strings.EqualFold(result.Name, r.Name) {
+		return dns.Record{}, providerError()
+	}
+	return result, nil
 }

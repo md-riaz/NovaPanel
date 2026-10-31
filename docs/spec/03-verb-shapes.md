@@ -161,6 +161,9 @@ firewall.revert{pending_id}                             → {}       # MFA; reve
 ```
 
 ## dns (Phase 7)
+
+Record types are exactly `A`, `AAAA`, `CNAME`, `TXT`, `MX`. SPF, DKIM and DMARC use TXT, not additional record types. Owners use F9 `DNSOwner`; zones and CNAME/MX targets use `Hostname`. TTL defaults to 1 in RPC parsing; provider input must explicitly be 1 or 60..86400. MX priority is 0..65535, otherwise zero. Only A/AAAA/CNAME may be proxied. `update` replaces the complete record with the same fields as create plus `record_id`, never a raw provider patch. Provider IDs are opaque provider identifiers, not panel ULIDs. Internal Create returns a normalized Record including ID; the worker projects only `{record_id}`. List projects exactly the listed fields, never raw provider objects. Verify returns exactly `{points_here,method}`, with method `resolver` or `provider`; no raw response or provider IPs are exposed.
+
 ```
 integration.set{kind:'cloudflare', token, zones:[string]} → {integration_id}   # token sealed; MFA
 dns.record.create{zone, type, name, value, ttl?:int, priority?:int, proxied?:bool} → job → {record_id}

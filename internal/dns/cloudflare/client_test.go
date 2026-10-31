@@ -32,13 +32,13 @@ func TestCreateFixedEndpointAndTypedBody(t *testing.T) {
 		if _, ok := body["value"]; ok {
 			t.Fatal("RPC value leaked into provider schema")
 		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"success":true,"result":{"id":"023e105f4ecef8ad9ca31a8372d0c354"}}`)), Header: make(http.Header)}, nil
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"success":true,"result":{"id":"023e105f4ecef8ad9ca31a8372d0c354","type":"A","name":"www.example.com","content":"192.0.2.1","ttl":1,"proxied":true}}`)), Header: make(http.Header)}, nil
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	id, err := c.Create(context.Background(), "example.com", dns.Record{Type: "A", Name: "www.example.com", Value: "192.0.2.1", TTL: 1, Proxied: true})
-	if err != nil || id != "023e105f4ecef8ad9ca31a8372d0c354" || calls != 1 {
+	if err != nil || id.ID != "023e105f4ecef8ad9ca31a8372d0c354" || id.Name != "www.example.com" || calls != 1 {
 		t.Fatal("create failed", err)
 	}
 }

@@ -20,13 +20,11 @@ type Record struct {
 	Proxied  bool
 }
 
-// Validate checks an ordinary hostname record against its authorized zone.
-// Underscore service/authentication owners require a canonical F9 amendment;
-// callers must not bypass Hostname to enable them or ACME challenge records.
+// Validate checks a DNS owner record against its authorized zone.
 func (r Record) Validate(zone string) error {
 	invalid := func() error { return rpcerr.Errf("invalid_argument", "Invalid DNS record") }
 	v := &validate.V{}
-	if v.Hostname(zone) != nil || v.Hostname(r.Name) != nil {
+	if v.Hostname(zone) != nil || v.DNSOwner(r.Name) != nil {
 		return invalid()
 	}
 	name, z := strings.ToLower(r.Name), strings.ToLower(zone)
