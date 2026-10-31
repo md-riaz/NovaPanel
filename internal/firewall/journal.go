@@ -362,6 +362,48 @@ func (j *Journal) Reconcile(ctx context.Context, commit func(JournalRecord) erro
 	})
 }
 
+// Revert is the synchronous internal manual recovery primitive. Fresh requests
+// must precede the deadline; matching interrupted recovery may finish after it.
+// Terminal client retries return not_found. Authentication belongs to the caller.
+func (j *Journal) Revert(ctx context.Context, pendingID string, now func() time.Time, restore func(JournalRecord) error) error {
+	if restore == nil || now == nil {
+		return errors.New("missing recovery adapter")
+	}
+	return j.locked(ctx, func() error {
+		r, err := j.read()
+		if err != nil {
+			return err
+		}
+		if r.ID != pendingID {
+			return notFound()
+		}
+		sampled := now()
+		switch r.State {
+		case "armed", "confirming":
+			if !sampled.Before(time.Unix(r.Deadline, 0)) {
+				return notFound()
+			}
+		case "reverting":
+			// The deadline limits admission, not completion of durable recovery.
+		default:
+			return notFound()
+		}
+		return j.restoreRecord(ctx, r, restore)
+	})
+}
+
+func (j *Journal) restoreRecord(ctx context.Context, r JournalRecord, restore func(JournalRecord) error) error {
+	r.State = "reverting"
+	if err := j.publishContext(ctx, r); err != nil {
+		return err
+	}
+	if err := restore(r); err != nil {
+		return err
+	}
+	r.State = "reverted"
+	return j.publish(r)
+}
+
 func (j *Journal) Fire(ctx context.Context, pendingID string, now func() time.Time, restore func(JournalRecord) error) error {
 	if restore == nil || now == nil {
 		return errors.New("missing recovery adapter")
@@ -387,14 +429,6 @@ func (j *Journal) Fire(ctx context.Context, pendingID string, now func() time.Ti
 		if now().Before(time.Unix(r.Deadline, 0)) {
 			return fmt.Errorf("firewall deadline not reached")
 		}
-		r.State = "reverting"
-		if err = j.publishContext(ctx, r); err != nil {
-			return err
-		}
-		if err = restore(r); err != nil {
-			return err
-		}
-		r.State = "reverted"
-		return j.publish(r)
+		return j.restoreRecord(ctx, r, restore)
 	})
 }

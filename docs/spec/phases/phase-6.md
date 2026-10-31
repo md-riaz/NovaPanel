@@ -150,6 +150,12 @@ flock. The earlier row-deletion wording means daemon reconciliation, not helper 
   returns `not_found`. Recovery first publishes `reverting`, then invokes
   idempotent rules-plus-enabled restoration with a durable ID-bound audit marker,
   then publishes `reverted`. Interrupted reverting replays the same ID.
+  The internal synchronous manual revert admits matching `armed`/`confirming`
+  only before the exact deadline. A matching already-started `reverting`
+  operation may retry after expiry to finish recovery. Manual retries against
+  `confirmed`, `reverted` or `acknowledged` return `not_found`; independent Fire
+  remains idempotent for terminal state. Manual recovery neither stops timers
+  nor consumes the SQLite projection, and does not enable public wiring.
 - Terminal state remains until daemon-only DB/audit reconciliation commits and a
   durable acknowledgement is published. Failed reconciliation retries by ID.
   This foundation deliberately refuses all further arms, including terminal reuse;

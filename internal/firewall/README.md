@@ -33,6 +33,17 @@ Readers must sync visible `confirmed` before suppressing recovery or reconciling
 if syncing fails they return an error and leave the timer and projection alone.
 No rollback of a committed confirmation is attempted. Pre-rename cancellation
 retains recovery; post-commit cancellation does not undo the outcome.
+`Revert` is an internal synchronous manual recovery operation sharing the same
+flock and publication sequence as `Fire`. Fresh matching `armed` or `confirming`
+requests must precede the exact deadline. Matching interrupted `reverting` may
+retry after expiry to finish recovery. Confirmed, reverted and acknowledged
+manual retries return `not_found`; `Fire` retains idempotent terminal success.
+Neither operation stops timers or consumes SQLite. Recovery intent is durably
+published before the adapter, and failed restoration or audit-marker publication
+retains same-ID replay. A terminal publication error may leave visible `reverted`;
+manual retries still return `not_found`, and daemon reconciliation retains the
+terminal evidence. Cancellation before intent publication prevents restoration;
+after successful restoration it does not prevent terminal publication.
 `Fire` publishes reverting
 before the idempotent recovery adapter and reverted afterwards. Terminal records
 remain until daemon-only `Reconcile` invokes a successful durable DB/audit commit
