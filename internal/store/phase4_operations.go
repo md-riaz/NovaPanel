@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"sort"
 	"strings"
 )
@@ -73,21 +74,51 @@ func OrderedOperationKeys(keys []string) []string {
 	return out
 }
 
-const operationColumns = `o.job_id,j.created_by,o.kind,coalesce(o.site_id,''),coalesce(o.db_id,''),o.checkpoint,o.identities_json,o.nonce,o.ciphertext,o.expires,o.updated,o.reconciled`
+const operationColumns = `o.job_id,j.created_by,j.verb,o.kind,coalesce(o.site_id,''),coalesce(o.db_id,''),o.checkpoint,o.identities_json,o.nonce,o.ciphertext,o.expires,o.updated,o.reconciled`
 
 func scanOperation(row scanner) (o Operation, err error) {
-	var raw string
-	err = row.Scan(&o.JobID, &o.Owner, &o.Kind, &o.SiteID, &o.DatabaseID, &o.Checkpoint, &raw, &o.Nonce, &o.Ciphertext, &o.Expires, &o.Updated, &o.Reconciled)
+	var raw, verb string
+	err = row.Scan(&o.JobID, &o.Owner, &verb, &o.Kind, &o.SiteID, &o.DatabaseID, &o.Checkpoint, &raw, &o.Nonce, &o.Ciphertext, &o.Expires, &o.Updated, &o.Reconciled)
 	if err != nil {
 		return
 	}
 	d := json.NewDecoder(strings.NewReader(raw))
 	d.DisallowUnknownFields()
-	err = d.Decode(&o.Identity)
-	if err == nil && (o.Identity.Version != 1 || o.Identity.Database.ID != o.DatabaseID || o.Identity.Database.SiteID != o.SiteID || o.Owner == "") {
+	if err = d.Decode(&o.Identity); err != nil {
+		return
+	}
+	var extra any
+	if d.Decode(&extra) != io.EOF || verb != operationVerb(o.Kind) || !validOperationIdentity(o) {
 		err = errors.New("operation identity corrupt")
 	}
 	return
+}
+
+func validOperationIdentity(o Operation) bool {
+	d := o.Identity.Database
+	if operationVerb(o.Kind) == "" || o.Owner == "" || o.Identity.Version != 1 || !phase4ResourceID.MatchString(d.ID) || d.ID != o.DatabaseID || d.SiteID != o.SiteID || d.Name != "d_"+strings.ToLower(d.ID) || d.Engine != "mariadb" || !phase4ResourceID.MatchString(d.PrimaryUserID) || len(o.Identity.Accounts) == 0 {
+		return false
+	}
+	seen := make(map[string]bool)
+	for _, a := range o.Identity.Accounts {
+		if !phase4ResourceID.MatchString(a.ID) || seen[a.ID] || a.Username != "u_"+strings.ToLower(a.ID) || a.Host != "127.0.0.1" {
+			return false
+		}
+		seen[a.ID] = true
+	}
+	if o.Kind == DatabaseCreate && (len(seen) != 1 || !seen[d.PrimaryUserID]) {
+		return false
+	}
+	if o.Kind == DBUserCreate && (len(seen) != 1 || seen[d.PrimaryUserID]) {
+		return false
+	}
+	if o.Kind != DatabaseCreate && o.Kind != DBUserCreate && !seen[d.PrimaryUserID] {
+		return false
+	}
+	if o.Kind == DBUserDelete {
+		return seen[o.Identity.TargetUserID] && o.Identity.TargetUserID != d.PrimaryUserID
+	}
+	return o.Identity.TargetUserID == ""
 }
 func (s *Store) LoadOperation(ctx context.Context, jid string) (Operation, error) {
 	return scanOperation(s.db.QueryRowContext(ctx, "SELECT "+operationColumns+" FROM phase4_operations o JOIN jobs j ON j.id=o.job_id WHERE o.job_id=?", jid))
@@ -307,10 +338,75 @@ func (s *Store) CheckOperation(ctx context.Context, jid string) error {
 			if primary != op.Identity.Database.PrimaryUserID {
 				return ErrSiteConflict
 			}
+			if e = checkOperationMembership(ctx, tx, op); e != nil {
+				return e
+			}
 		}
 		return nil
 	})
 }
+func checkOperationMembership(ctx context.Context, tx *sql.Tx, op Operation) error {
+	var db Database
+	if e := tx.QueryRowContext(ctx, "SELECT id,coalesce(site_id,''),name,engine,primary_user_id,created FROM databases WHERE id=?", op.DatabaseID).Scan(&db.ID, &db.SiteID, &db.Name, &db.Engine, &db.PrimaryUserID, &db.Created); e != nil {
+		return e
+	}
+	if db != op.Identity.Database {
+		return ErrSiteConflict
+	}
+	if op.SiteID != "" {
+		var status string
+		if e := tx.QueryRowContext(ctx, "SELECT status FROM sites WHERE id=?", op.SiteID).Scan(&status); e != nil {
+			return e
+		}
+		if status != "active" {
+			return ErrSiteConflict
+		}
+	}
+	if op.Kind == DatabaseDelete {
+		var n int
+		if e := tx.QueryRowContext(ctx, "SELECT count(*) FROM wordpress_bindings WHERE db_id=?", op.DatabaseID).Scan(&n); e != nil {
+			return e
+		}
+		if n != 0 {
+			return ErrSitePrecondition
+		}
+	}
+	if op.Kind == DBUserCreate {
+		var n int
+		a := op.Identity.Accounts[0]
+		if e := tx.QueryRowContext(ctx, "SELECT count(*) FROM db_users WHERE id=? OR username=?", a.ID, a.Username).Scan(&n); e != nil {
+			return e
+		}
+		if n != 0 {
+			return ErrSiteConflict
+		}
+		return nil
+	}
+	rows, e := tx.QueryContext(ctx, "SELECT id,username,host FROM db_users WHERE db_id=? ORDER BY id", op.DatabaseID)
+	if e != nil {
+		return e
+	}
+	defer rows.Close()
+	i := 0
+	for rows.Next() {
+		var a OperationAccount
+		if e = rows.Scan(&a.ID, &a.Username, &a.Host); e != nil {
+			return e
+		}
+		if i >= len(op.Identity.Accounts) || a != op.Identity.Accounts[i] {
+			return ErrSiteConflict
+		}
+		i++
+	}
+	if e = rows.Err(); e != nil {
+		return e
+	}
+	if i != len(op.Identity.Accounts) {
+		return ErrSiteConflict
+	}
+	return nil
+}
+
 func (s *Store) CheckpointOperation(ctx context.Context, jid, from, to string) error {
 	return s.Tx(ctx, func(tx *sql.Tx) error {
 		op, e := loadOperation(ctx, tx, jid)
@@ -351,6 +447,11 @@ func (s *Store) CompleteOperation(ctx context.Context, jid string, claim *JobCla
 			return ErrSitePrecondition
 		}
 		var result any = map[string]any{}
+		if op.Kind != DatabaseCreate {
+			if e = checkOperationMembership(ctx, tx, op); e != nil {
+				return e
+			}
+		}
 		db := op.Identity.Database
 		switch op.Kind {
 		case DatabaseCreate:

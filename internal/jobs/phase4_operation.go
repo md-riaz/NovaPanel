@@ -113,6 +113,20 @@ func (q *Queue) operationKeys(ctx context.Context, j Job) ([]string, error) {
 	return op.Keys(), nil
 }
 
+func (q *Queue) expireOperations(ctx context.Context) error {
+	s, ok := q.store.(interface {
+		ExpireOperations(context.Context) (int, error)
+	})
+	if !ok {
+		return nil
+	}
+	if e := q.healthy(); e != nil {
+		return e
+	}
+	_, e := s.ExpireOperations(ctx)
+	return e
+}
+
 // operationTerminal runs only after the queue has recorded completion audit.
 func (q *Queue) operationTerminal(ctx context.Context, j Job) (bool, error) {
 	s, ok := q.store.(operationStore)
@@ -136,7 +150,19 @@ func (q *Queue) operationTerminal(ctx context.Context, j Job) (bool, error) {
 			return true, e
 		}
 		defer clear(raw)
-		sealed, e := q.sealer.Seal(raw)
+		// Recovery fields are not part of the canonical show-once password claim.
+		var payload struct {
+			Password string `json:"password"`
+		}
+		if e = json.Unmarshal(raw, &payload); e != nil || payload.Password == "" {
+			return true, errors.New("jobs: invalid operation password")
+		}
+		projection, e := json.Marshal(payload)
+		if e != nil {
+			return true, e
+		}
+		defer clear(projection)
+		sealed, e := q.sealer.Seal(projection)
 		if e != nil {
 			return true, e
 		}

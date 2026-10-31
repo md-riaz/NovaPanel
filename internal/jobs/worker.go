@@ -31,6 +31,9 @@ func (q *Queue) Run(ctx context.Context) error {
 	if e := q.audit.Healthy(); e != nil {
 		return e
 	}
+	if e := q.expireOperations(ctx); e != nil {
+		return e
+	}
 	for q.startup != nil {
 		if ctx.Err() != nil {
 			return nil
@@ -62,7 +65,16 @@ func (q *Queue) Run(ctx context.Context) error {
 	}
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
+	expiryTick := time.NewTicker(time.Minute)
+	defer expiryTick.Stop()
 	for {
+		select {
+		case <-expiryTick.C:
+			if e := q.expireOperations(ctx); e != nil {
+				return e
+			}
+		default:
+		}
 		if ctx.Err() != nil {
 			return nil
 		}
