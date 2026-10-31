@@ -22,7 +22,7 @@ Static inspection of the pinned PHAR's Runner.php shows global configuration use
 
 ## Managed writer lifetime
 
-Protected effects additionally require the [managed process lifetime contract](phase4-config-isolation-lifetime-contract.md). It records the delegated cgroup v2 mechanism, closed at-birth launcher admission, original account lifetime, trusted-root exclusion and mandatory process/IO drain. Existing getent checks, shared FPM stop, process-group Wait and PID enumeration do not establish this protection. The required shared runner and FPM orchestration changes are not activated here.
+Protected effects additionally require the [managed process lifetime contract](phase4-config-isolation-lifetime-contract.md) and the [fresh-install execution-domain ruling](phase4-isolation-runtime-slice.md). It records the delegated cgroup v2 mechanism, closed at-birth launcher admission, original account lifetime, trusted-root exclusion and mandatory process/IO drain. Existing getent checks, shared FPM stop, process-group Wait and PID enumeration do not establish this protection. The required shared runner and FPM orchestration changes are not activated here.
 
 ## Secrets and installation
 
