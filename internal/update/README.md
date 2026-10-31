@@ -1,6 +1,22 @@
 # Signed updater foundation
 
-This package is an offline, injected-test foundation, not a completed Phase 6 updater.
+This package includes the signed-check RPC integration and an offline apply foundation, not a completed Phase 6 updater.
+
+## RPC integration on canonical main
+
+`update.check` is synchronous, admin with the canonical read-only override, and token-reachable only with `system:read`. It returns only `{current, latest?, security_fix?, notes?}` from the verified signed manifest. The release trust gate runs before network access. Checks use the configured `update_manifest_url` and `deadline_default_ms`, bounded further by dispatch. Transport/body failures are sanitized before dispatch logging, without losing cancellation codes.
+
+`update.apply` declares owner, MFA, slow, effectful, empty scope and `system` lock metadata, but refuses with `unsupported` before enqueueing even with an injected key. Its execution handler also refuses. No request can supply a key, URL or installation path. There is no separate noncanonical `update.status` verb; the canonical status reply is `update.check`.
+
+`Ping(ctx, socket, deadlineMs)` uses the real Unix RPC client against the configured socket and deadline. Scratch socket tests prove a real RPC reply and a stalled-response deadline. This seam is not wired into a privileged helper, since helper launch outside the daemon cgroup, store lifetime transfer, durable interrupted-job reconciliation, trusted installation ownership and versioned service packaging remain blockers. The existing offline apply callback remains available for isolated tests only.
+
+Dispatcher tests cover authorization, exact registry metadata, unset-key no-network/no-job refusal and audits. `update_signed_test.go` additionally runs the actual handler with injected HTTP transport in a separately linked test binary. Its deterministic seed is test-only. Generate its public key from `ed25519.NewKeyFromSeed(bytes.Repeat([]byte{42},32))`, padded-base64 encode it, then run:
+
+```
+NOVAPANEL_UPDATE_TEST_ANCHOR=1 go test -race -ldflags "-X novapanel/internal/update.releasePublicKeyBase64=$TEST_PUBLIC_KEY" ./internal/verbs -run '^TestUpdateSignedDispatch$' -count=1
+```
+
+This verifies signed success, bad signature, network-error no-leak behavior, configured deadline and continued apply refusal. Never use this test anchor in a release build. No production key or release download was used.
 
 ## Source and fixes
 

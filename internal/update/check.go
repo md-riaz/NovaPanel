@@ -53,11 +53,17 @@ func fetch(ctx context.Context, client *http.Client, raw string, limit int64) ([
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 	if err != nil {
-		return nil, err
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, rpcerr.Errf("agent_error", "update download failed")
 	}
 	res, err := safe.Do(req)
 	if err != nil {
-		return nil, err
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, rpcerr.Errf("agent_error", "update download failed")
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
@@ -65,7 +71,10 @@ func fetch(ctx context.Context, client *http.Client, raw string, limit int64) ([
 	}
 	body, err := io.ReadAll(io.LimitReader(contextReader{ctx, res.Body}, limit+1))
 	if err != nil {
-		return nil, err
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, rpcerr.Errf("agent_error", "update download failed")
 	}
 	if int64(len(body)) > limit {
 		return nil, rpcerr.Errf("invalid_argument", "update response exceeds limit")
