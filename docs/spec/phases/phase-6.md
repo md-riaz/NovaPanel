@@ -234,6 +234,13 @@ now confirms through durable journal publication and bounded detached timer-only
 stop/readback, and manually reverts through the same lazy InstalledRestore as Fire.
 It remains unwired to public operations and legacy FirewallRecovery. Details and
 limits are in `docs/phase6-journal-recovery.md`.
+The internal Agent.CommitFirewallTerminal operation now connects terminal outcomes
+to the ordinary replayed audit file and exact SQLite transaction without
+acknowledgement. It is callable only after explicit state initialization and is
+not installed in ordinary startup. Confirmed/reverted evidence remains retained;
+all retained states still block serve before OpenState. Migration, terminal
+retention/reuse and public activation remain gated. See
+`docs/phase6-daemon-terminal-commit.md`.
 Real cgroup cleanup/UFW/reboot/power-loss acceptance remains deferred VM work.
 
 **Firewall confirmation crash-safety gate.** SQLite and systemd do not share a

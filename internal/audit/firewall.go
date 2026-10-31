@@ -13,6 +13,16 @@ import (
 // ReconcileFirewall commits terminal journal evidence and consumes its exact
 // SQLite projection. This internal adapter has no CLI/RPC/startup wiring.
 func (l *Log) ReconcileFirewall(ctx context.Context, j *firewall.Journal) error {
+	return l.firewallTerminal(ctx, j, false)
+}
+
+// CommitFirewallTerminal commits through the ordinary audit sink and exact SQL
+// transaction, retaining terminal journal evidence without acknowledgement.
+func (l *Log) CommitFirewallTerminal(ctx context.Context, j *firewall.Journal) error {
+	return l.firewallTerminal(ctx, j, true)
+}
+
+func (l *Log) firewallTerminal(ctx context.Context, j *firewall.Journal, retain bool) error {
 	if l == nil || j == nil {
 		return errors.New("firewall reconciliation unavailable")
 	}
@@ -23,7 +33,11 @@ func (l *Log) ReconcileFirewall(ctx context.Context, j *firewall.Journal) error 
 	if l.err != nil {
 		return l.err
 	}
-	return j.Reconcile(ctx, func(r firewall.JournalRecord) error {
+	operation := j.Reconcile
+	if retain {
+		operation = j.CommitTerminal
+	}
+	return operation(ctx, func(r firewall.JournalRecord) error {
 		return l.s.ReconcileFirewallTerminal(ctx, r, func(v store.Event) error {
 			b, err := json.Marshal(map[string]any{"id": v.ID, "ts": v.TS, "actor": v.Actor, "role": v.Role, "verb": v.Verb, "object_key": v.ObjectKey, "outcome": v.Outcome, "code": v.Code, "detail": v.Detail})
 			if err != nil {

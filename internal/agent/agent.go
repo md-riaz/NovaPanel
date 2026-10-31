@@ -24,7 +24,8 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Agent struct {
-	firewallStartup func(context.Context) error
+	firewallStartup         func(context.Context) error
+	firewallTerminalJournal func(context.Context) (*firewall.Journal, error)
 	// Nil until durable snapshot recovery and independent deadman ownership are wired.
 	FirewallRecovery *firewall.Recovery
 	ProvisionSite    func(context.Context, string) error

@@ -39,6 +39,14 @@ readback. This trusted-root in-process consumer is not the independent helper;
 helper cgroup admission is unchanged. Public wiring remains closed. See
 `docs/phase6-journal-recovery.md` for ownership and completion limits.
 
+The internal Agent.CommitFirewallTerminal consumer separately opens the fixed
+journal and commits confirmed/reverted through ordinary audit replay and the
+existing exact Store transaction. It never acknowledges or runs recovery/timer
+commands. It is not called by ordinary serve, which still blocks every retained
+state before OpenState. See `docs/phase6-daemon-terminal-commit.md`. Production
+migration, terminal lifecycle policy and public activation are separate source
+requirements, not completed by this internal method.
+
 ## Required service ownership
 
 Every production execution must be in exactly
