@@ -15,9 +15,9 @@ func TestBootstrapAdmissionWindow(t *testing.T) {
 	c := &attemptClock{}
 	c.now.Store(1000)
 	s.Agent.Clock = c
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 100; i++ {
 		if !s.allowAuthentication(1001, "session.start", nil) {
-			t.Fatal(i)
+			t.Fatalf("visitor %d refused", i+1)
 		}
 	}
 	if s.allowAuthentication(1001, "session.start", nil) {
@@ -31,12 +31,16 @@ func TestBootstrapAdmissionWindow(t *testing.T) {
 			t.Fatal("credential verification must use account budgets")
 		}
 	}
-	c.now.Add(59999)
+	c.now.Add(49)
 	if s.allowAuthentication(1001, "session.start", nil) {
-		t.Fatal("early reset")
+		t.Fatal("early refill")
 	}
 	c.now.Add(1)
-	if !s.allowAuthentication(1001, "session.start", nil) {
-		t.Fatal("boundary reset")
+	if !s.allowAuthentication(1001, "session.start", nil) || s.allowAuthentication(1001, "session.start", nil) {
+		t.Fatal("20 rps refill")
+	}
+	c.now.Add(-1000)
+	if s.allowAuthentication(1001, "session.start", nil) {
+		t.Fatal("clock rollback restored allowance")
 	}
 }

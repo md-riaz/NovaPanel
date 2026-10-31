@@ -17,7 +17,7 @@ the `NewArgs` struct exactly as listed and validates fields (F9) before `Run`.
 
 ## session / mfa / user (Phase 2)
 ```
-session.start{}                                        → {session, csrf_token}   # public pre-login bootstrap; idempotent get-or-create: live anon in F2 → same session+csrf unchanged (lets web re-fetch anon csrf for the login-POST compare); none/expired → mints (rate-limited per peer; exhausted → forbidden); authed session → precondition_failed (F3; use whoami)
+session.start{}                                        → {session, csrf_token}   # public pre-login bootstrap; idempotent get-or-create: live anon in F2 → same session+csrf unchanged (lets web re-fetch anon csrf for the login-POST compare); none/expired → mints (rate-limited per peer; exhausted → rate_limited); authed session → precondition_failed (F3; use whoami)
 session.login{user, password, totp?:string}            → {session, role, csrf_token, mfa:bool}
 session.reauth{totp}                                    → {session, csrf_token, mfa_at}   # rotates the session id + csrf (F4); web replaces its cookie/header
 session.logout{}                                        → {}

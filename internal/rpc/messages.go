@@ -76,12 +76,12 @@ type AuditFunc func(AuditEvent)
 func (f AuditFunc) Record(e AuditEvent) { f(e) }
 
 type authRate struct {
-	start int64
-	count int
+	updated int64
+	tokens  float64
 }
 type Server struct {
 	authMu            sync.Mutex
-	authRates         map[uint32][3]authRate
+	authRates         map[uint32]authRate
 	Agent             *agent.Agent
 	WebUID            uint32
 	Registry          map[string]Verb
@@ -231,7 +231,7 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 		return r
 	}
 	if !(req.Verb == "session.start" && caller.Kind == "anon") && !s.allowAuthentication(caller.Peer, req.Verb, req.Args) {
-		return Err("forbidden", "Authentication rate limit exceeded")
+		return Err("rate_limited", "Authentication rate limit exceeded")
 	}
 	caller.Actor = req.Actor
 	if caller.Actor == "" && caller.Role == "owner" && caller.Peer == 0 {
