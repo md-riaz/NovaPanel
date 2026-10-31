@@ -563,6 +563,9 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	q = NewQueue(s, seal, auditSink)
+	q.SetConfigCustody(custody)
+	q.SetRunner(func(context.Context, *Job) error { t.Error("legacy terminal effects replayed"); return nil })
 	legacyRun, stopLegacy := context.WithTimeout(ctx, time.Second)
 	defer stopLegacy()
 	if err = q.Run(legacyRun); err == nil {
