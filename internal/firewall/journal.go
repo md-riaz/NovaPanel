@@ -39,6 +39,8 @@ type Journal struct {
 	root         string
 	dir          *os.File
 	lockIdentity os.FileInfo
+	// Tests inject faults at the real post-rename directory sync boundary.
+	syncDirectory func() error
 }
 
 func OpenJournal(root string) (*Journal, error) {
@@ -189,7 +191,7 @@ func validJournal(r JournalRecord) bool {
 		return false
 	}
 	switch r.State {
-	case "armed", "confirmed", "reverting", "reverted", "acknowledged":
+	case "armed", "confirming", "confirmed", "reverting", "reverted", "acknowledged":
 		return true
 	}
 	return false
@@ -224,7 +226,23 @@ func (j *Journal) read() (JournalRecord, error) {
 	}
 	return r, nil
 }
+
+// ErrConfirmationCommitted means the confirmation rename occurred. Callers must
+// not roll it back or report an ordinary cancellation; recovery must sync it.
+var ErrConfirmationCommitted = errors.New("confirmation committed; durability or timer completion failed")
+
+func (j *Journal) syncDir() error {
+	if j.syncDirectory != nil {
+		return j.syncDirectory()
+	}
+	return j.dir.Sync()
+}
+
 func (j *Journal) publish(r JournalRecord) error {
+	return j.publishContext(context.Background(), r)
+}
+
+func (j *Journal) publishContext(ctx context.Context, r JournalRecord) error {
 	if !validJournal(r) {
 		return errors.New("invalid journal record")
 	}
@@ -255,10 +273,16 @@ func (j *Journal) publish(r JournalRecord) error {
 	if err = f.Close(); err != nil {
 		return err
 	}
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	if err = unix.Renameat(dir, "state.next", dir, "state"); err != nil {
 		return err
 	}
-	return j.dir.Sync()
+	if err = j.syncDir(); err != nil && r.State == "confirmed" {
+		return errors.Join(ErrConfirmationCommitted, err)
+	}
+	return err
 }
 func (j *Journal) Arm(ctx context.Context, r JournalRecord) error {
 	return j.locked(ctx, func() error {
@@ -271,7 +295,7 @@ func (j *Journal) Arm(ctx context.Context, r JournalRecord) error {
 		if r.State != "armed" {
 			return errors.New("initial state must be armed")
 		}
-		return j.publish(r)
+		return j.publishContext(ctx, r)
 	})
 }
 func (j *Journal) Confirm(ctx context.Context, pendingID string, now func() time.Time, stop func(string) error) error {
@@ -283,14 +307,28 @@ func (j *Journal) Confirm(ctx context.Context, pendingID string, now func() time
 		if err != nil {
 			return err
 		}
-		if r.ID != pendingID || !now().Before(time.Unix(r.Deadline, 0)) || (r.State != "armed" && r.State != "confirmed") {
+		if r.ID != pendingID || !now().Before(time.Unix(r.Deadline, 0)) || (r.State != "armed" && r.State != "confirming" && r.State != "confirmed") {
 			return notFound()
 		}
-		r.State = "confirmed"
-		if err = j.publish(r); err != nil {
+		if err = ctx.Err(); err != nil {
 			return err
 		}
-		return stop(r.Unit)
+		if r.State != "confirmed" {
+			r.State = "confirming"
+			if err = j.publishContext(ctx, r); err != nil {
+				return err
+			}
+			r.State = "confirmed"
+			if err = j.publishContext(ctx, r); err != nil {
+				return err
+			}
+		} else if err = j.syncDir(); err != nil {
+			return errors.Join(ErrConfirmationCommitted, err)
+		}
+		if err = stop(r.Unit); err != nil {
+			return errors.Join(ErrConfirmationCommitted, err)
+		}
+		return nil
 	})
 }
 
@@ -310,6 +348,11 @@ func (j *Journal) Reconcile(ctx context.Context, commit func(JournalRecord) erro
 		}
 		if r.State != "confirmed" && r.State != "reverted" {
 			return errors.New("journal not terminal")
+		}
+		if r.State == "confirmed" {
+			if err = j.syncDir(); err != nil {
+				return errors.Join(ErrConfirmationCommitted, err)
+			}
 		}
 		if err = commit(r); err != nil {
 			return err
@@ -331,14 +374,21 @@ func (j *Journal) Fire(ctx context.Context, pendingID string, now func() time.Ti
 		if r.ID != pendingID {
 			return notFound()
 		}
-		if r.State == "confirmed" || r.State == "reverted" || r.State == "acknowledged" {
+		if r.State == "confirmed" {
+			// A visible commit is not durable proof until this reader syncs it.
+			if err = j.syncDir(); err != nil {
+				return errors.Join(ErrConfirmationCommitted, err)
+			}
+			return nil
+		}
+		if r.State == "reverted" || r.State == "acknowledged" {
 			return nil
 		}
 		if now().Before(time.Unix(r.Deadline, 0)) {
 			return fmt.Errorf("firewall deadline not reached")
 		}
 		r.State = "reverting"
-		if err = j.publish(r); err != nil {
+		if err = j.publishContext(ctx, r); err != nil {
 			return err
 		}
 		if err = restore(r); err != nil {

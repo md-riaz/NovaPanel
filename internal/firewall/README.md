@@ -26,7 +26,14 @@ intentionally absent. Provision the root and stable empty lock before opening;
 this package never creates or replaces the lock.
 
 `Confirm` samples its injected clock under the cross-process flock, publishes
-confirmed intent durably, then calls the timer adapter. `Fire` publishes reverting
+recoverable `confirming`, then commits `confirmed` and fsyncs before timer stop.
+A preparation sync failure restores on subsequent fire. A final commit sync
+failure returns `ErrConfirmationCommitted`, never an ordinary failed confirm.
+Readers must sync visible `confirmed` before suppressing recovery or reconciling;
+if syncing fails they return an error and leave the timer and projection alone.
+No rollback of a committed confirmation is attempted. Pre-rename cancellation
+retains recovery; post-commit cancellation does not undo the outcome.
+`Fire` publishes reverting
 before the idempotent recovery adapter and reverted afterwards. Terminal records
 remain until daemon-only `Reconcile` invokes a successful durable DB/audit commit
 and publishes acknowledgement. The commit callback must deduplicate by ID.
@@ -45,6 +52,12 @@ before terminal publication leaves reverting and replays the same ID on reopen.
 Strict canonical bounded JSON rejects duplicate/unknown/missing fields. Tests
 reject symlinks, hard links, foreign ownership, weak permissions, replaced lock
 and tampered version/unit, and recover an interrupted private temporary file.
+
+The independent review's post-rename EIO and clock-triggered cancellation faults
+are committed regressions using real scratch files and close/reopen. Tests also
+inject final-commit sync failure, reject unproven reads/reconciliation, retain a
+commit after cancellation, and SIGKILL a child before preparation directory sync.
+These prove process-death replay, not filesystem power-loss behavior.
 
 Not proved: power-loss or injected fsync/rename failures at every boundary,
 real snapshot capture/verification, actual SQLite reconciliation/deduplication,

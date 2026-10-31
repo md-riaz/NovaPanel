@@ -146,6 +146,9 @@ func TestJournalScratchHelper(t *testing.T) {
 		}
 	}
 	switch action {
+	case "prepare-crash":
+		j.syncDirectory = func() error { return barrier() }
+		err = j.Confirm(context.Background(), pending, func() time.Time { return time.Unix(99, 0) }, func(string) error { return errors.New("prepared confirmation stopped timer") })
 	case "confirm-crash":
 		err = j.Confirm(context.Background(), pending, func() time.Time { return time.Unix(99, 0) }, func(string) error { return barrier() })
 	case "fire-crash":

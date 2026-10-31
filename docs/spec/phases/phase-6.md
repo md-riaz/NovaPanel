@@ -131,10 +131,23 @@ flock. The earlier row-deletion wording means daemon reconciliation, not helper 
   contains no snapshot bytes, rule comments, credentials or arbitrary paths.
   Snapshot capture/verification/restoration remains a separately reviewed adapter.
 - Every decision locks the stable inode and rereads state. Publication uses an
-  exclusive temporary file, file fsync, atomic rename and directory fsync. Live
-  confirm publishes `confirmed` durably before timer cancellation. Stop failure
-  retains confirmed intent; fire never restores confirmed state. Exact-deadline
-  confirm returns `not_found`. Recovery first publishes `reverting`, then invokes
+  exclusive temporary file, file fsync, atomic rename and directory fsync.
+  Confirmation first publishes `confirming`; a failed preparation sync or crash
+  leaves this recoverable exactly like `armed`, never terminal confirmation.
+  After preparation succeeds, a second publication renames `confirmed`. This
+  rename is the irrevocable logical commit, not proof of directory durability.
+  The following successful directory fsync proves durability before timer stop.
+  A final-sync or stop failure returns `ErrConfirmationCommitted` together with
+  its cause. Callers must not treat it as uncommitted or roll it back. A reader
+  seeing `confirmed` must successfully fsync the directory under the same lock
+  before suppressing fire or reconciling; on failure it returns an error without
+  restoration, timer cancellation or DB acknowledgement. Recovery may finish a
+  visible commit's durability; after power loss it follows whichever complete
+  state survived. No claim is made that a failed fsync undoes a rename.
+  Cancellation is checked immediately before publication rename. Cancellation
+  before logical commit leaves `armed`/`confirming` recoverable; after commit it
+  does not erase the outcome or prevent timer completion. Exact-deadline confirm
+  returns `not_found`. Recovery first publishes `reverting`, then invokes
   idempotent rules-plus-enabled restoration with a durable ID-bound audit marker,
   then publishes `reverted`. Interrupted reverting replays the same ID.
 - Terminal state remains until daemon-only DB/audit reconciliation commits and a
