@@ -14,7 +14,7 @@ import (
 
 // ErrAttestationUnsupported means read access or token validity was not enough
 // to establish the exact canonical permissions. It never contains upstream data.
-var ErrAttestationUnsupported = errors.New("Cloudflare permission attestation unsupported")
+var ErrAttestationUnsupported = errors.New("cloudflare permission attestation unsupported")
 
 type AttestationError struct{}
 
