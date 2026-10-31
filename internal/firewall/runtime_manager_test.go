@@ -12,13 +12,14 @@ import (
 )
 
 type managerFixture struct {
-	t       *testing.T
-	r       JournalRecord
-	exists  bool
-	calls   [][]string
-	service map[string]any
-	unit    map[string]any
-	timer   map[string]any
+	t         *testing.T
+	r         JournalRecord
+	exists    bool
+	immediate bool
+	calls     [][]string
+	service   map[string]any
+	unit      map[string]any
+	timer     map[string]any
 }
 
 func variant(sig string, v any) any { return map[string]any{"type": sig, "data": v} }
@@ -47,9 +48,11 @@ func newManagerFixture(t *testing.T, r JournalRecord) *managerFixture {
 	for _, k := range []string{"ExecStartPre", "ExecStartPost", "ExecCondition", "ExecStop", "ExecStopPost"} {
 		f.service[k] = variant("a(sasbttttuii)", []any{})
 	}
-	for _, k := range []string{"RestartPreventExitStatus", "RestartForceExitStatus"} {
+	for _, k := range []string{"SuccessExitStatus", "RestartPreventExitStatus", "RestartForceExitStatus"} {
 		f.service[k] = variant("(aiai)", []any{[]int{}, []int{}})
 	}
+	f.timer["OnClockChange"] = variant("b", false)
+	f.timer["OnTimezoneChange"] = variant("b", false)
 	f.timer["Unit"] = variant("s", r.Unit+".service")
 	f.timer["AccuracyUSec"] = variant("t", 1000000)
 	f.timer["RandomizedDelayUSec"] = variant("t", 0)
@@ -69,6 +72,21 @@ func (f *managerFixture) Run(ctx context.Context, p string, a []string, o execpk
 	}
 	if p == "/usr/bin/systemd-run" {
 		f.exists = true
+		f.immediate = true
+		for _, v := range a {
+			if strings.HasPrefix(v, "--on-active=") {
+				f.immediate = false
+			}
+		}
+		if f.immediate {
+			f.service["ControlGroup"] = variant("s", "/system.slice/"+f.r.Unit+".service")
+			f.unit["fixtureStarted"] = variant("b", true)
+		}
+		return nil, nil, 0, nil
+	}
+	if p == "/usr/bin/systemctl" && len(a) > 1 && a[1] == "start" {
+		f.service["ControlGroup"] = variant("s", "/system.slice/"+f.r.Unit+".service")
+		f.unit["fixtureStarted"] = variant("b", true)
 		return nil, nil, 0, nil
 	}
 	if p != "/usr/bin/busctl" {
@@ -77,7 +95,7 @@ func (f *managerFixture) Run(ctx context.Context, p string, a []string, o execpk
 	method := a[6]
 	if method == "ListUnitsByNames" {
 		rows := []any{}
-		if f.exists {
+		if f.exists && !(f.immediate && strings.HasSuffix(a[len(a)-1], ".timer")) {
 			n := a[len(a)-1]
 			rows = append(rows, []any{n, "", "loaded", "inactive", "dead", "", "/org/freedesktop/systemd1/unit/fixture", 0, "", "/"})
 		}
@@ -110,6 +128,10 @@ func (f *managerFixture) Run(ctx context.Context, p string, a []string, o execpk
 			props["Names"] = variant("as", []string{n})
 			props["ActiveState"] = variant("s", "inactive")
 			props["SubState"] = variant("s", "dead")
+			if _, ok := f.unit["fixtureStarted"]; ok && strings.HasSuffix(n, ".service") {
+				props["ActiveState"] = variant("s", "active")
+				props["SubState"] = variant("s", "running")
+			}
 			if strings.HasSuffix(n, ".timer") {
 				props["ActiveState"] = variant("s", "active")
 				props["SubState"] = variant("s", "waiting")

@@ -28,7 +28,7 @@ func TestRuntimeStartupReinspection(t *testing.T) {
 			}}
 			m := runtimeManager{runner: runner, now: func() time.Time { return time.Unix(90, 0) }, monotonic: func() (uint64, error) { return 1000000, nil }}
 			e := startupFirewall(context.Background(), l, m)
-			if !errors.Is(e, ErrFirewallRecoveryPending) {
+			if !errors.Is(e, ErrFirewallRecoveryPending) || errors.Is(e, errManager) {
 				t.Fatal(e)
 			}
 			j, e := OpenJournal(l.root + "/journal")

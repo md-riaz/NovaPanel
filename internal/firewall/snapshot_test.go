@@ -22,11 +22,10 @@ func custodyInput() SnapshotInput {
 func custodyTempDir(t *testing.T) string {
 	t.Helper()
 	// Do not weaken production's writable-ancestor refusal for /tmp-based CI.
-	cwd, e := os.Getwd()
-	if e != nil {
-		t.Fatal(e)
-	}
-	dir, e := os.MkdirTemp(cwd, ".snapshot-scratch-")
+	// Keep volatile fixtures outside the source tree. Architecture checks walk
+	// the tree concurrently and must never observe directories being removed.
+	// TMPDIR is supplied by the scratch/root test launcher, not provisioned here.
+	dir, e := os.MkdirTemp(os.TempDir(), ".snapshot-scratch-")
 	if e != nil {
 		t.Fatal(e)
 	}

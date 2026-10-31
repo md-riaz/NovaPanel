@@ -31,7 +31,7 @@ func TestRuntimeStartupMatrix(t *testing.T) {
 					t.Fatal(e, f.calls)
 				}
 			} else {
-				if !errors.Is(e, ErrFirewallRecoveryPending) {
+				if !errors.Is(e, ErrFirewallRecoveryPending) || errors.Is(e, errManager) {
 					t.Fatal(e)
 				}
 				if (state == "armed" || state == "confirming") && len(f.calls) == 0 {

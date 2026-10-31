@@ -426,7 +426,7 @@ func verifyService(p map[string]any, r JournalRecord) error {
 			return errManager
 		}
 	}
-	for _, k := range []string{"RestartPreventExitStatus", "RestartForceExitStatus"} {
+	for _, k := range []string{"SuccessExitStatus", "RestartPreventExitStatus", "RestartForceExitStatus"} {
 		if !equalProperty(p, k, "(aiai)", []any{[]int{}, []int{}}) {
 			return errManager
 		}
@@ -489,16 +489,19 @@ func uintProperty(p map[string]any, k string) (uint64, error) {
 	}
 	return strconv.ParseUint(string(x.(json.Number)), 10, 64)
 }
-func verifyTimer(p map[string]any, r JournalRecord, remaining, start, end uint64) error {
+func verifyTimerConfiguration(p map[string]any, r JournalRecord) error {
+	if !(equalProperty(p, "ActiveState", "s", "active") && equalProperty(p, "SubState", "s", "waiting")) && !(equalProperty(p, "ActiveState", "s", "inactive") && equalProperty(p, "SubState", "s", "dead")) {
+		return errManager
+	}
 	if e := verifyUnit(p, r.Unit+".timer"); e != nil {
 		return e
 	}
-	for k, v := range map[string]string{"Unit": r.Unit + ".service", "ActiveState": "active", "SubState": "waiting"} {
+	for k, v := range map[string]string{"Unit": r.Unit + ".service"} {
 		if !equalProperty(p, k, "s", v) {
 			return errManager
 		}
 	}
-	if !equalProperty(p, "AccuracyUSec", "t", 1000000) || !equalProperty(p, "RandomizedDelayUSec", "t", 0) || !equalProperty(p, "RemainAfterElapse", "b", false) || !equalProperty(p, "TimersCalendar", "a(sst)", []any{}) {
+	if !equalProperty(p, "OnClockChange", "b", false) || !equalProperty(p, "OnTimezoneChange", "b", false) || !equalProperty(p, "AccuracyUSec", "t", 1000000) || !equalProperty(p, "RandomizedDelayUSec", "t", 0) || !equalProperty(p, "RemainAfterElapse", "b", false) || !equalProperty(p, "TimersCalendar", "a(sst)", []any{}) {
 		return errManager
 	}
 	x, e := property(p, "TimersMonotonic", "a(stt)")
@@ -517,6 +520,17 @@ func verifyTimer(p map[string]any, r JournalRecord, remaining, start, end uint64
 	if e != nil || interval == 0 {
 		return errManager
 	}
+	return nil
+}
+func verifyTimer(p map[string]any, r JournalRecord, remaining, start, end uint64) error {
+	if !equalProperty(p, "ActiveState", "s", "active") || !equalProperty(p, "SubState", "s", "waiting") {
+		return errManager
+	}
+	if e := verifyTimerConfiguration(p, r); e != nil {
+		return e
+	}
+	x, _ := property(p, "TimersMonotonic", "a(stt)")
+	row := x.([]any)[0].([]any)
 	next, e := uintProperty(p, "NextElapseUSecMonotonic")
 	if e != nil || end < start || next <= end {
 		return errManager
@@ -525,7 +539,9 @@ func verifyTimer(p map[string]any, r JournalRecord, remaining, start, end uint64
 	if bound < remaining || math.MaxUint64-bound < end {
 		return errManager
 	}
-	if next > end+bound || interval > remaining+1000000+(end-start) {
+	// OnActive's original interval does not shrink as the timer ages.
+	// Its independently reported next elapse is the deadline-bound schedule.
+	if next > end+bound {
 		return errManager
 	}
 	if row[2] != json.Number(strconv.FormatUint(next, 10)) {
@@ -546,6 +562,28 @@ func remainingMicros(deadline int64, now time.Time) (uint64, error) {
 		return 0, errManager
 	}
 	return seconds*1000000 - uint64(now.Nanosecond())/1000, nil
+}
+
+// stableManagerProperties excludes accounting counters and execution timestamps.
+// These are not configuration and can change while the safety contract is fixed.
+func stableManagerProperties(p map[string]any) map[string]any {
+	if p == nil {
+		return nil
+	}
+	out := map[string]any{}
+	for _, k := range []string{"Id", "Names", "LoadState", "Transient", "PartOf", "BindsTo", "Requires", "Requisite", "Conflicts", "PropagatesStopTo", "StopPropagatedFrom", "BoundBy", "Type", "User", "Group", "Slice", "KillMode", "Restart", "RestartMode", "DynamicUser", "Delegate", "SendSIGKILL", "RemainAfterExit", "RestartUSec", "TimeoutStopUSec", "TimeoutStartUSec", "RuntimeMaxUSec", "StartLimitIntervalUSec", "SuccessExitStatus", "RestartPreventExitStatus", "RestartForceExitStatus", "ExecStartPre", "ExecStartPost", "ExecCondition", "ExecStop", "ExecStopPost", "ActiveState", "SubState", "ControlGroup", "Unit", "AccuracyUSec", "RandomizedDelayUSec", "RemainAfterElapse", "TimersCalendar", "TimersMonotonic", "NextElapseUSecMonotonic", "OnClockChange", "OnTimezoneChange"} {
+		if v, ok := p[k]; ok {
+			out[k] = v
+		}
+	}
+	if x, e := property(p, "ExecStart", "a(sasbttttuii)"); e == nil {
+		rows := []any{}
+		for _, row := range x.([]any) {
+			rows = append(rows, row.([]any)[:3])
+		}
+		out["ExecStart"] = rows
+	}
+	return out
 }
 func (m runtimeManager) ensure(ctx context.Context, r JournalRecord) error {
 	if !validJournal(r) || m.now == nil || m.monotonic == nil {
@@ -588,7 +626,9 @@ func (m runtimeManager) ensure(ctx context.Context, r JournalRecord) error {
 		}
 		if !future || timer == nil {
 			if timer != nil {
-				return errManager
+				if e = verifyTimerConfiguration(timer, r); e != nil {
+					return e
+				}
 			}
 			if _, e = m.run(ctx, platform.Systemctl, "--system", "start", "--no-block", r.Unit+".service"); e != nil {
 				return e
@@ -617,7 +657,9 @@ func (m runtimeManager) ensure(ctx context.Context, r JournalRecord) error {
 		}
 	} else {
 		if timer != nil {
-			return errManager
+			if e = verifyTimerConfiguration(timer, r); e != nil {
+				return e
+			}
 		}
 		active, _ := property(service, "ActiveState", "s")
 		if active != "active" && active != "activating" {
@@ -625,11 +667,11 @@ func (m runtimeManager) ensure(ctx context.Context, r JournalRecord) error {
 		}
 	}
 	again, e := m.query(ctx, r.Unit+".service")
-	if e != nil || !reflect.DeepEqual(service, again) {
+	if e != nil || !reflect.DeepEqual(stableManagerProperties(service), stableManagerProperties(again)) {
 		return errors.Join(errManager, e)
 	}
 	again, e = m.query(ctx, r.Unit+".timer")
-	if e != nil || !reflect.DeepEqual(timer, again) {
+	if e != nil || !reflect.DeepEqual(stableManagerProperties(timer), stableManagerProperties(again)) {
 		return errors.Join(errManager, e)
 	}
 	return nil
