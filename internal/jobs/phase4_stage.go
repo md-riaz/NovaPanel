@@ -18,6 +18,11 @@ func (q *Queue) StageWordPress(ctx context.Context, jobID, root string, p wordpr
 	if lease == nil || lease.queue != q || lease.job != jobID || !lease.active.Load() || r == nil {
 		return refuse
 	}
+	ctx, done, admitted := lease.admit(ctx)
+	if !admitted {
+		return refuse
+	}
+	defer done()
 	s, ok := q.store.(operationStore)
 	if !ok {
 		return refuse
