@@ -30,6 +30,16 @@ func sealedInput(t *testing.T, body []byte) *os.File {
 	return f
 }
 
+func fixtureHelperLayout(root string) (string, error) {
+	fd, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return "", err
+	}
+	defer unix.Close(fd)
+	// Only fixtures substitute the owner and start at a held scratch directory.
+	return validateHelperDirectory(fd, uint32(os.Getuid()))
+}
+
 func TestPrepareHelperSealedCustody(t *testing.T) {
 	root := t.TempDir()
 	os.Chmod(root, 0755)
@@ -47,14 +57,23 @@ func TestPrepareHelperSealedCustody(t *testing.T) {
 	pub, sig := signed(t, string(body))
 	manifest, signature, bundle := sealedInput(t, body), sealedInput(t, sig), sealedInput(t, b)
 	// Section readers must not depend on inherited offsets, which are at EOF.
-	got, err := prepareHelper(context.Background(), pub, root, manifest, signature, bundle)
+	// Exercise sealed custody independently of privileged installation provisioning.
+	prepare := func(ctx context.Context, key []byte, root string, manifest, signature, bundle *os.File) (HelperInspection, error) {
+		return prepareHelperWithLayout(ctx, key, root, manifest, signature, bundle, fixtureHelperLayout)
+	}
+	got, err := prepare(context.Background(), pub, root, manifest, signature, bundle)
+	if os.Getuid() != 0 {
+		if _, err := prepareHelper(context.Background(), pub, root, manifest, signature, bundle); err == nil {
+			t.Fatal("production accepted non-root installation")
+		}
+	}
 	if err != nil || got.Current != "1.0.0" || got.Candidate != "1.2.3" {
 		t.Fatal(got, err)
 	}
 	if _, err = bundle.WriteAt([]byte("x"), 0); err == nil {
 		t.Fatal("sealed bytes changed")
 	}
-	if _, err = prepareHelper(context.Background(), pub, root, sealedInput(t, append(bytes.Clone(body), ' ')), signature, nil); err == nil {
+	if _, err = prepare(context.Background(), pub, root, sealedInput(t, append(bytes.Clone(body), ' ')), signature, nil); err == nil {
 		t.Fatal("accepted unauthenticated bytes")
 	}
 	ordinary, err := os.CreateTemp(t.TempDir(), "mutable")
@@ -63,10 +82,10 @@ func TestPrepareHelperSealedCustody(t *testing.T) {
 	}
 	defer ordinary.Close()
 	ordinary.Write(b)
-	if _, err = prepareHelper(context.Background(), pub, root, manifest, signature, ordinary); err == nil {
+	if _, err = prepare(context.Background(), pub, root, manifest, signature, ordinary); err == nil {
 		t.Fatal("accepted mutable bundle")
 	}
-	if _, err = prepareHelper(context.Background(), pub, root, manifest, signature, sealedInput(t, bytes.Repeat([]byte("x"), len(b)))); err == nil {
+	if _, err = prepare(context.Background(), pub, root, manifest, signature, sealedInput(t, bytes.Repeat([]byte("x"), len(b)))); err == nil {
 		t.Fatal("accepted wrong digest")
 	}
 	if _, err = os.Stat(filepath.Join(root, "1.2.3")); !os.IsNotExist(err) {
@@ -96,13 +115,30 @@ func TestHelperVersionLayout(t *testing.T) {
 	if err := os.Symlink("1.0.0", filepath.Join(root, "current")); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := ValidateHelperLayout(root); err != nil || got != "1.0.0" {
+	if got, err := fixtureHelperLayout(root); err != nil || got != "1.0.0" {
 		t.Fatal(got, err)
+	}
+
+	fd, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(fd)
+	if _, err := validateHelperDirectory(fd, uint32(os.Getuid())^1); err == nil {
+		t.Fatal("accepted wrong installation owner")
+	}
+	if os.Getuid() != 0 {
+		if _, err := ValidateHelperLayout(root); err == nil {
+			t.Fatal("production accepted non-root layout")
+		}
+		if _, err := validateHelperDirectory(fd, 0); err == nil {
+			t.Fatal("production owner policy accepted non-root directory")
+		}
 	}
 	if err := os.Chmod(filepath.Join(v, "panel-web"), 0775); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ValidateHelperLayout(root); err == nil {
+	if _, err := fixtureHelperLayout(root); err == nil {
 		t.Fatal("accepted writable web binary")
 	}
 }

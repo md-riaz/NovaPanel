@@ -35,6 +35,10 @@ func PrepareHelper(ctx context.Context, root string, manifest, signature, bundle
 }
 
 func prepareHelper(ctx context.Context, key ed25519.PublicKey, root string, manifest, signature, bundle *os.File) (HelperInspection, error) {
+	return prepareHelperWithLayout(ctx, key, root, manifest, signature, bundle, ValidateHelperLayout)
+}
+
+func prepareHelperWithLayout(ctx context.Context, key ed25519.PublicKey, root string, manifest, signature, bundle *os.File, layout func(string) (string, error)) (HelperInspection, error) {
 	var out HelperInspection
 	if err := ctx.Err(); err != nil {
 		return out, err
@@ -52,7 +56,7 @@ func prepareHelper(ctx context.Context, key ed25519.PublicKey, root string, mani
 	if err != nil {
 		return out, err
 	}
-	current, err := ValidateHelperLayout(root)
+	current, err := layout(root)
 	if err != nil {
 		return out, err
 	}
@@ -133,6 +137,16 @@ func ValidateHelperLayout(root string) (string, error) {
 			return "", helperInputError()
 		}
 	}
+	return validateHelperDirectory(fd, 0)
+}
+
+// validateHelperDirectory checks the held installation directory. Production
+// reaches it only after the root-owned ancestor walk above.
+func validateHelperDirectory(fd int, owner uint32) (string, error) {
+	var rootStat unix.Stat_t
+	if unix.Fstat(fd, &rootStat) != nil || rootStat.Uid != owner || rootStat.Mode&0022 != 0 || rootStat.Mode&0005 != 0005 {
+		return "", helperInputError()
+	}
 	target := make([]byte, 256)
 	n, err := unix.Readlinkat(fd, "current", target)
 	if err != nil || n == len(target) {
@@ -149,7 +163,7 @@ func ValidateHelperLayout(root string) (string, error) {
 	}
 	defer unix.Close(versionFD)
 	var st unix.Stat_t
-	if unix.Fstat(versionFD, &st) != nil || st.Uid != 0 || st.Mode&0022 != 0 || st.Mode&0005 != 0005 {
+	if unix.Fstat(versionFD, &st) != nil || st.Uid != owner || st.Mode&0022 != 0 || st.Mode&0005 != 0005 {
 		return "", helperInputError()
 	}
 	// The web unit must traverse the installation and execute its binary.
@@ -163,7 +177,7 @@ func ValidateHelperLayout(root string) (string, error) {
 		}
 		e = unix.Fstat(b, &st)
 		unix.Close(b)
-		if e != nil || st.Uid != 0 || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Mode&07022 != 0 || st.Mode&0005 != 0005 {
+		if e != nil || st.Uid != owner || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Mode&07022 != 0 || st.Mode&0005 != 0005 {
 			return "", helperInputError()
 		}
 	}
