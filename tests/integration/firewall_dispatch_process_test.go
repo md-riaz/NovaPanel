@@ -25,11 +25,11 @@ func TestFirewallDispatcherStoreIndependence(t *testing.T) {
 		t.Fatal(e)
 	}
 	repo := filepath.Clean(filepath.Join(cwd, "../.."))
-	root, e := os.MkdirTemp(repo, ".fw-dispatch-test-")
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer os.RemoveAll(root)
+	// Custody checks every ancestor. A sudo test process does not make the
+	// runner-owned checkout safe. The root launcher must supply a private,
+	// root-owned TMPDIR with equally trusted ancestors; do not repair checkout
+	// permissions or fall back to a globally writable system temporary directory.
+	root := firewallDispatcherScratch(t)
 	must := func(e error) {
 		t.Helper()
 		if e != nil {

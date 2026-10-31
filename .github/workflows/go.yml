@@ -33,4 +33,11 @@ jobs:
           go-version: '1.27.3'
           cache: true
       - name: Scratch socket, peer credentials and jobs with injected privileged commands
-        run: sudo env "PATH=$PATH" "GOCACHE=$RUNNER_TEMP/root-go-cache" make integration
+        # The checkout and RUNNER_TEMP belong to runner, not root. Firewall
+        # custody deliberately refuses those ancestors, even under sudo.
+        run: |
+          sudo env "PATH=$PATH" "GOCACHE=$RUNNER_TEMP/root-go-cache" bash -eu -c '
+            scratch=$(mktemp -d /root/novapanel-integration.XXXXXX)
+            trap '\''rm -rf -- "$scratch"'\'' EXIT
+            TMPDIR="$scratch" make integration
+          '
