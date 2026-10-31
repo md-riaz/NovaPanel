@@ -1,6 +1,22 @@
 package jobs
 
-import "sync"
+import (
+	"novapanel/internal/store"
+	"sync"
+)
+
+func (k *keyedLock) lockSet(keys []string) func() {
+	keys = store.OrderedOperationKeys(keys)
+	releases := make([]func(), 0, len(keys))
+	for _, key := range keys {
+		releases = append(releases, k.lock(key))
+	}
+	return func() {
+		for i := len(releases) - 1; i >= 0; i-- {
+			releases[i]()
+		}
+	}
+}
 
 type lockRef struct {
 	mu   sync.Mutex

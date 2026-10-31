@@ -145,6 +145,11 @@ func (s *Scheduler) Enable(ctx context.Context, jid string, enabled bool) error 
 
 // Tick delegates cadence CAS, busy-object skip and job insertion to one store transaction.
 func (s *Scheduler) Tick(ctx context.Context) error {
+	if s.q.admission != nil {
+		if err := s.q.admission(); err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if e := s.q.healthy(); e != nil {

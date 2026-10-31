@@ -24,45 +24,27 @@ func (q *Queue) Run(ctx context.Context) error {
 	q.running = true
 	q.mu.Unlock()
 	defer func() { q.mu.Lock(); q.running = false; q.mu.Unlock() }()
-	// Refuse even recovery mutations if the audit sinks have failed.
-	if q.audit == nil {
-		return errors.New("jobs: audit not configured")
-	}
-	if e := q.audit.Healthy(); e != nil {
-		return e
-	}
-	for q.startup != nil {
+	if err := q.PrepareStartup(ctx); err != nil {
 		if ctx.Err() != nil {
 			return nil
 		}
-		j, err := q.startup(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return errors.Join(ErrRecoveryBlocked, err)
-		}
-		if j == nil {
-			break
-		}
-		if j != nil {
-			if err = q.recoverPublication(ctx, *j); err != nil {
-				if ctx.Err() != nil {
-					return nil
-				}
-				return errors.Join(ErrRecoveryBlocked, err)
-			}
-		}
-	}
-	if e := q.store.RecoverJobs(ctx, q.clock.Now()); e != nil {
-		if ctx.Err() != nil {
-			return nil
-		}
-		return e
+		return err
 	}
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
+	expiryTick := time.NewTicker(time.Minute)
+	defer expiryTick.Stop()
 	for {
+		select {
+		case <-expiryTick.C:
+			if e := q.expireOperations(ctx); e != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				return e
+			}
+		default:
+		}
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -91,7 +73,18 @@ func (q *Queue) Run(ctx context.Context) error {
 	}
 }
 func (q *Queue) execute(ctx context.Context, j Job) error {
-	unlock := q.locks.lock(j.ObjectKey)
+	unlock, keyErr := q.lockJob(ctx, j)
+	if keyErr != nil {
+		var coded *rpcerr.CodedError
+		if errors.As(keyErr, &coded) && coded.Code == "unsupported" {
+			started, err := q.store.StartJob(ctx, j.ID, q.clock.Now())
+			if err != nil {
+				return err
+			}
+			return q.finish(ctx, started, keyErr)
+		}
+		return keyErr
+	}
 	defer unlock()
 	if e := q.healthy(); e != nil {
 		return e
@@ -108,10 +101,39 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 	run := q.runner
 	q.mu.Unlock()
 	// Caller identity is restored exclusively from durable trusted columns.
-	err := invoke(WithMetadata(ctx, metadata(j)), run, &j)
+	err := error(nil)
+	isOperation := false
+	if s, ok := q.store.(operationStore); ok {
+		if op, loadErr := s.LoadOperation(ctx, j.ID); loadErr == nil {
+			isOperation = true
+			err = s.CheckOperation(ctx, j.ID)
+			if err == nil && len(op.Ciphertext) > 0 {
+				if op.Kind == store.WordPressInstall {
+					_, err = q.OpenWordPressCredentials(ctx, j.ID)
+				} else {
+					_, err = q.OpenOperationCredentials(ctx, j.ID)
+				}
+			}
+		} else if !errors.Is(loadErr, sql.ErrNoRows) {
+			return loadErr
+		}
+	}
+	if err == nil {
+		workerCtx, cancel := context.WithCancel(WithMetadata(ctx, metadata(j)))
+		lease := &configWorkerLease{queue: q, job: j.ID, cancel: cancel}
+		lease.ctx = context.WithValue(workerCtx, configWorkerKey{}, lease)
+		lease.active.Store(true)
+		err = func() error {
+			defer lease.close()
+			return invoke(lease.ctx, run, &j)
+		}()
+	}
 	if ctx.Err() != nil {
 		return nil
 	} // leave running for restart's effectful/idempotent recovery
+	if isOperation {
+		err = operationError(err)
+	}
 	return q.finish(ctx, j, err)
 }
 
@@ -144,6 +166,12 @@ func (q *Queue) finish(ctx context.Context, j Job, err error) error {
 	}
 	if e = q.store.AppendJobEvent(ctx, store.JobEvent{ID: eid, JobID: j.ID, TS: now, Msg: j.State}); e != nil {
 		return e
+	}
+	if handled, e := q.operationTerminal(ctx, j); handled {
+		if e != nil {
+			return e
+		}
+		return q.reconcileConfigRecord(ctx, j.ID)
 	}
 	return q.store.UpdateJob(ctx, j)
 }

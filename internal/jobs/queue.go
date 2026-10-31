@@ -30,17 +30,22 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Queue struct {
-	store   Persistence
-	sealer  Sealer
-	audit   Auditor
-	clock   Clock
-	mu      sync.Mutex
-	runner  func(context.Context, *Job) error
-	running bool
-	startup func(context.Context) (*Job, error)
-	resume  func(context.Context, *Job) error
-	wake    chan struct{}
-	locks   keyedLock
+	configCustody   string // trusted startup dependency, immutable while running
+	admission       func() error
+	startupReady    bool
+	store           Persistence
+	sealer          Sealer
+	audit           Auditor
+	clock           Clock
+	operationMu     sync.Mutex
+	operationsReady bool
+	mu              sync.Mutex
+	runner          func(context.Context, *Job) error
+	running         bool
+	startup         func(context.Context) (*Job, error)
+	resume          func(context.Context, *Job) error
+	wake            chan struct{}
+	locks           keyedLock
 }
 
 func NewQueue(s Persistence, sealer Sealer, log Auditor) *Queue {
@@ -66,6 +71,11 @@ func (q *Queue) Enqueue(ctx context.Context, verb string, args any, objectKey st
 }
 func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey string, sealed bool) (EnqueueResult, error) {
 	var result EnqueueResult
+	if q.admission != nil {
+		if err := q.admission(); err != nil {
+			return result, err
+		}
+	}
 	m, ok := MetadataFrom(ctx)
 	if !ok || m.CreatedBy == "" {
 		return result, rpcerr.Errf("forbidden", "trusted job identity required")

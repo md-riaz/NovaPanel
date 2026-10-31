@@ -1,0 +1,350 @@
+#!/usr/bin/env python3
+"""Run retained official artifacts only inside an owned network-none container."""
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import subprocess
+import signal
+import time
+import tarfile
+import tempfile
+import uuid
+import zipfile
+
+ROOT = Path(__file__).resolve().parents[1]
+IMAGE = 'php@sha256:92ff31bbd049fd199bf3700719374e4594b2baa7324eefc459bda26d622c3ea9'
+EVIDENCE = Path(tempfile.mkdtemp(prefix='wp-offline-', dir=os.environ.get('TMPDIR')))
+NAME = 'novapanel-wp-' + uuid.uuid4().hex[:12]
+
+OWNER_LABEL = 'org.novapanel.wp-offline-owner'
+CANCEL_SIGNAL = 0
+CLEANING = False
+COMMAND_TIMEOUT = 180
+CLEANUP_TIMEOUT = 20
+CLEANUP_DEADLINE = None
+IDENTITIES = {}
+UNSETTLED_MUTATION = False
+
+
+def save_owner():
+    temporary = EVIDENCE / 'owner.pending'
+    with temporary.open('w') as record:
+        json.dump({'name': NAME, 'label': OWNER_LABEL, 'identities': IDENTITIES}, record)
+        record.write('\n')
+        record.flush()
+        os.fsync(record.fileno())
+    os.replace(temporary, EVIDENCE / 'owner.json')
+    directory = os.open(EVIDENCE, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def capture_ids():
+    import re
+    for kind, pattern in (('image', r'sha256:[a-f0-9]{64}'), ('container', r'[a-f0-9]{64}')):
+        path = EVIDENCE / (kind + '.id')
+        if path.exists():
+            identity = path.read_text().strip()
+            if not re.fullmatch(pattern, identity):
+                raise ValueError('invalid immutable ' + kind + ' identity')
+            if kind in IDENTITIES and IDENTITIES[kind] != identity:
+                raise ValueError('immutable identity changed')
+            IDENTITIES[kind] = identity
+    save_owner()
+
+
+
+class Cancelled(Exception):
+    pass
+
+
+def check_cancelled():
+    if CANCEL_SIGNAL and not CLEANING:
+        raise Cancelled()
+
+
+def cancellation(signum, _frame):
+    # Do not raise into Popen, filesystem writes or cleanup. Drain mutations so
+    # daemon-side build/create completion cannot race pre-ID cleanup.
+    global CANCEL_SIGNAL
+    if not CANCEL_SIGNAL:
+        CANCEL_SIGNAL = signum
+
+
+def cmd(*args, data=None, check=True):
+    global UNSETTLED_MUTATION
+    check_cancelled()
+    mutation = args[:2] in (('docker', 'build'), ('docker', 'create'), ('docker', 'start'))
+    identity_kind = {'build': 'image', 'create': 'container'}.get(args[1]) if mutation else None
+    if identity_kind:
+        flag = '--iidfile' if identity_kind == 'image' else '--cidfile'
+        args = (*args[:2], flag, str(EVIDENCE / (identity_kind + '.id')), *args[2:])
+    timeout = COMMAND_TIMEOUT
+    if CLEANUP_DEADLINE is not None:
+        timeout = max(.01, CLEANUP_DEADLINE - time.monotonic())
+    # A fresh session makes only this command's process group ours to terminate.
+    child = subprocess.Popen(args, stdin=subprocess.PIPE if data is not None else subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=ROOT,
+                             start_new_session=True)
+    deadline = time.monotonic() + timeout
+    first = True
+    finished = False
+    try:
+        while True:
+            try:
+                out, err = child.communicate(input=data if first else None, timeout=min(.1, max(.01, deadline - time.monotonic())))
+                finished = True
+                break
+            except subprocess.TimeoutExpired:
+                first = False
+                if time.monotonic() >= deadline or (CANCEL_SIGNAL and not CLEANING and not mutation):
+                    raise RuntimeError(f'{args[0]} command interrupted or timed out; evidence={EVIDENCE}')
+    finally:
+        if finished:
+            for stream in (child.stdin, child.stdout, child.stderr):
+                if stream is not None:
+                    stream.close()
+        if not finished:
+            if mutation:
+                UNSETTLED_MUTATION = True
+            # Kill the owned group even if the direct child already exited.
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            # Descendants can escape the session. Never wait for their pipes.
+            drain = .2
+            if CLEANUP_DEADLINE is not None:
+                drain = max(.001, min(drain, CLEANUP_DEADLINE - time.monotonic()))
+            try:
+                child.communicate(timeout=drain)
+            except subprocess.TimeoutExpired:
+                pass
+            finally:
+                for stream in (child.stdin, child.stdout, child.stderr):
+                    if stream is not None:
+                        stream.close()
+                try:
+                    child.wait(timeout=drain)
+                except subprocess.TimeoutExpired:
+                    raise RuntimeError(f'{args[0]} child reap deadline exceeded; evidence={EVIDENCE}')
+    if identity_kind:
+        capture_ids()
+    p = subprocess.CompletedProcess(args, child.returncode, out, err)
+    with (EVIDENCE / 'commands.log').open('ab') as log:
+        log.write((' '.join(args) + '\n').encode() + out + err)
+    if check and p.returncode:
+        raise RuntimeError(f'command failed; evidence={EVIDENCE}')
+    check_cancelled()
+    return p
+
+
+class OwnedResources:
+    def __enter__(self):
+        self.handlers = {s: signal.signal(s, cancellation) for s in (signal.SIGTERM, signal.SIGINT)}
+        # Retained even on SIGKILL. Reap only this explicit record, never scan
+        # other launches, tags, images or containers.
+        save_owner()
+        return self
+
+    def cleanup(self):
+        global CLEANING, CLEANUP_DEADLINE
+        CLEANING = True
+        CLEANUP_DEADLINE = time.monotonic() + CLEANUP_TIMEOUT
+        errors = []
+        removed = []
+        try:
+            capture_ids()
+            for kind, name in (('container', NAME), ('image', NAME + ':local')):
+                target = IDENTITIES.get(kind, name)
+                try:
+                    p = cmd('docker', kind, 'inspect', target, check=False)
+                    if p.returncode:
+                        if b'No such' in p.stderr:
+                            if kind not in IDENTITIES:
+                                # A client can die before writing its ID file.
+                                # Reconcile only this launch's exact label, never
+                                # a broad prune. Daemon settlement is still an
+                                # explicit prerequisite for final absence.
+                                found = cmd('docker', kind, 'ls', '--all', '--quiet', '--no-trunc',
+                                            '--filter', 'label=' + OWNER_LABEL + '=' + NAME).stdout.split()
+                                if found:
+                                    if len(set(found)) != 1:
+                                        raise RuntimeError('ambiguous pre-ID ownership; explicit reconciliation required')
+                                    target = found[0].decode()
+                                    p = cmd('docker', kind, 'inspect', target)
+                                else:
+                                    continue
+                            else:
+                                continue
+                        else:
+                            raise RuntimeError('inspect failed, absence not established')
+                    item = json.loads(p.stdout)[0]
+                    if item['Config'].get('Labels', {}).get(OWNER_LABEL) != NAME:
+                        raise RuntimeError('ownership label mismatch')
+                    identity = item['Id']
+                    IDENTITIES[kind] = identity
+                    save_owner()
+                    args = ('docker', kind, 'rm', '-f', identity)
+                    cmd(*args)
+                    # Immutable-ID readback, not just disappearance of a tag.
+                    p = cmd('docker', kind, 'inspect', identity, check=False)
+                    if not p.returncode or b'No such' not in p.stderr:
+                        raise RuntimeError('resource absence not established')
+                    removed.append({'kind': kind, 'id': identity})
+                except Exception as exc:
+                    errors.append(f'{kind} {target}: {exc}')
+            if UNSETTLED_MUTATION:
+                errors.append('Docker mutation did not settle; explicit trusted-record reap required after daemon settlement')
+            (EVIDENCE / 'cleanup.json').write_text(json.dumps({'removed': removed, 'errors': errors}) + '\n')
+            if errors:
+                (EVIDENCE / 'cleanup-errors.log').write_text('\n'.join(errors) + '\n')
+                raise RuntimeError(f'cleanup failed; evidence={EVIDENCE}')
+        finally:
+            CLEANING = False
+            CLEANUP_DEADLINE = None
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            self.cleanup()
+        finally:
+            for s, handler in self.handlers.items():
+                signal.signal(s, handler)
+            print('Evidence:', EVIDENCE, flush=True)
+        check_cancelled()
+
+
+def reap(record):
+    global NAME, IDENTITIES
+    import re
+    # Explicit operator-trusted record and directory only. This does not attest
+    # owner/mode/symlink custody or that the original launcher/daemon has settled.
+    source = Path(record)
+    item = json.loads(source.read_text())
+    if item.get('label') != OWNER_LABEL or not re.fullmatch(r'novapanel-(?:wp|reviewcancel)-[a-f0-9]{12}', item.get('name', '')):
+        raise ValueError('invalid explicit ownership record')
+    NAME = item['name']
+    IDENTITIES = item.get('identities', {})
+    for kind, pattern in (('image', r'sha256:[a-f0-9]{64}'), ('container', r'[a-f0-9]{64}')):
+        path = source.parent / (kind + '.id')
+        identity = path.read_text().strip() if path.exists() else IDENTITIES.get(kind)
+        if identity is not None:
+            if not re.fullmatch(pattern, identity) or (kind in IDENTITIES and IDENTITIES[kind] != identity):
+                raise ValueError('invalid immutable ownership identity')
+            IDENTITIES[kind] = identity
+    with OwnedResources():
+        pass
+
+def inspect():
+    raw = cmd('docker', 'inspect', NAME).stdout
+    (EVIDENCE / 'inspect.json').write_bytes(raw)
+    item = json.loads(raw)[0]
+    h = item['HostConfig']
+    assert item['Config']['User'] == '23041:23041'
+    assert h['ReadonlyRootfs'] and h['NetworkMode'] == 'none'
+    assert not h['Privileged'] and not h['Binds'] and not h['Devices'] and not h['CapAdd']
+    assert not h['PortBindings'] and h['CapDrop'] == ['ALL']
+    assert 'no-new-privileges:true' in h['SecurityOpt']
+    assert h['Memory'] == h['MemorySwap'] == 536870912 and h['PidsLimit'] == 64
+    assert h['NanoCpus'] == 1000000000
+    assert set(h['Tmpfs']) == {'/scratch'}
+
+def staged_artifacts():
+    value = os.environ.get('NOVAPANEL_WP_STAGED_ARTIFACTS')
+    if not value:
+        raise ValueError('NOVAPANEL_WP_STAGED_ARTIFACTS is required to opt in to the retained-artifact lab')
+    return Path(value)
+
+
+def run_lab():
+    artifacts = staged_artifacts()
+    sha = cmd('git', 'rev-parse', 'HEAD').stdout.decode().strip()
+    assert not cmd('git', 'status', '--porcelain').stdout, 'commit inputs before exact-source lab'
+    (EVIDENCE / 'source-sha.txt').write_text(sha + '\n')
+    # Verify signature, full ZIP and checksum inventory through production custody.
+    cmd('go', 'test', './internal/wordpress', '-run', '^TestStagedRetainedOfficialArtifacts$', '-count=1', '-v')
+    pins = {'cli.phar': 'ce34ddd838f7351d6759068d09793f26755463b4a4610a5a5c0a97b68220d85c',
+            'wordpress.zip': 'a147146c159362778ecbbbfb07bb20ddf4e85b130f971c824e656a8f938c5f87',
+            'checksums.json': 'bb718bddf197e0098f05395dd9b228fad70b394926ee9d70a8c6a67cf20781e7'}
+    blobs = {name: (artifacts / name).read_bytes() for name in pins}
+    for name, expected in pins.items():
+        assert hashlib.sha256(blobs[name]).hexdigest() == expected
+    cmd('go', 'build', '-o', str(EVIDENCE / 'probe'), './tools/phase4wpoffline')
+    pack = io.BytesIO()
+    with tarfile.open(fileobj=pack, mode='w') as tar:
+        def add(name, data=b'', directory=False, uid=0, mode=0o444):
+            t = tarfile.TarInfo(name)
+            t.uid = t.gid = uid
+            t.mode = mode
+            t.type = tarfile.DIRTYPE if directory else tarfile.REGTYPE
+            t.size = 0 if directory else len(data)
+            tar.addfile(t, None if directory else io.BytesIO(data))
+        for d in ['lab', 'lab/cwd', 'lab/home', 'lab/packages', 'lab/empty-ini']:
+            add(d, directory=True, mode=0o755)
+        add('lab/cli.phar', blobs['cli.phar'])
+        add('lab/checksums.json', blobs['checksums.json'])
+        # Missing bootstrap intentionally gives the first real runtime RED.
+        bootstrap = ROOT / 'tools/phase4wpoffline/bootstrap.php'
+        if bootstrap.exists():
+            add('lab/bootstrap.php', bootstrap.read_bytes())
+            add('lab/transport.php', (bootstrap.parent / 'transport.php').read_bytes())
+        add('lab/probe', (EVIDENCE / 'probe').read_bytes(), mode=0o555)
+        add('lab/hostile.ini', b'auto_prepend_file=/lab/hostile.php\n')
+        add('lab/hostile.php', b'<?php file_put_contents("/scratch/INJECTED", "bad"); exit(91);')
+        add('Dockerfile', ('FROM ' + IMAGE + '\nCOPY lab /lab\n').encode())
+    # --pull=false alone still permits fetching a missing base. Require local custody.
+    cmd('docker', 'image', 'inspect', IMAGE)
+    image = NAME + ':local'
+    cmd('docker', 'build', '--network=none', '--pull=false', '--force-rm', '--label', OWNER_LABEL + '=' + NAME, '-t', image, '-', data=pack.getvalue())
+    cmd('docker', 'create', '--name', NAME, '--label', OWNER_LABEL + '=' + NAME, '--user', '23041:23041', '--network', 'none',
+        '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true',
+        '--memory', '512m', '--memory-swap', '512m', '--cpus', '1', '--pids-limit', '64',
+        '--tmpfs', '/scratch:rw,nosuid,nodev,noexec,size=256m,mode=0700,uid=23041,gid=23041',
+        '--entrypoint', '/bin/sleep', image, '180')
+    inspect()
+    cmd('docker', 'start', NAME)
+    # Write scratch as the numeric site user, never root and never host PHP.
+    files = io.BytesIO()
+    with tarfile.open(fileobj=files, mode='w') as tar:
+        with zipfile.ZipFile(io.BytesIO(blobs['wordpress.zip'])) as z:
+            for ent in z.infolist():
+                if ent.is_dir():
+                    continue
+                name = 'public/' + ent.filename.removeprefix('wordpress/')
+                data = z.read(ent)
+                t = tarfile.TarInfo(name); t.mode = 0o600; t.size = len(data)
+                tar.addfile(t, io.BytesIO(data))
+        for name, data in {'public/wp-config.php': b'<?php file_put_contents("/scratch/INJECTED", "bad"); exit(91);', 'public/wp-content/mu-plugins/hostile.php': b'<?php exit(91);', 'public/wp-cli.yml': b'require: /lab/hostile.php\n', 'public/.user.ini': b'auto_prepend_file=/lab/hostile.php\n'}.items():
+            t = tarfile.TarInfo(name); t.mode = 0o600; t.size = len(data)
+            tar.addfile(t, io.BytesIO(data))
+    cmd('docker', 'exec', '-i', NAME, 'tar', '-x', '-C', '/scratch', data=files.getvalue())
+    cmd('docker', 'exec', NAME, '/usr/local/bin/php', '-n', '-v')
+    p = cmd('docker', 'exec', '-e', 'PHPRC=/lab/hostile.ini', '-e', 'WP_CLI_EARLY_REQUIRE=/lab/hostile.php', NAME, '/lab/probe', check=False)
+    if p.returncode:
+        raise RuntimeError(f'runtime failed; evidence={EVIDENCE}')
+    assert cmd('docker', 'exec', NAME, 'test', '-e', '/scratch/INJECTED', check=False).returncode == 1
+    inspect()
+    (EVIDENCE / 'result.json').write_text(json.dumps({'source': sha, 'result': 'PASS', 'pins': pins}) + '\n')
+    print('PASS', EVIDENCE)
+
+def main():
+    import sys
+    try:
+        if len(sys.argv) == 3 and sys.argv[1] == '--reap':
+            reap(sys.argv[2])
+        else:
+            staged_artifacts()
+            with OwnedResources():
+                run_lab()
+    except Exception:
+        if CANCEL_SIGNAL:
+            raise SystemExit(128 + CANCEL_SIGNAL)
+        raise
+
+
+if __name__ == '__main__':
+    main()
