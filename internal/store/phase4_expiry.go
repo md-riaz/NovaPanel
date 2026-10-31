@@ -7,15 +7,23 @@ import (
 
 func (s *Store) FailOperation(ctx context.Context, jid, code string) error {
 	return s.Tx(ctx, func(tx *sql.Tx) error {
-		if _, e := loadOperation(ctx, tx, jid); e != nil {
+		if _, e := tx.ExecContext(ctx, "UPDATE phase4_operations SET updated=updated WHERE job_id=?", jid); e != nil {
+			return e
+		}
+		op, e := loadOperation(ctx, tx, jid)
+		if e != nil {
 			return e
 		}
 		now := s.clock.Now()
+		expired := op.Checkpoint == "expired" || now >= op.Expires
+		if expired {
+			code = "interrupted"
+		}
 		r, e := tx.ExecContext(ctx, `UPDATE jobs SET state='failed',code=?,error='job execution failed',updated=?,finished=? WHERE id=? AND state='running'`, code, now, now, jid)
 		if e = affected(r, e); e != nil {
 			return e
 		}
-		if code == "interrupted" {
+		if code == "interrupted" && !expired {
 			return nil
 		}
 		if _, e = tx.ExecContext(ctx, "DELETE FROM job_claims WHERE job_id=?", jid); e != nil {

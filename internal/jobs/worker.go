@@ -139,8 +139,10 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 	q.mu.Unlock()
 	// Caller identity is restored exclusively from durable trusted columns.
 	err := error(nil)
+	isOperation := false
 	if s, ok := q.store.(operationStore); ok {
 		if op, loadErr := s.LoadOperation(ctx, j.ID); loadErr == nil {
+			isOperation = true
 			err = s.CheckOperation(ctx, j.ID)
 			if err == nil && len(op.Ciphertext) > 0 {
 				_, err = q.OpenOperationCredentials(ctx, j.ID)
@@ -155,6 +157,9 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 	if ctx.Err() != nil {
 		return nil
 	} // leave running for restart's effectful/idempotent recovery
+	if isOperation {
+		err = operationError(err)
+	}
 	return q.finish(ctx, j, err)
 }
 

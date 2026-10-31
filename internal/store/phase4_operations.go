@@ -314,6 +314,9 @@ func (s *Store) CheckOperation(ctx context.Context, jid string) error {
 			return e
 		}
 		if op.Kind == DatabaseCreate {
+			if e = checkOperationSite(ctx, tx, op); e != nil {
+				return e
+			}
 			var n int
 			e = tx.QueryRowContext(ctx, "SELECT count(*) FROM databases WHERE id=? OR name=?", op.DatabaseID, op.Identity.Database.Name).Scan(&n)
 			if e != nil {
@@ -345,6 +348,23 @@ func (s *Store) CheckOperation(ctx context.Context, jid string) error {
 		return nil
 	})
 }
+func checkOperationSite(ctx context.Context, tx *sql.Tx, op Operation) error {
+	if op.SiteID == "" {
+		return nil
+	}
+	var status string
+	if e := tx.QueryRowContext(ctx, "SELECT status FROM sites WHERE id=?", op.SiteID).Scan(&status); e != nil {
+		if errors.Is(e, sql.ErrNoRows) {
+			return ErrSiteConflict
+		}
+		return e
+	}
+	if status != "active" {
+		return ErrSiteConflict
+	}
+	return nil
+}
+
 func checkOperationMembership(ctx context.Context, tx *sql.Tx, op Operation) error {
 	var db Database
 	if e := tx.QueryRowContext(ctx, "SELECT id,coalesce(site_id,''),name,engine,primary_user_id,created FROM databases WHERE id=?", op.DatabaseID).Scan(&db.ID, &db.SiteID, &db.Name, &db.Engine, &db.PrimaryUserID, &db.Created); e != nil {
@@ -353,14 +373,8 @@ func checkOperationMembership(ctx context.Context, tx *sql.Tx, op Operation) err
 	if db != op.Identity.Database {
 		return ErrSiteConflict
 	}
-	if op.SiteID != "" {
-		var status string
-		if e := tx.QueryRowContext(ctx, "SELECT status FROM sites WHERE id=?", op.SiteID).Scan(&status); e != nil {
-			return e
-		}
-		if status != "active" {
-			return ErrSiteConflict
-		}
+	if e := checkOperationSite(ctx, tx, op); e != nil {
+		return e
 	}
 	if op.Kind == DatabaseDelete {
 		var n int
@@ -445,6 +459,9 @@ func (s *Store) CompleteOperation(ctx context.Context, jid string, claim *JobCla
 		}
 		if op.Checkpoint != "verified" && !((op.Kind == DatabaseDelete || op.Kind == DBUserDelete) && op.Checkpoint == "db_applied") {
 			return ErrSitePrecondition
+		}
+		if e = checkOperationSite(ctx, tx, op); e != nil {
+			return e
 		}
 		var result any = map[string]any{}
 		if op.Kind != DatabaseCreate {

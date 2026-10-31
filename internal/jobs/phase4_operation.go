@@ -12,6 +12,24 @@ import (
 	"novapanel/internal/store"
 )
 
+func operationError(err error) error {
+	switch {
+	case errors.Is(err, store.ErrOperationExpired):
+		return rpcerr.Errf("interrupted", "operation recovery expired")
+	case errors.Is(err, store.ErrOperationLocked):
+		return rpcerr.Errf("locked", "operation locked")
+	case errors.Is(err, store.ErrSitePrecondition):
+		return rpcerr.Errf("precondition_failed", "operation precondition failed")
+	case errors.Is(err, store.ErrSiteConflict):
+		return rpcerr.Errf("conflict", "operation membership changed")
+	case errors.Is(err, store.ErrSiteInvalid):
+		return rpcerr.Errf("invalid_argument", "invalid operation")
+	case errors.Is(err, sql.ErrNoRows):
+		return rpcerr.Errf("not_found", "operation target not found")
+	}
+	return err
+}
+
 // OperationCredentials is the complete credential-only DB recovery contract.
 // WordPress configuration and salts require a separate typed journal.
 type OperationCredentials struct {
@@ -101,7 +119,7 @@ func (q *Queue) EnqueueOperation(ctx context.Context, r store.OperationRequest, 
 		return out, errors.New("jobs: deletion cannot carry credentials")
 	}
 	if _, e = s.PrepareOperation(ctx, j, store.JobClaim{JobID: jid, ClaimHash: claimHash(text)}, r, nonce, ciphertext); e != nil {
-		return out, e
+		return out, operationError(e)
 	}
 	if e = q.record(j, "ok", "", "enqueue"); e != nil {
 		return out, e
