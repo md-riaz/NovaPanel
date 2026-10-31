@@ -2,6 +2,8 @@
 package platform
 
 const Systemctl = "/usr/bin/systemctl"
+const SystemdRun = "/usr/bin/systemd-run"
+const Busctl = "/usr/bin/busctl"
 const NginxRoot = "/etc/nginx"
 const Nginx = "/usr/sbin/nginx"
 const Chattr = "/usr/bin/chattr"

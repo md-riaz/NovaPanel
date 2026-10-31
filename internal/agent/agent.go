@@ -7,6 +7,7 @@ import (
 	"novapanel/internal/auth"
 	"novapanel/internal/config"
 	"novapanel/internal/exec"
+	"novapanel/internal/firewall"
 	"novapanel/internal/jobs"
 	"novapanel/internal/platform"
 	"novapanel/internal/render/nginx"
@@ -23,6 +24,11 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Agent struct {
+	firewallStartup         func(context.Context) error
+	firewallStartupPlan     func(context.Context) (*firewall.FirewallStartupPlan, error)
+	firewallTerminalJournal func(context.Context) (*firewall.Journal, error)
+	// Nil until durable snapshot recovery and independent deadman ownership are wired.
+	FirewallRecovery *firewall.Recovery
 	ProvisionSite    func(context.Context, string) error
 	Nginx            *nginx.Applier
 	PasswordFailures auth.FailureBudgets
@@ -44,6 +50,10 @@ func New() *Agent { return NewWithDependencies(config.Defaults(), exec.Real{}, &
 func NewWithDependencies(cfg config.Config, runner exec.Runner, v *validate.V) *Agent {
 	c := realClock{}
 	a := &Agent{Cfg: cfg, Exec: runner, Validate: v, Clock: c, Started: c.Now(),
+		firewallStartup: func(ctx context.Context) error { return firewall.PreflightInstalledFirewall(ctx, runner) },
+		firewallStartupPlan: func(ctx context.Context) (*firewall.FirewallStartupPlan, error) {
+			return firewall.PrepareInstalledFirewallStartup(ctx, runner)
+		},
 		ProvisionSite: func(ctx context.Context, name string) error {
 			return platform.EnsureSite(ctx, runner, cfg.SitesRoot, cfg.ACMEWebroot, name)
 		},

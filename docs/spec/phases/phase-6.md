@@ -94,8 +94,9 @@ recoverable out-of-band** — never store the only copy inside the repo they unl
   stops the transient `.timer` unit + deletes the `fw_pending` row; **`firewall.revert{pending_id}`**
   runs the revert now + deletes the row. Both are MFA-gated and carry `firewall:write` so an
   automation-grant apply can be confirmed. **When the timer fires on its own**, the root
-  `panel-agent fw-revert` subcommand restores state **and deletes the `fw_pending` row itself** (it
-  opens the DB directly — it must work with the daemon down) and writes a revert marker file; the agent
+  `panel-agent fw-revert` subcommand restores state and publishes a terminal journal
+  outcome. The daemon alone reconciles and deletes the `fw_pending` row after
+  durable DB/audit commit. The helper never opens SQLite. The agent
   turns that marker into an audit event on next start (a fired revert is never silently unlogged, and
   never leaves a stale armed row that would `conflict` future applies).
 - **Confirmation is a fresh client round-trip, not an agent self-probe** (the agent cannot prove
@@ -115,6 +116,164 @@ recoverable out-of-band** — never store the only copy inside the repo they unl
   token) may `firewall.confirm`/`revert` the **single** armed pending — `firewall.apply` returns
   `conflict` if one is already armed, so there is never ambiguity about which; an unknown or expired
   `pending_id` → `not_found`; every confirm/revert is audited with its actor.
+
+**Approved confined journal foundation, superseding direct-DB helper ownership.**
+The journal is the recovery authority. Only the daemon writes SQLite; `fw_pending`
+is a projection. The independent helper never opens the DB or bypasses its lifetime
+flock. The earlier row-deletion wording means daemon reconciliation, not helper SQL.
+
+- A preprovisioned private 0700 owner-controlled root contains one stable 0600
+  lock inode and one bounded state file. New arms and pre-acknowledgement states
+  remain version 1. Version 2 is allowed only for acknowledged receipts with an
+  exact `terminal_state` of confirmed or reverted; normalization restores the
+  original version-1 terminal record and its deterministic audit bytes.
+  All components open no-follow;
+  writable/foreign ancestors and nonregular, linked or incorrectly owned files
+  fail closed. Root/agent UID is trusted and must not mutate paths concurrently.
+- State binds the existing pending ID, exact timer unit, deadline, prior enabled
+  state and SHA-256 of an independently held immutable snapshot. Journal JSON
+  contains no snapshot bytes, rule comments, credentials or arbitrary paths.
+  Snapshot capture/verification/restoration remains a separately reviewed adapter.
+- Every decision locks the stable inode and rereads state. Publication uses an
+  exclusive temporary file, file fsync, atomic rename and directory fsync.
+  Confirmation first publishes `confirming`; a failed preparation sync or crash
+  leaves this recoverable exactly like `armed`, never terminal confirmation.
+  After preparation succeeds, a second publication renames `confirmed`. This
+  rename is the irrevocable logical commit, not proof of directory durability.
+  The following successful directory fsync proves durability before timer stop.
+  A final-sync or stop failure returns `ErrConfirmationCommitted` together with
+  its cause. Callers must not treat it as uncommitted or roll it back. A reader
+  seeing `confirmed` must successfully fsync the directory under the same lock
+  before suppressing fire or reconciling; on failure it returns an error without
+  restoration, timer cancellation or DB acknowledgement. Recovery may finish a
+  visible commit's durability; after power loss it follows whichever complete
+  state survived. No claim is made that a failed fsync undoes a rename.
+  Cancellation is checked immediately before publication rename. Cancellation
+  before logical commit leaves `armed`/`confirming` recoverable; after commit it
+  does not erase the outcome or prevent timer completion. Exact-deadline confirm
+  returns `not_found`. Recovery first publishes `reverting`, then invokes
+  idempotent rules-plus-enabled restoration with a durable ID-bound audit marker,
+  then publishes `reverted`. Interrupted reverting replays the same ID.
+  The internal synchronous manual revert admits matching `armed`/`confirming`
+  only before the exact deadline. A matching already-started `reverting`
+  operation may retry after expiry to finish recovery. Manual retries against
+  `confirmed`, `reverted` or `acknowledged` return `not_found`; independent Fire
+  remains idempotent for terminal state. Manual recovery neither stops timers
+  nor consumes the SQLite projection, and does not enable public wiring.
+- Terminal state remains until daemon-only DB/audit reconciliation commits and a
+  durable acknowledgement is published. Failed reconciliation retries by ID.
+  This foundation deliberately refuses all further arms, including terminal reuse;
+  reviewed archival/retention and new-apply admission are not implemented.
+- Scratch subprocess kills and fixed-clock races prove orchestration on a real
+  filesystem only. Boot scheduling, power-loss, daemon cgroup isolation, real
+  snapshot custody and disposable-VM UFW/systemd acceptance remain required.
+  No production adapter, CLI, RPC wiring, migration or live apply is enabled.
+
+**Approved internal immutable snapshot custody, not live recovery.**
+The delegated custody decision narrows the earlier wildcard; it does not claim
+that the repository previously specified an inventory. F0a targets Ubuntu 24.04.
+Ubuntu noble's [ufw-framework(8)](https://manpages.ubuntu.com/manpages/noble/en/man8/ufw-framework.8.html)
+identifies before/user/after rule files for each address family. Together with
+B-D7's captures, the closed, bytewise-sorted artifact inventory is:
+`enabled`, `ip6tables-save`, `iptables-save`, `ufw-status-numbered`,
+`ufw/after.rules`, `ufw/after6.rules`, `ufw/before.rules`, `ufw/before6.rules`,
+`ufw/user.rules`, `ufw/user6.rules`. All six rule files and three diagnostic
+captures must be supplied and nonempty, even when UFW or IPv6 is disabled.
+Missing IPv6 files/capture is refused, never inferred as disabled or replaced
+with empty bytes. This is a conservative custody admission policy, not a claim
+that every installation has IPv6 support. Unsupported layouts remain refused.
+`enabled` is generated as `true\n` or `false\n` from prior active state, not parsed
+from localized status. Defaults, sysctl, init hooks and other configuration are
+not restored by this custody API; their runtime policy remains separate.
+
+- Input is already captured bytes, copied by Put. Each artifact is at most 4 MiB;
+  total artifact bytes are at most 16 MiB; canonical manifest is at most 4096 bytes.
+  Unknown rule names and absent artifacts fail before any publication.
+- `manifest.json` is compact Go JSON in field order `version`, `id`,
+  `prior_enabled`, `artifacts`. Version is 1; each sorted entry has `name`, `size`,
+  `sha256`, with lowercase SHA-256 hex. No omitted fields or trailing newline.
+  Journal `SnapshotSHA256` is SHA-256 of these exact canonical manifest bytes;
+  the manifest binds ID, enabled state, lengths and hashes of every artifact.
+- Custody root is preprovisioned, same-effective-UID 0700 under no-follow,
+  root-or-agent-owned ancestors with no group/other write permission. No sticky
+  exception, chmod repair or pathname supplied by RPC/SQL. Files are single-link
+  owner-only 0600 regular files; snapshot/ufw directories are 0700. Held root
+  identity, complete inventory, sizes and hashes are revalidated on each open.
+  Root/agent UID is trusted not to mutate paths or descriptor bytes concurrently.
+- Publication serializes staging/final admission through completion under an
+  exclusive flock on a fresh descriptor for the pinned custody root directory.
+  Independent handles/processes and calls sharing one handle use the same inode;
+  lock waits honor cancellation and revalidate root identity before admission.
+  No lock pathname is created or replaced. Publication exclusively stages
+  `<id>.next`, fsyncs every file and both staged
+  directories, then uses atomic no-replace rename to `<id>` and fsyncs root.
+  Incomplete staging is refused, never adopted, repaired or archived. Same-ID
+  identical complete retry succeeds only after full revalidation and fsync of
+  its directories and root. Different content never replaces the original.
+  A post-rename root-sync error can leave a complete visible directory; a retry
+  establishes durability of that same content, never replaces it. Verify also
+  syncs directories before returning read-only, already-verified descriptors.
+- This API does not capture, restore, arm, reconcile or publish an audit marker.
+  A future restore adapter must consume verified descriptors without reopening
+  unchecked paths and still implement the separately reviewed rules/enabled,
+  durable marker and runtime acceptance contracts. No public wiring, schema,
+  Runner change, archive, deletion or terminal reuse is authorized.
+
+**Independent recovery runtime amendment.** The actual installed root subcommand
+now composes the authoritative journal, immutable custody and InstalledRestore,
+without daemon initialization or SQLite. It admits only the fixed private layout
+and the exact ID-bound unified system-manager service cgroup. Unmanaged shells
+fail before restoration. Recovery child execution uses direct-child parent-death
+SIGKILL with creating-thread lifetime, plus group cancellation and synchronous
+wait. Descendant cleanup after unexpected helper death still belongs to the
+independent systemd service, not to Pdeathsig. The explicit service/timer/startup
+contract, provisioning, tested scope and remaining coverage are recorded in
+`docs/phase6-independent-recovery.md`. A bounded Runner-backed transient manager
+adapter and mandatory pre-OpenState startup consumer now inspect the authoritative
+journal and schedule and verify independent recovery before daemon state opens.
+Pending armed/confirming/reverting always stops that startup attempt, even if the
+helper becomes terminal during readback. Strict absence or v1 confirmed/reverted
+or v2 acknowledged classification retains an opaque custody plan, without holding
+flock across ordinary OpenState. Completion rechecks the exact classified record
+under that same custody before any socket/jobs/workers. Absence requires zero SQL
+pending rows. Terminal consumption uses ordinary file-first Audit/Store COMMIT,
+then context-bound durable v2 acknowledgement. A receipt boot verifies the exact
+normalized original event after ordinary audit replay and requires zero pending
+rows, without deleting or inserting in verification. Exact file-only evidence may
+legitimately recreate SQL during ordinary replay with zero pending; missing-both,
+collision or any pending under a receipt refuses. Legacy v1 acknowledged is
+ambiguous and refuses before OpenState without inference. Retain all evidence;
+no reuse/archive/new Arm/public apply is authorized. Old binaries reject v2, so
+downgrade is not transparent. Firewall refusal is fatal before listener publication,
+not Phase 4 read-only recovery mode; later Phase 4 PrepareStartup remains after
+firewall completion and socket reservation, before listening.
+The approved schema-only stack now supplies exact Phase 4 migration 0006 and full
+canonical production 0007 through ordinary Store.Open. No Phase 4 runtime, SQL
+reconciliation bypass, RPC activation or public apply is supplied. The internal context-aware JournalRecovery consumer
+now confirms through durable journal publication and bounded detached timer-only
+stop/readback, and manually reverts through the same lazy InstalledRestore as Fire.
+It remains unwired to public operations and legacy FirewallRecovery. Details and
+limits are in `docs/phase6-journal-recovery.md`.
+The internal Agent.CommitFirewallTerminal operation now connects terminal outcomes
+to the ordinary replayed audit file and exact SQLite transaction without
+acknowledgement. It is callable only after explicit state initialization and is
+not installed in ordinary startup. Confirmed/reverted evidence remains retained;
+all retained states still block serve before OpenState. Terminal startup,
+retention/reuse and public activation remain gated. See
+`docs/phase6-daemon-terminal-commit.md`.
+Real cgroup cleanup/UFW/reboot/power-loss acceptance remains deferred VM work.
+
+**Firewall confirmation crash-safety gate.** SQLite and systemd do not share a
+transaction. Stopping the timer inside a pending-row transaction can leave an
+unconfirmed row without a timer if deletion or commit fails, or the process dies.
+Until a durable confirmation/reconciliation protocol and independent deadman DB
+ownership are implemented and crash-tested, confirmation must return `unsupported`
+for a live pending ID **before cancelling anything**. Unknown/expired IDs retain
+`not_found`; live apply remains unsupported. A rollback or a best-effort re-arm
+alone is not process-death safety. Restore is idempotent by pending ID and must
+restore rules plus enabled state and durably publish its audit marker before row
+consumption. A failed deletion/commit retains the same ID for replay, never a new
+nonce. No new RPC fields or schema are introduced by this gate.
 
 **MariaDB restore swap (no RENAME DATABASE).** Steps: (1) take a **pre-restore safety dump** of the
 live DB to the panel repo first (so the current state is always recoverable); (2) create a **scratch

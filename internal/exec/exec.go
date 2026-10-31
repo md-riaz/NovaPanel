@@ -7,6 +7,7 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 )
@@ -45,7 +46,24 @@ func (w *boundedWriter) Write(p []byte) (int, error) {
 	}
 	return n, nil
 }
+
+// Recovery opts into direct-child parent-death protection. The independent
+// systemd service, not Pdeathsig, owns descendant cleanup after helper death.
+type Recovery struct{}
+
+func (Recovery) Run(ctx context.Context, prog string, args []string, o RunOpts) ([]byte, []byte, int, error) {
+	return run(ctx, prog, args, o, true)
+}
 func (Real) Run(ctx context.Context, prog string, args []string, o RunOpts) ([]byte, []byte, int, error) {
+	return run(ctx, prog, args, o, false)
+}
+func run(ctx context.Context, prog string, args []string, o RunOpts, recovery bool) ([]byte, []byte, int, error) {
+	if recovery {
+		// Linux attaches Pdeathsig to the creating thread. Keep that thread alive
+		// through Start and synchronous Wait, including cancellation and pipe drain.
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+	}
 	if !filepath.IsAbs(prog) {
 		return nil, nil, -1, fmt.Errorf("program must be absolute")
 	}
@@ -64,6 +82,9 @@ func (Real) Run(ctx context.Context, prog string, args []string, o RunOpts) ([]b
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if recovery {
+		cmd.SysProcAttr.Pdeathsig = syscall.SIGKILL
+	}
 	if o.Uid != 0 || o.Gid != 0 {
 		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: o.Uid, Gid: o.Gid, Groups: o.Groups}
 	}

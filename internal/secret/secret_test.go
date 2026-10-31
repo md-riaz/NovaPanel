@@ -1,9 +1,10 @@
-package secret
+package secret_test
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"novapanel/internal/secret"
 	"novapanel/internal/store"
 	"os"
 	"path/filepath"
@@ -12,7 +13,7 @@ import (
 
 func TestKeyLifecycleSealingSettings(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "seal.key")
-	s, e := LoadOrCreate(p)
+	s, e := secret.LoadOrCreate(p)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -24,7 +25,7 @@ func TestKeyLifecycleSealingSettings(t *testing.T) {
 	if e != nil || bytes.Contains(sealed.Ciphertext, []byte("password")) {
 		t.Fatal(sealed, e)
 	}
-	s2, e := LoadOrCreate(p)
+	s2, e := secret.LoadOrCreate(p)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -45,7 +46,7 @@ func TestKeyLifecycleSealingSettings(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	var saved Sealed
+	var saved secret.Sealed
 	if e = json.Unmarshal(b, &saved); e != nil {
 		t.Fatal(e)
 	}
@@ -56,22 +57,22 @@ func TestKeyLifecycleSealingSettings(t *testing.T) {
 	if _, e = s.Open(sealed); e == nil {
 		t.Fatal("tampering accepted")
 	}
-	if _, e = s.Open(Sealed{}); e == nil {
+	if _, e = s.Open(secret.Sealed{}); e == nil {
 		t.Fatal("malformed accepted")
 	}
 	os.Chmod(p, 0644)
-	if _, e = LoadOrCreate(p); e == nil {
+	if _, e = secret.LoadOrCreate(p); e == nil {
 		t.Fatal("unsafe permissions accepted")
 	}
 	link := filepath.Join(t.TempDir(), "link")
 	os.Symlink(p, link)
-	if _, e = LoadOrCreate(link); e == nil {
+	if _, e = secret.LoadOrCreate(link); e == nil {
 		t.Fatal("symlink accepted")
 	}
 }
 func TestRedactNestedNoMutation(t *testing.T) {
 	original := map[string]any{"password": "shh", "nested": []any{map[string]any{"TOKEN": "npat_id_secret", "message": "Bearer abc.def and nps_id_secret"}}, "public": "safe"}
-	out := Redact(original)
+	out := secret.Redact(original)
 	b, _ := json.Marshal(out)
 	if bytes.Contains(b, []byte("shh")) || bytes.Contains(b, []byte("abc.def")) || bytes.Contains(b, []byte("npat_id_secret")) || bytes.Contains(b, []byte("nps_id_secret")) {
 		t.Fatal(string(b))
