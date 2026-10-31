@@ -137,7 +137,15 @@ func main() {
 	write(base+"/new/index.php", []byte("<?php echo 'new:'.ini_get('memory_limit');"))
 	write(base+"/fpm.ini", []byte("[global]\nerror_log="+base+"/fpm.log\npid="+base+"/fpm.pid\ninclude="+base+"/pool/*.conf\n"))
 	l := &lab{}
-	p := &php.Applier{Root: base + "/pool", Runner: l, Probe: func(ctx context.Context, d php.Desired) error { return l.hit("fpm.probe") }}
+	p := &php.Applier{Root: base + "/pool", Runner: l, Probe: func(ctx context.Context, d php.Desired) error {
+		// The established nginx route executes PHP against the newly reloaded pool.
+		if l.phase != "" {
+			if err := health(ctx, "old:512M"); err != nil {
+				return err
+			}
+		}
+		return l.hit("fpm.probe")
+	}}
 	a := &nginx.Applier{Root: base + "/nginx", Runner: l, Probe: func(ctx context.Context, d nginx.Desired) error {
 		want := "old:256M"
 		if strings.HasSuffix(d.Docroot, "/new") {

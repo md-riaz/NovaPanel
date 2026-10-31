@@ -59,6 +59,7 @@ func TestPHPTransactionRecovery(t *testing.T) {
 			p := &php.Applier{Root: pool, Runner: r, Probe: func(context.Context, php.Desired) error { return probe("fpm.probe") }}
 			a := &Applier{Root: root, Runner: r, Probe: func(context.Context, Desired) error { return probe("nginx.probe") }}
 			d := Desired{Name: "demo", Domains: []string{"demo.example.test"}, Docroot: "/srv/sites/demo/public", ACMERoot: "/var/www/acme/demo", PHP: &php.Desired{Name: "demo", Type: "php", Version: "8.3", UID: 1001, GID: 1001}}
+			restoreErr := errors.New("restored service unhealthy")
 			restoreProbe := func(c context.Context) error {
 				if c.Err() != nil {
 					t.Fatal("canceled recovery")
@@ -68,7 +69,7 @@ func TestPHPTransactionRecovery(t *testing.T) {
 					t.Fatal("unbounded recovery")
 				}
 				events = append(events, "restore.probe")
-				return nil
+				return restoreErr
 			}
 			if err := a.ApplyPHP(ctx, p, d, func(context.Context) error { return nil }, restoreProbe); err != nil {
 				t.Fatal(err)
@@ -87,6 +88,8 @@ func TestPHPTransactionRecovery(t *testing.T) {
 			d.PHP.Limits = &php.Limits{MemoryMB: 512, UploadMB: 64, MaxExecSec: 60}
 			if err := a.ApplyPHP(ctx, p, d, func(context.Context) error { return probe("commit") }, restoreProbe); err == nil {
 				t.Fatal("expected failure")
+			} else if failure != "fpm.validate" && failure != "nginx.validate" && !errors.Is(err, restoreErr) {
+				t.Fatal("lost restored-state health failure", err)
 			}
 			if !failed {
 				t.Fatal("did not inject failure")
