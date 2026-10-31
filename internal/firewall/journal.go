@@ -344,7 +344,9 @@ func (j *Journal) Reconcile(ctx context.Context, commit func(JournalRecord) erro
 			return err
 		}
 		if r.State == "acknowledged" {
-			return nil
+			// A failed post-rename sync may leave this visible without a durable
+			// acknowledgement. Retry must establish durability before success.
+			return j.syncDir()
 		}
 		if r.State != "confirmed" && r.State != "reverted" {
 			return errors.New("journal not terminal")

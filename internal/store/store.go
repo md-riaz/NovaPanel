@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -143,7 +144,20 @@ func (s *Store) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
 	if e = fn(tx); e != nil {
 		return e
 	}
-	return tx.Commit()
+	if e = tx.Commit(); e != nil {
+		// SQLite may retain the transaction after a failed deferred-constraint
+		// COMMIT, although database/sql has already marked Tx done. Clean up on
+		// this pinned connection before returning it to the single-entry pool.
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, rollbackErr := conn.ExecContext(cleanup, "ROLLBACK"); rollbackErr != nil {
+			// An already-rolled-back transaction also takes this conservative
+			// discard path. Never reuse a connection with uncertain SQL state.
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+		return e
+	}
+	return nil
 }
 func (s *Store) migrate() error {
 	entries, e := migrations.ReadDir("migrations")
