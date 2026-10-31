@@ -43,7 +43,9 @@ func (v IntegrationSpec) Validate() error {
 }
 
 // IntegrationToken is execution-only, never an RPC result or durable job argument.
-type IntegrationToken struct{ value []byte }
+// Keep bytes behind a closure: fmt's invalid-verb and private-field fallbacks
+// can bypass Format and traverse a slice even when its field is unexported.
+type IntegrationToken struct{ value func() []byte }
 
 func NewIntegrationToken(v []byte) (*IntegrationToken, error) {
 	if len(v) == 0 || len(v) > 4096 {
@@ -54,11 +56,22 @@ func NewIntegrationToken(v []byte) (*IntegrationToken, error) {
 			return nil, ErrIntegration
 		}
 	}
-	return &IntegrationToken{value: append([]byte(nil), v...)}, nil
+	value := append([]byte(nil), v...)
+	return &IntegrationToken{value: func() []byte { return value }}, nil
 }
-func (*IntegrationToken) Format(s fmt.State, _ rune)   { _, _ = io.WriteString(s, "[REDACTED]") }
-func (*IntegrationToken) MarshalJSON() ([]byte, error) { return []byte(`"[REDACTED]"`), nil }
+func (IntegrationToken) Format(s fmt.State, _ rune)   { _, _ = io.WriteString(s, "[REDACTED]") }
+func (IntegrationToken) MarshalJSON() ([]byte, error) { return []byte(`"[REDACTED]"`), nil }
 
 // ExecutionBytes returns a copy owned by the caller, which must clear it after use.
-func (v *IntegrationToken) ExecutionBytes() []byte { return append([]byte(nil), v.value...) }
-func (v *IntegrationToken) Destroy()               { clear(v.value); v.value = nil }
+func (v *IntegrationToken) ExecutionBytes() []byte {
+	if v.value == nil {
+		return nil
+	}
+	return append([]byte(nil), v.value()...)
+}
+func (v *IntegrationToken) Destroy() {
+	if v.value != nil {
+		clear(v.value())
+		v.value = nil
+	}
+}
