@@ -31,6 +31,8 @@ func (q *Queue) reconcileConfigRecord(ctx context.Context, jid string) error {
 	s, ok := q.store.(interface {
 		LoadOperation(context.Context, string) (store.Operation, error)
 		CheckTerminalWordPressConfig(context.Context, string) error
+		AuthorizeTerminalWordPressConfig(context.Context, string) error
+		AcknowledgeTerminalWordPressConfig(context.Context, string) error
 	})
 	seal, hasSeal := q.sealer.(*secret.Sealer)
 	if !ok || !hasSeal {
@@ -49,13 +51,21 @@ func (q *Queue) reconcileConfigRecord(ctx context.Context, jid string) error {
 	if err = s.CheckTerminalWordPressConfig(ctx, jid); err != nil {
 		return errors.New("jobs: config terminal reconciliation refused")
 	}
+	if op.Identity.ConfigCleanup == "acknowledged" {
+		return configcustody.CheckConfigRecordAbsent(ctx, root, jid)
+	}
 	w := op.Identity.WordPress
 	plan, err := wordpress.BuildInstall(w.Input, w.Evidence)
 	if err != nil {
 		return errors.New("jobs: config terminal reconciliation refused")
 	}
 	b := configcustody.ConfigBinding{JobID: jid, SiteID: op.SiteID, DatabaseID: op.DatabaseID, AccountID: op.Identity.Database.PrimaryUserID, Docroot: plan.Docroot, UID: w.Input.UID, GID: w.Input.GID}
-	return configcustody.RemoveConfigRecord(ctx, root, b, seal)
+	if err = configcustody.RemoveConfigRecordAuthorized(ctx, root, b, seal, func() error {
+		return s.AuthorizeTerminalWordPressConfig(ctx, jid)
+	}); err != nil {
+		return err
+	}
+	return s.AcknowledgeTerminalWordPressConfig(ctx, jid)
 }
 
 func (q *Queue) reconcileConfigRecords(ctx context.Context) error {

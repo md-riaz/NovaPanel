@@ -21,6 +21,26 @@ func RemoveConfigRecord(ctx context.Context, custody string, b ConfigBinding, se
 	return removeConfigRecord(ctx, custody, b, seal, 0, configOps{})
 }
 
+// RemoveConfigRecordAuthorized persists terminal ownership after opening and
+// authenticating a present record, but before unlink. Absence authorizes before
+// directory sync. A failed open/authentication cannot retire a live binding.
+func RemoveConfigRecordAuthorized(ctx context.Context, custody string, b ConfigBinding, seal *secret.Sealer, authorize func() error) error {
+	if b.UID == 0 || b.GID == 0 || authorize == nil {
+		return errConfigCustody
+	}
+	authorized := false
+	ops := configOps{boundary: func(stage string) error {
+		if !authorized && (stage == "cleanup-authorize" || stage == "cleanup-dir-sync") {
+			if err := authorize(); err != nil {
+				return err
+			}
+			authorized = true
+		}
+		return nil
+	}}
+	return removeConfigRecord(ctx, custody, b, seal, 0, ops)
+}
+
 func removeConfigRecord(ctx context.Context, custody string, b ConfigBinding, seal *secret.Sealer, owner uint32, ops configOps) (err error) {
 	defer func() {
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
@@ -80,6 +100,14 @@ func removeConfigRecord(ctx context.Context, custody string, b ConfigBinding, se
 		}
 		var current unix.Stat_t
 		if unix.Fstatat(int(dir.Fd()), name, &current, unix.AT_SYMLINK_NOFOLLOW) != nil || held.Dev != current.Dev || held.Ino != current.Ino || held.Nlink != 1 || current.Nlink != 1 {
+			return errConfigCustody
+		}
+		if err = ops.check(ctx, "cleanup-authorize"); err != nil {
+			return err
+		}
+		// Authorization can perform a durable write. Recheck the directory entry
+		// afterwards before unlink, under the caller's root-writer exclusion.
+		if unix.Fstatat(int(dir.Fd()), name, &current, unix.AT_SYMLINK_NOFOLLOW) != nil || held.Dev != current.Dev || held.Ino != current.Ino || current.Nlink != 1 {
 			return errConfigCustody
 		}
 		if err = unix.Unlinkat(int(dir.Fd()), name, 0); err != nil {

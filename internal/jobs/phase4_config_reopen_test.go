@@ -354,6 +354,56 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// A failed acknowledgement must retain pre-unlink ownership across rebinding.
+	if err = s.Tx(ctx, func(tx *sql.Tx) error {
+		_, e := tx.ExecContext(ctx, `CREATE TRIGGER stop_cleanup_ack BEFORE UPDATE OF identities_json ON phase4_operations WHEN json_extract(NEW.identities_json,'$.ConfigCleanup')='acknowledged' BEGIN SELECT RAISE(ABORT,'injected acknowledgement failure'); END`)
+		return e
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = q.PrepareOperations(ctx); err == nil {
+		t.Fatal("acknowledgement failure ignored")
+	}
+	if _, err = os.Stat(filepath.Join(custody, en.Job.ID+".sealed")); !os.IsNotExist(err) {
+		t.Fatal("unlink not reached before failed acknowledgement", err)
+	}
+	if err = s.Tx(ctx, func(tx *sql.Tx) error {
+		_, e := tx.ExecContext(ctx, `DROP TRIGGER stop_cleanup_ack; UPDATE sites SET docroot=docroot||'-rebound'`)
+		return e
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = auditSink.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = store.Open(dbpath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditSink, err = audit.Open(s, filepath.Join(root, "audit"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q = NewQueue(s, seal, auditSink)
+	q.SetConfigCustody(custody)
+	if err = q.PrepareOperations(ctx); err != nil {
+		t.Fatal("authorized missing-record cleanup after rebinding", err)
+	}
+	q.SetRunner(func(context.Context, *Job) error { t.Error("rebound terminal effects replayed"); return nil })
+	reboundRun, reboundStop := context.WithTimeout(ctx, 100*time.Millisecond)
+	if err = q.Run(reboundRun); err != nil {
+		t.Fatal("rebound Queue.Run", err)
+	}
+	reboundStop()
+	if err = s.Tx(ctx, func(tx *sql.Tx) error {
+		_, e := tx.ExecContext(ctx, `UPDATE sites SET docroot=? WHERE id=?`, docroot, terminalOp.SiteID)
+		return e
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err = q.PrepareOperations(ctx); err != nil {
 		t.Fatal("terminal cleanup retry", err)
 	}
@@ -419,4 +469,73 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 	if _, err = q.Claim(ctx, en.Job.ID, en.ClaimToken); err == nil {
 		t.Fatal("claim recreated")
 	}
+	deleteJob := store.Job{ID: "review-delete", Verb: "site.delete", CreatedBy: "session", Role: "owner", State: "queued", Args: []byte(`{}`)}
+	if _, err = s.PrepareOperation(ctx, deleteJob, store.JobClaim{}, store.OperationRequest{Kind: store.SiteDelete, SiteID: op.SiteID}, nil, nil); err != nil {
+		t.Fatal("canonical delete admission", err)
+	}
+	if _, err = s.StartJob(ctx, deleteJob.ID, time.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.CheckpointOperation(ctx, deleteJob.ID, "prepared", "db_applied"); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.CompleteOperation(ctx, deleteJob.ID, nil); err != nil {
+		t.Fatal("canonical delete completion", err)
+	}
+	if _, err = s.SiteByID(ctx, op.SiteID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("site was not deleted", err)
+	}
+	t.Log("supported site.delete committed after successful cleanup and consumed claim")
+	if err = auditSink.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = store.Open(dbpath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditSink, err = audit.Open(s, filepath.Join(root, "audit"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q = NewQueue(s, seal, auditSink)
+	q.SetConfigCustody(custody)
+	q.SetRunner(func(context.Context, *Job) error { t.Error("historical effects replayed"); return nil })
+	// Reappearing records after acknowledgement must block real startup, even
+	// authentic old records. They must not be silently ignored or removed.
+	for _, raw := range [][]byte{record, []byte("unmanaged")} {
+		if err = os.WriteFile(filepath.Join(custody, en.Job.ID+".sealed"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		blocked, stopBlocked := context.WithTimeout(ctx, time.Second)
+		if err = q.Run(blocked); err == nil {
+			t.Fatal("acknowledged present record accepted")
+		}
+		stopBlocked()
+		got, e := os.ReadFile(filepath.Join(custody, en.Job.ID+".sealed"))
+		if e != nil || !bytes.Equal(got, raw) {
+			t.Fatal("conflict removed", e)
+		}
+		if err = os.Remove(filepath.Join(custody, en.Job.ID+".sealed")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restart, stop := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer stop()
+	if err = q.Run(restart); err != nil {
+		t.Fatal("REGRESSION: supported site.delete after completed cleanup blocks reopened Queue.Run", err)
+	}
+	if got, e := os.ReadFile(filepath.Join(docroot, "wp-config.php")); e != nil || !bytes.Equal(got, first) {
+		t.Fatal("startup changed live config", e)
+	}
+	if _, err = q.Claim(ctx, en.Job.ID, en.ClaimToken); err == nil {
+		t.Fatal("startup recreated claim")
+	}
+	finalOp, e := s.LoadOperation(ctx, en.Job.ID)
+	if e != nil || finalOp.Checkpoint != "done" || finalOp.Identity.ConfigCleanup != "acknowledged" || len(finalOp.Ciphertext) != 0 {
+		t.Fatal("lost terminal acknowledgement", e)
+	}
+
 }

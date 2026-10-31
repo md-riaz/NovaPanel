@@ -25,6 +25,7 @@ func validWordPressIdentity(op Operation) bool {
 	nested := op
 	nested.Kind = DatabaseCreate
 	nested.Identity.WordPress = nil
+	nested.Identity.ConfigCleanup = ""
 	if !validOperationIdentity(nested) {
 		return false
 	}

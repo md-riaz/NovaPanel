@@ -45,6 +45,7 @@ type OperationIdentity struct {
 	Attached                   []OperationDatabase `json:",omitempty"`
 	BindingID                  string              `json:",omitempty"`
 	PurgeFiles, PurgeDatabases bool
+	ConfigCleanup              string                `json:",omitempty"`
 	WordPress                  *WordPressReservation `json:",omitempty"`
 }
 type Operation struct {
@@ -118,6 +119,9 @@ func scanOperation(row scanner) (o Operation, err error) {
 }
 
 func validOperationIdentity(o Operation) bool {
+	if state := o.Identity.ConfigCleanup; state != "" && (o.Kind != WordPressInstall || o.Checkpoint != "done" || (state != "authorized" && state != "acknowledged")) {
+		return false
+	}
 	if o.Kind == WordPressInstall {
 		return validWordPressIdentity(o)
 	}
