@@ -18,7 +18,7 @@ No firewall test invokes UFW, systemd, iptables, SSH or a network probe.
 
 ## Confined journal foundation
 
-`journal.go` is an unwired alternative authority, not a `PendingStore` adapter.
+`journal.go` is the independent recovery authority, not a `PendingStore` adapter. Actual terminal startup is documented in `docs/phase6-terminal-startup-lifecycle.md`.
 It never imports or opens SQLite. The approved phase-6 amendment supersedes the
 old direct-DB helper contract. `Arm` retains a single record permanently and
 refuses rearming even after acknowledgement. Production admission/archival is
@@ -48,7 +48,7 @@ after successful restoration it does not prevent terminal publication.
 before the idempotent recovery adapter and reverted afterwards. Terminal records
 remain until daemon-only `Reconcile` invokes a successful durable DB/audit commit
 and publishes acknowledgement. The commit callback must deduplicate by ID.
-These callbacks are trusted seams, not implemented production adapters.
+The daemon startup consumer composes ordinary Audit/Store and publishes v2 acknowledged-only receipts retaining terminal_state. Receipt retries use a distinct verify-only callback requiring zero pending and exact post-replay evidence. Legacy v1 acknowledged refuses startup.
 
 Metadata contains only version, ID, fixed unit, deadline, prior enabled state,
 snapshot digest and state. The snapshot itself must remain in separate private
@@ -169,7 +169,7 @@ concurrent trusted-root changes. No real UFW or systemd acceptance is claimed.
 
 1. Keep canonical 01 authorization at the privileged dispatch boundary. Apply is slow/effectful, admin+, MFA, `firewall:write`, object key `firewall`. Confirm/revert are synchronous, MFA-gated and automation-token reachable. This package is not an authorization layer.
 2. Use 03's exact apply shape. `Desired.DefaultIncoming` is a trusted planning option, not a new RPC argument: 03 currently omits `default_incoming`, despite phase prose including it. Do not expose it without a canonical amendment. Read SSH port and timer defaults from config.
-3. `store.CreateFirewallPending` and `store.WithPending` implement singleton reservation and one-shot transaction consumption with a SQLite writer lock held through the callback. Tests prove reopen durability, concurrency, deadline refusal and restore retry. The approved schema-only stack supplies canonical DDL through full production `0007_phase6.sql` after the byte-identical published Phase 4 `0006_phase4.sql`. Positive tests use ordinary migrations, not fixture installation. This does not activate public recovery or startup admission. Independent process access remains blocked by the daemon lifetime flock. Confirmation now refuses before stopping the timer. A scratch replay matrix covers restoration, audit-marker, DELETE and actual COMMIT failures; it is not a process-kill or power-loss test. A real Store open test confirms that the lifetime flock blocks an independent opener until the daemon closes its store.
+3. `store.CreateFirewallPending` and `store.WithPending` implement singleton reservation and one-shot transaction consumption with a SQLite writer lock held through the callback. Tests prove reopen durability, concurrency, deadline refusal and restore retry. The approved schema-only stack supplies canonical DDL through full production `0007_phase6.sql` after the byte-identical published Phase 4 `0006_phase4.sql`. Positive tests use ordinary migrations, not fixture installation. This does not activate public recovery. Terminal-only startup is implemented separately with exact receipt verification before serving. Independent process access remains blocked by the daemon lifetime flock. Confirmation now refuses before stopping the timer. A scratch replay matrix covers restoration, audit-marker, DELETE and actual COMMIT failures; it is not a process-kill or power-loss test. A real Store open test confirms that the lifetime flock blocks an independent opener until the daemon closes its store.
 4. Capture a confined root-owned snapshot with the exact inventory admitted by internal custody. Capture, no-follow safe restore plus durable audit marker and daemon startup reconciliation remain absent; only the already-captured-byte custody writer/verifier is supplied here.
 5. Apply requires full desired-set replacement, dry-run, persisted pending plus independently armed transient timer BEFORE risky commands, SSH-first application and rule verification. Rendered argv are not an append-to-live implementation, and there is deliberately no live apply API in this slice.
 6. Root `panel-agent fw-revert` must work with the daemon down. Its locking/DB ownership must be reconciled with the existing daemon lifetime lock. Cancel/fire races must use the same cross-process pending lock. Manual revert may leave a harmless timer which later finds no row; never reuse IDs or delete snapshots before the timer can no longer need them.

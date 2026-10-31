@@ -26,14 +26,14 @@ func TestJournalAcknowledgementRetryEstablishesDurability(t *testing.T) {
 		return fault
 	}
 	commits := 0
-	if err := j.Reconcile(ctx, func(JournalRecord) error { commits++; return nil }); !errors.Is(err, fault) {
+	if err := j.Reconcile(ctx, func(JournalRecord) error { commits++; return nil }, func(JournalRecord) error { return nil }); !errors.Is(err, fault) {
 		t.Fatal(err)
 	}
-	if err := j.Reconcile(ctx, func(JournalRecord) error { commits++; return nil }); !errors.Is(err, fault) {
+	if err := j.Reconcile(ctx, func(JournalRecord) error { commits++; return nil }, func(JournalRecord) error { return nil }); !errors.Is(err, fault) {
 		t.Fatal("visible acknowledgement accepted without durability", err)
 	}
 	j.syncDirectory = nil
-	if err := j.Reconcile(ctx, func(JournalRecord) error { commits++; return nil }); err != nil {
+	if err := j.Reconcile(ctx, func(JournalRecord) error { commits++; return nil }, func(JournalRecord) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if commits != 1 {

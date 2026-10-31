@@ -30,6 +30,7 @@ type JournalRecord struct {
 	SnapshotSHA256 string `json:"snapshot_sha256"`
 	PriorEnabled   bool   `json:"prior_enabled"`
 	State          string `json:"state"`
+	TerminalState  string `json:"terminal_state,omitempty"`
 }
 
 // Journal requires a preprovisioned 0700 root and stable empty 0600 lock file.
@@ -215,7 +216,13 @@ func (j *Journal) locked(ctx context.Context, fn func() error) error {
 }
 func validJournal(r JournalRecord) bool {
 	digest, err := hex.DecodeString(r.SnapshotSHA256)
-	if r.Version != 1 || !id.Valid(r.ID) || r.Unit != "novapanel-fwrevert-"+r.ID || r.Deadline <= 0 || r.Deadline > 253402300799 || err != nil || len(digest) != 32 || strings.ToLower(r.SnapshotSHA256) != r.SnapshotSHA256 {
+	if (r.Version != 1 && r.Version != 2) || !id.Valid(r.ID) || r.Unit != "novapanel-fwrevert-"+r.ID || r.Deadline <= 0 || r.Deadline > 253402300799 || err != nil || len(digest) != 32 || strings.ToLower(r.SnapshotSHA256) != r.SnapshotSHA256 {
+		return false
+	}
+	if r.Version == 2 {
+		return r.State == "acknowledged" && (r.TerminalState == "confirmed" || r.TerminalState == "reverted")
+	}
+	if r.TerminalState != "" {
 		return false
 	}
 	switch r.State {
@@ -292,8 +299,11 @@ func (j *Journal) publishContext(ctx context.Context, r JournalRecord) error {
 	}
 	defer f.Close()
 	b, _ := json.Marshal(r)
-	if _, err = f.Write(b); err != nil {
-		return err
+	if n, writeErr := f.Write(b); writeErr != nil || n != len(b) {
+		if writeErr != nil {
+			return writeErr
+		}
+		return io.ErrShortWrite
 	}
 	if err = f.Sync(); err != nil {
 		return err
@@ -307,8 +317,13 @@ func (j *Journal) publishContext(ctx context.Context, r JournalRecord) error {
 	if err = unix.Renameat(dir, "state.next", dir, "state"); err != nil {
 		return err
 	}
-	if err = j.syncDir(); err != nil && r.State == "confirmed" {
-		return errors.Join(ErrConfirmationCommitted, err)
+	if err = j.syncDir(); err != nil {
+		if r.Version == 2 {
+			return errors.Join(ErrAcknowledgementCommitted, err)
+		}
+		if r.State == "confirmed" {
+			return errors.Join(ErrConfirmationCommitted, err)
+		}
 	}
 	return err
 }
@@ -373,7 +388,30 @@ func (j *Journal) Confirm(ctx context.Context, pendingID string, now func() time
 
 // Reconcile is daemon-only. commit must idempotently commit the exact ID's
 // pending-row projection and audit event before returning. No helper calls it.
-func (j *Journal) Reconcile(ctx context.Context, commit func(JournalRecord) error) error {
+func (j *Journal) Reconcile(ctx context.Context, commit func(JournalRecord) error, verify ...func(JournalRecord) error) error {
+	return j.reconcileExpected(ctx, nil, commit, verify...)
+}
+
+var ErrLegacyAcknowledgement = errors.New("ambiguous legacy firewall acknowledgement")
+var ErrAcknowledgementCommitted = errors.New("acknowledgement committed; durability failed")
+
+// OriginalTerminal preserves the exact v1 audit identity of a v2 receipt.
+func (r JournalRecord) OriginalTerminal() (JournalRecord, error) {
+	if !validJournal(r) {
+		return JournalRecord{}, errors.New("invalid terminal record")
+	}
+	if r.Version == 2 {
+		r.Version = 1
+		r.State = r.TerminalState
+		r.TerminalState = ""
+	}
+	if r.State != "confirmed" && r.State != "reverted" {
+		return JournalRecord{}, ErrLegacyAcknowledgement
+	}
+	return r, nil
+}
+
+func (j *Journal) reconcileExpected(ctx context.Context, expected *JournalRecord, commit func(JournalRecord) error, verify ...func(JournalRecord) error) error {
 	if commit == nil {
 		return errors.New("missing reconciliation adapter")
 	}
@@ -382,24 +420,44 @@ func (j *Journal) Reconcile(ctx context.Context, commit func(JournalRecord) erro
 		if err != nil {
 			return err
 		}
-		if r.State == "acknowledged" {
-			// A failed post-rename sync may leave this visible without a durable
-			// acknowledgement. Retry must establish durability before success.
-			return j.syncDir()
+		if expected != nil && r != *expected {
+			return errors.New("firewall startup journal changed")
 		}
-		if r.State != "confirmed" && r.State != "reverted" {
-			return errors.New("journal not terminal")
-		}
-		if r.State == "confirmed" {
-			if err = j.syncDir(); err != nil {
-				return errors.Join(ErrConfirmationCommitted, err)
-			}
-		}
-		if err = commit(r); err != nil {
+		original, err := r.OriginalTerminal()
+		if err != nil {
 			return err
 		}
+		if err = j.syncDir(); err != nil {
+			if r.Version == 2 {
+				return errors.Join(ErrAcknowledgementCommitted, err)
+			}
+			if r.State == "confirmed" {
+				return errors.Join(ErrConfirmationCommitted, err)
+			}
+			return err
+		}
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		if r.Version == 2 {
+			if len(verify) != 1 || verify[0] == nil {
+				return errors.New("missing receipt verification adapter")
+			}
+			if err = verify[0](original); err != nil {
+				return err
+			}
+			return ctx.Err()
+		}
+		if err = commit(original); err != nil {
+			return err
+		}
+		r.Version = 2
+		r.TerminalState = r.State
 		r.State = "acknowledged"
-		return j.publish(r)
+		if err = j.publishContext(ctx, r); err != nil {
+			return err
+		}
+		return ctx.Err()
 	})
 }
 

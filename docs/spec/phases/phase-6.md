@@ -123,7 +123,11 @@ is a projection. The independent helper never opens the DB or bypasses its lifet
 flock. The earlier row-deletion wording means daemon reconciliation, not helper SQL.
 
 - A preprovisioned private 0700 owner-controlled root contains one stable 0600
-  lock inode and one bounded version-1 state file. All components open no-follow;
+  lock inode and one bounded state file. New arms and pre-acknowledgement states
+  remain version 1. Version 2 is allowed only for acknowledged receipts with an
+  exact `terminal_state` of confirmed or reverted; normalization restores the
+  original version-1 terminal record and its deterministic audit bytes.
+  All components open no-follow;
   writable/foreign ancestors and nonregular, linked or incorrectly owned files
   fail closed. Root/agent UID is trusted and must not mutate paths concurrently.
 - State binds the existing pending ID, exact timer unit, deadline, prior enabled
@@ -226,8 +230,23 @@ independent systemd service, not to Pdeathsig. The explicit service/timer/startu
 contract, provisioning, tested scope and remaining coverage are recorded in
 `docs/phase6-independent-recovery.md`. A bounded Runner-backed transient manager
 adapter and mandatory pre-OpenState startup consumer now inspect the authoritative
-journal, schedule and verify independent recovery, and block daemon startup for
-all retained pending or terminal records. Only a valid absent state permits serve.
+journal and schedule and verify independent recovery before daemon state opens.
+Pending armed/confirming/reverting always stops that startup attempt, even if the
+helper becomes terminal during readback. Strict absence or v1 confirmed/reverted
+or v2 acknowledged classification retains an opaque custody plan, without holding
+flock across ordinary OpenState. Completion rechecks the exact classified record
+under that same custody before any socket/jobs/workers. Absence requires zero SQL
+pending rows. Terminal consumption uses ordinary file-first Audit/Store COMMIT,
+then context-bound durable v2 acknowledgement. A receipt boot verifies the exact
+normalized original event after ordinary audit replay and requires zero pending
+rows, without deleting or inserting in verification. Exact file-only evidence may
+legitimately recreate SQL during ordinary replay with zero pending; missing-both,
+collision or any pending under a receipt refuses. Legacy v1 acknowledged is
+ambiguous and refuses before OpenState without inference. Retain all evidence;
+no reuse/archive/new Arm/public apply is authorized. Old binaries reject v2, so
+downgrade is not transparent. Firewall refusal is fatal before listener publication,
+not Phase 4 read-only recovery mode; later Phase 4 PrepareStartup remains after
+firewall completion and socket reservation, before listening.
 The approved schema-only stack now supplies exact Phase 4 migration 0006 and full
 canonical production 0007 through ordinary Store.Open. No Phase 4 runtime, SQL
 reconciliation bypass, RPC activation or public apply is supplied. The internal context-aware JournalRecovery consumer

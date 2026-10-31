@@ -42,10 +42,9 @@ helper cgroup admission is unchanged. Public wiring remains closed. See
 The internal Agent.CommitFirewallTerminal consumer separately opens the fixed
 journal and commits confirmed/reverted through ordinary audit replay and the
 existing exact Store transaction. It never acknowledges or runs recovery/timer
-commands. It is not called by ordinary serve, which still blocks every retained
-state before OpenState. See `docs/phase6-daemon-terminal-commit.md`. Production
-migration, terminal lifecycle policy and public activation are separate source
-requirements, not completed by this internal method.
+commands. Ordinary serve separately uses the outcome-preserving terminal startup
+lifecycle in `docs/phase6-terminal-startup-lifecycle.md`. Production migrations
+0006/0007 are present. Public activation remains closed.
 
 ## Required service ownership
 
@@ -77,12 +76,12 @@ death; scratch process tests do not validate that manager contract.
 
 ## Implemented timer and fail-stop startup consumer
 
-The daemon now calls a mandatory fixed-layout preflight before OpenState, socket
-reservation and worker configuration. Locked Journal.Inspect distinguishes a
-missing state leaf from invalid custody. A valid empty journal permits ordinary
-startup. Every pending, terminal and acknowledged record retains its evidence and
-blocks ordinary serve. No production migration or terminal acknowledgement is
-introduced.
+The daemon classifies fixed-layout custody before OpenState and completes exact
+terminal reconciliation or receipt verification before socket reservation and
+workers. Locked absence also requires zero pending SQL rows after OpenState.
+Pending always invokes manager admission and stops that attempt. Eligible v1
+terminal outcomes become v2 acknowledged receipts after ordinary Audit/Store
+commit. Legacy v1 acknowledgement refuses. All evidence remains retained.
 
 The private manager adapter executes fixed systemd-run, busctl and timer-only
 systemctl commands through Runner. It requests explicit cleanup/retry properties,
@@ -94,7 +93,7 @@ continues to reject early restoration. Confirm remains disconnected publicly.
 
 The consumer does not capture, arm, apply, reconcile or archive transactions.
 Transient timers do not survive reboot. Startup reconstructs scheduling from the
-retained journal but still refuses daemon admission until later SQL integration.
+retained journal and refuses pending admission on that attempt.
 Clock rollback has no bounded elapsed-time guarantee. Root remains trusted not to
 reconfigure admitted manager units concurrently. Real manager property encoding,
 cgroup drain, UFW, reboot and power-loss checks remain deferred VM acceptance.
@@ -121,8 +120,8 @@ or substituting manual Revert. Terminal outcomes require daemon audit/Store
 reconciliation; acknowledged still refuses new arms. Clock rollback provides no
 bounded elapsed-time guarantee.
 
-Production migration 0007 remains absent pending the independently owned 0006
-predecessor. Do not acknowledge terminal files using file evidence alone or treat
+Historical design note: production 0006/0007 are now installed through ordinary
+Store.Open. Do not acknowledge terminal files using file evidence alone or treat
 missing SQL tables as absence. Later reconciliation runs after ordinary audit
 replay and before mutation workers. Public apply, confirmation and legacy wiring
 remain closed. This helper neither captures nor arms, applies, archives or deletes.

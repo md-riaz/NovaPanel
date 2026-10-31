@@ -18,8 +18,31 @@ import (
 // The caller must hold the journal lock until this returns and acknowledge only
 // after success. Production fw_pending migration and public wiring remain gated.
 func (s *Store) ReconcileFirewallTerminal(ctx context.Context, r firewall.JournalRecord, appendDurable func(Event) error) error {
+	return s.firewallTerminal(ctx, r, appendDurable, false)
+}
+
+// VerifyFirewallTerminalReceipt validates post-replay completion without consuming
+// projections or manufacturing SQL evidence. The independent sink is synced again.
+func (s *Store) VerifyFirewallTerminalReceipt(ctx context.Context, r firewall.JournalRecord, appendDurable func(Event) error) error {
+	return s.firewallTerminal(ctx, r, appendDurable, true)
+}
+
+func (s *Store) VerifyFirewallAbsent(ctx context.Context) error {
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		var count int
+		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM fw_pending").Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			return errors.New("orphan firewall projection")
+		}
+		return nil
+	})
+}
+
+func (s *Store) firewallTerminal(ctx context.Context, r firewall.JournalRecord, appendDurable func(Event) error, verify bool) error {
 	digest, err := hex.DecodeString(r.SnapshotSHA256)
-	if appendDurable == nil || r.Version != 1 || !id.Valid(r.ID) || r.Unit != "novapanel-fwrevert-"+r.ID || r.Deadline <= 0 || r.Deadline > 253402300799 || err != nil || len(digest) != 32 || strings.ToLower(r.SnapshotSHA256) != r.SnapshotSHA256 || (r.State != "confirmed" && r.State != "reverted") {
+	if appendDurable == nil || r.Version != 1 || r.TerminalState != "" || !id.Valid(r.ID) || r.Unit != "novapanel-fwrevert-"+r.ID || r.Deadline <= 0 || r.Deadline > 253402300799 || err != nil || len(digest) != 32 || strings.ToLower(r.SnapshotSHA256) != r.SnapshotSHA256 || (r.State != "confirmed" && r.State != "reverted") {
 		return errors.New("invalid terminal firewall reconciliation")
 	}
 	detail, err := json.Marshal(r)
@@ -32,8 +55,10 @@ func (s *Store) ReconcileFirewallTerminal(ctx context.Context, r firewall.Journa
 	}
 	want := Event{ID: r.ID, TS: r.Deadline * 1000, Actor: "firewall-recovery", Verb: verb, ObjectKey: "firewall:" + r.ID, Outcome: "ok", Detail: detail}
 	return s.Tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, "UPDATE fw_pending SET confirmed=confirmed"); err != nil {
-			return err
+		if !verify {
+			if _, err := tx.ExecContext(ctx, "UPDATE fw_pending SET confirmed=confirmed"); err != nil {
+				return err
+			}
 		}
 		var count int
 		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM fw_pending").Scan(&count); err != nil {
@@ -62,6 +87,9 @@ func (s *Store) ReconcileFirewallTerminal(ctx context.Context, r firewall.Journa
 		}
 		if !present && !exists {
 			return errors.New("firewall projection missing without reconciliation evidence")
+		}
+		if verify && (count != 0 || !exists) {
+			return errors.New("firewall receipt evidence inconsistent")
 		}
 		if err := appendDurable(want); err != nil {
 			return err

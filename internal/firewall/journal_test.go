@@ -98,10 +98,10 @@ func TestJournalReconcileRetainsTerminalUntilCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := 0
-	if err := j.Reconcile(ctx, func(got JournalRecord) error { calls++; return nil }); err != nil {
+	if err := j.Reconcile(ctx, func(got JournalRecord) error { calls++; return nil }, func(JournalRecord) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if err := j.Reconcile(ctx, func(got JournalRecord) error { calls++; return nil }); err != nil {
+	if err := j.Reconcile(ctx, func(got JournalRecord) error { calls++; return nil }, func(JournalRecord) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 {

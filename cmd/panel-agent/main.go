@@ -96,16 +96,19 @@ func run(args []string) error {
 }
 
 // serve shares the production lifecycle with scratch tests using an injected runner.
-func serve(ctx context.Context, a *agent.Agent) error {
-	return serveWithPreflight(ctx, a, a.FirewallStartup)
+func serve(ctx context.Context, a *agent.Agent) (err error) {
+	plan, err := a.PrepareFirewallStartup(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, plan.Close()) }()
+	return serveInitialized(ctx, a, func() error { return a.CompleteFirewallStartup(ctx, plan) })
 }
 
-func serveWithPreflight(ctx context.Context, a *agent.Agent, preflight func(context.Context) error) (err error) {
-	if preflight == nil {
-		return errors.New("firewall startup dependency missing")
-	}
-	if err = preflight(ctx); err != nil {
-		return err
+// Production entry always supplies the retained plan finisher.
+func serveInitialized(ctx context.Context, a *agent.Agent, finish func() error) (err error) {
+	if finish == nil {
+		return errors.New("firewall startup finisher missing")
 	}
 	cleanup, err := a.OpenState(ctx)
 	if err != nil {
@@ -122,6 +125,12 @@ func serveWithPreflight(ctx context.Context, a *agent.Agent, preflight func(cont
 			err = errors.Join(err, releaseSocket())
 		}
 	}()
+	if err = finish(); err != nil {
+		return err
+	}
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	releaseSocket, err = reserveSocket(a.Cfg.SocketPath)
 	if err != nil {
 		return err

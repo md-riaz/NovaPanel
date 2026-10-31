@@ -182,7 +182,7 @@ func FixtureStartup(t *testing.T,root string)error{
 
 		agentShim := `package agent
 import("context";"testing";"novapanel/internal/firewall")
-func FixtureStartup(a *Agent,t *testing.T,root string){a.firewallStartup=func(context.Context)error{return firewall.FixtureStartup(t,root)}}
+func FixtureStartup(a *Agent,t *testing.T,root string){a.firewallStartupPlan=func(context.Context)(*firewall.FirewallStartupPlan,error){return nil,firewall.FixtureStartup(t,root)}}
 `
 		child = `package main
 import("context";"errors";"os";"testing";"novapanel/internal/agent";"novapanel/internal/config";"novapanel/internal/firewall";"novapanel/internal/validate")
