@@ -224,8 +224,12 @@ SIGKILL with creating-thread lifetime, plus group cancellation and synchronous
 wait. Descendant cleanup after unexpected helper death still belongs to the
 independent systemd service, not to Pdeathsig. The explicit service/timer/startup
 contract, provisioning, tested scope and remaining coverage are recorded in
-`docs/phase6-independent-recovery.md`. No timer launcher, startup consumer,
-production migration, RPC activation or public apply is supplied by this amendment.
+`docs/phase6-independent-recovery.md`. A bounded Runner-backed transient manager
+adapter and mandatory pre-OpenState startup consumer now inspect the authoritative
+journal, schedule and verify independent recovery, and block daemon startup for
+all retained pending or terminal records. Only a valid absent state permits serve.
+No production migration, SQL reconciliation bypass, RPC activation or public apply
+is supplied by this amendment.
 Real cgroup cleanup/UFW/reboot/power-loss acceptance remains deferred VM work.
 
 **Firewall confirmation crash-safety gate.** SQLite and systemd do not share a

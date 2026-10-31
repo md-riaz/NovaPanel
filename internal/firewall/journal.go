@@ -47,6 +47,29 @@ func OpenJournal(root string) (*Journal, error) {
 	return openJournalContext(context.Background(), root)
 }
 
+// OpenJournalContext bounds initial stable-inode lock admission by ctx.
+func OpenJournalContext(ctx context.Context, root string) (*Journal, error) {
+	return openJournalContext(ctx, root)
+}
+
+// Inspect returns a read-only value copy under the authoritative stable lock.
+// Only absence of the state leaf after custody admission is absence.
+func (j *Journal) Inspect(ctx context.Context) (r JournalRecord, present bool, err error) {
+	err = j.locked(ctx, func() error {
+		var e error
+		r, e = j.read()
+		if errors.Is(e, unix.ENOENT) {
+			return nil
+		}
+		if e != nil {
+			return e
+		}
+		present = true
+		return nil
+	})
+	return
+}
+
 // openJournalContext retains stable-inode admission while bounding initial lock wait.
 func openJournalContext(ctx context.Context, root string) (*Journal, error) {
 	d, err := journalRoot(root)

@@ -24,6 +24,7 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Agent struct {
+	firewallStartup func(context.Context) error
 	// Nil until durable snapshot recovery and independent deadman ownership are wired.
 	FirewallRecovery *firewall.Recovery
 	ProvisionSite    func(context.Context, string) error
@@ -47,6 +48,7 @@ func New() *Agent { return NewWithDependencies(config.Defaults(), exec.Real{}, &
 func NewWithDependencies(cfg config.Config, runner exec.Runner, v *validate.V) *Agent {
 	c := realClock{}
 	a := &Agent{Cfg: cfg, Exec: runner, Validate: v, Clock: c, Started: c.Now(),
+		firewallStartup: func(ctx context.Context) error { return firewall.PreflightInstalledFirewall(ctx, runner) },
 		ProvisionSite: func(ctx context.Context, name string) error {
 			return platform.EnsureSite(ctx, runner, cfg.SitesRoot, cfg.ACMEWebroot, name)
 		},

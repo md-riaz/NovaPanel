@@ -96,7 +96,17 @@ func run(args []string) error {
 }
 
 // serve shares the production lifecycle with scratch tests using an injected runner.
-func serve(ctx context.Context, a *agent.Agent) (err error) {
+func serve(ctx context.Context, a *agent.Agent) error {
+	return serveWithPreflight(ctx, a, a.FirewallStartup)
+}
+
+func serveWithPreflight(ctx context.Context, a *agent.Agent, preflight func(context.Context) error) (err error) {
+	if preflight == nil {
+		return errors.New("firewall startup dependency missing")
+	}
+	if err = preflight(ctx); err != nil {
+		return err
+	}
 	cleanup, err := a.OpenState(ctx)
 	if err != nil {
 		return err

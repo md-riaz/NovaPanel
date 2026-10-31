@@ -59,7 +59,31 @@ wait/pipe drain. General Real callers are unchanged. Parent-death signalling doe
 not cover grandchildren. Manager cgroup cleanup is required for unexpected helper
 death; scratch process tests do not validate that manager contract.
 
-## Next consumer, not implemented
+## Implemented timer and fail-stop startup consumer
+
+The daemon now calls a mandatory fixed-layout preflight before OpenState, socket
+reservation and worker configuration. Locked Journal.Inspect distinguishes a
+missing state leaf from invalid custody. A valid empty journal permits ordinary
+startup. Every pending, terminal and acknowledged record retains its evidence and
+blocks ordinary serve. No production migration or terminal acknowledgement is
+introduced.
+
+The private manager adapter executes fixed systemd-run, busctl and timer-only
+systemctl commands through Runner. It requests explicit cleanup/retry properties,
+rounds the remaining absolute deadline up to microseconds, queries typed manager
+properties, and repeats object readback. A launcher success alone is never proof.
+Existing conflicting units are not replaced. A verified existing service without
+a timer starts immediately. Predeadline reverting uses immediate retry while Fire
+continues to reject early restoration. Confirm remains disconnected publicly.
+
+The consumer does not capture, arm, apply, reconcile or archive transactions.
+Transient timers do not survive reboot. Startup reconstructs scheduling from the
+retained journal but still refuses daemon admission until later SQL integration.
+Clock rollback has no bounded elapsed-time guarantee. Root remains trusted not to
+reconfigure admitted manager units concurrently. Real manager property encoding,
+cgroup drain, UFW, reboot and power-loss checks remain deferred VM acceptance.
+
+## Earlier consumer design
 
 The timer launcher must invoke only `/usr/bin/systemd-run`, explicit system service
 mode and the fixed installed helper argv, with the ID-bound unit and all properties
@@ -115,8 +139,9 @@ The raw parent-death subprocess test also proves a grandchild can still write
 only after the direct child is observed dead, then cleans up the owned processes.
 This demonstrates why service cleanup remains mandatory.
 
-Outstanding source-test coverage remains explicit: no death-after-marker overlay.
-The actual-dispatcher
+Independent review of 3407c9e supplied enabled/disabled death-after-marker
+reopen/replay coverage in its external overlay. That is independent evidence,
+not an original-author test run. The actual-dispatcher
 child uses a fake Runner and test-only service/layout injection, not the installed
 CLI or real manager cleanup. This is not full acceptance of every design test.
 Independent exact-commit review remains required. Real manager cleanup, UFW

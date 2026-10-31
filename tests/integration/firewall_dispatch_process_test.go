@@ -17,6 +17,14 @@ import (
 // TestFirewallDispatcherStoreIndependence compiles test-only overlays. Neither
 // the installed CLI nor the firewall package exports a fixture path override.
 func TestFirewallDispatcherStoreIndependence(t *testing.T) {
+	firewallDispatcherStoreIndependence(t, false)
+}
+
+func TestFirewallStartupStoreIndependence(t *testing.T) {
+	firewallDispatcherStoreIndependence(t, true)
+}
+
+func firewallDispatcherStoreIndependence(t *testing.T, startup bool) {
 	if os.Geteuid() != 0 || os.Getegid() != 0 {
 		t.Skip("fixed runtime metadata requires root UID/GID fixtures")
 	}
@@ -82,9 +90,40 @@ type fixtureRunner struct{t *testing.T;calls []string}
 func(f *fixtureRunner)Run(_ context.Context,p string,a []string,_ execpkg.RunOpts)([]byte,[]byte,int,error){f.calls=append(f.calls,p+" "+strings.Join(a," "));return nil,nil,0,nil}
 func TestFixtureDispatcherChild(t *testing.T){root:=os.Getenv("NP_DISPATCH_ROOT");if root==""{t.Fatal("missing fixture")};f:=&fixtureRunner{t:t};handled,e:=dispatchFirewallRevert(t.Context(),[]string{"fw-revert","/var/lib/novapanel/firewall/snapshots/01ARZ3NDEKTSV4RRFFQ69G5FAV"},os.Geteuid(),os.Getegid(),func(ctx context.Context,id string)error{return firewall.FixtureRecover(ctx,id,root,f)});if !handled||e!=nil{t.Fatalf("dispatch %t %v",handled,e)};if strings.Join(f.calls,";")!="/usr/sbin/ufw --force enable;/usr/sbin/ufw reload"{t.Fatal(f.calls)}}
 `
+	// All substitutions below are test-only overlays bound to this checkout.
 	must(os.WriteFile(root+"/shim.go.txt", []byte(shim), 0600))
 	must(os.WriteFile(root+"/child.go.txt", []byte(child), 0600))
-	overlay, e := json.Marshal(map[string]any{"Replace": map[string]string{repo + "/internal/firewall/fixture_dispatch_overlay.go": root + "/shim.go.txt", repo + "/cmd/panel-agent/fixture_dispatch_overlay_test.go": root + "/child.go.txt"}})
+	replacements := map[string]string{repo + "/internal/firewall/fixture_dispatch_overlay.go": root + "/shim.go.txt", repo + "/cmd/panel-agent/fixture_dispatch_overlay_test.go": root + "/child.go.txt"}
+	packagePath := "./cmd/panel-agent"
+	if startup {
+		fixtureSource, e := os.ReadFile(repo + "/internal/firewall/runtime_manager_test.go")
+		must(e)
+		fixtureSource = []byte(strings.Split(string(fixtureSource), "func TestRuntimeManagerLaunchReadback")[0])
+		fixtureSource = []byte(strings.Replace(string(fixtureSource), "\n\t\"time\"", "", 1))
+		must(os.WriteFile(root+"/manager-fixture.go.txt", fixtureSource, 0600))
+		startupShim := `package firewall
+import("context";"testing";"time")
+func FixtureStartup(t *testing.T,root string)error{j,e:=OpenJournal(root+"/journal");if e!=nil{return e};r,_,e:=j.Inspect(t.Context());j.Close();if e!=nil{return e};f:=newManagerFixture(t,r);m:=runtimeManager{runner:f,now:func()time.Time{return time.Unix(90,0)},monotonic:func()(uint64,error){return 1000000,nil}};e=startupFirewall(context.Background(),runtimeLayout{root:root,rules:root+"/rules"},m);if len(f.calls)<10{t.Fatal("no manager execution")};return e}
+`
+		agentShim := `package agent
+import("context";"testing";"novapanel/internal/firewall")
+func FixtureStartup(a *Agent,t *testing.T,root string){a.firewallStartup=func(context.Context)error{return firewall.FixtureStartup(t,root)}}
+`
+		child = `package main
+import("context";"errors";"os";"testing";"novapanel/internal/agent";"novapanel/internal/config";"novapanel/internal/firewall";"novapanel/internal/validate")
+func TestFixtureDispatcherChild(t *testing.T){root:=os.Getenv("NP_DISPATCH_ROOT");cfg:=config.Defaults();cfg.DBPath=root+"/panel.db";cfg.TLSDir="relative-state-sentinel";a:=agent.NewWithDependencies(cfg,safeRunner{},&validate.V{});agent.FixtureStartup(a,t,root);if e:=serve(t.Context(),a);!errors.Is(e,firewall.ErrFirewallRecoveryPending){t.Fatal(e)};if a.Store!=nil||a.Jobs!=nil||a.Scheduler!=nil{t.Fatal("state/workers initialized")};handled,e:=dispatchFirewallRevert(context.Background(),[]string{"fw-revert","/var/lib/novapanel/firewall/snapshots/01ARZ3NDEKTSV4RRFFQ69G5FAV"},os.Geteuid(),os.Getegid(),func(ctx context.Context,id string)error{return firewall.FixtureRecover(ctx,id,root,&fixtureRunner{t:t})});if !handled||e!=nil{t.Fatal(handled,e)}}
+type fixtureRunner struct{t *testing.T}
+func(f *fixtureRunner)Run(ctx context.Context,p string,a []string,o execpkg.RunOpts)([]byte,[]byte,int,error){if p!="/usr/sbin/ufw"{f.t.Fatal(p)};return nil,nil,0,nil}
+`
+		child = strings.Replace(child, `"novapanel/internal/validate")`, `"novapanel/internal/validate";execpkg "novapanel/internal/exec")`, 1)
+		must(os.WriteFile(root+"/startup-shim.go.txt", []byte(startupShim), 0600))
+		must(os.WriteFile(root+"/agent-shim.go.txt", []byte(agentShim), 0600))
+		must(os.WriteFile(root+"/child.go.txt", []byte(child), 0600))
+		replacements[repo+"/internal/firewall/fixture_manager_overlay.go"] = root + "/manager-fixture.go.txt"
+		replacements[repo+"/internal/firewall/fixture_startup_overlay.go"] = root + "/startup-shim.go.txt"
+		replacements[repo+"/internal/agent/fixture_startup_overlay.go"] = root + "/agent-shim.go.txt"
+	}
+	overlay, e := json.Marshal(map[string]any{"Replace": replacements})
 	must(e)
 	must(os.WriteFile(root+"/overlay.json", overlay, 0600))
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
@@ -103,7 +142,7 @@ func TestFixtureDispatcherChild(t *testing.T){root:=os.Getenv("NP_DISPATCH_ROOT"
 	if strings.TrimSpace(goBinary) == "" {
 		t.Fatal("Go executable missing from absolute PATH entries")
 	}
-	out, errout, exit, e := (execpkg.Real{}).Run(ctx, goBinary, []string{"test", "-c", "-overlay=" + root + "/overlay.json", "-o", root + "/child", "./cmd/panel-agent"}, execpkg.RunOpts{Dir: repo, Env: os.Environ()})
+	out, errout, exit, e := (execpkg.Real{}).Run(ctx, goBinary, []string{"test", "-c", "-overlay=" + root + "/overlay.json", "-o", root + "/child", packagePath}, execpkg.RunOpts{Dir: repo, Env: os.Environ()})
 	if e != nil || exit != 0 {
 		t.Fatalf("compile %v %d %s %s", e, exit, out, errout)
 	}

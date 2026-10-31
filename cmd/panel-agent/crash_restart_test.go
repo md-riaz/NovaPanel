@@ -60,7 +60,7 @@ func TestSafeCrashRestart(t *testing.T) {
 	restartCtx, stop := context.WithCancel(context.Background())
 	defer stop()
 	restarted := make(chan error, 1)
-	go func() { restarted <- serve(restartCtx, a) }()
+	go func() { restarted <- serveScratch(restartCtx, a) }()
 	waitAgent(t, a, restarted)
 	client, e := rpc.Dial(a.Cfg.SocketPath)
 	if e != nil {

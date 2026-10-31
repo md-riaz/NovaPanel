@@ -34,7 +34,7 @@ func TestSafeDaemonHelper(t *testing.T) {
 	if os.Getenv("NOVAPANEL_SAFE_CONSOLE") == "1" {
 		configureConsoleFixture(t, a)
 	}
-	if e := serve(ctx, a); e != nil {
+	if e := serveScratch(ctx, a); e != nil {
 		t.Fatal(e)
 	}
 }

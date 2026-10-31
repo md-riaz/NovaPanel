@@ -18,7 +18,7 @@ func TestReadsSurviveStickyAuditFailure(t *testing.T) {
 	a := scratchAgent(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, a) }()
+	go func() { done <- serveScratch(ctx, a) }()
 	defer func() {
 		cancel()
 		select {
