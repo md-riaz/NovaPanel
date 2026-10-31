@@ -20,6 +20,10 @@ Static inspection of the pinned PHAR's Runner.php shows global configuration use
 - CLI PHP uses an explicit reviewed agent-owned ini and isolated `PHP_INI_SCAN_DIR`, with `auto_prepend_file`, `auto_append_file` and `user_ini.filename` empty. Do not rely on CLI ignoring .user.ini while allowing ambient PHP configuration or extension loading. Required extensions and ini contents need confined PHP 8.3 acceptance before execution is enabled.
 - Resolve UID/GID/groups from the persisted provisioned account, not a request. No root, nginx supplementary membership, sudo, shell or `--allow-root`. Use the existing typed exec runner.
 
+## Managed writer lifetime
+
+Protected effects additionally require the [managed process lifetime contract](phase4-config-isolation-lifetime-contract.md). It records the delegated cgroup v2 mechanism, closed at-birth launcher admission, original account lifetime, trusted-root exclusion and mandatory process/IO drain. Existing getent checks, shared FPM stop, process-group Wait and PID enumeration do not establish this protection. The required shared runner and FPM orchestration changes are not activated here.
+
 ## Secrets and installation
 
 `config create --prompt=dbpass --skip-salts` consumes only the generated DB password plus one newline on its stdin. `core install --prompt=admin_password --skip-email` uses a separate stdin stream containing only its administrator password plus one newline. Neither secret enters argv, environment, plans, errors or raw persistent child output. Publish eight independent locally generated salts with the typed no-follow atomic config publisher and site-owned 0400 wp-config.php before core install.
