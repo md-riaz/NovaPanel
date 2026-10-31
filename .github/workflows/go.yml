@@ -17,6 +17,14 @@ jobs:
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
           go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+      - name: Provision private unprivileged scratch
+        # Default /tmp has a writable ancestor and is not valid custody.
+        # HOME belongs to runner, with root/runner-owned non-writable ancestry.
+        # Keep volatile fixtures outside the checkout's architecture scan.
+        run: |
+          test "$(id -u)" -ne 0
+          scratch=$(mktemp -d "$HOME/novapanel-unit.XXXXXX")
+          printf 'TMPDIR=%s\n' "$scratch" >> "$GITHUB_ENV"
       - name: Unprivileged Unix health ping and deadline regression
         run: |
           test "$(id -u)" -ne 0
@@ -24,6 +32,15 @@ jobs:
       - run: make ci
       - name: Combined Phase 6 package and shared-boundary race tests
         run: make phase6-test
+      - name: Remove private unprivileged scratch
+        if: always()
+        run: |
+          if [ -n "${TMPDIR:-}" ]; then
+            case "$TMPDIR" in
+              "$HOME"/novapanel-unit.*) rm -rf -- "$TMPDIR" ;;
+              *) printf 'Refusing unexpected scratch path: %s\n' "$TMPDIR" >&2; exit 1 ;;
+            esac
+          fi
   integration:
     runs-on: ubuntu-24.04
     steps:
