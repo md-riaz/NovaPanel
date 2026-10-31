@@ -1,9 +1,12 @@
 # Pure WordPress installation contract
 
-This package does not install WordPress. It performs no filesystem access, download,
-signature operation, process execution, SQL, queue registration or service mutation.
-Only tests read immutable fixtures. The five-step plan includes a non-executable
-protected-config publication barrier between config creation and core installation.
+This package does not install WordPress. The install-plan builder performs no IO,
+process execution or authorization. The separate protected-config custody consumer
+in `config.go` performs scratch-tested filesystem publication and sealed recovery.
+It does not open the execution gates below. See
+`docs/phase4-protected-config-custody.md` for its trusted caller requirements.
+The five-step plan includes a non-executable protected-config publication barrier
+between config creation and core installation.
 
 ## API
 
