@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"io"
 	"net/http"
 	"os"
@@ -77,7 +78,14 @@ func (l *lab) Run(ctx context.Context, prog string, args []string, _ runner.RunO
 		out, stderr, code, err = l.command(ctx, "/tmp/nginx/usr/sbin/nginx", "-t", "-c", base+"/nginx.ini", "-p", "/tmp/")
 	case "fpm.reload":
 		if b, e := os.ReadFile(base + "/fpm.pid"); e == nil {
-			out, stderr, code, err = l.command(ctx, "/bin/kill", "-USR2", strings.TrimSpace(string(b)))
+			pid, e := strconv.Atoi(strings.TrimSpace(string(b)))
+			if e != nil || pid <= 1 {
+				return nil, nil, 1, errors.New("invalid owned FPM pid")
+			}
+			err = unix.Kill(pid, unix.SIGUSR2)
+			if err != nil {
+				code = 1
+			}
 		} else {
 			out, stderr, code, err = l.command(ctx, "/usr/local/sbin/php-fpm", "-D", "-y", base+"/fpm.ini")
 		}
