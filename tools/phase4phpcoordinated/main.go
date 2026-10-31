@@ -21,7 +21,7 @@ import (
 
 const base = "/tmp/coordinated"
 
-var injected = errors.New("injected failure")
+var errInjected = errors.New("errInjected failure")
 
 func must(err error) {
 	if err != nil {
@@ -45,7 +45,7 @@ func (l *lab) hit(event string) error {
 	if l.phase == event && !l.failed {
 		l.failed = true
 		l.cancel()
-		return injected
+		return errInjected
 	}
 	return nil
 }
