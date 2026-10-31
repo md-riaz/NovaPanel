@@ -103,7 +103,7 @@ func (p *PermissionProbe) Probe(ctx context.Context, token *dns.IntegrationToken
 			ID   string `json:"id"`
 			Name string `json:"name"`
 		}]
-		if err = get("/zones?name="+url.QueryEscape(z)+"&page=1&per_page=2", &env); err != nil {
+		if err = get("/zones?name="+url.QueryEscape(z)+"&page=1&per_page=5", &env); err != nil {
 			return empty, err
 		}
 		if !env.single() || len(env.Result) != 1 || env.Result[0].Name != z || !identifier.MatchString(env.Result[0].ID) {

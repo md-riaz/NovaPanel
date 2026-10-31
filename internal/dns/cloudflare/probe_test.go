@@ -32,7 +32,7 @@ func probeFixture(t *testing.T, change func(*http.Request, map[string]any)) http
 		case "/client/v4/user/tokens/verify":
 			env["result"] = map[string]any{"id": probeID, "status": "active"}
 		case "/client/v4/zones":
-			if r.URL.Query().Get("name") != "example.com" {
+			if r.URL.Query().Get("name") != "example.com" || r.URL.Query().Get("page") != "1" || r.URL.Query().Get("per_page") != "5" {
 				t.Fatal("wrong zone filter")
 			}
 			env["result"] = []any{map[string]any{"id": probeID, "name": "example.com"}}

@@ -14,7 +14,7 @@ import (
 )
 
 func TestPermissionProbeUnknownFailsClosed(t *testing.T) {
-	for _, kind := range []string{"verify-only", "missing-write", "unknown-id", "name-spoof", "deny", "wildcard", "extra-zone", "nested-account", "wrong-token", "wrong-zone", "pagination", "errors", "unknown-scope"} {
+	for _, kind := range []string{"verify-only", "missing-write", "unknown-id", "name-spoof", "deny", "wildcard", "extra-zone", "nested-account", "wrong-token", "wrong-zone", "pagination", "missing-metadata-counts", "catalog-pagination", "legacy-zone-permissions", "errors", "unknown-scope"} {
 		t.Run(kind, func(t *testing.T) {
 			p := cloudflare.NewPermissionProbe(probeFixture(t, func(r *http.Request, e map[string]any) {
 				if kind == "verify-only" && r.URL.Path == "/client/v4/user/tokens/"+probeID {
@@ -29,6 +29,17 @@ func TestPermissionProbeUnknownFailsClosed(t *testing.T) {
 						e["result_info"].(map[string]any)["total_count"] = 2
 					}
 				}
+				if kind == "legacy-zone-permissions" && r.URL.Path == "/client/v4/zones" {
+					e["result"].([]any)[0].(map[string]any)["permissions"] = []string{"#dns_records:edit", "#cache:purge"}
+				}
+				if r.URL.Path == "/client/v4/user/tokens/permission_groups" {
+					switch kind {
+					case "missing-metadata-counts":
+						delete(e, "result_info")
+					case "catalog-pagination":
+						e["result_info"].(map[string]any)["total_count"] = 2
+					}
+				}
 				if kind == "unknown-scope" && r.URL.Path == "/client/v4/user/tokens/permission_groups" {
 					e["result"].([]any)[0].(map[string]any)["scopes"] = []string{"com.cloudflare.api.account"}
 				}
@@ -38,7 +49,7 @@ func TestPermissionProbeUnknownFailsClosed(t *testing.T) {
 				result := e["result"].(map[string]any)
 				policy := result["policies"].([]any)[0].(map[string]any)
 				switch kind {
-				case "missing-write":
+				case "missing-write", "legacy-zone-permissions":
 					policy["permission_groups"] = []any{map[string]any{"id": strings.Repeat("1", 32)}, map[string]any{"id": strings.Repeat("3", 32)}}
 				case "unknown-id", "name-spoof":
 					policy["permission_groups"].([]any)[1] = map[string]any{"id": strings.Repeat("4", 32), "name": "DNS Write"}
