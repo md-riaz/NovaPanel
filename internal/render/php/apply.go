@@ -51,12 +51,30 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 		return err
 	}
 	defer root.Close()
+	dir, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	err = poolCustody(dir)
+	dir.Close()
+	if err != nil {
+		return err
+	}
 	name := d.Name + ".conf"
 	// Inspect every publication target before any write or command.
 	for _, file := range []string{name, name + ".lkg", name + ".tmp", "novapanel-validate.ini", "novapanel-validate.ini.tmp"} {
 		if info, e := root.Lstat(file); e == nil {
-			if !info.Mode().IsRegular() {
+			if !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 {
 				return rpcerr.Errf("invalid_argument", "Invalid PHP file")
+			}
+			f, e := root.OpenFile(file, os.O_RDONLY|unix.O_NOFOLLOW, 0)
+			if e != nil {
+				return e
+			}
+			e = poolCustody(f)
+			f.Close()
+			if e != nil {
+				return e
 			}
 		} else if !os.IsNotExist(e) {
 			return e
@@ -68,6 +86,15 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 		return err
 	}
 	// Never infer known-good from live bytes, including retries after process death.
+	marker := []byte("; novapanel managed pool\n")
+	live, liveErr := poolRead(root, name)
+	if liveErr != nil && !os.IsNotExist(liveErr) {
+		return liveErr
+	}
+	if liveErr == nil && !exists && !strings.HasPrefix(string(live), string(marker)) {
+		return rpcerr.Errf("precondition_failed", "Unmanaged PHP pool")
+	}
+	b = append(marker, b...)
 	if err = poolWrite(root, name, b); err != nil {
 		return err
 	}
@@ -121,6 +148,16 @@ func (a *Applier) command(ctx context.Context, prog string, args []string) error
 	}
 	return nil
 }
+func poolCustody(f *os.File) error {
+	var stat unix.Stat_t
+	if err := unix.Fstat(int(f.Fd()), &stat); err != nil {
+		return err
+	}
+	if stat.Uid != uint32(os.Geteuid()) || stat.Mode&0022 != 0 {
+		return rpcerr.Errf("invalid_argument", "Invalid PHP custody")
+	}
+	return nil
+}
 func poolRead(root *os.Root, name string) ([]byte, error) {
 	f, err := root.OpenFile(name, os.O_RDONLY|unix.O_NOFOLLOW, 0)
 	if err != nil {
@@ -131,7 +168,7 @@ func poolRead(root *os.Root, name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() {
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 {
 		return nil, rpcerr.Errf("invalid_argument", "Invalid PHP file")
 	}
 	return io.ReadAll(f)
@@ -139,7 +176,7 @@ func poolRead(root *os.Root, name string) ([]byte, error) {
 func poolWrite(root *os.Root, name string, b []byte) error {
 	for _, file := range []string{name, name + ".tmp"} {
 		if info, err := root.Lstat(file); err == nil {
-			if !info.Mode().IsRegular() {
+			if !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 {
 				return rpcerr.Errf("invalid_argument", "Invalid PHP file")
 			}
 			if strings.HasSuffix(file, ".tmp") {
