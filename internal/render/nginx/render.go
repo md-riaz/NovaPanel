@@ -3,6 +3,7 @@ package nginx
 
 import (
 	"bytes"
+	"novapanel/internal/render/php"
 	"novapanel/internal/rpcerr"
 	"novapanel/internal/validate"
 	"path/filepath"
@@ -15,6 +16,8 @@ type Redirect struct {
 	Code           int
 }
 type Desired struct {
+	// PHP is resolved from persisted site state, never caller-provided socket paths.
+	PHP               *php.Desired
 	ForceReload       bool
 	TLS               *TLSState
 	ForceHTTPS        bool
@@ -44,7 +47,7 @@ var httpTemplate = template.Must(template.New("http").Funcs(template.FuncMap{"pa
     listen [::]:80;{{end}}
     server_name {{range .Domains}}{{.}} {{end}};
     root "{{.Docroot}}";
-    index index.html;
+    index {{if .PHP}}index.php {{end}}index.html;
     {{if not .HTTPS}}location ^~ /.well-known/acme-challenge/ {
         root "{{.ACMERoot}}";
         default_type "text/plain";
@@ -62,6 +65,34 @@ var httpTemplate = template.Must(template.New("http").Funcs(template.FuncMap{"pa
         {{end}}{{end}}{{if .Maintenance}}return 503;{{else}}try_files $uri $uri/ =404;{{end}}
     }
     {{end}}location ~ /\. { deny all; }
+    {{if and .PHP (not .Maintenance) (not .RedirectHTTPS)}}location ~* /(?:uploads|files)/.*\.php { return 404; }
+    location ~ \.php$ {
+        try_files $uri =404;
+        fastcgi_pass unix:/run/php/novapanel/{{.Name}}.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param SCRIPT_NAME $fastcgi_script_name;
+        fastcgi_param PATH_INFO "";
+        fastcgi_param QUERY_STRING $query_string;
+        fastcgi_param REQUEST_METHOD $request_method;
+        fastcgi_param CONTENT_TYPE $content_type;
+        fastcgi_param CONTENT_LENGTH $content_length;
+        fastcgi_param REQUEST_URI $request_uri;
+        fastcgi_param DOCUMENT_URI $document_uri;
+        fastcgi_param DOCUMENT_ROOT $document_root;
+        fastcgi_param SERVER_PROTOCOL $server_protocol;
+        fastcgi_param REQUEST_SCHEME $scheme;
+        fastcgi_param HTTPS $https if_not_empty;
+        fastcgi_param GATEWAY_INTERFACE CGI/1.1;
+        fastcgi_param SERVER_SOFTWARE nginx;
+        fastcgi_param REMOTE_ADDR $remote_addr;
+        fastcgi_param REMOTE_PORT $remote_port;
+        fastcgi_param SERVER_ADDR $server_addr;
+        fastcgi_param SERVER_PORT $server_port;
+        fastcgi_param SERVER_NAME $server_name;
+        fastcgi_param REDIRECT_STATUS 200;
+        fastcgi_param HTTP_PROXY "";
+    }
+    {{end}}location ~* \.php { return 404; }
     add_header X-Content-Type-Options nosniff always;
     add_header X-Frame-Options SAMEORIGIN always;
     add_header Referrer-Policy strict-origin-when-cross-origin always;
@@ -71,6 +102,14 @@ var httpTemplate = template.Must(template.New("http").Funcs(template.FuncMap{"pa
 
 func Render(d Desired) ([]byte, error) {
 	v := &validate.V{}
+	if d.PHP != nil {
+		if d.PHP.Name != d.Name {
+			return nil, rpcerr.Errf("invalid_argument", "PHP site identity mismatch")
+		}
+		if _, err := php.Render(*d.PHP); err != nil {
+			return nil, err
+		}
+	}
 	if e := v.SiteName(d.Name); e != nil {
 		return nil, e
 	}
