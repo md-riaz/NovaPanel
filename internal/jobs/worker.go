@@ -119,7 +119,10 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 		}
 	}
 	if err == nil {
-		err = invoke(WithMetadata(ctx, metadata(j)), run, &j)
+		lease := &configWorkerLease{queue: q, job: j.ID}
+		lease.active.Store(true)
+		err = invoke(context.WithValue(WithMetadata(ctx, metadata(j)), configWorkerKey{}, lease), run, &j)
+		lease.active.Store(false)
 	}
 	if ctx.Err() != nil {
 		return nil
