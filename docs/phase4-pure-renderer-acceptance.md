@@ -1,5 +1,7 @@
 # Phase 4 pure renderer acceptance
 
+> Historical pre-merge record. Current authority and implementation status are in [Phase 4 foundation handoff](phase4-foundation-handoff.md). PR #81 is now merged at `2ff29a1a70f0ad678969d48006a4c21c183dd29a`; statements below about its pending merge or test-only authorization describe the earlier snapshot.
+
 ## Scope and history
 
 Local branch `integration/phase4-pure-contracts-20261031` starts at the approved stacked base `936d848024db3f38ff101757d2a71cb962879d56`. Only the requested source patches were cherry-picked:

@@ -1,5 +1,7 @@
 # Phase 4 canonical planning validation
 
+> Historical pre-merge record. Current authority and implementation status are in [Phase 4 foundation handoff](phase4-foundation-handoff.md). PR #81 is now merged at `2ff29a1a70f0ad678969d48006a4c21c183dd29a`; statements below about its pending merge or test-only authorization describe the earlier snapshot.
+
 This is documentation and isolated SQL validation, not Phase 4 runtime acceptance.
 
 - Base `82f76cc0ec17dfa8f3fc46a0536e371c5fe9b08f`. New isolated branch `planning/phase4-canonical-stacked-20261031`.

@@ -1,5 +1,7 @@
 # Phase 4 bounded dependency map
 
+> Historical pre-merge record. Current authority and implementation status are in [Phase 4 foundation handoff](phase4-foundation-handoff.md). PR #81 is now merged at `2ff29a1a70f0ad678969d48006a4c21c183dd29a`; statements below about its pending merge or test-only authorization describe the earlier snapshot.
+
 Phase 3 candidate 82f76cc0ec17dfa8f3fc46a0536e371c5fe9b08f is implementation/local-safe acceptance complete subject to published exact-head architecture review and actual remote CI. The unresolved browser create/poll timeout risk is accepted for dependent development under the user's delegation, not dismissed as fixed. Parent approves the documented internal Phase 4 decisions. Final privileged Ubuntu VM checks are explicitly deferred until project-end acceptance and remain unpassed. Standard Phase 4 integration requires reviewed and separately authorized merged Phase 3 plus canonical amendment publication and an explicitly opened slice. No main merge is authorized by this packet. While external review waits, only a parent-recorded stacked-development exception may open isolated pure PHP/DB tests and their minimal implementations on this exact unmerged SHA. Such work is not merged prerequisite completion, canonical publication, deployment or full Phase 4 acceptance.
 
 The controlling contract is [Phase 4](spec/phases/phase-4.md), with foundations F6-F12 and F15.

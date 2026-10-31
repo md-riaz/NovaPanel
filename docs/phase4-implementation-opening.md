@@ -1,5 +1,7 @@
 # Phase 4 opening implementation plan
 
+> Historical pre-merge record. Current authority and implementation status are in [Phase 4 foundation handoff](phase4-foundation-handoff.md). PR #81 is now merged at `2ff29a1a70f0ad678969d48006a4c21c183dd29a`; statements below about its pending merge or test-only authorization describe the earlier snapshot.
+
 > For Hermes: Use subagent-driven-development to implement this plan task-by-task only after its exact opening record exists.
 
 Goal: open independent PHP and DB work without treating external review or final VM deferral as completed acceptance.

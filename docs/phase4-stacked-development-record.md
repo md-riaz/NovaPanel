@@ -1,5 +1,7 @@
 # Phase 4 stacked development record
 
+> Historical pre-merge record. Current authority and implementation status are in [Phase 4 foundation handoff](phase4-foundation-handoff.md). PR #81 is now merged at `2ff29a1a70f0ad678969d48006a4c21c183dd29a`; statements below about its pending merge or test-only authorization describe the earlier snapshot.
+
 ## Controlling authority and exact contract
 
 The controlling parent explicitly recorded the bounded exception in this task's delegation. The user's instruction is to apply the approved canonical packet in a new isolated planning branch and prepare PHP and DB ownership for immediate implementation. This record activates only the stacked independent wave in `docs/phase4-implementation-opening.md`. It does not assert prerequisite merge, completed-source approval, remote CI success or publication to main.

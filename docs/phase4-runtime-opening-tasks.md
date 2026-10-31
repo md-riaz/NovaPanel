@@ -1,5 +1,7 @@
 # Phase 4 runtime-opening tasks and PHP transport acceptance
 
+> Historical pre-merge record. Current authority and implementation status are in [Phase 4 foundation handoff](phase4-foundation-handoff.md). PR #81 is now merged at `2ff29a1a70f0ad678969d48006a4c21c183dd29a`; statements below about its pending merge or test-only authorization describe the earlier snapshot.
+
 ## Current authority
 
 This branch starts at pure integration `cb6a49552242aa5947ab75523e6fa67a2b2ac693`. The parent opened only continued pure tests and confined fixture integration. No production migration, daemon wiring, PHP/DB installation, WordPress execution, prerequisite merge, push or PR mutation is authorized.

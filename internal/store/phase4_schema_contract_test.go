@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// These are SQL contract tests, not production journal, terminal or recovery APIs.
+// SQL constraints exercise the production migration; typed APIs have separate tests.
 func TestPhase4SchemaContract(t *testing.T) {
 	for _, upgrade := range []bool{false, true} {
 		t.Run(fmt.Sprintf("upgrade_%t", upgrade), func(t *testing.T) {
@@ -24,8 +24,8 @@ func TestPhase4SchemaContract(t *testing.T) {
 					s.Close()
 				}
 			}()
-			if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations"); n != 5 {
-				t.Fatalf("shipped migrations: %d", n)
+			if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations"); n != 6 {
+				t.Fatalf("production migrations: %d", n)
 			}
 			if upgrade {
 				phase4Exec(t, s.db.raw, "INSERT INTO settings VALUES('preserved','true')")
@@ -37,9 +37,6 @@ func TestPhase4SchemaContract(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-			}
-			if _, err := s.db.raw.Exec("SELECT * FROM databases"); err == nil || !strings.Contains(err.Error(), "no such table") {
-				t.Fatalf("candidate unexpectedly shipped: %v", err)
 			}
 			fixture, err := os.ReadFile("testdata/phase4_candidate.sql")
 			if err != nil {
@@ -54,7 +51,7 @@ func TestPhase4SchemaContract(t *testing.T) {
 			if strings.TrimSpace(ddl) != strings.TrimSpace(string(fixture)) {
 				t.Fatal("fixture differs from canonical DDL")
 			}
-			phase4Exec(t, s.db.raw, string(fixture))
+
 			phase4Exec(t, s.db.raw, "INSERT INTO sites(id,name,type,docroot,created,updated) VALUES('s1','one','wordpress','/scratch/one',1,1),('s2','two','wordpress','/scratch/two',1,1)")
 			phase4Exec(t, s.db.raw, "INSERT INTO site_php_limits(site_id) VALUES('s1')")
 			var memory, upload, seconds int
@@ -154,8 +151,8 @@ func TestPhase4SchemaContract(t *testing.T) {
 			if upgrade && phase4Count(t, s.db.raw, "SELECT count(*) FROM settings WHERE key='preserved'") != 1 {
 				t.Fatal("upgrade lost existing data")
 			}
-			if phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations") != 5 {
-				t.Fatal("candidate registered as shipped migration")
+			if phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations") != 6 {
+				t.Fatal("missing production migration")
 			}
 			var integrity string
 			if err := s.db.raw.QueryRow("PRAGMA integrity_check").Scan(&integrity); err != nil || integrity != "ok" {
