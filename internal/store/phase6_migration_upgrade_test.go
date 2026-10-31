@@ -163,7 +163,7 @@ func TestPhase6MigrationRefusal(t *testing.T) {
 			}
 			query := `UPDATE schema_migrations SET hash='wrong' WHERE version='0005'`
 			if kind == "phase85" {
-				query = `CREATE INDEX idx_sessions_idle_deadline ON sessions(idle_deadline);CREATE INDEX idx_sessions_abs_deadline ON sessions(abs_deadline);INSERT INTO schema_migrations VALUES('0006','af263cda18b1affbe82be79095b32bdb5d0a835278db2284893f56ed56be24a0',1)`
+				query = `CREATE INDEX idx_sessions_idle_deadline_id ON sessions(idle_deadline, id);CREATE INDEX idx_sessions_abs_deadline_id ON sessions(abs_deadline, id);INSERT INTO schema_migrations VALUES('0006','af263cda18b1affbe82be79095b32bdb5d0a835278db2284893f56ed56be24a0',1)`
 			}
 			if kind == "unknown" {
 				query = `INSERT INTO schema_migrations VALUES('9999','unknown',1)`
