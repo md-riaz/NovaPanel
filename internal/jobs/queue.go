@@ -30,17 +30,19 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Queue struct {
-	store   Persistence
-	sealer  Sealer
-	audit   Auditor
-	clock   Clock
-	mu      sync.Mutex
-	runner  func(context.Context, *Job) error
-	running bool
-	startup func(context.Context) (*Job, error)
-	resume  func(context.Context, *Job) error
-	wake    chan struct{}
-	locks   keyedLock
+	store           Persistence
+	sealer          Sealer
+	audit           Auditor
+	clock           Clock
+	operationMu     sync.Mutex
+	operationsReady bool
+	mu              sync.Mutex
+	runner          func(context.Context, *Job) error
+	running         bool
+	startup         func(context.Context) (*Job, error)
+	resume          func(context.Context, *Job) error
+	wake            chan struct{}
+	locks           keyedLock
 }
 
 func NewQueue(s Persistence, sealer Sealer, log Auditor) *Queue {

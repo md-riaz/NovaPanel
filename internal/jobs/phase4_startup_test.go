@@ -48,6 +48,9 @@ func TestOperationRealQueueStartupExpiry(t *testing.T) {
 	defer func() { s.Close() }()
 	seal, _ := secret.New(make([]byte, 32))
 	q := NewQueue(s, seal, &fakeAudit{})
+	if e := q.PrepareOperations(context.Background()); e != nil {
+		t.Fatal(e)
+	}
 	r, e := q.EnqueueOperation(ctx, store.OperationRequest{Kind: store.DatabaseCreate}, map[string]any{"password": "expired-password"})
 	if e != nil {
 		t.Fatal(e)

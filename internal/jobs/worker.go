@@ -60,6 +60,14 @@ func (q *Queue) Run(ctx context.Context) error {
 			}
 		}
 	}
+	if _, ok := q.store.(operationStore); ok {
+		if e := q.PrepareOperations(ctx); e != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return e
+		}
+	}
 	if e := q.store.RecoverJobs(ctx, q.clock.Now()); e != nil {
 		if ctx.Err() != nil {
 			return nil
@@ -132,8 +140,11 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 	// Caller identity is restored exclusively from durable trusted columns.
 	err := error(nil)
 	if s, ok := q.store.(operationStore); ok {
-		if _, loadErr := s.LoadOperation(ctx, j.ID); loadErr == nil {
+		if op, loadErr := s.LoadOperation(ctx, j.ID); loadErr == nil {
 			err = s.CheckOperation(ctx, j.ID)
+			if err == nil && len(op.Ciphertext) > 0 {
+				_, err = q.OpenOperationCredentials(ctx, j.ID)
+			}
 		} else if !errors.Is(loadErr, sql.ErrNoRows) {
 			return loadErr
 		}

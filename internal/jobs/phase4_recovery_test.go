@@ -21,7 +21,10 @@ func TestOperationRealQueueCrashReopenClaimProjection(t *testing.T) {
 	defer func() { s.Close() }()
 	seal, _ := secret.New(make([]byte, 32))
 	q := NewQueue(s, seal, &fakeAudit{})
-	r, e := q.EnqueueOperation(ctx, store.OperationRequest{Kind: store.DatabaseCreate}, map[string]any{"password": "generated-password", "salts": "must-not-be-delivered", "protected_config": "private-config"})
+	if e := q.PrepareOperations(context.Background()); e != nil {
+		t.Fatal(e)
+	}
+	r, e := q.EnqueueOperation(ctx, store.OperationRequest{Kind: store.DatabaseCreate}, map[string]any{"password": "generated-password"})
 	if e != nil {
 		t.Fatal(e)
 	}

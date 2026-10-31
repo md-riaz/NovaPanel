@@ -24,6 +24,9 @@ func TestOperationQueueFailureCleanup(t *testing.T) {
 				t.Fatal(err)
 			}
 			q := NewQueue(s, seal, &fakeAudit{})
+			if e := q.PrepareOperations(context.Background()); e != nil {
+				t.Fatal(e)
+			}
 			result, err := q.EnqueueOperation(ctx, store.OperationRequest{Kind: store.DatabaseCreate}, map[string]any{"password": "never-persist-plaintext"})
 			if err != nil {
 				t.Fatal(err)

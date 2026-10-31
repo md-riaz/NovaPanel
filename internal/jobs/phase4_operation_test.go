@@ -39,6 +39,9 @@ func TestOperationQueueReopenDeleteAndOrderedLocks(t *testing.T) {
 			}
 			seal, _ := secret.New(make([]byte, 32))
 			q := NewQueue(s, seal, &fakeAudit{})
+			if e := q.PrepareOperations(context.Background()); e != nil {
+				t.Fatal(e)
+			}
 			ctx := WithMetadata(context.Background(), Metadata{Actor: "forged-owner-label", CreatedBy: "local-root", Role: "owner"})
 			r, e := q.EnqueueOperation(ctx, store.OperationRequest{Kind: kind, DatabaseID: pair.ID, UserID: target}, nil)
 			if e != nil {

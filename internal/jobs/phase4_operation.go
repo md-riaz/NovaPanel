@@ -9,9 +9,14 @@ import (
 	"errors"
 	"novapanel/internal/id"
 	"novapanel/internal/rpcerr"
-	"novapanel/internal/secret"
 	"novapanel/internal/store"
 )
+
+// OperationCredentials is the complete credential-only DB recovery contract.
+// WordPress configuration and salts require a separate typed journal.
+type OperationCredentials struct {
+	Password string `json:"password"`
+}
 
 type operationStore interface {
 	PrepareOperation(context.Context, store.Job, store.JobClaim, store.OperationRequest, []byte, []byte) (store.Operation, error)
@@ -25,6 +30,11 @@ type operationStore interface {
 // seals credentials before SQL, and persists only nonsecret job arguments.
 func (q *Queue) EnqueueOperation(ctx context.Context, r store.OperationRequest, fields map[string]any) (EnqueueResult, error) {
 	var out EnqueueResult
+	q.operationMu.Lock()
+	defer q.operationMu.Unlock()
+	if !q.operationsReady {
+		return out, ErrRecoveryBlocked
+	}
 	s, ok := q.store.(operationStore)
 	if !ok {
 		return out, errors.New("jobs: operation persistence unavailable")
@@ -70,7 +80,14 @@ func (q *Queue) EnqueueOperation(ctx context.Context, r store.OperationRequest, 
 		if fields == nil || q.sealer == nil {
 			return out, errors.New("jobs: sealed operation credential required")
 		}
-		raw, e := json.Marshal(fields)
+		if len(fields) != 1 {
+			return out, errors.New("jobs: credential-only recovery input required")
+		}
+		password, ok := fields["password"].(string)
+		if !ok || password == "" {
+			return out, errors.New("jobs: operation password required")
+		}
+		raw, e := json.Marshal(operationInput{Version: 1, JobID: jid, Kind: r.Kind, DatabaseID: r.DatabaseID, Owner: m.CreatedBy, Authority: metadata(j), Credentials: OperationCredentials{Password: password}})
 		if e != nil {
 			return out, errors.New("jobs: operation encoding failed")
 		}
@@ -145,17 +162,9 @@ func (q *Queue) operationTerminal(ctx context.Context, j Job) (bool, error) {
 	}
 	var claim *store.JobClaim
 	if len(op.Ciphertext) > 0 {
-		raw, e := q.sealer.Open(secret.Sealed{Nonce: op.Nonce, Ciphertext: op.Ciphertext})
+		payload, e := q.OpenOperationCredentials(ctx, j.ID)
 		if e != nil {
 			return true, e
-		}
-		defer clear(raw)
-		// Recovery fields are not part of the canonical show-once password claim.
-		var payload struct {
-			Password string `json:"password"`
-		}
-		if e = json.Unmarshal(raw, &payload); e != nil || payload.Password == "" {
-			return true, errors.New("jobs: invalid operation password")
 		}
 		projection, e := json.Marshal(payload)
 		if e != nil {
