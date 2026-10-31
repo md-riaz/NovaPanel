@@ -59,6 +59,14 @@ The new helper command only inspects signed sealed memfds and a versioned instal
 
 Final candidate gates run after this documentation commit. Evidence is external at `/root/.hermes/cache/scratch/phase6-journal-helper-review/` and must be tied to the resulting full SHA. No retrospective test-first claim is made for saved commits. No Phase 4/7 paths or production migrations are added; `0007` stays testdata behind the absent production `0006`. Passing these gates does not complete Phase 6 and does not authorize merge.
 
+## Journal confirmation fault correction
+
+The fixed journal source `647139e8a7eeeed3b9459ffd00a8b72023ef8d49` is carried unchanged as `a41fef2`, preserving saved combined candidate `9fa9982ff2fb5435505f0be52208376596161b74` and PR80 remote head `fbd4cc2f2fbcdce496ca49f46576a10a76f4b58f` as ancestors. Both the shared journal prerequisite and the correction have matching stable patch IDs; no equivalent prerequisite was duplicated.
+
+Confirmation now publishes recoverable `confirming` preparation before the terminal `confirmed` record. Cancellation before publication leaves the armed record and timer untouched. A directory-sync failure during preparation permits restoration after reopen. Errors after confirmed rename carry `ErrConfirmationCommitted`, and readers must successfully sync that visible commit before suppressing restoration or projecting it. These are confined file-journal guarantees, not production firewall confirmation support or power-loss acceptance.
+
+All final-head gates run after this documentation commit. Evidence belongs outside the tree at `/root/.hermes/cache/scratch/phase6-journal-fixed-evidence/`. Independent review remains pending until its separate result is received; passing local gates alone does not authorize publication or merge. Public firewall apply/confirmation and updater apply remain unsupported, the production update trust anchor remains unset, and production migration `0007` remains deferred behind absent `0006`.
+
 ## Verification
 
 The combined package corpus includes updater, firewall, backup, store, verbs and RPC architecture tests. `make phase6-test` runs that corpus uncached with the race detector and is part of the existing Go CI workflow. `make ci` remains the whole-repository build, formatting, vet, staticcheck, tests, architecture backstop, vulnerability and systemd gate. Opt-in production-like integrations are separate acceptance, not implied by unit CI.
