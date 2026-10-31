@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"novapanel/internal/dns"
@@ -18,10 +19,17 @@ import (
 var identifier = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 type Client struct {
-	token string
+	// A closure keeps fmt's invalid-verb fallback from traversing the raw token.
+	token func() string
 	zones map[string]string
 	http  *http.Client
 }
+
+func (c Client) String() string   { return "Cloudflare client (redacted)" }
+func (c Client) GoString() string { return c.String() }
+
+// Format prevents unsupported verbs from falling back to credential-bearing fields.
+func (c Client) Format(state fmt.State, verb rune) { _, _ = io.WriteString(state, c.String()) }
 
 func New(token string, zones map[string]string, transport http.RoundTripper) (*Client, error) {
 	if token == "" || len(zones) == 0 {
@@ -43,7 +51,7 @@ func New(token string, zones map[string]string, transport http.RoundTripper) (*C
 		}
 		bindings[lower] = id
 	}
-	return &Client{token: token, zones: bindings, http: &http.Client{Transport: transport, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	return &Client{token: func() string { return token }, zones: bindings, http: &http.Client{Transport: transport, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 func providerError() error { return rpcerr.Errf("agent_error", "Invalid Cloudflare response") }
 func (c *Client) zonePath(zone string) (string, error) {
@@ -75,7 +83,7 @@ func (c *Client) request(ctx context.Context, method, path string, body any, out
 	if err != nil {
 		return providerError()
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", "Bearer "+c.token())
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
