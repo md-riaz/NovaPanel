@@ -44,6 +44,11 @@ type Journal struct {
 }
 
 func OpenJournal(root string) (*Journal, error) {
+	return openJournalContext(context.Background(), root)
+}
+
+// openJournalContext retains stable-inode admission while bounding initial lock wait.
+func openJournalContext(ctx context.Context, root string) (*Journal, error) {
 	d, err := journalRoot(root)
 	if err != nil {
 		return nil, err
@@ -60,7 +65,7 @@ func OpenJournal(root string) (*Journal, error) {
 		d.Close()
 		return nil, e
 	}
-	err = j.locked(context.Background(), func() error { return nil })
+	err = j.locked(ctx, func() error { return nil })
 	if err != nil {
 		d.Close()
 		return nil, err

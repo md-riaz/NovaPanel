@@ -41,20 +41,25 @@ func readServiceLeaf(d *os.File, name string, limit int64) ([]byte, error) {
 	return b, nil
 }
 func admitRecoveryService(pendingID string) error {
+	return admitRecoveryServiceWith(pendingID, strictRuntimeDir, unix.Fstatfs)
+}
+
+// Private dependencies allow scratch filesystem acceptance without host service access.
+func admitRecoveryServiceWith(pendingID string, openDir func(string, bool) (*os.File, error), statfs func(int, *unix.Statfs_t) error) error {
 	// No environment variable is service evidence. Refuse user managers, cgroup v1,
 	// nested delegation and namespaces that hide the exact system.slice identity.
-	manager, e := strictRuntimeDir("/run/systemd/system", false)
+	manager, e := openDir("/run/systemd/system", false)
 	if e != nil {
 		return errRecoveryService
 	}
 	defer manager.Close()
-	proc, e := strictRuntimeDir("/proc/"+strconv.Itoa(os.Getpid()), false)
+	proc, e := openDir("/proc/"+strconv.Itoa(os.Getpid()), false)
 	if e != nil {
 		return errRecoveryService
 	}
 	defer proc.Close()
 	var fs unix.Statfs_t
-	if unix.Fstatfs(int(proc.Fd()), &fs) != nil || fs.Type != unix.PROC_SUPER_MAGIC {
+	if statfs(int(proc.Fd()), &fs) != nil || fs.Type != unix.PROC_SUPER_MAGIC {
 		return errRecoveryService
 	}
 	membership, e := readServiceLeaf(proc, "cgroup", 4096)
@@ -65,15 +70,15 @@ func admitRecoveryService(pendingID string) error {
 	if e != nil {
 		return e
 	}
-	root, e := strictRuntimeDir("/sys/fs/cgroup", false)
+	root, e := openDir("/sys/fs/cgroup", false)
 	if e != nil {
 		return errRecoveryService
 	}
 	defer root.Close()
-	if unix.Fstatfs(int(root.Fd()), &fs) != nil || fs.Type != unix.CGROUP2_SUPER_MAGIC {
+	if statfs(int(root.Fd()), &fs) != nil || fs.Type != unix.CGROUP2_SUPER_MAGIC {
 		return errRecoveryService
 	}
-	group, e := strictRuntimeDir("/sys/fs/cgroup"+path, false)
+	group, e := openDir("/sys/fs/cgroup"+path, false)
 	if e != nil {
 		return errRecoveryService
 	}
@@ -98,7 +103,7 @@ func admitRecoveryService(pendingID string) error {
 	}
 	// Reopen and compare identities to reject replaced/moved cgroup roots.
 	for path, pinned := range map[string]*os.File{"/sys/fs/cgroup": root, "/sys/fs/cgroup" + path: group, "/run/systemd/system": manager} {
-		current, e := strictRuntimeDir(path, false)
+		current, e := openDir(path, false)
 		if e != nil {
 			return errRecoveryService
 		}

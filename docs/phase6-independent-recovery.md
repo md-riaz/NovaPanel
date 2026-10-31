@@ -18,7 +18,11 @@ recovery record exists. No age-based cleanup is authorized.
 
 The actual execution is Journal.FireVerified, immutable snapshot custody and
 InstalledRestore. The installed destination opens lazily inside the verified
-callback. Terminal matching fire does not require /etc/ufw. Recovery restores the
+callback. Terminal matching fire does not require /etc/ufw, restore or markers.
+Only journal/custody layout is admitted before the decision. Restoration still
+requires the same strict destination owner, group, modes and no-follow ancestors.
+The initial journal lock wait honors the recovery context while preserving inode
+validation. Recovery restores the
 six admitted rule files, preserves approved installed modes, restores prior
 enabled state with fixed argv, publishes the ID/digest/enabled-bound private
 marker, then publishes reverted. Failures retain same-ID journal/custody evidence.
@@ -93,11 +97,28 @@ contention, command-entry cancellation and same-ID replay with fake commands.
 The exec tests check the direct-child signal policy and actual parent SIGKILL.
 All command execution is scratch test binaries or injected runners, not real UFW.
 
-Outstanding source-test coverage is explicit: no connected actual-dispatcher
-subprocess with a concurrently held Store, no death-after-marker overlay, no raw
-Pdeathsig grandchild survival demonstration, and no fixture-backed full service
-filesystem replacement matrix. Therefore this is runtime source progress, not
-full acceptance of every test criterion in the implementation design. Independent
-exact-commit review remains required. Real manager cleanup, UFW restoration,
-reboot, clock change and power-loss acceptance are deferred final-product VM work.
-Root/GID-zero scratch behavioral tests skip on ordinary-user execution.
+The correction retains independent-review RED regressions for all terminal states
+with both destinations unavailable and for an already-canceled initial lock wait.
+A separate held-lock deadline test covers cancellation during constructor wait.
+The command matrix crosses enabled/disabled command positions with exit failure,
+runner error and context cancellation, then verifies reverting, intact custody,
+absent markers and same-ID reopen/replay. Filesystem-backed service fixtures run
+the complete admission algorithm with private directory/type probes, including
+unsafe membership leaves, forged environment, wrong identities, membership change
+and root/group/manager replacement. Production still fixes its paths and probes.
+A test-only build overlay connects the actual dispatcher to the private recovery
+constructor in a child while the parent retains a real Store lifetime lock. It
+checks all installed bytes/modes, marker binding, terminal state and unchanged
+SQLite/WAL/SHM/pid bytes. The installed binary has no override.
+
+The raw parent-death subprocess test also proves a grandchild can still write
+only after the direct child is observed dead, then cleans up the owned processes.
+This demonstrates why service cleanup remains mandatory.
+
+Outstanding source-test coverage remains explicit: no death-after-marker overlay.
+The actual-dispatcher
+child uses a fake Runner and test-only service/layout injection, not the installed
+CLI or real manager cleanup. This is not full acceptance of every design test.
+Independent exact-commit review remains required. Real manager cleanup, UFW
+restoration, reboot, clock change and power-loss acceptance are deferred
+final-product VM work. Root/GID-zero behavioral tests skip for ordinary users.

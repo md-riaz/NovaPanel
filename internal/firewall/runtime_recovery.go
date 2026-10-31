@@ -60,7 +60,7 @@ func strictRuntimeDir(path string, private bool) (*os.File, error) {
 	return os.NewFile(uintptr(fd), "runtime-directory"), nil
 }
 func (l runtimeLayout) admit() error {
-	for _, p := range []string{l.root, l.root + "/journal", l.root + "/snapshots", l.root + "/restore", l.root + "/restore/markers"} {
+	for _, p := range []string{l.root, l.root + "/journal", l.root + "/snapshots"} {
 		f, e := strictRuntimeDir(p, true)
 		if e != nil {
 			return errRuntimeRecovery
@@ -105,9 +105,9 @@ func recoverInstalled(ctx context.Context, pendingID string, l runtimeLayout, no
 	if err = l.admit(); err != nil {
 		return err
 	}
-	j, err := OpenJournal(l.root + "/journal")
+	j, err := openJournalContext(ctx, l.root+"/journal")
 	if err != nil {
-		return errRuntimeRecovery
+		return errors.Join(errRuntimeRecovery, err)
 	}
 	defer func() { err = errors.Join(err, j.Close()) }()
 	c, err := OpenSnapshotCustody(l.root + "/snapshots")
@@ -118,6 +118,15 @@ func recoverInstalled(ctx context.Context, pendingID string, l runtimeLayout, no
 	return j.FireVerified(ctx, pendingID, now, c, func(r JournalRecord, s *VerifiedSnapshot) (err error) {
 		if err = l.admit(); err != nil {
 			return err
+		}
+		for _, path := range []string{l.root + "/restore", l.root + "/restore/markers"} {
+			d, e := strictRuntimeDir(path, true)
+			if e != nil {
+				return e
+			}
+			if e = d.Close(); e != nil {
+				return e
+			}
 		}
 		a, err := openInstalledRestore(l.rules, l.root+"/restore", 0, runner)
 		if err != nil {
