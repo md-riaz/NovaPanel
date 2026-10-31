@@ -18,6 +18,8 @@ jobs:
           go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
           go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
       - run: make ci
+      - name: Combined Phase 6 package and shared-boundary race tests
+        run: make phase6-test
   integration:
     runs-on: ubuntu-24.04
     steps:
