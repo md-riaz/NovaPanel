@@ -108,7 +108,11 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 			isOperation = true
 			err = s.CheckOperation(ctx, j.ID)
 			if err == nil && len(op.Ciphertext) > 0 {
-				_, err = q.OpenOperationCredentials(ctx, j.ID)
+				if op.Kind == store.WordPressInstall {
+					_, err = q.OpenWordPressCredentials(ctx, j.ID)
+				} else {
+					_, err = q.OpenOperationCredentials(ctx, j.ID)
+				}
 			}
 		} else if !errors.Is(loadErr, sql.ErrNoRows) {
 			return loadErr

@@ -47,6 +47,9 @@ type operationStore interface {
 // EnqueueOperation is agent-only admission. It allocates IDs before any locks,
 // seals credentials before SQL, and persists only nonsecret job arguments.
 func (q *Queue) EnqueueOperation(ctx context.Context, r store.OperationRequest, fields map[string]any) (EnqueueResult, error) {
+	return q.enqueueOperation(ctx, r, fields, nil)
+}
+func (q *Queue) enqueueOperation(ctx context.Context, r store.OperationRequest, fields map[string]any, wp *WordPressCredentials) (EnqueueResult, error) {
 	var out EnqueueResult
 	if q.admission != nil {
 		if err := q.admission(); err != nil {
@@ -69,19 +72,34 @@ func (q *Queue) EnqueueOperation(ctx context.Context, r store.OperationRequest, 
 	if e := q.healthy(); e != nil {
 		return out, e
 	}
-	verbs := map[store.OperationKind]string{store.SiteDelete: "site.delete", store.DatabaseCreate: "database.create", store.DatabaseRotate: "database.rotate_password", store.DBUserCreate: "dbuser.create", store.DatabaseDelete: "database.delete", store.DBUserDelete: "dbuser.delete"}
+	verbs := map[store.OperationKind]string{store.WordPressInstall: "site.create", store.SiteDelete: "site.delete", store.DatabaseCreate: "database.create", store.DatabaseRotate: "database.rotate_password", store.DBUserCreate: "dbuser.create", store.DatabaseDelete: "database.delete", store.DBUserDelete: "dbuser.delete"}
 	verb := verbs[r.Kind]
 	if verb == "" {
 		return out, rpcerr.Errf("invalid_argument", "operation kind unavailable")
 	}
 	var e error
-	if r.Kind == store.DatabaseCreate {
+	if r.Kind == store.WordPressInstall {
+		if r.WordPress == nil || wp == nil {
+			return out, errors.New("jobs: WordPress recovery input required")
+		}
+		r.SiteID, e = id.New()
+		if e != nil {
+			return out, e
+		}
+		w := *r.WordPress
+		w.DomainID, e = id.New()
+		if e != nil {
+			return out, e
+		}
+		r.WordPress = &w
+	}
+	if r.Kind == store.DatabaseCreate || r.Kind == store.WordPressInstall {
 		r.DatabaseID, e = id.New()
 		if e != nil {
 			return out, e
 		}
 	}
-	if r.Kind == store.DatabaseCreate || r.Kind == store.DBUserCreate {
+	if r.Kind == store.DatabaseCreate || r.Kind == store.DBUserCreate || r.Kind == store.WordPressInstall {
 		r.UserID, e = id.New()
 		if e != nil {
 			return out, e
@@ -100,10 +118,29 @@ func (q *Queue) EnqueueOperation(ctx context.Context, r store.OperationRequest, 
 	if r.Kind == store.SiteDelete {
 		j.ObjectKey = "site:" + r.SiteID
 	}
+	if r.Kind == store.WordPressInstall {
+		j.ObjectKey = "site:" + r.WordPress.Input.SiteName
+		r.WordPress.Input.DatabaseID = r.DatabaseID
+		r.WordPress.Input.DatabaseUserID = r.UserID
+	}
 	j.Effectful = m.Effectful
 	var nonce, ciphertext []byte
-	needsSecret := r.Kind == store.DatabaseCreate || r.Kind == store.DatabaseRotate || r.Kind == store.DBUserCreate
-	if needsSecret {
+	needsSecret := r.Kind == store.DatabaseCreate || r.Kind == store.DatabaseRotate || r.Kind == store.DBUserCreate || r.Kind == store.WordPressInstall
+	if r.Kind == store.WordPressInstall {
+		if wp == nil || q.sealer == nil || fields != nil || !validWordPressCredentials(*wp) {
+			return out, errors.New("jobs: WordPress recovery input required")
+		}
+		raw, err := json.Marshal(wordPressInput{Version: 1, JobID: jid, SiteID: r.SiteID, DatabaseID: r.DatabaseID, Owner: m.CreatedBy, Authority: metadata(j), Reservation: *r.WordPress, Credentials: *wp})
+		if err != nil {
+			return out, err
+		}
+		defer clear(raw)
+		sealed, err := q.sealer.Seal(raw)
+		if err != nil {
+			return out, err
+		}
+		nonce, ciphertext = sealed.Nonce, sealed.Ciphertext
+	} else if needsSecret {
 		if fields == nil || q.sealer == nil {
 			return out, errors.New("jobs: sealed operation credential required")
 		}
@@ -195,6 +232,22 @@ func (q *Queue) operationTerminal(ctx context.Context, j Job) (bool, error) {
 	}
 	var claim *store.JobClaim
 	if len(op.Ciphertext) > 0 {
+		if op.Kind == store.WordPressInstall {
+			payload, err := q.OpenWordPressCredentials(ctx, j.ID)
+			if err != nil {
+				return true, err
+			}
+			raw, err := json.Marshal(wordPressClaim(op, payload))
+			if err != nil {
+				return true, err
+			}
+			defer clear(raw)
+			sealed, err := q.sealer.Seal(raw)
+			if err != nil {
+				return true, err
+			}
+			return true, s.CompleteOperation(ctx, j.ID, &store.JobClaim{Nonce: sealed.Nonce, Ciphertext: sealed.Ciphertext})
+		}
 		payload, e := q.OpenOperationCredentials(ctx, j.ID)
 		if e != nil {
 			return true, e

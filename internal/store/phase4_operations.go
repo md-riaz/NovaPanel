@@ -13,6 +13,7 @@ import (
 type OperationKind string
 
 const (
+	WordPressInstall   OperationKind = "wordpress_install"
 	SiteDelete         OperationKind = "site_delete"
 	DatabaseCreate     OperationKind = "database_create"
 	DatabaseRotate     OperationKind = "database_rotate"
@@ -28,6 +29,7 @@ type OperationRequest struct {
 	Kind                       OperationKind
 	SiteID, DatabaseID, UserID string
 	PurgeFiles, PurgeDatabases bool
+	WordPress                  *WordPressReservation
 }
 type OperationDatabase struct {
 	Database Database
@@ -43,6 +45,7 @@ type OperationIdentity struct {
 	Attached                   []OperationDatabase `json:",omitempty"`
 	BindingID                  string              `json:",omitempty"`
 	PurgeFiles, PurgeDatabases bool
+	WordPress                  *WordPressReservation `json:",omitempty"`
 }
 type Operation struct {
 	JobID, Owner                   string
@@ -55,6 +58,9 @@ type Operation struct {
 }
 
 func (o Operation) Keys() []string {
+	if o.Kind == WordPressInstall {
+		return OrderedOperationKeys([]string{"site:" + o.SiteID, "site:" + o.Identity.WordPress.Input.SiteName, "db:" + o.DatabaseID, "db:" + o.Identity.Database.Name})
+	}
 	if o.Kind == SiteDelete {
 		keys := []string{"site:" + o.SiteID}
 		for _, db := range o.Identity.Attached {
@@ -112,6 +118,9 @@ func scanOperation(row scanner) (o Operation, err error) {
 }
 
 func validOperationIdentity(o Operation) bool {
+	if o.Kind == WordPressInstall {
+		return validWordPressIdentity(o)
+	}
 	if o.Kind == SiteDelete {
 		return validSiteDeleteIdentity(o)
 	}
@@ -148,6 +157,8 @@ func loadOperation(ctx context.Context, tx *sql.Tx, jid string) (Operation, erro
 }
 func operationVerb(k OperationKind) string {
 	switch k {
+	case WordPressInstall:
+		return "site.create"
 	case SiteDelete:
 		return "site.delete"
 	case DatabaseCreate:
@@ -164,12 +175,15 @@ func operationVerb(k OperationKind) string {
 	return ""
 }
 func operationSecrets(k OperationKind) bool {
-	return k == DatabaseCreate || k == DatabaseRotate || k == DBUserCreate
+	return k == DatabaseCreate || k == DatabaseRotate || k == DBUserCreate || k == WordPressInstall
 }
 
 // PrepareOperation atomically reserves immutable identities, job authority and claim hash.
 // No runtime effect or resource lock is taken while SQLite is held.
 func (s *Store) PrepareOperation(ctx context.Context, j Job, c JobClaim, r OperationRequest, nonce, ciphertext []byte) (op Operation, err error) {
+	if r.Kind == WordPressInstall {
+		return s.prepareWordPress(ctx, j, c, r, nonce, ciphertext)
+	}
 	if r.Kind == SiteDelete {
 		return s.prepareSiteDelete(ctx, j, r, nonce, ciphertext)
 	}
@@ -308,6 +322,29 @@ func nilBytes(b []byte) any {
 	return b
 }
 func operationBlocked(ctx context.Context, tx *sql.Tx, op Operation) error {
+	// Include reservation aliases, not just rows that do not yet exist.
+	rows, e := tx.QueryContext(ctx, "SELECT "+operationColumns+" FROM phase4_operations o JOIN jobs j ON j.id=o.job_id WHERE o.job_id<>? AND o.checkpoint<>'done' AND NOT(o.checkpoint='expired' AND o.reconciled=1)", op.JobID)
+	if e != nil {
+		return e
+	}
+	defer rows.Close()
+	keys := op.Keys()
+	for rows.Next() {
+		other, err := scanOperation(rows)
+		if err != nil {
+			return err
+		}
+		for _, a := range keys {
+			for _, b := range other.Keys() {
+				if a == b {
+					return ErrOperationLocked
+				}
+			}
+		}
+	}
+	if e = rows.Err(); e != nil {
+		return e
+	}
 	var n int
 	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM phase4_operations WHERE job_id<>? AND checkpoint<>'done' AND NOT(checkpoint='expired' AND reconciled=1) AND (db_id=? OR (?<>'' AND site_id=?))`, op.JobID, op.DatabaseID, op.SiteID, op.SiteID).Scan(&n)
 	if err != nil {
@@ -340,6 +377,9 @@ func (s *Store) CheckOperation(ctx context.Context, jid string) error {
 		}
 		if op.Kind == SiteDelete {
 			return checkSiteDelete(ctx, tx, op)
+		}
+		if op.Kind == WordPressInstall {
+			return checkWordPress(ctx, tx, op)
 		}
 		if op.Kind == DatabaseCreate {
 			if e = checkOperationSite(ctx, tx, op); e != nil {
@@ -499,6 +539,9 @@ func (s *Store) CompleteOperation(ctx context.Context, jid string, claim *JobCla
 				return e
 			}
 			return finishOperation(ctx, tx, op, now, []byte(`{}`))
+		}
+		if op.Kind == WordPressInstall {
+			return completeWordPress(ctx, tx, op, now, claim)
 		}
 		if e = checkOperationSite(ctx, tx, op); e != nil {
 			return e

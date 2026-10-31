@@ -170,6 +170,10 @@ func (s *Store) UpdateJob(ctx context.Context, j Job) error {
 }
 func (s *Store) RecoverJobs(ctx context.Context, now int64) error {
 	return s.Tx(ctx, func(tx *sql.Tx) error {
+		// A validated typed journal owns roll-forward, including secret-input jobs.
+		if _, e := tx.ExecContext(ctx, `UPDATE jobs SET state='queued',code=NULL,error=NULL,finished=NULL,updated=? WHERE state='running' AND EXISTS(SELECT 1 FROM phase4_operations o WHERE o.job_id=jobs.id AND o.checkpoint NOT IN ('done','expired'))`, now); e != nil {
+			return e
+		}
 		_, e := tx.ExecContext(ctx, `UPDATE jobs SET state=CASE WHEN effectful=1 THEN 'failed' ELSE 'queued' END,code=CASE WHEN effectful=1 THEN 'interrupted' ELSE NULL END,error=CASE WHEN effectful=1 THEN 'execution interrupted by restart' ELSE NULL END,finished=CASE WHEN effectful=1 THEN ? ELSE NULL END,updated=? WHERE state='running'`, now, now)
 		return e
 	})
