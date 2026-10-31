@@ -215,6 +215,19 @@ not restored by this custody API; their runtime policy remains separate.
   durable marker and runtime acceptance contracts. No public wiring, schema,
   Runner change, archive, deletion or terminal reuse is authorized.
 
+**Independent recovery runtime amendment.** The actual installed root subcommand
+now composes the authoritative journal, immutable custody and InstalledRestore,
+without daemon initialization or SQLite. It admits only the fixed private layout
+and the exact ID-bound unified system-manager service cgroup. Unmanaged shells
+fail before restoration. Recovery child execution uses direct-child parent-death
+SIGKILL with creating-thread lifetime, plus group cancellation and synchronous
+wait. Descendant cleanup after unexpected helper death still belongs to the
+independent systemd service, not to Pdeathsig. The explicit service/timer/startup
+contract, provisioning, tested scope and remaining coverage are recorded in
+`docs/phase6-independent-recovery.md`. No timer launcher, startup consumer,
+production migration, RPC activation or public apply is supplied by this amendment.
+Real cgroup cleanup/UFW/reboot/power-loss acceptance remains deferred VM work.
+
 **Firewall confirmation crash-safety gate.** SQLite and systemd do not share a
 transaction. Stopping the timer inside a pending-row transaction can leave an
 unconfirmed row without a timer if deletion or commit fails, or the process dies.

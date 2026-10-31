@@ -11,6 +11,7 @@ import (
 	"novapanel/internal/agent"
 	"novapanel/internal/config"
 	"novapanel/internal/exec"
+	"novapanel/internal/firewall"
 	"novapanel/internal/jobs"
 	"novapanel/internal/rpc"
 	"novapanel/internal/validate"
@@ -43,6 +44,9 @@ func listenSocket(path string, gid uint32) (*net.UnixListener, error) {
 	return l, nil
 }
 func run(args []string) error {
+	if handled, err := dispatchFirewallRevert(context.Background(), args, geteuid(), os.Getegid(), firewall.RecoverInstalledFirewall); handled {
+		return err
+	}
 	if geteuid() != 0 {
 		return fmt.Errorf("panel-agent must run as root")
 	}
