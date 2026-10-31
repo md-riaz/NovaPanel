@@ -68,6 +68,9 @@ func (q *Queue) PrepareOperations(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := q.reconcileConfigRecords(ctx); err != nil {
+		return errors.Join(ErrRecoveryBlocked, err)
+	}
 	q.operationsReady = true
 	return nil
 }

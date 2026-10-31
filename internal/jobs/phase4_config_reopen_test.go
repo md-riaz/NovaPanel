@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"novapanel/internal/audit"
 	"novapanel/internal/secret"
 	"novapanel/internal/store"
 	"novapanel/internal/wordpress"
@@ -115,8 +116,13 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 	}
 	defer func() { s.Close() }()
 	seal, _ := secret.New(make([]byte, 32))
-	auditSink := &fakeAudit{}
+	auditSink, err := audit.Open(s, filepath.Join(root, "audit"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { auditSink.Close() }()
 	q := NewQueue(s, seal, auditSink)
+	q.SetConfigCustody(custody)
 	if err = q.PrepareOperations(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +235,16 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 	if err = s.Tx(ctx, func(tx *sql.Tx) error { _, e := tx.ExecContext(ctx, "DROP TRIGGER stop_config"); return e }); err != nil {
 		t.Fatal(err)
 	}
+	if err = auditSink.Close(); err != nil {
+		t.Fatal(err)
+	}
+	auditSink, err = audit.Open(s, filepath.Join(root, "audit"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	q = NewQueue(s, seal, auditSink)
+	// Force cleanup failure after the real terminal transaction, not effect failure.
+	q.SetConfigCustody(filepath.Join(custody, "missing"))
 	recovered := make(chan struct{}, 1)
 	q.SetRunner(func(ctx context.Context, j *Job) error {
 		if j.ID != en.Job.ID {
@@ -268,8 +283,74 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 		}
 	}
 	cancel()
-	if err = <-done; err != nil {
+	if err = <-done; err == nil {
+		t.Fatal("post-commit cleanup failure ignored")
+	}
+	if _, e := os.Stat(filepath.Join(custody, en.Job.ID+".sealed")); e != nil {
+		t.Fatal("removed before cleanup retry", e)
+	}
+	q.SetConfigCustody(custody)
+	terminalOp, e := s.LoadOperation(ctx, en.Job.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if err = s.Tx(ctx, func(tx *sql.Tx) error {
+		_, e := tx.ExecContext(ctx, `UPDATE sites SET docroot=docroot||'-rebound' WHERE id=?`, terminalOp.SiteID)
+		return e
+	}); err != nil {
 		t.Fatal(err)
+	}
+	if err = q.PrepareOperations(ctx); err == nil {
+		t.Fatal("cleanup accepted rebound site")
+	}
+	if err = s.Tx(ctx, func(tx *sql.Tx) error {
+		_, e := tx.ExecContext(ctx, `UPDATE sites SET docroot=? WHERE id=?`, docroot, terminalOp.SiteID)
+		return e
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = auditSink.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = store.Open(dbpath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditSink, err = audit.Open(s, filepath.Join(root, "audit"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q = NewQueue(s, seal, auditSink)
+	q.SetConfigCustody(custody)
+	q.SetRunner(func(context.Context, *Job) error { t.Error("committed job replayed after cleanup failure"); return nil })
+	// A committed job alone is insufficient when its audit mirror is absent.
+	var saved string
+	if err = s.Tx(ctx, func(tx *sql.Tx) error {
+		if e := tx.QueryRowContext(ctx, `SELECT detail_json FROM events WHERE json_extract(detail_json,'$.job_id')=? AND json_extract(detail_json,'$.stage')='exec'`, en.Job.ID).Scan(&saved); e != nil {
+			return e
+		}
+		_, e := tx.ExecContext(ctx, `UPDATE events SET detail_json='{}' WHERE json_extract(detail_json,'$.job_id')=? AND json_extract(detail_json,'$.stage')='exec'`, en.Job.ID)
+		return e
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = q.PrepareOperations(ctx); err == nil {
+		t.Fatal("cleanup without durable audit")
+	}
+	if _, e := os.Stat(filepath.Join(custody, en.Job.ID+".sealed")); e != nil {
+		t.Fatal("record removed without audit", e)
+	}
+	if err = s.Tx(ctx, func(tx *sql.Tx) error {
+		_, e := tx.ExecContext(ctx, `UPDATE events SET detail_json=? WHERE detail_json='{}' AND verb='site.create' AND outcome='ok'`, saved)
+		return e
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = q.PrepareOperations(ctx); err != nil {
+		t.Fatal("terminal cleanup retry", err)
 	}
 	second, err := os.ReadFile(filepath.Join(docroot, "wp-config.php"))
 	if err != nil || !bytes.Equal(first, second) {
@@ -287,7 +368,7 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	durable, err := json.Marshal([]any{job, events, auditSink.events})
+	durable, err := json.Marshal([]any{job, events})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,5 +386,32 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 	}
 	if _, err = q.Claim(ctx, en.Job.ID, en.ClaimToken); err == nil {
 		t.Fatal("claim replay")
+	}
+	if _, err = os.Stat(filepath.Join(custody, en.Job.ID+".sealed")); !os.IsNotExist(err) {
+		t.Fatal("terminal custody record retained", err)
+	}
+	// Reopen after consumed claim. Terminal cleanup must not rerun effects.
+	if err = auditSink.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = store.Open(dbpath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditSink, err = audit.Open(s, filepath.Join(root, "audit"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q = NewQueue(s, seal, auditSink)
+	q.SetConfigCustody(custody)
+	q.SetRunner(func(context.Context, *Job) error { t.Error("terminal effects replayed"); return nil })
+	if err = q.PrepareOperations(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = q.Claim(ctx, en.Job.ID, en.ClaimToken); err == nil {
+		t.Fatal("claim recreated")
 	}
 }

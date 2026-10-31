@@ -164,7 +164,10 @@ func (q *Queue) finish(ctx context.Context, j Job, err error) error {
 		return e
 	}
 	if handled, e := q.operationTerminal(ctx, j); handled {
-		return e
+		if e != nil {
+			return e
+		}
+		return q.reconcileConfigRecord(ctx, j.ID)
 	}
 	return q.store.UpdateJob(ctx, j)
 }

@@ -30,6 +30,7 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Queue struct {
+	configCustody   string // trusted startup dependency, immutable while running
 	admission       func() error
 	startupReady    bool
 	store           Persistence

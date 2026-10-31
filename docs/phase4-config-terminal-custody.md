@@ -1,0 +1,9 @@
+# Protected config terminal custody ruling
+
+This delegated slice removes only the encrypted `<job-id>.sealed` record after successful operation-owned terminal publication. It never deletes `wp-config.php`, temporary files, unmanaged entries, failed or expired operation records. Failed/expired effect reconciliation remains separate because terminal failure does not prove filesystem rollback.
+
+The queue receives an explicit trusted custody-root dependency, not an RPC path. It reconciles successful WordPress operations after the existing audit-before-terminal sequence and at startup before admission. SQLite must prove the original WordPress operation and job are done, input ciphertext is destroyed, the committed site/database/WordPress binding still matches, and the exact successful worker completion audit is mirrored. The existing atomic terminal transaction establishes claim publication. A surviving claim must be published or consumed; an absent claim is permitted because consumption/expiry deletes it. No new schema or plaintext metadata is introduced.
+
+The filesystem consumer authenticates the sealed record against the complete operation binding, holds a no-follow root-owned custody directory, and checks the held record inode against the directory entry immediately before unlink. It removes no other entry. Trusted root relocation and concurrent root writers remain excluded by the dependency contract and existing operation locks. It makes no current-docroot-path attestation. Missing records are idempotent, with directory sync on retries. Cancellation or cleanup failure refuses startup admission and retains the committed outcome without rerunning effects or recreating claims.
+
+Production isolation, staged artifacts and final VM/power-loss acceptance remain unpassed. This adds no default production wiring or publication authority.

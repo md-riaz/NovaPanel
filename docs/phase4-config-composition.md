@@ -53,9 +53,10 @@ before any callback admission remain terminal, and expired journals never requeu
 A swallowed effect error cannot report success. The adapter does not delete files,
 including unmanaged entries.
 It retains the authenticated file record as required by the approved helper.
-Terminal file-record reconciliation/removal is still a separate operation-owner
-integration requirement; this slice does not add a permanent credential vault or
-claim automatic file-record expiry. SQLite terminal input destruction and F19
+Terminal file-record reconciliation/removal now has an opt-in operation-owner
+integration described in `phase4-config-terminal-custody.md`. The default remains
+unwired. Successful cleanup does not remove the live config or reconcile failed
+filesystem effects. SQLite terminal input destruction and F19
 projection remain in the existing atomic terminal transaction.
 
 ## Verification and remaining gates
@@ -73,8 +74,8 @@ PHP tests explicitly skip when those dependencies are unavailable.
 
 Public productionWP remains unsupported. Missing staged artifact custody, verified
 archive/download/checksum routing, actual account quiescence/provisioning, reviewed
-PHP ini, database application, core-install, PHP publication/probes and terminal
-file-record reconciliation remain runtime activation blockers. No WordPress
+PHP ini, database application, core-install, PHP publication/probes and failed-effect
+file reconciliation remain runtime activation blockers. No WordPress
 artifact was executed. PHP execution here loads only generated config and a trusted
 scratch assertion bootstrap, not WordPress. Final VM/power-loss acceptance remains
 deferred and unpassed. No source publication or host service changes are included.
