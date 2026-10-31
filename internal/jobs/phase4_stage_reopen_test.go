@@ -86,7 +86,7 @@ func TestWordPressStageOfficialQueueReopen(t *testing.T) {
 			<-done
 			t.Fatal(err)
 		}
-	case <-time.After(30 * time.Second):
+	case <-time.After(150 * time.Second):
 		cancel()
 		<-done
 		t.Fatal("stage not reached")
@@ -132,7 +132,7 @@ func TestWordPressStageOfficialQueueReopen(t *testing.T) {
 	go func() { done <- q.Run(run) }()
 	select {
 	case err = <-reached:
-	case <-time.After(30 * time.Second):
+	case <-time.After(150 * time.Second):
 		cancel()
 		<-done
 		t.Fatal("restart not reached")

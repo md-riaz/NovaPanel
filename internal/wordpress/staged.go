@@ -57,7 +57,13 @@ func consumeStaged(ctx context.Context, p StagedPaths, r runner.Runner, m Manife
 	if r == nil || ctx.Err() != nil {
 		return e, errStaged
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	budget := 30 * time.Second
+	if consume != nil {
+		// Full extraction includes bounded archive hashing, thousands of file
+		// syncs and restart comparisons. Signature-only preflight stays short.
+		budget = 2 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	var held []*os.File
 	defer func() {
