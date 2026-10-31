@@ -282,10 +282,15 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	cancel()
-	if err = <-done; err == nil {
-		t.Fatal("post-commit cleanup failure ignored")
+	select {
+	case err = <-done:
+		if err == nil {
+			t.Fatal("post-commit cleanup failure ignored")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cleanup failure did not stop worker")
 	}
+	cancel()
 	if _, e := os.Stat(filepath.Join(custody, en.Job.ID+".sealed")); e != nil {
 		t.Fatal("removed before cleanup retry", e)
 	}
