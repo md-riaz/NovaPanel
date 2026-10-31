@@ -32,6 +32,9 @@ func (q *Queue) Run(ctx context.Context) error {
 		return e
 	}
 	if e := q.expireOperations(ctx); e != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		return e
 	}
 	for q.startup != nil {
@@ -71,6 +74,9 @@ func (q *Queue) Run(ctx context.Context) error {
 		select {
 		case <-expiryTick.C:
 			if e := q.expireOperations(ctx); e != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
 				return e
 			}
 		default:

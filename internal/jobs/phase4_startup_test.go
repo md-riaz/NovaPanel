@@ -9,6 +9,31 @@ import (
 	"time"
 )
 
+type cancelExpiryStore struct {
+	*store.Store
+	cancel context.CancelFunc
+}
+
+func (s cancelExpiryStore) ExpireOperations(ctx context.Context) (int, error) {
+	s.cancel()
+	return 0, context.Canceled
+}
+
+func TestOperationStartupExpiryCancellationDrainsCleanly(t *testing.T) {
+	s, e := store.Open(filepath.Join(t.TempDir(), "db"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	q := NewQueue(cancelExpiryStore{s, cancel}, nil, &fakeAudit{})
+	q.SetRunner(func(context.Context, *Job) error { return nil })
+	if e = q.Run(ctx); e != nil {
+		t.Fatalf("shutdown returned expiry cancellation: %v", e)
+	}
+}
+
 type operationFixedClock int64
 
 func (c operationFixedClock) Now() int64 { return int64(c) }
