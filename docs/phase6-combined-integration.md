@@ -49,6 +49,16 @@ The first acceptance on fixture-fix commit `ba40ed9` passed `make ci` and full r
 
 This follow-up's exact-commit acceptance runs after this documentation is committed. Evidence is outside the tree at `/root/.hermes/cache/scratch/pr80-nonroot-evidence/`: root and UID-65534 ping/deadline runs, `make ci`, `make phase6-test`, and uncached full-repository race output. Remote checks must be read against the published SHA, not the preceding head; pending checks are not green.
 
+## Saved journal and helper integration
+
+The next candidate preserves remote head `fbd4cc2f2fbcdce496ca49f46576a10a76f4b58f`, whose two unit and two integration checks and GitGuardian check were read back as successful. Journal source `106b1df7dba00ccffbbb8b710835afa8f4dbbf24` is carried as `43bf57e`; inspection-helper source `6f3258052159912da08a54c59ad3e91cedd84c63` is carried as `8f6661d`. Both source/destination stable patch IDs match, with author identities and dates preserved.
+
+The confined journal uses a stable flock inode, bounded canonical metadata, file and directory fsync, confirmation publication before timer cancellation, and same-ID recovery/reconciliation. Its committed process tests kill only owned scratch helpers through internal/exec. Snapshot restoration and auditing are fake adapters. The journal remains disconnected from production RPC, CLI, timers and SQLite reconciliation. Terminal records cannot be reused. Power-loss and fsync fault injection remain unverified.
+
+The new helper command only inspects signed sealed memfds and a versioned installation. Production signing trust stays unset, service units are unchanged, and apply/recovery activation stays unsupported. Scratch child-survival and post-switch kill tests exercise existing offline apply with fake runners, not the prepare command or real systemd cgroup survival. Independent helper probes are test-only overlays with no implementation replacements.
+
+Final candidate gates run after this documentation commit. Evidence is external at `/root/.hermes/cache/scratch/phase6-journal-helper-review/` and must be tied to the resulting full SHA. No retrospective test-first claim is made for saved commits. No Phase 4/7 paths or production migrations are added; `0007` stays testdata behind the absent production `0006`. Passing these gates does not complete Phase 6 and does not authorize merge.
+
 ## Verification
 
 The combined package corpus includes updater, firewall, backup, store, verbs and RPC architecture tests. `make phase6-test` runs that corpus uncached with the race detector and is part of the existing Go CI workflow. `make ci` remains the whole-repository build, formatting, vet, staticcheck, tests, architecture backstop, vulnerability and systemd gate. Opt-in production-like integrations are separate acceptance, not implied by unit CI.
