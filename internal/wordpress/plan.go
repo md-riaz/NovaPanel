@@ -1,6 +1,6 @@
-// Package wordpress prepares nonsecret installation contracts and provides a
-// protected-config filesystem custody consumer. Neither authorizes PHP execution.
-// See README.md for mandatory consumer gates.
+// Package wordpress prepares nonsecret installation contracts without IO.
+// The separate configcustody subpackage publishes protected configuration.
+// Neither authorizes PHP execution. See README.md for mandatory consumer gates.
 package wordpress
 
 import (

@@ -2,7 +2,7 @@
 
 This package does not install WordPress. The install-plan builder performs no IO,
 process execution or authorization. The separate protected-config custody consumer
-in `config.go` performs scratch-tested filesystem publication and sealed recovery.
+in `configcustody/config.go` performs scratch-tested filesystem publication and sealed recovery.
 It does not open the execution gates below. See
 `docs/phase4-protected-config-custody.md` for its trusted caller requirements.
 The five-step plan includes a non-executable protected-config publication barrier
