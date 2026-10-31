@@ -69,13 +69,49 @@ func TestDomainExpansionAtomicDedupDurability(t *testing.T) {
 	if err = s.UpdateJob(ctx, durable); err != nil {
 		t.Fatal(err)
 	}
-	d, err := s.DomainByID(ctx, child.ID)
+	// Every concurrent alias, not just the child's ID owner, keeps its binding.
+	for n := 0; n < 8; n++ {
+		d, e := s.DomainByID(ctx, fmt.Sprint("alias", n))
+		if e != nil {
+			t.Fatal(e)
+		}
+		_, retry, e := s.AddDomainWithExpansion(ctx, d, parent.ID, 200)
+		if e != nil || retry != nil {
+			t.Fatalf("alias%d retry=%+v %v", n, retry, e)
+		}
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, retry, err := s.AddDomainWithExpansion(ctx, d, parent.ID, 200)
-	if err != nil || retry != nil {
-		t.Fatalf("retry=%+v %v", retry, err)
+	for n := 0; n < 8; n++ {
+		d, e := s.DomainByID(ctx, fmt.Sprint("alias", n))
+		if e != nil {
+			t.Fatal(e)
+		}
+		_, retry, e := s.AddDomainWithExpansion(ctx, d, parent.ID, 250)
+		if e != nil || retry != nil {
+			t.Fatalf("reopened alias%d retry=%+v %v", n, retry, e)
+		}
+	}
+	children, err = s.ListJobs(ctx, JobFilter{Verb: "ssl.issue"})
+	if err != nil || len(children) != 1 {
+		t.Fatalf("terminal retries created another child: %+v %v", children, err)
+	}
+	// Removing/re-adding a name creates a new domain identity, not a retry.
+	if err = s.RemoveDomain(ctx, "alias0"); err != nil {
+		t.Fatal(err)
+	}
+	_, fresh, err := s.AddDomainWithExpansion(ctx, Domain{ID: "replacement", SiteID: "site", FQDN: "alias0.example.test"}, parent.ID, 275)
+	if err != nil || fresh == nil || fresh.ID != "replacement" {
+		t.Fatalf("new domain identity: %+v %v", fresh, err)
+	}
+	fresh.State = "failed"
+	if err = s.UpdateJob(ctx, *fresh); err != nil {
+		t.Fatal(err)
 	}
 	// Transaction failure cannot leave a new desired row with no durable follow-up.
 	if err = s.Tx(ctx, func(tx *sql.Tx) error {
@@ -90,6 +126,25 @@ func TestDomainExpansionAtomicDedupDurability(t *testing.T) {
 	}
 	if _, err = s.DomainByID(ctx, "rollback"); err != sql.ErrNoRows {
 		t.Fatalf("domain survived failed publication: %v", err)
+	}
+	if err = s.Tx(ctx, func(tx *sql.Tx) error {
+		if _, e := tx.ExecContext(ctx, "DROP TRIGGER fail_expansion"); e != nil {
+			return e
+		}
+		_, e := tx.ExecContext(ctx, `CREATE TRIGGER fail_binding BEFORE INSERT ON settings WHEN NEW.key LIKE 'acme:domain-expansion:%' BEGIN SELECT RAISE(ABORT,'injected binding'); END`)
+		return e
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = s.AddDomainWithExpansion(ctx, Domain{ID: "unbound", SiteID: "site", FQDN: "unbound.example.test"}, parent.ID, 400)
+	if err == nil {
+		t.Fatal("binding failure ignored")
+	}
+	if _, err = s.DomainByID(ctx, "unbound"); err != sql.ErrNoRows {
+		t.Fatalf("domain survived failed binding: %v", err)
+	}
+	if _, err = s.GetJob(ctx, "unbound"); err != sql.ErrNoRows {
+		t.Fatalf("child survived failed binding: %v", err)
 	}
 }
 
