@@ -83,7 +83,7 @@ func (l *lab) Run(ctx context.Context, prog string, args []string, _ runner.RunO
 		}
 	case "nginx.reload":
 		argv := []string{"-c", base + "/nginx.ini", "-p", "/tmp/"}
-		if _, e := os.Stat(base + "/nginx.pid"); e == nil {
+		if b, e := os.ReadFile(base + "/nginx.pid"); e == nil && len(bytes.TrimSpace(b)) > 0 {
 			argv = append(argv, "-s", "reload")
 		}
 		out, stderr, code, err = l.command(ctx, "/tmp/nginx/usr/sbin/nginx", argv...)
