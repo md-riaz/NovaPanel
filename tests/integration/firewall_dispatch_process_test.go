@@ -31,7 +31,15 @@ func TestFirewallStartupStoreIndependence(t *testing.T) {
 func firewallDispatcherStoreIndependence(t *testing.T, startup bool) {
 	firewallDispatcherConnected(t, startup, true, "none")
 }
-func firewallDispatcherConnected(t *testing.T, startup, enabled bool, fault string) {
+func TestFirewallJournalRecovery(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		for _, fault := range []string{"none", "command", "death", "marker-death", "confirm"} {
+			t.Run(fmt.Sprintf("enabled-%t/%s", enabled, fault), func(t *testing.T) { firewallDispatcherConnected(t, true, enabled, fault, "consumer") })
+		}
+	}
+}
+
+func firewallDispatcherConnected(t *testing.T, startup, enabled bool, fault string, consumer ...string) {
 
 	if os.Geteuid() != 0 || os.Getegid() != 0 {
 		t.Skip("fixed runtime metadata requires root UID/GID fixtures")
@@ -67,6 +75,20 @@ func firewallDispatcherConnected(t *testing.T, startup, enabled bool, fault stri
 	digest, e := c.Put(t.Context(), pending, firewall.SnapshotInput{PriorEnabled: enabled, Rules: rules, IPTablesSave: []byte("v4"), IP6TablesSave: []byte("v6"), NumberedStatus: []byte("status")})
 	must(e)
 	must(c.Close())
+	snapshotBefore := map[string][]byte{}
+	must(filepath.WalkDir(root+"/snapshots", func(path string, d os.DirEntry, e error) error {
+		if e != nil {
+			return e
+		}
+		if !d.IsDir() {
+			b, e := os.ReadFile(path)
+			if e != nil {
+				return e
+			}
+			snapshotBefore[path] = b
+		}
+		return nil
+	}))
 	j, e := firewall.OpenJournal(root + "/journal")
 	must(e)
 	must(j.Arm(t.Context(), firewall.JournalRecord{Version: 1, ID: pending, Unit: "novapanel-fwrevert-" + pending, Deadline: 100, SnapshotSHA256: digest, PriorEnabled: enabled, State: "armed"}))
@@ -107,7 +129,7 @@ func TestFixtureDispatcherChild(t *testing.T){root:=os.Getenv("NP_DISPATCH_ROOT"
 		fixtureSource, e := os.ReadFile(repo + "/internal/firewall/runtime_manager_test.go")
 		must(e)
 		fixtureSource = []byte(strings.Split(string(fixtureSource), "func TestRuntimeManagerLaunchReadback")[0])
-		fixtureSource = []byte(strings.Replace(string(fixtureSource), "\n\t\"time\"", "", 1))
+		fixtureSource = []byte(strings.Replace(string(fixtureSource), "\n	\"time\"", "", 1))
 		must(os.WriteFile(root+"/manager-fixture.go.txt", fixtureSource, 0600))
 		startupShim := `package firewall
 import("context";"testing";"time";"os";"errors";execpkg "novapanel/internal/exec")
@@ -127,6 +149,37 @@ func FixtureStartup(t *testing.T,root string)error{
  return e
 }
 `
+		if len(consumer) > 0 {
+			startupShim = strings.Replace(startupShim, `func FixtureStartup(t *testing.T,root string)error{`, `func FixtureStartup(t *testing.T,root string)error{
+ exe,x:=os.Executable();if x!=nil{t.Fatal(x)}
+ fault:=os.Getenv("NP_FAULT")
+ consumerCtx,consumerCancel:=context.WithCancel(t.Context());defer consumerCancel()
+ waited:=make(chan struct{});if fault=="death"||fault=="marker-death" {go func(){defer close(waited);timer:=time.NewTimer(10*time.Second);defer timer.Stop();for{if _,e:=os.Stat(root+"/consumer-ready");e==nil{consumerCancel();return};select{case <-timer.C:consumerCancel();return;case <-time.After(time.Millisecond):}}}()}else{close(waited)}
+ b,eb,code,x:=(execpkg.Recovery{}).Run(consumerCtx,exe,[]string{"-test.run=^TestFixtureConsumerChild$"},execpkg.RunOpts{Env:[]string{"NP_DISPATCH_ROOT="+root,"NP_FAULT="+fault}})
+ <-waited
+ if fault=="death"||fault=="marker-death" {if _,e:=os.Stat(root+"/consumer-ready");e!=nil{t.Fatal("consumer never reached durable reverting",e)}}
+ if fault=="none"||fault=="confirm" {if x!=nil||code!=0{t.Fatalf("consumer %v %d %s %s",x,code,b,eb)}}else if x==nil&&code==0{t.Fatal("consumer fault did not fail")}
+ if fault=="none"||fault=="confirm" {return startupFirewall(t.Context(),runtimeLayout{root:root,rules:root+"/rules"},runtimeManager{})}
+ if fault=="marker-death" {if x=os.Remove(root+"/journal/state.next");x!=nil{t.Fatal(x)};if x=os.WriteFile(root+"/ufw-calls",nil,0600);x!=nil{t.Fatal(x)}}
+ if x=os.Setenv("NP_FAULT","none");x!=nil{t.Fatal(x)}
+ `, 1)
+			shim += `func FixtureConsumer(ctx context.Context,id,root string,r execpkg.Runner,confirm bool)error{
+ j,e:=OpenJournal(root+"/journal");if e!=nil{return e};record,_,e:=j.Inspect(ctx);j.Close();if e!=nil{return e}
+ s,e:=openInstalledJournalRecovery(ctx,runtimeLayout{root:root,rules:root+"/rules"},func()time.Time{return time.Unix(90,0)},&consumerManager{root:root},r);if e!=nil{return e};defer s.Close()
+ if os.Getenv("NP_FAULT")=="marker-death" {n:=0;s.journal.syncDirectory=func()error{n++;if n==1 {if e:=os.Mkdir(root+"/journal/state.next",0700);e!=nil{return e}};return s.journal.dir.Sync()};e=s.Revert(ctx,id);if e==nil{return errors.New("terminal publication did not fail")};if _,e=os.Stat(root+"/restore/markers/"+id+".json");e!=nil{return e};if e=os.WriteFile(root+"/consumer-ready",[]byte("marker"),0600);e!=nil{return e};select{}}
+ if confirm{return s.Confirm(ctx,id)};_ = record;return s.Revert(ctx,id)
+}
+ type consumerManager struct{root string}
+ func(m *consumerManager)Run(ctx context.Context,p string,a []string,o execpkg.RunOpts)([]byte,[]byte,int,error){
+ b,e:=os.ReadFile(m.root+"/journal/state");if e!=nil{return nil,nil,1,e};if !strings.Contains(string(b),"confirmed"){return nil,nil,1,errors.New("stop before commit")}
+ if p=="/usr/bin/systemctl" {if len(a)!=3||a[1]!="stop"||!strings.HasSuffix(a[2],".timer"){return nil,nil,1,errors.New("wrong stop")};return nil,nil,0,nil}
+ if p=="/usr/bin/busctl" {return []byte("{\"type\":\"a(ssssssouso)\",\"data\":[[]]}"),nil,0,nil};return nil,nil,1,errors.New("unexpected manager command")
+ }
+ `
+			shim = strings.Replace(shim, `"context";"time";`, `"context";"time";"os";"strings";"errors";`, 1)
+			must(os.WriteFile(root+"/shim.go.txt", []byte(shim), 0600))
+		}
+
 		agentShim := `package agent
 import("context";"testing";"novapanel/internal/firewall")
 func FixtureStartup(a *Agent,t *testing.T,root string){a.firewallStartup=func(context.Context)error{return firewall.FixtureStartup(t,root)}}
@@ -138,6 +191,12 @@ func TestFixtureRecoveryChild(t *testing.T){root:=os.Getenv("NP_DISPATCH_ROOT");
 type fixtureRunner struct{t *testing.T}
 func(f *fixtureRunner)Run(ctx context.Context,p string,a []string,o execpkg.RunOpts)([]byte,[]byte,int,error){if p!="/usr/sbin/ufw"{f.t.Fatal(p)};switch os.Getenv("NP_FAULT"){case "death":os.Exit(23);case "command":return nil,nil,1,errors.New("injected UFW failure")};h,e:=os.OpenFile(os.Getenv("NP_DISPATCH_ROOT")+"/ufw-calls",os.O_APPEND|os.O_CREATE|os.O_WRONLY,0600);if e!=nil{f.t.Fatal(e)};defer h.Close();h.WriteString(strings.Join(a," ")+"\n");return nil,nil,0,nil}
 `
+		if len(consumer) > 0 {
+			child = strings.Replace(child, `case "death":os.Exit(23)`, `case "death":if e:=os.WriteFile(os.Getenv("NP_DISPATCH_ROOT")+"/consumer-ready",[]byte("ready"),0600);e!=nil{f.t.Fatal(e)};select{}`, 1)
+			child += `func TestFixtureConsumerChild(t *testing.T){root:=os.Getenv("NP_DISPATCH_ROOT");if e:=firewall.FixtureConsumer(t.Context(),"01ARZ3NDEKTSV4RRFFQ69G5FAV",root,&fixtureRunner{t:t},os.Getenv("NP_FAULT")=="confirm");e!=nil{t.Fatal(e)}}
+`
+			child = strings.Replace(child, `if _,e:=os.Stat(root+"/manager-spawned");e!=nil{t.Fatal("manager never spawned helper",e)}`, `if os.Getenv("NP_FAULT")!="none"&&os.Getenv("NP_FAULT")!="confirm" {if _,e:=os.Stat(root+"/manager-spawned");e!=nil{t.Fatal("manager never spawned helper",e)}}`, 1)
+		}
 		child = strings.Replace(child, `"novapanel/internal/validate")`, `"strings";"novapanel/internal/validate";execpkg "novapanel/internal/exec")`, 1)
 		must(os.WriteFile(root+"/startup-shim.go.txt", []byte(startupShim), 0600))
 		must(os.WriteFile(root+"/agent-shim.go.txt", []byte(agentShim), 0600))
@@ -173,7 +232,7 @@ func(f *fixtureRunner)Run(ctx context.Context,p string,a []string,o execpkg.RunO
 	if e != nil || exit != 0 {
 		t.Fatalf("child %v %d %s %s", e, exit, out, errout)
 	}
-	if startup {
+	if startup && fault != "confirm" {
 		calls, e := os.ReadFile(root + "/ufw-calls")
 		must(e)
 		want := "disable\n"
@@ -184,29 +243,55 @@ func(f *fixtureRunner)Run(ctx context.Context,p string,a []string,o execpkg.RunO
 			t.Fatalf("enabled-state commands %q want %q", calls, want)
 		}
 	}
-	for n, want := range rules {
-		b, e := os.ReadFile(root + "/rules/" + n)
-		must(e)
-		if !bytes.Equal(b, want) {
-			t.Fatal("wrong restored bytes", n)
+	if fault == "confirm" {
+		for n := range rules {
+			b, e := os.ReadFile(root + "/rules/" + n)
+			must(e)
+			if string(b) != "old" {
+				t.Fatal("confirmation changed rules")
+			}
 		}
-		s, e := os.Stat(root + "/rules/" + n)
-		must(e)
-		if s.Mode().Perm() != 0640 {
-			t.Fatal("mode changed")
+		if _, e := os.Stat(root + "/ufw-calls"); !os.IsNotExist(e) {
+			t.Fatal("confirmation ran UFW", e)
 		}
-	}
-	marker, e := os.ReadFile(root + "/restore/markers/" + pending + ".json")
-	must(e)
-	if !bytes.Contains(marker, []byte(digest)) {
-		t.Fatal("unbound marker")
+	} else {
+		for n, want := range rules {
+			b, e := os.ReadFile(root + "/rules/" + n)
+			must(e)
+			if !bytes.Equal(b, want) {
+				t.Fatal("wrong restored bytes", n)
+			}
+			s, e := os.Stat(root + "/rules/" + n)
+			must(e)
+			if s.Mode().Perm() != 0640 {
+				t.Fatal("mode changed")
+			}
+		}
+		marker, e := os.ReadFile(root + "/restore/markers/" + pending + ".json")
+		must(e)
+		if !bytes.Contains(marker, []byte(digest)) {
+			t.Fatal("unbound marker")
+		}
 	}
 	b, e := os.ReadFile(root + "/journal/state")
 	must(e)
 	var state firewall.JournalRecord
 	must(json.Unmarshal(b, &state))
-	if state.State != "reverted" || state.ID != pending {
+	wantState := "reverted"
+	if fault == "confirm" {
+		wantState = "confirmed"
+	}
+	if state.State != wantState || state.ID != pending {
 		t.Fatal(state)
+	}
+	if fault == "confirm" {
+		for path, want := range snapshotBefore {
+			b, e := os.ReadFile(path)
+			must(e)
+			if !bytes.Equal(b, want) {
+				t.Fatal("confirmation changed immutable snapshot", path)
+			}
+		}
 	}
 	for n, want := range before {
 		b, e := os.ReadFile(root + "/" + n)

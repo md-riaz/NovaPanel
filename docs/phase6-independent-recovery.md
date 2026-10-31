@@ -31,6 +31,14 @@ Lock order is stable journal flock, custody verification, private restoration
 flock, commands, marker, restoration unlock, terminal journal publication.
 Never seek audit or Store locks inside this callback.
 
+The internal `OpenInstalledJournalRecovery(ctx)` consumer owns journal/custody
+handles and shares this lazy callback for synchronous manual RevertVerified.
+Manual admission is predeadline except matching interrupted reverting replay.
+Its Confirm uses Journal.Confirm followed by a ten-second detached timer stop and
+readback. This trusted-root in-process consumer is not the independent helper;
+helper cgroup admission is unchanged. Public wiring remains closed. See
+`docs/phase6-journal-recovery.md` for ownership and completion limits.
+
 ## Required service ownership
 
 Every production execution must be in exactly

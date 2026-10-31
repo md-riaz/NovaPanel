@@ -326,12 +326,23 @@ func (j *Journal) Arm(ctx context.Context, r JournalRecord) error {
 		return j.publishContext(ctx, r)
 	})
 }
+
+// readPending maps only an absent state leaf to client not_found, never a
+// missing stable lock or root encountered by locked admission.
+func (j *Journal) readPending() (JournalRecord, error) {
+	r, err := j.read()
+	if errors.Is(err, unix.ENOENT) {
+		return r, notFound()
+	}
+	return r, err
+}
+
 func (j *Journal) Confirm(ctx context.Context, pendingID string, now func() time.Time, stop func(string) error) error {
 	if stop == nil || now == nil {
 		return errors.New("missing timer adapter")
 	}
 	return j.locked(ctx, func() error {
-		r, err := j.read()
+		r, err := j.readPending()
 		if err != nil {
 			return err
 		}
@@ -400,7 +411,7 @@ func (j *Journal) Revert(ctx context.Context, pendingID string, now func() time.
 		return errors.New("missing recovery adapter")
 	}
 	return j.locked(ctx, func() error {
-		r, err := j.read()
+		r, err := j.readPending()
 		if err != nil {
 			return err
 		}

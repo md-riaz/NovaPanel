@@ -115,7 +115,13 @@ func recoverInstalled(ctx context.Context, pendingID string, l runtimeLayout, no
 		return errRuntimeRecovery
 	}
 	defer func() { err = errors.Join(err, c.Close()) }()
-	return j.FireVerified(ctx, pendingID, now, c, func(r JournalRecord, s *VerifiedSnapshot) (err error) {
+	return j.FireVerified(ctx, pendingID, now, c, installedRestoreCallback(ctx, l, runner))
+}
+
+// installedRestoreCallback keeps destination admission lazy for terminal journal
+// decisions, and shares the exact descriptor restoration between Fire and Revert.
+func installedRestoreCallback(ctx context.Context, l runtimeLayout, runner execpkg.Runner) VerifiedRestore {
+	return func(r JournalRecord, s *VerifiedSnapshot) (err error) {
 		if err = l.admit(); err != nil {
 			return err
 		}
@@ -134,5 +140,5 @@ func recoverInstalled(ctx context.Context, pendingID string, l runtimeLayout, no
 		}
 		defer func() { err = errors.Join(err, a.Close()) }()
 		return a.Restore(ctx, r, s)
-	})
+	}
 }

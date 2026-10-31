@@ -229,7 +229,11 @@ adapter and mandatory pre-OpenState startup consumer now inspect the authoritati
 journal, schedule and verify independent recovery, and block daemon startup for
 all retained pending or terminal records. Only a valid absent state permits serve.
 No production migration, SQL reconciliation bypass, RPC activation or public apply
-is supplied by this amendment.
+is supplied by this amendment. The internal context-aware JournalRecovery consumer
+now confirms through durable journal publication and bounded detached timer-only
+stop/readback, and manually reverts through the same lazy InstalledRestore as Fire.
+It remains unwired to public operations and legacy FirewallRecovery. Details and
+limits are in `docs/phase6-journal-recovery.md`.
 Real cgroup cleanup/UFW/reboot/power-loss acceptance remains deferred VM work.
 
 **Firewall confirmation crash-safety gate.** SQLite and systemd do not share a
