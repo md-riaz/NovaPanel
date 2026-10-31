@@ -196,7 +196,12 @@ not restored by this custody API; their runtime policy remains separate.
   owner-only 0600 regular files; snapshot/ufw directories are 0700. Held root
   identity, complete inventory, sizes and hashes are revalidated on each open.
   Root/agent UID is trusted not to mutate paths or descriptor bytes concurrently.
-- Publication exclusively stages `<id>.next`, fsyncs every file and both staged
+- Publication serializes staging/final admission through completion under an
+  exclusive flock on a fresh descriptor for the pinned custody root directory.
+  Independent handles/processes and calls sharing one handle use the same inode;
+  lock waits honor cancellation and revalidate root identity before admission.
+  No lock pathname is created or replaced. Publication exclusively stages
+  `<id>.next`, fsyncs every file and both staged
   directories, then uses atomic no-replace rename to `<id>` and fsyncs root.
   Incomplete staging is refused, never adopted, repaired or archived. Same-ID
   identical complete retry succeeds only after full revalidation and fsync of

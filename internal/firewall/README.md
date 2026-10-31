@@ -92,7 +92,12 @@ not inferred from the old wildcard or the dashboard prototype.
 The preprovisioned same-owner 0700 root has strictly nonwritable, trusted,
 no-follow ancestry. Unlike the journal's sticky-directory exception, custody
 refuses writable ancestors. Files are no-follow, 0600, single-link and regular.
-Publication copies bounded input, fsyncs every file and staged directory, uses
+Publication takes an exclusive flock on a fresh descriptor for the pinned root
+inode before final/staging admission and holds it through publication or identical
+replay. This serializes independent handles and processes, including calls sharing
+one handle; waits honor cancellation and recheck root identity after admission.
+No replaceable lock pathname or staging cleanup is introduced. Publication copies
+bounded input, fsyncs every file and staged directory, uses
 Linux `RENAME_NOREPLACE`, then syncs root. Failed staging remains refused, not
 cleaned or adopted. A final-sync failure may leave a complete visible snapshot;
 identical retry revalidates and syncs directories, while different content refuses.

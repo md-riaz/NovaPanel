@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"novapanel/internal/id"
@@ -43,8 +44,9 @@ type snapshotManifest struct {
 
 var snapshotNames = [...]string{"enabled", "ip6tables-save", "iptables-save", "ufw-status-numbered", "ufw/after.rules", "ufw/after6.rules", "ufw/before.rules", "ufw/before6.rules", "ufw/user.rules", "ufw/user6.rules"}
 
-// SnapshotCustody holds an admitted root identity. Trusted UID must not mutate
-// custody paths or bytes concurrently. Close must not race other methods.
+// SnapshotCustody holds an admitted root identity. Put serializes across handles
+// and processes; trusted UID must not otherwise mutate custody paths or bytes.
+// Close must not race other methods.
 type SnapshotCustody struct {
 	root     string
 	dir      *os.File
@@ -337,6 +339,31 @@ func (c *SnapshotCustody) Verify(ctx context.Context, r JournalRecord) (*Verifie
 func (c *SnapshotCustody) Put(ctx context.Context, pendingID string, in SnapshotInput) (string, error) {
 	_, data, b, e := snapshotInput(pendingID, in)
 	if e != nil || c.check(ctx) != nil {
+		return "", errSnapshot
+	}
+	// Reopen the pinned directory for a distinct flock description on every call.
+	// Locking c.dir itself would let calls sharing this handle bypass each other.
+	lock, e := snapshotOpenDir(c.dir, ".")
+	if e != nil {
+		return "", errSnapshot
+	}
+	defer lock.Close()
+	for {
+		e = unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if e == nil {
+			break
+		}
+		if e != unix.EWOULDBLOCK && e != unix.EAGAIN {
+			return "", errSnapshot
+		}
+		select {
+		case <-ctx.Done():
+			return "", errSnapshot
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	defer unix.Flock(int(lock.Fd()), unix.LOCK_UN)
+	if c.check(ctx) != nil {
 		return "", errSnapshot
 	}
 	dir := int(c.dir.Fd())
