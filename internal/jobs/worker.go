@@ -91,7 +91,11 @@ func (q *Queue) Run(ctx context.Context) error {
 	}
 }
 func (q *Queue) execute(ctx context.Context, j Job) error {
-	unlock := q.locks.lock(j.ObjectKey)
+	keys, keyErr := q.operationKeys(ctx, j)
+	if keyErr != nil {
+		return keyErr
+	}
+	unlock := q.locks.lockSet(keys)
 	defer unlock()
 	if e := q.healthy(); e != nil {
 		return e
@@ -108,7 +112,17 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 	run := q.runner
 	q.mu.Unlock()
 	// Caller identity is restored exclusively from durable trusted columns.
-	err := invoke(WithMetadata(ctx, metadata(j)), run, &j)
+	err := error(nil)
+	if s, ok := q.store.(operationStore); ok {
+		if _, loadErr := s.LoadOperation(ctx, j.ID); loadErr == nil {
+			err = s.CheckOperation(ctx, j.ID)
+		} else if !errors.Is(loadErr, sql.ErrNoRows) {
+			return loadErr
+		}
+	}
+	if err == nil {
+		err = invoke(WithMetadata(ctx, metadata(j)), run, &j)
+	}
 	if ctx.Err() != nil {
 		return nil
 	} // leave running for restart's effectful/idempotent recovery
@@ -143,6 +157,9 @@ func (q *Queue) finish(ctx context.Context, j Job, err error) error {
 		return e
 	}
 	if e = q.store.AppendJobEvent(ctx, store.JobEvent{ID: eid, JobID: j.ID, TS: now, Msg: j.State}); e != nil {
+		return e
+	}
+	if handled, e := q.operationTerminal(ctx, j); handled {
 		return e
 	}
 	return q.store.UpdateJob(ctx, j)

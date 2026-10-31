@@ -1,0 +1,401 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"sort"
+	"strings"
+)
+
+type OperationKind string
+
+const (
+	DatabaseCreate     OperationKind = "database_create"
+	DatabaseRotate     OperationKind = "database_rotate"
+	DBUserCreate       OperationKind = "dbuser_create"
+	DatabaseDelete     OperationKind = "database_delete"
+	DBUserDelete       OperationKind = "dbuser_delete"
+	OperationTTLMillis int64         = 86400000
+)
+
+// OperationRequest contains trusted, pre-reserved identities, never RPC arguments.
+// New resource IDs must be minted by the admitting agent before acquiring locks.
+type OperationRequest struct {
+	Kind                       OperationKind
+	SiteID, DatabaseID, UserID string
+}
+type OperationAccount struct{ ID, Username, Host string }
+type OperationIdentity struct {
+	Version      int
+	Database     Database
+	Accounts     []OperationAccount
+	TargetUserID string
+}
+type Operation struct {
+	JobID, Owner                   string
+	Kind                           OperationKind
+	SiteID, DatabaseID, Checkpoint string
+	Identity                       OperationIdentity
+	Nonce, Ciphertext              []byte
+	Expires, Updated               int64
+	Reconciled                     bool
+}
+
+func (o Operation) Keys() []string {
+	keys := []string{"db:" + o.DatabaseID}
+	if o.SiteID != "" {
+		keys = append(keys, "site:"+o.SiteID)
+	}
+	if o.Kind == DatabaseCreate {
+		keys = append(keys, "db:"+o.Identity.Database.Name)
+	}
+	return OrderedOperationKeys(keys)
+}
+
+// OrderedOperationKeys is shared with the queue; site locks always precede DB locks.
+func OrderedOperationKeys(keys []string) []string {
+	keys = append([]string(nil), keys...)
+	rank := func(k string) string {
+		if strings.HasPrefix(k, "site:") {
+			return "0" + k
+		}
+		return "1" + k
+	}
+	sort.Slice(keys, func(i, j int) bool { return rank(keys[i]) < rank(keys[j]) })
+	out := keys[:0]
+	for _, k := range keys {
+		if len(out) == 0 || out[len(out)-1] != k {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+const operationColumns = `o.job_id,j.created_by,o.kind,coalesce(o.site_id,''),coalesce(o.db_id,''),o.checkpoint,o.identities_json,o.nonce,o.ciphertext,o.expires,o.updated,o.reconciled`
+
+func scanOperation(row scanner) (o Operation, err error) {
+	var raw string
+	err = row.Scan(&o.JobID, &o.Owner, &o.Kind, &o.SiteID, &o.DatabaseID, &o.Checkpoint, &raw, &o.Nonce, &o.Ciphertext, &o.Expires, &o.Updated, &o.Reconciled)
+	if err != nil {
+		return
+	}
+	d := json.NewDecoder(strings.NewReader(raw))
+	d.DisallowUnknownFields()
+	err = d.Decode(&o.Identity)
+	if err == nil && (o.Identity.Version != 1 || o.Identity.Database.ID != o.DatabaseID || o.Identity.Database.SiteID != o.SiteID || o.Owner == "") {
+		err = errors.New("operation identity corrupt")
+	}
+	return
+}
+func (s *Store) LoadOperation(ctx context.Context, jid string) (Operation, error) {
+	return scanOperation(s.db.QueryRowContext(ctx, "SELECT "+operationColumns+" FROM phase4_operations o JOIN jobs j ON j.id=o.job_id WHERE o.job_id=?", jid))
+}
+func loadOperation(ctx context.Context, tx *sql.Tx, jid string) (Operation, error) {
+	return scanOperation(tx.QueryRowContext(ctx, "SELECT "+operationColumns+" FROM phase4_operations o JOIN jobs j ON j.id=o.job_id WHERE o.job_id=?", jid))
+}
+func operationVerb(k OperationKind) string {
+	switch k {
+	case DatabaseCreate:
+		return "database.create"
+	case DatabaseRotate:
+		return "database.rotate_password"
+	case DBUserCreate:
+		return "dbuser.create"
+	case DatabaseDelete:
+		return "database.delete"
+	case DBUserDelete:
+		return "dbuser.delete"
+	}
+	return ""
+}
+func operationSecrets(k OperationKind) bool {
+	return k == DatabaseCreate || k == DatabaseRotate || k == DBUserCreate
+}
+
+// PrepareOperation atomically reserves immutable identities, job authority and claim hash.
+// No runtime effect or resource lock is taken while SQLite is held.
+func (s *Store) PrepareOperation(ctx context.Context, j Job, c JobClaim, r OperationRequest, nonce, ciphertext []byte) (op Operation, err error) {
+	err = s.Tx(ctx, func(tx *sql.Tx) error {
+		if operationVerb(r.Kind) == "" || j.Verb != operationVerb(r.Kind) || j.CreatedBy == "" || j.State != "queued" || !phase4ResourceID.MatchString(r.DatabaseID) {
+			return ErrSiteInvalid
+		}
+		if operationSecrets(r.Kind) != (len(nonce) > 0 && len(ciphertext) > 0) || ((len(nonce) == 0) != (len(ciphertext) == 0)) {
+			return ErrSiteInvalid
+		}
+		if r.Kind == DatabaseDelete || r.Kind == DBUserDelete {
+			if len(ciphertext) != 0 {
+				return ErrSiteInvalid
+			}
+		}
+		var ident OperationIdentity
+		ident.Version = 1
+		if r.Kind == DatabaseCreate {
+			if !phase4ResourceID.MatchString(r.UserID) {
+				return ErrSiteInvalid
+			}
+			ident.Database = Database{ID: r.DatabaseID, SiteID: r.SiteID, Name: "d_" + strings.ToLower(r.DatabaseID), Engine: "mariadb", PrimaryUserID: r.UserID}
+			ident.Accounts = []OperationAccount{{ID: r.UserID, Username: "u_" + strings.ToLower(r.UserID), Host: "127.0.0.1"}}
+			var n int
+			if e := tx.QueryRowContext(ctx, "SELECT count(*) FROM databases WHERE id=? OR name=?", r.DatabaseID, ident.Database.Name).Scan(&n); e != nil {
+				return e
+			}
+			if n != 0 {
+				return ErrSiteConflict
+			}
+		} else {
+			dbid := r.DatabaseID
+			if r.Kind == DBUserDelete {
+				if e := tx.QueryRowContext(ctx, "SELECT db_id FROM db_users WHERE id=?", r.UserID).Scan(&dbid); e != nil {
+					return e
+				}
+				if dbid != r.DatabaseID {
+					return ErrSiteConflict
+				}
+			}
+			if e := tx.QueryRowContext(ctx, "SELECT id,coalesce(site_id,''),name,engine,primary_user_id,created FROM databases WHERE id=?", dbid).Scan(&ident.Database.ID, &ident.Database.SiteID, &ident.Database.Name, &ident.Database.Engine, &ident.Database.PrimaryUserID, &ident.Database.Created); e != nil {
+				return e
+			}
+			if r.SiteID != "" && r.SiteID != ident.Database.SiteID {
+				return ErrSiteConflict
+			}
+			rows, e := tx.QueryContext(ctx, "SELECT id,username,host FROM db_users WHERE db_id=? ORDER BY id", dbid)
+			if e != nil {
+				return e
+			}
+			for rows.Next() {
+				var a OperationAccount
+				if e = rows.Scan(&a.ID, &a.Username, &a.Host); e != nil {
+					rows.Close()
+					return e
+				}
+				ident.Accounts = append(ident.Accounts, a)
+			}
+			e = rows.Err()
+			rows.Close()
+			if e != nil {
+				return e
+			}
+			if r.Kind == DBUserCreate {
+				if !phase4ResourceID.MatchString(r.UserID) {
+					return ErrSiteInvalid
+				}
+				ident.Accounts = []OperationAccount{{ID: r.UserID, Username: "u_" + strings.ToLower(r.UserID), Host: "127.0.0.1"}}
+			}
+			if r.Kind == DBUserDelete {
+				if r.UserID == ident.Database.PrimaryUserID {
+					return ErrSitePrecondition
+				}
+				ident.TargetUserID = r.UserID
+			}
+			if r.Kind == DatabaseDelete {
+				var n int
+				if e = tx.QueryRowContext(ctx, "SELECT count(*) FROM wordpress_bindings WHERE db_id=?", dbid).Scan(&n); e != nil {
+					return e
+				}
+				if n != 0 {
+					return ErrSitePrecondition
+				}
+			}
+		}
+		if ident.Database.SiteID != "" {
+			var status string
+			if e := tx.QueryRowContext(ctx, "SELECT status FROM sites WHERE id=?", ident.Database.SiteID).Scan(&status); e != nil {
+				return e
+			}
+			if status != "active" {
+				return ErrSitePrecondition
+			}
+		}
+		// All identities are durable before the queue acquires its complete lock set.
+		op = Operation{JobID: j.ID, Owner: j.CreatedBy, Kind: r.Kind, SiteID: ident.Database.SiteID, DatabaseID: r.DatabaseID, Checkpoint: "prepared", Identity: ident, Nonce: nonce, Ciphertext: ciphertext}
+		if e := operationBlocked(ctx, tx, op); e != nil {
+			return e
+		}
+		if e := insertJob(ctx, tx, j); e != nil {
+			return e
+		}
+		if operationSecrets(r.Kind) {
+			if c.JobID != j.ID || c.ClaimHash == "" {
+				return ErrSiteInvalid
+			}
+			c.Nonce = nil
+			c.Ciphertext = nil
+			c.Expires = 0
+			if e := insertClaim(ctx, tx, c); e != nil {
+				return e
+			}
+		}
+		// First write above owns the write lock before sampling publication time.
+		op.Updated = s.clock.Now()
+		op.Expires = op.Updated + OperationTTLMillis
+		raw, e := json.Marshal(ident)
+		if e != nil {
+			return e
+		}
+		_, e = tx.ExecContext(ctx, `INSERT INTO phase4_operations(job_id,kind,site_id,db_id,checkpoint,identities_json,nonce,ciphertext,expires,updated) VALUES(?,?,?,?,?,?,?,?,?,?)`, j.ID, r.Kind, nullableString(op.SiteID), r.DatabaseID, "prepared", string(raw), nilBytes(nonce), nilBytes(ciphertext), op.Expires, op.Updated)
+		return e
+	})
+	return
+}
+func nullableString(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+func nilBytes(b []byte) any {
+	if len(b) == 0 {
+		return nil
+	}
+	return b
+}
+func operationBlocked(ctx context.Context, tx *sql.Tx, op Operation) error {
+	var n int
+	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM phase4_operations WHERE job_id<>? AND checkpoint<>'done' AND NOT(checkpoint='expired' AND reconciled=1) AND (db_id=? OR (?<>'' AND site_id=?))`, op.JobID, op.DatabaseID, op.SiteID, op.SiteID).Scan(&n)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return ErrOperationLocked
+	}
+	return nil
+}
+
+var ErrOperationLocked = errors.New("operation locked")
+var ErrOperationExpired = errors.New("operation interrupted by expiry")
+
+// CheckOperation must run under the complete lock set before each external mutation.
+func (s *Store) CheckOperation(ctx context.Context, jid string) error {
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		op, e := loadOperation(ctx, tx, jid)
+		if e != nil {
+			return e
+		}
+		if op.Checkpoint == "done" {
+			return nil
+		}
+		if op.Checkpoint == "expired" || s.clock.Now() >= op.Expires {
+			return ErrOperationExpired
+		}
+		if e = operationBlocked(ctx, tx, op); e != nil {
+			return e
+		}
+		if op.Kind == DatabaseCreate {
+			var n int
+			e = tx.QueryRowContext(ctx, "SELECT count(*) FROM databases WHERE id=? OR name=?", op.DatabaseID, op.Identity.Database.Name).Scan(&n)
+			if e != nil {
+				return e
+			}
+			if n != 0 {
+				return ErrSiteConflict
+			}
+		} else {
+			var site string
+			e = tx.QueryRowContext(ctx, "SELECT coalesce(site_id,'') FROM databases WHERE id=?", op.DatabaseID).Scan(&site)
+			if e != nil {
+				return e
+			}
+			if site != op.SiteID {
+				return ErrSiteConflict
+			}
+			var primary string
+			if e = tx.QueryRowContext(ctx, "SELECT primary_user_id FROM databases WHERE id=?", op.DatabaseID).Scan(&primary); e != nil {
+				return e
+			}
+			if primary != op.Identity.Database.PrimaryUserID {
+				return ErrSiteConflict
+			}
+		}
+		return nil
+	})
+}
+func (s *Store) CheckpointOperation(ctx context.Context, jid, from, to string) error {
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		op, e := loadOperation(ctx, tx, jid)
+		if e != nil {
+			return e
+		}
+		allowed := from == "prepared" && to == "db_applied" || from == "db_applied" && to == "verified" || from == "db_applied" && to == "config_published" || from == "config_published" && to == "verified"
+		if !allowed || op.Checkpoint != from {
+			return ErrSiteConflict
+		}
+		if op.Checkpoint == "expired" || s.clock.Now() >= op.Expires {
+			return ErrOperationExpired
+		}
+		r, e := tx.ExecContext(ctx, "UPDATE phase4_operations SET checkpoint=?,updated=? WHERE job_id=? AND checkpoint=?", to, s.clock.Now(), jid, from)
+		return affected(r, e)
+	})
+}
+
+// CompleteOperation publishes verified metadata, claim, job and journal in one commit.
+// A done replay never recreates a consumed or expired claim.
+func (s *Store) CompleteOperation(ctx context.Context, jid string, claim *JobClaim) error {
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		if _, e := tx.ExecContext(ctx, "UPDATE phase4_operations SET updated=updated WHERE job_id=?", jid); e != nil {
+			return e
+		}
+		op, e := loadOperation(ctx, tx, jid)
+		if e != nil {
+			return e
+		}
+		if op.Checkpoint == "done" {
+			return nil
+		}
+		now := s.clock.Now()
+		if op.Checkpoint == "expired" || now >= op.Expires {
+			return ErrOperationExpired
+		}
+		if op.Checkpoint != "verified" && !((op.Kind == DatabaseDelete || op.Kind == DBUserDelete) && op.Checkpoint == "db_applied") {
+			return ErrSitePrecondition
+		}
+		var result any = map[string]any{}
+		db := op.Identity.Database
+		switch op.Kind {
+		case DatabaseCreate:
+			_, e = tx.ExecContext(ctx, "INSERT INTO databases(id,site_id,name,primary_user_id,created) VALUES(?,?,?,?,?)", db.ID, nullableString(db.SiteID), db.Name, db.PrimaryUserID, now)
+			if e != nil {
+				return siteWriteError(e)
+			}
+			a := op.Identity.Accounts[0]
+			_, e = tx.ExecContext(ctx, "INSERT INTO db_users(id,db_id,username,host,created) VALUES(?,?,?,?,?)", a.ID, db.ID, a.Username, a.Host, now)
+			result = map[string]string{"db_id": db.ID, "db_name": db.Name, "db_user": a.Username}
+		case DBUserCreate:
+			a := op.Identity.Accounts[0]
+			_, e = tx.ExecContext(ctx, "INSERT INTO db_users(id,db_id,username,host,created) VALUES(?,?,?,?,?)", a.ID, db.ID, a.Username, a.Host, now)
+			result = map[string]string{"dbuser_id": a.ID}
+		case DatabaseDelete:
+			_, e = tx.ExecContext(ctx, "DELETE FROM databases WHERE id=?", db.ID)
+		case DBUserDelete:
+			_, e = tx.ExecContext(ctx, "DELETE FROM db_users WHERE id=? AND db_id=? AND id<>?", op.Identity.TargetUserID, db.ID, db.PrimaryUserID)
+		case DatabaseRotate:
+		default:
+			return ErrSiteInvalid
+		}
+		if e != nil {
+			return e
+		}
+		if operationSecrets(op.Kind) {
+			if claim == nil || len(claim.Nonce) == 0 || len(claim.Ciphertext) == 0 {
+				return ErrSiteInvalid
+			}
+			r, e := tx.ExecContext(ctx, "UPDATE job_claims SET nonce=?,ciphertext=?,expires=? WHERE job_id=? AND length(ciphertext)=0 AND claimed=0", claim.Nonce, claim.Ciphertext, now+ClaimTTLMillis, jid)
+			if e = affected(r, e); e != nil {
+				return e
+			}
+		} else if claim != nil {
+			return ErrSiteInvalid
+		}
+		raw, e := json.Marshal(result)
+		if e != nil {
+			return e
+		}
+		r, e := tx.ExecContext(ctx, `UPDATE jobs SET state='done',step='phase4_committed',progress=1,result_json=?,error=NULL,code=NULL,updated=?,finished=? WHERE id=? AND state='running'`, string(raw), now, now, jid)
+		if e = affected(r, e); e != nil {
+			return e
+		}
+		_, e = tx.ExecContext(ctx, "UPDATE phase4_operations SET checkpoint='done',nonce=NULL,ciphertext=NULL,updated=? WHERE job_id=?", now, jid)
+		return e
+	})
+}

@@ -37,7 +37,37 @@ func (*Store) GetDatabase(context.Context, string) (Database, error)
 
 ## Still required before runtime consumers
 
-B is incomplete. No production prepare/load/checkpoint/blocker/expiry/reconcile/atomic terminal operation API has been implemented. Ordered multi-resource queue acquisition and trusted durable reserved identity metadata remain unimplemented. Existing singleton queue behavior is unchanged. F19 metadata/job/claim/journal atomicity is tested only as SQL, not as a typed worker path. The next B slice must implement those contracts and publish exact signatures before DB/WordPress workers start. There is deliberately no stub API pretending otherwise.
+B remains incomplete. The recovered operation-foundation slice adds the internal APIs below for database create/rotate/delete and secondary-account create/delete. Prepare persists resolved identities, authority, a sealed payload and a reserved claim hash in one transaction. The worker acquires the journal's ordered lock set once; ordinary jobs keep singleton locking. Terminal publication commits metadata, job result/done, sealed claim, journal done and recovery ciphertext removal atomically. Done replay does not recreate a claim. Non-interrupted queue failures clear recovery ciphertext and keep an unreconciled blocker; interrupted failures retain recovery input.
+
+```go
+// novapanel/internal/store
+// OperationRequest carries trusted IDs, not RPC arguments.
+type OperationRequest struct {
+    Kind OperationKind
+    SiteID, DatabaseID, UserID string
+}
+// DatabaseCreate, DatabaseRotate, DBUserCreate, DatabaseDelete, DBUserDelete
+// are the supported OperationKind constants.
+func (*Store) PrepareOperation(context.Context, Job, JobClaim, OperationRequest, []byte, []byte) (Operation, error)
+func (*Store) LoadOperation(context.Context, string) (Operation, error)
+func (Operation) Keys() []string
+func OrderedOperationKeys([]string) []string
+func (*Store) CheckOperation(context.Context, string) error
+func (*Store) CheckpointOperation(context.Context, string, string, string) error
+func (*Store) CompleteOperation(context.Context, string, *JobClaim) error
+func (*Store) FailOperation(context.Context, string, string) error
+func (*Store) ExpireOperations(context.Context) (int, error)
+func (*Store) ReconcileOperation(context.Context, string) error
+
+// novapanel/internal/jobs
+func (*Queue) EnqueueOperation(context.Context, store.OperationRequest, map[string]any) (EnqueueResult, error)
+```
+
+`Operation` exposes JobID, Owner, Kind, SiteID, DatabaseID, Checkpoint, typed Identity, sealed Nonce/Ciphertext, Expires, Updated and Reconciled. Identity contains Version, Database, Accounts and TargetUserID; each account contains ID, Username and Host. These are internal trusted contracts, not public RPC handlers. `EnqueueOperation` generates create IDs before admission and returns the existing `EnqueueResult` with a claim token for secret-bearing operations. The caller must validate the credential payload and authorize before admission. `CompleteOperation` receives already-sealed claim bytes; it never performs external IO. Callers must hold `Operation.Keys()` through external postcondition checks and terminal publication. Preparation lifetime is fixed at 24 hours; claim lifetime starts at publication.
+
+Verified coverage includes typed create publication rollback with a real SQLite trigger, close/reopen identity retention, owner-bound one-shot claim and done replay, exact-deadline expiry blocking/reconcile, queue deletion replay after reopen, ordered overlapping locks, and queue failure cleanup. These checks are not full DB/WordPress recovery acceptance.
+
+Before runtime consumers: implement WordPress/site-delete journal variants and dynamic attached-DB lock planning; strengthen immutable identity validation and complete under-lock membership/account/binding revalidation; define typed credential/config payloads and claim projections; map store errors to canonical RPC codes; wire startup-before-admission and minute expiry batches plus authorized reconciliation; prove success/failure and crash/restart through the real queue for all operation kinds, including session/token authority, audit failure boundaries, blocked-clock publication, bounded expiry/query-plan/concurrency and leak checks. The generic `RecoverJobs` behavior is unchanged and is not a complete Phase 4 recovery supervisor. No runtime verb is enabled by this foundation. Do not start DB/WordPress consumers until these remaining contracts are complete.
 
 A can continue pure production nginx PHP-routing tests without exposing PHP site types. Runtime publication requires complete B contracts, safe FPM/nginx validate/publish/probe/restore, existing-site compatibility tests and production-mode lab acceptance. Current lab fixture substitution is not production success.
 
