@@ -21,9 +21,10 @@ jobs:
         # Default /tmp has a writable ancestor and is not valid custody.
         # HOME belongs to runner, with root/runner-owned non-writable ancestry.
         # Keep volatile fixtures outside the checkout's architecture scan.
+        # Short prefix leaves room for Go test names in Unix socket paths.
         run: |
           test "$(id -u)" -ne 0
-          scratch=$(mktemp -d "$HOME/novapanel-unit.XXXXXX")
+          scratch=$(mktemp -d "$HOME/n.XXXXXX")
           printf 'TMPDIR=%s\n' "$scratch" >> "$GITHUB_ENV"
       - name: Unprivileged Unix health ping and deadline regression
         run: |
@@ -37,7 +38,7 @@ jobs:
         run: |
           if [ -n "${TMPDIR:-}" ]; then
             case "$TMPDIR" in
-              "$HOME"/novapanel-unit.*) rm -rf -- "$TMPDIR" ;;
+              "$HOME"/n.*) rm -rf -- "$TMPDIR" ;;
               *) printf 'Refusing unexpected scratch path: %s\n' "$TMPDIR" >&2; exit 1 ;;
             esac
           fi
