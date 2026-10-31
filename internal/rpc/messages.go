@@ -292,6 +292,11 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 			return Err("agent_error", "Durable audit unavailable")
 		}
 	}
+	if mutation {
+		if err := s.Agent.CheckMutationAdmission(); err != nil {
+			return errorReply(err)
+		}
+	}
 	if mutation && s.Agent.Store != nil {
 		pending, err := s.Agent.Store.TLSIntent(ctx)
 		if err != nil {

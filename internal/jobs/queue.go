@@ -30,6 +30,8 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Queue struct {
+	admission       func() error
+	startupReady    bool
 	store           Persistence
 	sealer          Sealer
 	audit           Auditor
@@ -68,6 +70,11 @@ func (q *Queue) Enqueue(ctx context.Context, verb string, args any, objectKey st
 }
 func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey string, sealed bool) (EnqueueResult, error) {
 	var result EnqueueResult
+	if q.admission != nil {
+		if err := q.admission(); err != nil {
+			return result, err
+		}
+	}
 	m, ok := MetadataFrom(ctx)
 	if !ok || m.CreatedBy == "" {
 		return result, rpcerr.Errf("forbidden", "trusted job identity required")

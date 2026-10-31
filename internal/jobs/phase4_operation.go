@@ -48,6 +48,11 @@ type operationStore interface {
 // seals credentials before SQL, and persists only nonsecret job arguments.
 func (q *Queue) EnqueueOperation(ctx context.Context, r store.OperationRequest, fields map[string]any) (EnqueueResult, error) {
 	var out EnqueueResult
+	if q.admission != nil {
+		if err := q.admission(); err != nil {
+			return out, err
+		}
+	}
 	q.operationMu.Lock()
 	defer q.operationMu.Unlock()
 	if !q.operationsReady {

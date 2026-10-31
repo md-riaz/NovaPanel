@@ -14,6 +14,7 @@ import (
 	"novapanel/internal/secret"
 	"novapanel/internal/store"
 	"novapanel/internal/validate"
+	"sync/atomic"
 	"time"
 )
 
@@ -23,6 +24,7 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Agent struct {
+	mutationsBlocked atomic.Bool
 	ProvisionSite    func(context.Context, string) error
 	Nginx            *nginx.Applier
 	PasswordFailures auth.FailureBudgets

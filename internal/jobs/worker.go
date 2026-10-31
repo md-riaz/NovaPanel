@@ -24,55 +24,11 @@ func (q *Queue) Run(ctx context.Context) error {
 	q.running = true
 	q.mu.Unlock()
 	defer func() { q.mu.Lock(); q.running = false; q.mu.Unlock() }()
-	// Refuse even recovery mutations if the audit sinks have failed.
-	if q.audit == nil {
-		return errors.New("jobs: audit not configured")
-	}
-	if e := q.audit.Healthy(); e != nil {
-		return e
-	}
-	if e := q.expireOperations(ctx); e != nil {
+	if err := q.PrepareStartup(ctx); err != nil {
 		if ctx.Err() != nil {
 			return nil
 		}
-		return e
-	}
-	for q.startup != nil {
-		if ctx.Err() != nil {
-			return nil
-		}
-		j, err := q.startup(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return errors.Join(ErrRecoveryBlocked, err)
-		}
-		if j == nil {
-			break
-		}
-		if j != nil {
-			if err = q.recoverPublication(ctx, *j); err != nil {
-				if ctx.Err() != nil {
-					return nil
-				}
-				return errors.Join(ErrRecoveryBlocked, err)
-			}
-		}
-	}
-	if _, ok := q.store.(operationStore); ok {
-		if e := q.PrepareOperations(ctx); e != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return e
-		}
-	}
-	if e := q.store.RecoverJobs(ctx, q.clock.Now()); e != nil {
-		if ctx.Err() != nil {
-			return nil
-		}
-		return e
+		return err
 	}
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
@@ -117,11 +73,18 @@ func (q *Queue) Run(ctx context.Context) error {
 	}
 }
 func (q *Queue) execute(ctx context.Context, j Job) error {
-	keys, keyErr := q.operationKeys(ctx, j)
+	unlock, keyErr := q.lockJob(ctx, j)
 	if keyErr != nil {
+		var coded *rpcerr.CodedError
+		if errors.As(keyErr, &coded) && coded.Code == "unsupported" {
+			started, err := q.store.StartJob(ctx, j.ID, q.clock.Now())
+			if err != nil {
+				return err
+			}
+			return q.finish(ctx, started, keyErr)
+		}
 		return keyErr
 	}
-	unlock := q.locks.lockSet(keys)
 	defer unlock()
 	if e := q.healthy(); e != nil {
 		return e
