@@ -100,6 +100,10 @@ func (l *lab) Run(ctx context.Context, prog string, args []string, _ runner.RunO
 		fmt.Fprintf(os.Stderr, "%s: %s %v\n", event, stderr, err)
 		return out, stderr, code, err
 	}
+	// Reload signals return before workers replace their configuration.
+	if strings.HasSuffix(event, ".reload") {
+		time.Sleep(300 * time.Millisecond)
+	}
 	if err = l.hit(event); err != nil {
 		return out, stderr, 1, err
 	}
