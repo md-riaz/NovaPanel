@@ -7,6 +7,7 @@ import (
 	"novapanel/internal/auth"
 	"novapanel/internal/config"
 	"novapanel/internal/exec"
+	"novapanel/internal/firewall"
 	"novapanel/internal/jobs"
 	"novapanel/internal/platform"
 	"novapanel/internal/render/nginx"
@@ -23,6 +24,8 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Agent struct {
+	// Nil until durable snapshot recovery and independent deadman ownership are wired.
+	FirewallRecovery *firewall.Recovery
 	ProvisionSite    func(context.Context, string) error
 	Nginx            *nginx.Applier
 	PasswordFailures auth.FailureBudgets
