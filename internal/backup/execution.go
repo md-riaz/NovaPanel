@@ -99,7 +99,10 @@ func BackupPanelSnapshot(ctx context.Context, run runner.Runner, r Repository, p
 	if run == nil || p == nil || len(p.plain) == 0 || snapshot == nil || snapshot.dir == nil {
 		return errors.New("panel backup execution unavailable")
 	}
-	return runRestic(ctx, run, r, p, []string{"backup", "--tag", "panel", "--", snapshot.Path()})
+	if err := snapshot.validatePath(); err != nil {
+		return err
+	}
+	return runRestic(ctx, run, r, p, []string{"backup", "--tag", "panel", "--", snapshot.path})
 }
 
 func runRestic(ctx context.Context, run runner.Runner, r Repository, p *Password, args []string) error {

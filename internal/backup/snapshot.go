@@ -27,9 +27,46 @@ type Snapshot struct {
 	parent *os.File
 	name   string
 	path   string
+	info   os.FileInfo
 }
 
-func (s *Snapshot) Path() string { return s.path }
+// Path returns empty if the private snapshot no longer has its original identity.
+// Snapshot methods and consumption require exclusive use until Close.
+func (s *Snapshot) Path() string {
+	if s.validatePath() != nil {
+		return ""
+	}
+	return s.path
+}
+
+func (s *Snapshot) validatePath() error {
+	unsafe := errors.New("snapshot path unavailable or changed")
+	if s == nil || s.dir == nil || s.info == nil {
+		return unsafe
+	}
+	dir, err := openScratch(filepath.Dir(s.path))
+	if err != nil {
+		return unsafe
+	}
+	defer dir.Close()
+	actual, err := dir.Stat()
+	held, heldErr := s.dir.Stat()
+	if err != nil || heldErr != nil || !os.SameFile(actual, held) {
+		return unsafe
+	}
+	fd, err := unix.Openat(int(dir.Fd()), "panel.db", unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return unsafe
+	}
+	file := os.NewFile(uintptr(fd), "panel.db")
+	defer file.Close()
+	info, err := file.Stat()
+	var st unix.Stat_t
+	if err != nil || !os.SameFile(info, s.info) || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || info.Size() == 0 || unix.Fstat(fd, &st) != nil || st.Mode&07777 != 0600 || st.Uid != uint32(os.Geteuid()) || st.Nlink != 1 {
+		return unsafe
+	}
+	return nil
+}
 
 // Close removes only this snapshot's private staging directory. It is idempotent.
 func (s *Snapshot) Close() error {
@@ -49,7 +86,10 @@ func (s *Snapshot) Close() error {
 
 // CreateSnapshot uses SQLite VACUUM INTO, including committed WAL content.
 // scratch must already be an absolute, same-owner 0700 directory without any
-// symlink components. It is a trusted agent scratch root, never an RPC path.
+// symlink components. Ancestors must be root/agent-owned and not group/other
+// writable, except root-owned sticky directories. It is never an RPC path.
+// Root and the agent UID are trusted not to rename or mutate the tree during
+// creation or consumption; identity checks do not prevent a trusted-owner race.
 // Callers must provide a bounded context and must not mutate this private tree.
 func CreateSnapshot(ctx context.Context, source SQLExecutor, scratch string) (_ *Snapshot, err error) {
 	if source == nil {
@@ -94,6 +134,10 @@ func CreateSnapshot(ctx context.Context, source SQLExecutor, scratch string) (_ 
 		}
 		return nil, errors.New("panel snapshot failed")
 	}
+	s.info, err = file.Stat()
+	if err != nil {
+		return nil, err
+	}
 	if err = file.Sync(); err != nil {
 		return nil, err
 	}
@@ -104,6 +148,9 @@ func CreateSnapshot(ctx context.Context, source SQLExecutor, scratch string) (_ 
 		return nil, err
 	}
 	if err = parent.Sync(); err != nil {
+		return nil, err
+	}
+	if err = s.validatePath(); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -121,6 +168,13 @@ func openScratch(path string) (*os.File, error) {
 	for _, part := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
 		if part == "" {
 			continue
+		}
+		var ancestor unix.Stat_t
+		if unix.Fstat(int(current.Fd()), &ancestor) != nil ||
+			((ancestor.Uid != 0 && ancestor.Uid != uint32(os.Geteuid())) || ancestor.Mode&0022 != 0) &&
+				(ancestor.Uid != 0 || ancestor.Mode&unix.S_ISVTX == 0) {
+			current.Close()
+			return nil, errors.New("unsafe scratch ancestor")
 		}
 		next, e := unix.Openat(int(current.Fd()), part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		current.Close()
