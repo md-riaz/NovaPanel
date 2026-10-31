@@ -73,26 +73,31 @@ class LifecycleTests(unittest.TestCase):
 
     def test_descendant_pipe_timeout_is_bounded(self):
         # An outer process bounds the regression even on the broken launcher.
-        with tempfile.TemporaryDirectory(dir=os.environ['TMPDIR']) as td:
-            pidfile = Path(td) / 'descendant'
-            code = '''
-import importlib.util,sys
+        for behavior in ('ordinary', 'parent-exit', 'escaped', 'cancel'):
+            with self.subTest(behavior=behavior), tempfile.TemporaryDirectory(dir=os.environ['TMPDIR']) as td:
+                pidfile = Path(td) / 'descendant'
+                code = '''
+import importlib.util,sys,signal,threading
 s=importlib.util.spec_from_file_location('lab',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
 m.COMMAND_TIMEOUT=.15
+mode=sys.argv[3]
+if mode=='cancel':
+ m.COMMAND_TIMEOUT=30
+ threading.Timer(.15,lambda:m.cancellation(signal.SIGTERM,None)).start()
 try:
- m.cmd(sys.executable,'-c',"import os,time; p=os.fork(); open("+repr(sys.argv[2])+",'w').write(str(os.getpid())) if p==0 else None; time.sleep(30)")
+ m.cmd(sys.executable,'-c',"import os,time; p=os.fork(); open("+repr(sys.argv[2])+",'w').write(str(os.getpid())) if p==0 else None; os.setsid() if p==0 and "+repr(mode)+"=='escaped' else None; os._exit(0) if p!=0 and "+repr(mode)+"=='parent-exit' else None; time.sleep(30)")
 except RuntimeError: pass
 '''
-            p = subprocess.Popen([sys.executable, '-c', code, str(MODULE), str(pidfile)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            try:
-                p.communicate(timeout=2)
-                self.assertEqual(p.returncode, 0)
-            finally:
-                if pidfile.exists():
-                    try: os.kill(int(pidfile.read_text()), signal.SIGKILL)
-                    except ProcessLookupError: pass
-                if p.poll() is None: p.kill()
-                p.communicate(timeout=3)
+                p = subprocess.Popen([sys.executable, '-c', code, str(MODULE), str(pidfile), behavior], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                try:
+                    p.communicate(timeout=2)
+                    self.assertEqual(p.returncode, 0)
+                finally:
+                    if pidfile.exists():
+                        try: os.kill(int(pidfile.read_text()), signal.SIGKILL)
+                        except ProcessLookupError: pass
+                    if p.poll() is None: p.kill()
+                    p.communicate(timeout=3)
 
     @unittest.skipUnless(os.environ.get('NOVAPANEL_WP_DOCKER_TEST') == '1', 'local Docker opt-in')
     def test_original_image_id_survives_tag_removal_and_foreign_replacement(self):
