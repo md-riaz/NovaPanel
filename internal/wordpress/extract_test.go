@@ -80,8 +80,28 @@ func TestExtractStageRefusesChangedCustody(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "bytes":
+				before, err := os.Stat(file)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// The fixture owns this read-only file. Temporarily allow writing
+				// without relying on root's DAC override, then restore custody so
+				// rejection exercises changed bytes, not changed permissions.
+				if err := os.Chmod(file, 0644); err != nil {
+					t.Fatal(err)
+				}
 				if err := os.WriteFile(file, []byte("tampered"), 0444); err != nil {
 					t.Fatal(err)
+				}
+				if err := os.Chmod(file, 0444); err != nil {
+					t.Fatal(err)
+				}
+				after, err := os.Stat(file)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !os.SameFile(before, after) || after.Mode().Perm() != 0444 {
+					t.Fatal("byte tampering changed inode or custody permissions")
 				}
 			case "site_owned":
 				if os.Geteuid() != 0 {
