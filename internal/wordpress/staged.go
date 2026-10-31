@@ -242,14 +242,21 @@ func verifyStagedArchive(ctx context.Context, archive, metadata *os.File, m Mani
 			return errStaged
 		}
 		name := strings.TrimPrefix(f.Name, "wordpress/")
-		if f.FileInfo().IsDir() {
-			if f.Name == "wordpress/" {
-				continue
-			}
-			name = strings.TrimSuffix(name, "/")
-			if !safeArchiveName(name) || directories[name] {
+		// ZIP Mode adds ModeDir for a trailing slash even on a symlink or
+		// special entry. Check the complete type before classifying names.
+		typ := f.Mode().Type()
+		if typ != 0 && typ != os.ModeDir {
+			return errStaged
+		}
+		if typ == os.ModeDir {
+			if !strings.HasSuffix(f.Name, "/") {
 				return errStaged
 			}
+			name = strings.TrimSuffix(name, "/")
+			if (name == "" && f.Name != "wordpress/") || (name != "" && !safeArchiveName(name)) || directories[name] {
+				return errStaged
+			}
+			// The empty relative name represents the explicit root record.
 			directories[name] = true
 			continue
 		}
@@ -291,6 +298,16 @@ func verifyStagedArchive(ctx context.Context, archive, metadata *os.File, m Mani
 		if seen[name] {
 			return errStaged
 		}
+		// Check explicit directories as well as files. This final pass is
+		// independent of ZIP entry order and includes implicit ancestors.
+		if name == "" {
+			continue
+		}
+		for parent := path.Dir(name); parent != "."; parent = path.Dir(parent) {
+			if seen[parent] {
+				return errStaged
+			}
+		}
 	}
 	for name := range seen {
 		for parent := path.Dir(name); parent != "."; parent = path.Dir(parent) {
@@ -305,5 +322,5 @@ func verifyStagedArchive(ctx context.Context, archive, metadata *os.File, m Mani
 	return nil
 }
 func safeArchiveName(name string) bool {
-	return name != "" && name != "." && path.Clean(name) == name && !strings.HasPrefix(name, "/") && !strings.HasPrefix(name, "../") && !strings.ContainsAny(name, "\\\x00\r\n")
+	return name != "" && name != "." && name != ".." && path.Clean(name) == name && !strings.HasPrefix(name, "/") && !strings.HasPrefix(name, "../") && !strings.ContainsAny(name, "\\\x00\r\n")
 }
