@@ -15,8 +15,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE = 'php@sha256:92ff31bbd049fd199bf3700719374e4594b2baa7324eefc459bda26d622c3ea9'
-ARTIFACTS = Path(os.environ['NOVAPANEL_WP_STAGED_ARTIFACTS'])
-EVIDENCE = Path(tempfile.mkdtemp(prefix='wp-offline-', dir=os.environ['TMPDIR']))
+EVIDENCE = Path(tempfile.mkdtemp(prefix='wp-offline-', dir=os.environ.get('TMPDIR')))
 NAME = 'novapanel-wp-' + uuid.uuid4().hex[:12]
 
 OWNER_LABEL = 'org.novapanel.wp-offline-owner'
@@ -254,7 +253,15 @@ def inspect():
     assert h['NanoCpus'] == 1000000000
     assert set(h['Tmpfs']) == {'/scratch'}
 
+def staged_artifacts():
+    value = os.environ.get('NOVAPANEL_WP_STAGED_ARTIFACTS')
+    if not value:
+        raise ValueError('NOVAPANEL_WP_STAGED_ARTIFACTS is required to opt in to the retained-artifact lab')
+    return Path(value)
+
+
 def run_lab():
+    artifacts = staged_artifacts()
     sha = cmd('git', 'rev-parse', 'HEAD').stdout.decode().strip()
     assert not cmd('git', 'status', '--porcelain').stdout, 'commit inputs before exact-source lab'
     (EVIDENCE / 'source-sha.txt').write_text(sha + '\n')
@@ -263,7 +270,7 @@ def run_lab():
     pins = {'cli.phar': 'ce34ddd838f7351d6759068d09793f26755463b4a4610a5a5c0a97b68220d85c',
             'wordpress.zip': 'a147146c159362778ecbbbfb07bb20ddf4e85b130f971c824e656a8f938c5f87',
             'checksums.json': 'bb718bddf197e0098f05395dd9b228fad70b394926ee9d70a8c6a67cf20781e7'}
-    blobs = {name: (ARTIFACTS / name).read_bytes() for name in pins}
+    blobs = {name: (artifacts / name).read_bytes() for name in pins}
     for name, expected in pins.items():
         assert hashlib.sha256(blobs[name]).hexdigest() == expected
     cmd('go', 'build', '-o', str(EVIDENCE / 'probe'), './tools/phase4wpoffline')
@@ -330,6 +337,7 @@ def main():
         if len(sys.argv) == 3 and sys.argv[1] == '--reap':
             reap(sys.argv[2])
         else:
+            staged_artifacts()
             with OwnedResources():
                 run_lab()
     except Exception:

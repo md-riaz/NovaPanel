@@ -5,12 +5,14 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 MODULE = Path(__file__).with_name('phase4_wp_offline_lab.py')
 
@@ -23,6 +25,31 @@ def load():
 
 
 class LifecycleTests(unittest.TestCase):
+    def test_import_without_optional_environment(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop('NOVAPANEL_WP_STAGED_ARTIFACTS', None)
+            os.environ.pop('TMPDIR', None)
+            try:
+                lab = load()
+            except KeyError as error:
+                self.fail(f'import requires optional environment: {error}')
+        self.addCleanup(shutil.rmtree, lab.EVIDENCE)
+        self.assertTrue(lab.EVIDENCE.is_dir())
+
+    def test_lab_requires_artifact_opt_in_before_any_command(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop('NOVAPANEL_WP_STAGED_ARTIFACTS', None)
+            lab = load()
+            self.addCleanup(shutil.rmtree, lab.EVIDENCE)
+            with mock.patch.object(lab, 'cmd') as command:
+                with self.assertRaisesRegex(ValueError, 'NOVAPANEL_WP_STAGED_ARTIFACTS'):
+                    lab.run_lab()
+                command.assert_not_called()
+            with mock.patch.object(sys, 'argv', [str(MODULE)]), mock.patch.object(lab, 'OwnedResources') as owner:
+                with self.assertRaisesRegex(ValueError, 'NOVAPANEL_WP_STAGED_ARTIFACTS'):
+                    lab.main()
+                owner.assert_not_called()
+
     def test_cleanup_failure_is_logged_and_image_cleanup_still_attempted(self):
         lab = load()
         calls = []
@@ -74,7 +101,7 @@ class LifecycleTests(unittest.TestCase):
     def test_descendant_pipe_timeout_is_bounded(self):
         # An outer process bounds the regression even on the broken launcher.
         for behavior in ('ordinary', 'parent-exit', 'escaped', 'cancel'):
-            with self.subTest(behavior=behavior), tempfile.TemporaryDirectory(dir=os.environ['TMPDIR']) as td:
+            with self.subTest(behavior=behavior), tempfile.TemporaryDirectory(dir=os.environ.get('TMPDIR')) as td:
                 pidfile = Path(td) / 'descendant'
                 code = '''
 import importlib.util,sys,signal,threading
@@ -169,7 +196,7 @@ except RuntimeError: pass
         # COPY-only build from the exact locally retained PHP digest. No pull or network.
         fixture = load()
         subprocess.run(['docker', 'image', 'inspect', fixture.IMAGE], check=True, capture_output=True)
-        with tempfile.TemporaryDirectory(prefix='wp-signal-', dir=os.environ['TMPDIR']) as td:
+        with tempfile.TemporaryDirectory(prefix='wp-signal-', dir=os.environ.get('TMPDIR')) as td:
             ready = Path(td) / 'ready.json'
             code = '''
 import importlib.util,io,json,os,signal,sys,tarfile,time
