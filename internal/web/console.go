@@ -44,7 +44,7 @@ func (s *server) console(w http.ResponseWriter, r *http.Request, c RPCClient, rt
 	cv := &consoleView{SiteID: chi.URLParam(r, "siteID"), Section: rt.verb, Writable: v.Role == "owner" || v.Role == "admin"}
 	v.Console = cv
 	args := map[string]any{}
-	if cv.SiteID != "" {
+	if cv.SiteID != "" && rt.verb != "job.status" {
 		args["site_id"] = cv.SiteID
 	}
 	if rt.verb == "job.status" {
@@ -67,6 +67,10 @@ func (s *server) console(w http.ResponseWriter, r *http.Request, c RPCClient, rt
 		return
 	}
 	cv.Data = data
+	if rt.verb == "job.status" && cv.SiteID != "" && (data["verb"] != "php.set" || data["object_key"] != "site:"+cv.SiteID) {
+		http.NotFound(w, r)
+		return
+	}
 	if rt.verb == "job.status" && cv.SiteID != "" && data["verb"] == "php.set" && data["state"] == "done" {
 		cv.Data, ok = call(w, r, c, "site.get", map[string]any{"site_id": cv.SiteID}, token)
 		if !ok {
@@ -146,8 +150,11 @@ func consoleArgs(verb, site string, r *http.Request) (map[string]any, error) {
 		limits := map[string]any{}
 		for _, name := range []string{"memory_mb", "upload_mb", "max_exec_sec"} {
 			values := r.PostForm[name]
+			if len(values) == 0 || (len(values) == 1 && values[0] == "") {
+				continue
+			}
 			if len(values) != 1 {
-				return nil, fmt.Errorf("%s required", name)
+				return nil, fmt.Errorf("invalid %s", name)
 			}
 			n, err := strconv.Atoi(values[0])
 			if err != nil {
@@ -155,7 +162,9 @@ func consoleArgs(verb, site string, r *http.Request) (map[string]any, error) {
 			}
 			limits[name] = n
 		}
-		args["limits"] = limits
+		if len(limits) != 0 {
+			args["limits"] = limits
+		}
 	case "site.create":
 		if err := required("type", "primary_domain"); err != nil {
 			return nil, err

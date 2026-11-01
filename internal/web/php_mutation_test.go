@@ -16,7 +16,7 @@ func TestPHPJobFeedback(t *testing.T) {
 				case "session.whoami":
 					return rpc.Reply{OK: true, Data: map[string]any{"role": "admin", "csrf_token": "expected"}}, nil
 				case "job.status":
-					return rpc.Reply{OK: true, Data: map[string]any{"id": "JOB", "verb": "php.set", "state": state, "error": "<bad>", "code": "agent_error"}}, nil
+					return rpc.Reply{OK: true, Data: map[string]any{"id": "JOB", "verb": "php.set", "object_key": "site:SITE", "state": state, "error": "<bad>", "code": "agent_error"}}, nil
 				case "site.get":
 					return rpc.Reply{OK: true, Data: map[string]any{"site": map[string]any{"type": "php", "name": "demo", "php_version": "8.3"}, "php_limits": map[string]any{"memory_mb": 768, "upload_mb": 64, "max_exec_sec": 60}}}, nil
 				default:
