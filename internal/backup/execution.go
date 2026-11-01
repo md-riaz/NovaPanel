@@ -77,6 +77,9 @@ func (p *Password) PublishClaim(ctx context.Context, publisher ClaimPublisher, j
 // Callers own admission, serialization, recovery and F19 publication. The runner
 // must never log argv-adjacent options or child output: those may contain secrets.
 func InitRepository(ctx context.Context, run runner.Runner, r Repository, p *Password) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if ValidateRepository(r) != nil {
 		return ErrRepository
 	}
