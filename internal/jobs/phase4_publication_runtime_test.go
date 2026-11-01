@@ -61,6 +61,9 @@ func TestQueueRunPublicationRollbackMatrix(t *testing.T) {
 			var records []string
 			a.before = func(_ string, ev audit.Event) error {
 				publication, _ := ev.Detail["publication"].(string)
+				if ev.Detail["stage"] != "exec" || publication == "" {
+					t.Errorf("publication must be distinguished within F11 exec: %+v", ev)
+				}
 				records = append(records, publication)
 				if mode == "expiry_in_intent" && publication == "intent" {
 					clock.n.Store(op.Expires)

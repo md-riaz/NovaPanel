@@ -66,6 +66,15 @@ func TestPHPRecoveryAuditReplayPersistent(t *testing.T) {
 		t.Fatalf("dispatch: %+v", reply)
 	}
 	job := reply.Data.(jobs.EnqueueResult).Job
+	for _, invalid := range []string{"", "not-a-ulid"} {
+		if got, err := st.PreparePHPFailureAudit(ctx, job.ID, invalid); err != store.ErrSiteInvalid || got != "" {
+			t.Fatalf("invalid proposed failure ID %q: id=%q err=%v", invalid, got, err)
+		}
+	}
+	opBefore, err := st.LoadOperation(ctx, job.ID)
+	if err != nil || opBefore.Identity.PHP.FailureEventID != "" {
+		t.Fatalf("invalid ID changed durable identity: %+v %v", opBefore, err)
+	}
 	if err := st.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TRIGGER fail_php_terminal BEFORE INSERT ON site_php_limits BEGIN SELECT RAISE(ABORT,'injected'); END`)
 		return err
@@ -115,7 +124,7 @@ func TestPHPRecoveryAuditReplayPersistent(t *testing.T) {
 	}
 	var n int
 	if err := st.Tx(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `SELECT count(*) FROM events WHERE verb='php.set' AND outcome='error' AND json_extract(detail_json,'$.job_id')=? AND json_extract(detail_json,'$.stage')='exec'`, job.ID).Scan(&n)
+		return tx.QueryRowContext(ctx, `SELECT count(*) FROM events WHERE verb='php.set' AND outcome='error' AND json_extract(detail_json,'$.job_id')=? AND json_extract(detail_json,'$.stage')='exec' AND json_extract(detail_json,'$.publication')='restored'`, job.ID).Scan(&n)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +145,7 @@ func TestPHPRecoveryAuditReplayPersistent(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			t.Fatal(err)
 		}
-		if ev.Verb == "php.set" && ev.Outcome == "error" && ev.Detail["job_id"] == job.ID && ev.Detail["stage"] == "exec" {
+		if ev.Verb == "php.set" && ev.Outcome == "error" && ev.Detail["job_id"] == job.ID && ev.Detail["stage"] == "exec" && ev.Detail["publication"] == "restored" {
 			fileCount++
 			failureID = ev.ID
 		}

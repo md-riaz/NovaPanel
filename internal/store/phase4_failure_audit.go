@@ -8,6 +8,9 @@ import (
 
 // PreparePHPFailureAudit durably binds a restored-PHP terminal event before append.
 func (s *Store) PreparePHPFailureAudit(ctx context.Context, jid, eventID string) (out string, err error) {
+	if !id.Valid(eventID) {
+		return "", ErrSiteInvalid
+	}
 	err = s.Tx(ctx, func(tx *sql.Tx) error {
 		if _, e := tx.ExecContext(ctx, "UPDATE phase4_operations SET updated=updated WHERE job_id=?", jid); e != nil {
 			return e

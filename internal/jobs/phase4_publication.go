@@ -36,11 +36,7 @@ func (q *Queue) publicationRecord(j Job, eid, publication, outcome, code string)
 	if err := q.healthy(); err != nil {
 		return err
 	}
-	stage := "exec"
-	if publication == "not_committed" {
-		stage = "publication"
-	}
-	err := a.RecordWithID(eid, audit.Event{Principal: audit.JobPrincipal(j.CreatedBy, j.Role, j.Scopes), Actor: j.Actor, Role: j.Role, Verb: j.Verb, ObjectKey: j.ObjectKey, Outcome: outcome, Code: code, Detail: map[string]any{"job_id": j.ID, "stage": stage, "publication": publication}})
+	err := a.RecordWithID(eid, audit.Event{Principal: audit.JobPrincipal(j.CreatedBy, j.Role, j.Scopes), Actor: j.Actor, Role: j.Role, Verb: j.Verb, ObjectKey: j.ObjectKey, Outcome: outcome, Code: code, Detail: map[string]any{"job_id": j.ID, "stage": "exec", "publication": publication}})
 	if err != nil {
 		return q.latchPublication(err)
 	}

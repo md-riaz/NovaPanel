@@ -218,7 +218,7 @@ func TestReviewRunChangedPreconditions(t *testing.T) {
 				}
 				terminal := 0
 				for _, event := range log.events {
-					if event.Detail["job_id"] == j.ID && event.Detail["stage"] == "exec" {
+					if event.Detail["job_id"] == j.ID && event.Detail["stage"] == "exec" && event.Detail["publication"] != "intent" && event.Detail["publication"] != "not_committed" {
 						terminal++
 						if event.Outcome != "error" || event.Code != "conflict" {
 							t.Fatalf("false terminal audit: %+v", event)
