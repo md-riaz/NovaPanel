@@ -95,12 +95,8 @@ func nullableJSON(j json.RawMessage) any {
 	return string(j)
 }
 func (s *Store) GetJob(ctx context.Context, id string) (Job, error) {
-	j, err := scanJob(s.db.QueryRowContext(ctx, "SELECT "+jobColumns+" FROM jobs WHERE id=?", id))
-	if err != nil {
-		return j, err
-	}
 	var pending bool
-	err = s.db.QueryRowContext(ctx, "SELECT "+publicationPendingSQL+" FROM jobs WHERE id=?", id).Scan(&pending)
+	j, err := scanJob(publicationScanner{scanner: s.db.QueryRowContext(ctx, "SELECT "+jobColumns+","+publicationPendingSQL+" FROM jobs WHERE id=?", id), pending: &pending})
 	if err != nil {
 		return Job{}, err
 	}
