@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	php "novapanel/internal/render/php"
 	"sort"
 	"strings"
 )
@@ -20,6 +21,7 @@ const (
 	DBUserCreate       OperationKind = "dbuser_create"
 	DatabaseDelete     OperationKind = "database_delete"
 	DBUserDelete       OperationKind = "dbuser_delete"
+	PHPSet             OperationKind = "php_set"
 	OperationTTLMillis int64         = 86400000
 )
 
@@ -30,6 +32,7 @@ type OperationRequest struct {
 	SiteID, DatabaseID, UserID string
 	PurgeFiles, PurgeDatabases bool
 	WordPress                  *WordPressReservation
+	PHP                        *php.SetRequest
 }
 type OperationDatabase struct {
 	Database Database
@@ -47,6 +50,7 @@ type OperationIdentity struct {
 	PurgeFiles, PurgeDatabases bool
 	ConfigCleanup              string                `json:",omitempty"`
 	WordPress                  *WordPressReservation `json:",omitempty"`
+	PHP                        *PHPOperationIdentity `json:",omitempty"`
 }
 type Operation struct {
 	JobID, Owner                   string
@@ -59,6 +63,9 @@ type Operation struct {
 }
 
 func (o Operation) Keys() []string {
+	if o.Kind == PHPSet {
+		return []string{"site:" + o.SiteID}
+	}
 	if o.Kind == WordPressInstall {
 		return OrderedOperationKeys([]string{"site:" + o.SiteID, "site:" + o.Identity.WordPress.Input.SiteName, "db:" + o.DatabaseID, "db:" + o.Identity.Database.Name, "domain:" + o.Identity.WordPress.DomainID, "domain:" + o.Identity.WordPress.Input.PrimaryDomain})
 	}
@@ -119,6 +126,12 @@ func scanOperation(row scanner) (o Operation, err error) {
 }
 
 func validOperationIdentity(o Operation) bool {
+	if o.Kind == PHPSet {
+		return validPHPSetIdentity(o)
+	}
+	if o.Identity.PHP != nil {
+		return false
+	}
 	if state := o.Identity.ConfigCleanup; state != "" && (o.Kind != WordPressInstall || o.Checkpoint != "done" || (state != "authorized" && state != "acknowledged")) {
 		return false
 	}
@@ -165,6 +178,8 @@ func operationVerb(k OperationKind) string {
 		return "site.create"
 	case SiteDelete:
 		return "site.delete"
+	case PHPSet:
+		return "php.set"
 	case DatabaseCreate:
 		return "database.create"
 	case DatabaseRotate:
@@ -185,6 +200,9 @@ func operationSecrets(k OperationKind) bool {
 // PrepareOperation atomically reserves immutable identities, job authority and claim hash.
 // No runtime effect or resource lock is taken while SQLite is held.
 func (s *Store) PrepareOperation(ctx context.Context, j Job, c JobClaim, r OperationRequest, nonce, ciphertext []byte) (op Operation, err error) {
+	if r.Kind == PHPSet {
+		return s.preparePHPSet(ctx, j, r, nonce, ciphertext)
+	}
 	if r.Kind == WordPressInstall {
 		return s.prepareWordPress(ctx, j, c, r, nonce, ciphertext)
 	}
@@ -382,6 +400,9 @@ func (s *Store) CheckOperation(ctx context.Context, jid string) error {
 		if op.Kind == SiteDelete {
 			return checkSiteDelete(ctx, tx, op)
 		}
+		if op.Kind == PHPSet {
+			return checkPHPSet(ctx, tx, op)
+		}
 		if op.Kind == WordPressInstall {
 			return checkWordPress(ctx, tx, op)
 		}
@@ -499,7 +520,7 @@ func (s *Store) CheckpointOperation(ctx context.Context, jid, from, to string) e
 		if e != nil {
 			return e
 		}
-		allowed := from == "prepared" && to == "db_applied" || from == "db_applied" && to == "verified" || from == "db_applied" && to == "config_published" || from == "config_published" && to == "verified"
+		allowed := from == "prepared" && to == "db_applied" && op.Kind != PHPSet || from == "prepared" && to == "config_published" && op.Kind == PHPSet || from == "db_applied" && to == "verified" || from == "db_applied" && to == "config_published" || from == "config_published" && to == "verified"
 		if !allowed || op.Checkpoint != from {
 			return ErrSiteConflict
 		}
@@ -546,6 +567,9 @@ func (s *Store) CompleteOperation(ctx context.Context, jid string, claim *JobCla
 		}
 		if op.Kind == WordPressInstall {
 			return completeWordPress(ctx, tx, op, now, claim)
+		}
+		if op.Kind == PHPSet {
+			return completePHPSet(ctx, tx, op, now, claim)
 		}
 		if e = checkOperationSite(ctx, tx, op); e != nil {
 			return e
