@@ -36,7 +36,11 @@ func (q *Queue) publicationRecord(j Job, eid, publication, outcome, code string)
 	if err := q.healthy(); err != nil {
 		return err
 	}
-	err := a.RecordWithID(eid, audit.Event{Principal: audit.JobPrincipal(j.CreatedBy, j.Role, j.Scopes), Actor: j.Actor, Role: j.Role, Verb: j.Verb, ObjectKey: j.ObjectKey, Outcome: outcome, Code: code, Detail: map[string]any{"job_id": j.ID, "stage": "exec", "publication": publication}})
+	stage := "exec"
+	if publication == "not_committed" {
+		stage = "publication"
+	}
+	err := a.RecordWithID(eid, audit.Event{Principal: audit.JobPrincipal(j.CreatedBy, j.Role, j.Scopes), Actor: j.Actor, Role: j.Role, Verb: j.Verb, ObjectKey: j.ObjectKey, Outcome: outcome, Code: code, Detail: map[string]any{"job_id": j.ID, "stage": stage, "publication": publication}})
 	if err != nil {
 		return q.latchPublication(err)
 	}
@@ -99,7 +103,17 @@ func (q *Queue) finishPublication(ctx context.Context, j Job) (bool, error) {
 			if e != nil {
 				return true, q.latchPublication(e)
 			}
-			if e = q.publicationRecord(j, eid, "not_committed", "error", code); e != nil {
+			fs, ok := q.store.(interface {
+				PreparePublicationFailureAudit(context.Context, string, string, string) (store.PublicationAudit, error)
+			})
+			if !ok {
+				return true, q.latchPublication(ErrRecoveryBlocked)
+			}
+			failure, e := fs.PreparePublicationFailureAudit(context.WithoutCancel(ctx), j.ID, eid, code)
+			if e != nil {
+				return true, q.latchPublication(e)
+			}
+			if e = q.publicationRecord(j, failure.FailureEventID, "not_committed", "error", failure.FailureCode); e != nil {
 				return true, e
 			}
 			if code == "agent_error" {

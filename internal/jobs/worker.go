@@ -211,6 +211,9 @@ func (q *Queue) finish(ctx context.Context, j Job, err error) error {
 			return e
 		}
 	}
+	if errors.Is(err, nginx.ErrPHPOriginalRestored) {
+		return q.finishRestoredPHP(ctx, j)
+	}
 	// Do not persist external error text or panic payloads, which can contain secrets.
 	if e := q.record(j, outcome, j.Code, "exec"); e != nil {
 		return e
@@ -221,18 +224,6 @@ func (q *Queue) finish(ctx context.Context, j Job, err error) error {
 	}
 	if e = q.store.AppendJobEvent(ctx, store.JobEvent{ID: eid, JobID: j.ID, TS: now, Msg: j.State}); e != nil {
 		return e
-	}
-	if errors.Is(err, nginx.ErrPHPOriginalRestored) {
-		s, ok := q.store.(interface {
-			FailRestoredPHP(context.Context, string, string) error
-		})
-		if !ok {
-			return ErrRecoveryBlocked
-		}
-		if e := s.FailRestoredPHP(ctx, j.ID, j.Code); e != nil {
-			return e
-		}
-		return q.reconcileConfigRecord(ctx, j.ID)
 	}
 	if handled, e := q.operationTerminal(ctx, j); handled {
 		if e != nil {

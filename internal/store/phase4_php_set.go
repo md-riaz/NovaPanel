@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"novapanel/internal/id"
 	"reflect"
 
 	php "novapanel/internal/render/php"
@@ -17,12 +18,18 @@ type PHPOperationIdentity struct {
 	OriginalLimits        php.Limits
 	OriginalLimitsPresent bool
 	DesiredLimits         php.Limits
+	FailureEventID        string `json:",omitempty"`
 }
 
 func validPHPSetIdentity(op Operation) bool {
 	i := op.Identity
 	if op.Owner == "" || !phase4ResourceID.MatchString(op.SiteID) || op.DatabaseID != "" || i.Version != 1 || i.Site == nil || i.Site.ID != op.SiteID || i.Site.Status != "active" || (i.Site.Type != "php" && i.Site.Type != "wordpress") || i.Site.PHPVersion == nil || i.PHP == nil || *i.Site.PHPVersion != i.PHP.OriginalVersion || i.PHP.OriginalVersion != "8.3" || i.PHP.DesiredVersion != "8.3" {
 		return false
+	}
+	if f := i.PHP.FailureEventID; f != "" {
+		if !id.Valid(f) || i.PublicationAudit != nil && (f == i.PublicationAudit.IntentEventID || f == i.PublicationAudit.FinalEventID || f == i.PublicationAudit.FailureEventID) {
+			return false
+		}
 	}
 	// Reject fields belonging to another operation kind.
 	expected := OperationIdentity{Version: 1, Site: i.Site, PHP: i.PHP, PublicationAudit: i.PublicationAudit}

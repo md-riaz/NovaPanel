@@ -13,6 +13,8 @@ import (
 type PublicationAudit struct {
 	Version                     int
 	IntentEventID, FinalEventID string
+	FailureEventID              string `json:",omitempty"`
+	FailureCode                 string `json:",omitempty"`
 	State                       string
 }
 
@@ -46,7 +48,7 @@ func publicationPending(ctx context.Context, tx interface {
 
 func validPublication(op Operation) bool {
 	p := op.Identity.PublicationAudit
-	return p == nil || p.Version == 1 && id.Valid(p.IntentEventID) && id.Valid(p.FinalEventID) && p.IntentEventID != p.FinalEventID && (p.State == "intent" && op.Checkpoint != "done" || (p.State == "committed" || p.State == "acknowledged") && op.Checkpoint == "done")
+	return p == nil || p.Version == 1 && id.Valid(p.IntentEventID) && id.Valid(p.FinalEventID) && p.IntentEventID != p.FinalEventID && (p.FailureEventID == "" && p.FailureCode == "" || id.Valid(p.FailureEventID) && p.FailureEventID != p.IntentEventID && p.FailureEventID != p.FinalEventID && (p.FailureCode == "agent_error" || p.FailureCode == "interrupted" || p.FailureCode == "conflict")) && (p.State == "intent" && op.Checkpoint != "done" || (p.State == "committed" || p.State == "acknowledged") && op.Checkpoint == "done")
 }
 
 func (s *Store) PreparePublicationAudit(ctx context.Context, jid, intent, final string) (p PublicationAudit, err error) {
