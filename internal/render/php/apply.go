@@ -183,10 +183,17 @@ func poolRead(root *os.Root, name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 {
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 || info.Size() > 1024*1024 {
 		return nil, rpcerr.Errf("invalid_argument", "Invalid PHP file")
 	}
-	return io.ReadAll(f)
+	var st unix.Stat_t
+	if err = unix.Fstat(int(f.Fd()), &st); err != nil {
+		return nil, err
+	}
+	if st.Uid != uint32(os.Geteuid()) || st.Nlink != 1 {
+		return nil, rpcerr.Errf("invalid_argument", "Invalid PHP custody")
+	}
+	return io.ReadAll(io.LimitReader(f, 1024*1024+1))
 }
 func poolWrite(root *os.Root, name string, b []byte) error {
 	for _, file := range []string{name, name + ".tmp"} {

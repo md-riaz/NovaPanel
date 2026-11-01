@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"golang.org/x/sys/unix"
+
 	"novapanel/internal/rpcerr"
 )
 
@@ -65,11 +67,18 @@ func (a *Applier) Transaction(ctx context.Context, d Desired, fn func(*Transacti
 			if !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 {
 				return rpcerr.Errf("invalid_argument", "Invalid PHP file")
 			}
-			f, e := root.Open(file)
+			f, e := root.OpenFile(file, os.O_RDONLY|unix.O_NOFOLLOW, 0)
 			if e != nil {
 				return e
 			}
 			e = poolCustody(f)
+			if e == nil {
+				var st unix.Stat_t
+				e = unix.Fstat(int(f.Fd()), &st)
+				if e == nil && st.Nlink != 1 {
+					e = rpcerr.Errf("invalid_argument", "Invalid PHP links")
+				}
+			}
 			f.Close()
 			if e != nil {
 				return e
@@ -93,25 +102,52 @@ func (a *Applier) Transaction(ctx context.Context, d Desired, fn func(*Transacti
 	return fn(&Transaction{a: a, root: root, name: name, good: good, live: live, desired: append([]byte(marker), b...)})
 }
 
-// PoolSnapshot is the job-bound prior known-good state. A nil Config means
-// no prior pool; callers must persist it durably before any external effect.
-type PoolSnapshot struct {
-	Config []byte `json:"config"`
+// Snapshot captures the exact live and last-known-good files while the pool
+// transaction lock is held. A nil slice denotes absence, not an empty file.
+type Snapshot struct {
+	Live []byte `json:"live"`
+	LKG  []byte `json:"lkg"`
 }
 
-// Snapshot returns a detached copy, unaffected by later LKG promotion.
-func (t *Transaction) Snapshot() PoolSnapshot {
-	if t.good == nil {
-		return PoolSnapshot{}
+func (t *Transaction) Snapshot() Snapshot {
+	return Snapshot{Live: bytes.Clone(t.live), LKG: bytes.Clone(t.good)}
+}
+
+// RestoreSnapshot restores both original artifacts, including absence. The
+// caller must persist and authenticate the snapshot before publication and
+// validate, reload and probe the restored services before releasing recovery.
+func (t *Transaction) RestoreSnapshot(s Snapshot) error {
+	var result error
+	for _, v := range []struct {
+		name string
+		data []byte
+	}{
+		{t.name, s.Live}, {t.name + ".lkg", s.LKG},
+	} {
+		var err error
+		if v.data != nil {
+			err = poolWrite(t.root, v.name, v.data)
+		} else {
+			// Refuse to remove an unexpected symlink or other special file.
+			if info, e := t.root.Lstat(v.name); e == nil && !info.Mode().IsRegular() {
+				err = rpcerr.Errf("invalid_argument", "Invalid PHP file")
+			} else if e != nil && !os.IsNotExist(e) {
+				err = e
+			} else if e == nil {
+				err = t.root.Remove(v.name)
+			}
+		}
+		result = errors.Join(result, err)
 	}
-	return PoolSnapshot{Config: append([]byte{}, t.good...)}
-}
-
-// RestoreSnapshot restores the captured state rather than the current LKG.
-// It must only be given a trusted, validated job-bound snapshot.
-func (t *Transaction) RestoreSnapshot(s PoolSnapshot) error {
-	t.good = s.Config
-	return t.Restore()
+	if result != nil {
+		return result
+	}
+	dir, err := t.root.Open(".")
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 // Unchanged requires both live bytes and the separately proven LKG.
