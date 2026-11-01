@@ -157,6 +157,7 @@ Guardrails      — the "nevers" specific to this phase (plus the global invaria
 | `phases/phase-7.md` | DNS (external first): `dns.Provider` + Cloudflare | **drafted** |
 | `phases/phase-8.md` | Integrations & API: OpenAPI, scoped tokens, deploy API + webhooks (D1) | **drafted** |
 | `phases/phase-9.md` | Optional modules (after core is boring): OLS perf mode, mail, PowerDNS, FTP, Docker | **drafted** |
+| `PHASE-DRIVER-PROMPT.md` | The reusable **worker + verifier** driver: one prompt that takes a phase/PR from spec-confirmed to merge-ready (build → independent verify → reconcile loop → green PR), encoding this README's precedence, pre-flight check, pre-review checklist, and the 10 invariants | **drafted** |
 
 **All phase specs are drafted** with external references gathered (Nginx/FPM/ACME, Restic/UFW,
 Argon2id/TOTP/MariaDB/WordPress — verified values baked into the specs). Coding of a phase begins only
