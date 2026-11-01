@@ -55,7 +55,7 @@ func TestPoolPublication(t *testing.T) {
 			if fail == 0 && (!strings.Contains(string(live), "512M") || string(live) != string(lkg)) {
 				t.Fatal("not published")
 			}
-			if !strings.HasPrefix(r.calls[0], "/usr/sbin/php-fpm8.3 -t --fpm-config "+filepath.Join(root, "novapanel-validate.ini")) {
+			if r.calls[0] != "/usr/sbin/php-fpm8.3 -t" {
 				t.Fatal(r.calls)
 			}
 		})

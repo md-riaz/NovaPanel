@@ -149,7 +149,9 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 	return err
 }
 func (a *Applier) validate(ctx context.Context) error {
-	return a.command(ctx, "/usr/sbin/php-fpm8.3", []string{"-t", "--fpm-config", filepath.Join(a.Root, "novapanel-validate.ini")})
+	// Validate the configuration actually used by the service, not only the
+	// managed pools: broken global settings or other pools must block reload.
+	return a.command(ctx, "/usr/sbin/php-fpm8.3", []string{"-t"})
 }
 func (a *Applier) reload(ctx context.Context) error {
 	return a.command(ctx, platform.Systemctl, []string{"reload", "php8.3-fpm"})
