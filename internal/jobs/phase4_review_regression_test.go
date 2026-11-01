@@ -115,7 +115,8 @@ func TestReviewRunDeadlineAfterStartup(t *testing.T) {
 func TestReviewRunChangedPreconditions(t *testing.T) {
 	for _, change := range []string{"site_failed", "binding_added", "account_added", "target_removed", "primary_changed", "site_rebound", "create_site_failed", "create_publication_site_failed", "dbuser_site_failed", "rotate_site_failed", "empty_accounts"} {
 		t.Run(change, func(t *testing.T) {
-			s, e := store.Open(filepath.Join(t.TempDir(), "queue.db"))
+			path := filepath.Join(t.TempDir(), "queue.db")
+			s, e := store.Open(path)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -133,7 +134,8 @@ func TestReviewRunChangedPreconditions(t *testing.T) {
 				reviewSQL(t, s, `INSERT INTO db_users(id,db_id,username,host,created) VALUES(?, ?, ?, '127.0.0.1',1)`, target, db, "u_"+strings.ToLower(target))
 			}
 			seal, _ := secret.New(make([]byte, 32))
-			q := NewQueue(s, seal, &fakeAudit{})
+			log := &fakeAudit{}
+			q := NewQueue(s, seal, log)
 			request := store.OperationRequest{Kind: store.DatabaseDelete, DatabaseID: db}
 			var fields map[string]any
 			if change == "target_removed" || change == "primary_changed" {
@@ -153,6 +155,12 @@ func TestReviewRunChangedPreconditions(t *testing.T) {
 			}
 			if e = q.PrepareOperations(ctx); e != nil {
 				t.Fatal(e)
+			}
+			if change == "create_publication_site_failed" {
+				q.SetRunner(func(context.Context, *Job) error { return nil })
+				if e = q.PrepareStartup(ctx); e != nil {
+					t.Fatal(e)
+				}
 			}
 			r, e := q.EnqueueOperation(ctx, request, fields)
 			if e != nil {
@@ -174,10 +182,17 @@ func TestReviewRunChangedPreconditions(t *testing.T) {
 			case "empty_accounts":
 				reviewSQL(t, s, `UPDATE phase4_operations SET identities_json=json_set(identities_json,'$.Accounts',json('[]')) WHERE job_id=?`, r.Job.ID)
 			}
+			var successor EnqueueResult
+			if change == "create_publication_site_failed" {
+				successor, e = q.Enqueue(ctx, "review.successor", map[string]any{}, "system")
+				if e != nil {
+					t.Fatal(e)
+				}
+			}
 			calls := 0
 			q.SetRunner(func(c context.Context, j *Job) error {
 				calls++
-				if change == "create_publication_site_failed" {
+				if change == "create_publication_site_failed" && j.ID == r.Job.ID {
 					if err := s.CheckpointOperation(c, j.ID, "prepared", "db_applied"); err != nil {
 						return err
 					}
@@ -188,13 +203,65 @@ func TestReviewRunChangedPreconditions(t *testing.T) {
 				}
 				return nil
 			})
-			j, e := reviewRunTerminal(t, q, s, r.Job.ID)
+			waitID := r.Job.ID
+			if successor.Job.ID != "" {
+				waitID = successor.Job.ID
+			}
+			j, e := reviewRunTerminal(t, q, s, waitID)
 			if change == "create_publication_site_failed" {
+				if e != nil || j.State != "done" {
+					t.Fatalf("worker stopped before successor: state=%s error=%v", j.State, e)
+				}
+				j, e = s.GetJob(ctx, r.Job.ID)
+				if e != nil || j.State != "failed" || j.Code != "conflict" {
+					t.Fatalf("publication refusal: state=%s code=%s error=%v", j.State, j.Code, e)
+				}
+				terminal := 0
+				for _, event := range log.events {
+					if event.Detail["job_id"] == j.ID && event.Detail["stage"] == "exec" {
+						terminal++
+						if event.Outcome != "error" || event.Code != "conflict" {
+							t.Fatalf("false terminal audit: %+v", event)
+						}
+					}
+				}
+				if terminal != 1 {
+					t.Fatalf("terminal audit count=%d", terminal)
+				}
 				if _, err := s.GetDatabase(ctx, j.ObjectKey[3:]); !errors.Is(err, sql.ErrNoRows) {
 					t.Fatal("ineligible create published", err)
 				}
 				if _, err := q.Claim(ctx, j.ID, r.ClaimToken); err == nil {
 					t.Fatal("ineligible create published claim")
+				}
+				op, err := s.LoadOperation(ctx, j.ID)
+				if err != nil || op.Checkpoint != "expired" || len(op.Ciphertext) != 0 || op.Reconciled {
+					t.Fatalf("failed publication lost its unreconciled tombstone: %+v %v", op, err)
+				}
+				if err = s.Close(); err != nil {
+					t.Fatal(err)
+				}
+				s, err = store.Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer s.Close()
+				q = NewQueue(s, seal, &fakeAudit{})
+				q.SetRunner(func(context.Context, *Job) error { t.Error("terminal operation replayed"); return nil })
+				if err = q.PrepareStartup(ctx); err != nil {
+					t.Fatal(err)
+				}
+				next, err := q.Enqueue(ctx, "review.after-reopen", map[string]any{}, "system")
+				if err != nil {
+					t.Fatal(err)
+				}
+				q.SetRunner(func(context.Context, *Job) error { return nil })
+				if nextJob, err := reviewRunTerminal(t, q, s, next.Job.ID); err != nil || nextJob.State != "done" {
+					t.Fatalf("reopen worker: %s %v", nextJob.State, err)
+				}
+				persisted, err := s.GetJob(ctx, j.ID)
+				if err != nil || persisted.State != "failed" || persisted.Code != "conflict" {
+					t.Fatalf("reopen changed terminal failure: %+v %v", persisted, err)
 				}
 				return
 			}

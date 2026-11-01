@@ -138,6 +138,25 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 }
 
 func (q *Queue) finish(ctx context.Context, j Job, err error) error {
+	// The executor may have changed eligibility after its last checkpoint.
+	// Revalidate under the still-held operation locks before choosing the audit
+	// outcome. CompleteOperation retains its transaction-local checks.
+	if err == nil {
+		if s, ok := q.store.(operationStore); ok {
+			if _, loadErr := s.LoadOperation(ctx, j.ID); loadErr == nil {
+				if checkErr := s.CheckOperation(ctx, j.ID); checkErr != nil {
+					mapped := operationError(checkErr)
+					var coded *rpcerr.CodedError
+					if !errors.As(mapped, &coded) {
+						return checkErr
+					}
+					err = mapped
+				}
+			} else if !errors.Is(loadErr, sql.ErrNoRows) {
+				return loadErr
+			}
+		}
+	}
 	now := q.clock.Now()
 	j.Updated = now
 	j.Finished = &now
