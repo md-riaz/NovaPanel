@@ -5,6 +5,7 @@ package audit
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -118,7 +119,18 @@ func (l *Log) Healthy() error {
 	defer l.mu.Unlock()
 	return l.err
 }
-func (l *Log) Record(ev Event) error {
+func (l *Log) Record(ev Event) error { return l.record("", ev) }
+
+// RecordWithID records an agent-allocated ULID; retries retain the first timestamp.
+// Any failure remains sticky until the log is reopened and reconciled.
+func (l *Log) RecordWithID(eid string, ev Event) error {
+	if eid == "" {
+		eid = "invalid"
+	}
+	return l.record(eid, ev)
+}
+
+func (l *Log) record(eid string, ev Event) error {
 	if l == nil {
 		return errors.New("audit unavailable")
 	}
@@ -131,9 +143,16 @@ func (l *Log) Record(ev Event) error {
 	if e := ev.validate(); e != nil {
 		return fail(e)
 	}
-	eid, e := id.New()
-	if e != nil {
-		return fail(e)
+	stable := eid != ""
+	if stable && !id.Valid(eid) {
+		return fail(errors.New("invalid audit event ID"))
+	}
+	var e error
+	if !stable {
+		eid, e = id.New()
+		if e != nil {
+			return fail(e)
+		}
 	}
 	redacted := secret.Redact(ev.Detail)
 	if ev.Principal.Kind != "" {
@@ -154,6 +173,29 @@ func (l *Log) Record(ev Event) error {
 		return fail(e)
 	}
 	v := store.Event{ID: eid, TS: time.Now().UnixMilli(), Actor: secret.RedactText(ev.Actor), Role: secret.RedactText(ev.Role), Verb: secret.RedactText(ev.Verb), ObjectKey: secret.RedactText(ev.ObjectKey), Outcome: ev.Outcome, Code: secret.RedactText(ev.Code), Detail: detail}
+	if stable {
+		f, ok := l.sink.(interface {
+			io.ReaderAt
+			Stat() (os.FileInfo, error)
+		})
+		if !ok {
+			return fail(errors.New("stable audit recording requires readable file"))
+		}
+		old, found, err := findEvent(f, eid)
+		if err != nil {
+			return fail(err)
+		}
+		if found {
+			v.TS = old.TS
+			if !sameEvent(old, v) {
+				return fail(errors.New("audit event ID conflict"))
+			}
+			if err = l.s.ReplayEvent(context.Background(), old); err != nil {
+				return fail(err)
+			}
+			return nil
+		}
+	}
 	// Use explicit snake_case keys, sharing the same ID and data across both sinks.
 	b, e := json.Marshal(map[string]any{"id": v.ID, "ts": v.TS, "actor": v.Actor, "role": v.Role, "verb": v.Verb, "object_key": v.ObjectKey, "outcome": v.Outcome, "code": v.Code, "detail": json.RawMessage(detail)})
 	if e != nil {
@@ -204,34 +246,91 @@ func (l *Log) replay(f *os.File) error {
 		if e != nil {
 			return e
 		}
-		var v struct {
-			ID        string          `json:"id"`
-			TS        *int64          `json:"ts"`
-			Actor     *string         `json:"actor"`
-			Role      string          `json:"role"`
-			Verb      *string         `json:"verb"`
-			ObjectKey string          `json:"object_key"`
-			Outcome   string          `json:"outcome"`
-			Code      string          `json:"code"`
-			Detail    json.RawMessage `json:"detail"`
+		v, err := decodeEvent(line)
+		if err != nil {
+			return err
 		}
-		if e = json.Unmarshal(line, &v); e != nil {
-			return e
-		}
-		if !id.Valid(v.ID) || v.TS == nil || v.Actor == nil || v.Verb == nil {
-			return errors.New("invalid audit record")
-		}
-		var detail map[string]any
-		if len(v.Detail) != 0 {
-			if e = json.Unmarshal(v.Detail, &detail); e != nil {
-				return e
-			}
-		}
-		if e = (Event{Outcome: v.Outcome, Detail: detail}).validate(); e != nil {
-			return e
-		}
-		if e = l.s.ReplayEvent(context.Background(), store.Event{ID: v.ID, TS: *v.TS, Actor: *v.Actor, Role: v.Role, Verb: *v.Verb, ObjectKey: v.ObjectKey, Outcome: v.Outcome, Code: v.Code, Detail: v.Detail}); e != nil {
-			return e
+		if err = l.s.ReplayEvent(context.Background(), v); err != nil {
+			return err
 		}
 	}
+}
+
+func decodeEvent(line []byte) (store.Event, error) {
+	var e error
+	var v struct {
+		ID        string          `json:"id"`
+		TS        *int64          `json:"ts"`
+		Actor     *string         `json:"actor"`
+		Role      string          `json:"role"`
+		Verb      *string         `json:"verb"`
+		ObjectKey string          `json:"object_key"`
+		Outcome   string          `json:"outcome"`
+		Code      string          `json:"code"`
+		Detail    json.RawMessage `json:"detail"`
+	}
+	if e = json.Unmarshal(line, &v); e != nil {
+		return store.Event{}, e
+	}
+	if !id.Valid(v.ID) || v.TS == nil || v.Actor == nil || v.Verb == nil {
+		return store.Event{}, errors.New("invalid audit record")
+	}
+	var detail map[string]any
+	if len(v.Detail) != 0 {
+		if e = json.Unmarshal(v.Detail, &detail); e != nil {
+			return store.Event{}, e
+		}
+	}
+	if e = (Event{Outcome: v.Outcome, Detail: detail}).validate(); e != nil {
+		return store.Event{}, e
+	}
+	return store.Event{ID: v.ID, TS: *v.TS, Actor: *v.Actor, Role: v.Role, Verb: *v.Verb, ObjectKey: v.ObjectKey, Outcome: v.Outcome, Code: v.Code, Detail: v.Detail}, nil
+}
+
+// Scan the source of truth without a growing ID cache or changing its offset.
+func findEvent(f interface {
+	io.ReaderAt
+	Stat() (os.FileInfo, error)
+}, eid string) (store.Event, bool, error) {
+	st, err := f.Stat()
+	if err != nil {
+		return store.Event{}, false, err
+	}
+	r := bufio.NewReader(io.NewSectionReader(f, 0, st.Size()))
+	var found store.Event
+	seen := false
+	for {
+		line, err := r.ReadBytes('\n')
+		if err == io.EOF && len(line) == 0 {
+			return found, seen, nil
+		}
+		if err != nil {
+			return store.Event{}, false, err
+		}
+		v, err := decodeEvent(line)
+		if err != nil {
+			return store.Event{}, false, err
+		}
+		if v.ID == eid {
+			if seen && (found.TS != v.TS || !sameEvent(found, v)) {
+				return store.Event{}, false, errors.New("audit event ID conflict")
+			}
+			found, seen = v, true
+		}
+	}
+}
+
+func sameEvent(a, b store.Event) bool {
+	return a.ID == b.ID && a.Actor == b.Actor && a.Role == b.Role && a.Verb == b.Verb && a.ObjectKey == b.ObjectKey && a.Outcome == b.Outcome && a.Code == b.Code && bytes.Equal(canonicalDetail(a.Detail), canonicalDetail(b.Detail))
+}
+
+func canonicalDetail(raw json.RawMessage) []byte {
+	var v any
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.UseNumber()
+	if d.Decode(&v) != nil {
+		return nil
+	}
+	b, _ := json.Marshal(v)
+	return b
 }
