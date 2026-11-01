@@ -43,7 +43,7 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if err != nil {
 		return err
 	}
-	if op.Kind != store.PHPSet || op.Identity.Site == nil || op.Identity.PHP == nil || j.ObjectKey != "site:"+op.SiteID || op.Checkpoint != "prepared" {
+	if op.Kind != store.PHPSet || op.Identity.Site == nil || op.Identity.PHP == nil || j.ObjectKey != "site:"+op.SiteID || (op.Checkpoint != "prepared" && op.Checkpoint != "config_published" && op.Checkpoint != "verified") {
 		return rpc.Errf("precondition_failed", "Invalid PHP operation")
 	}
 	check := func(c context.Context) error { return a.Jobs.CheckPHPEffect(c, j.ID, op.SiteID) }
@@ -83,7 +83,7 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	oldPHP := *d.PHP
 	oldPHP.Version, oldPHP.Limits = p.OriginalVersion, &p.OriginalLimits
 	old.PHP = &oldPHP
-	binding := nginx.PHPDurableBinding{Root: a.PHP.RecoveryRoot, JobID: j.ID, SiteID: op.SiteID, Check: check}
+	binding := nginx.PHPDurableBinding{Root: a.PHP.RecoveryRoot, JobID: j.ID, SiteID: op.SiteID, Check: check, RecoveryOnly: op.Checkpoint != "prepared"}
 	// Terminal metadata and its audit are owned by Queue.finish, not this callback.
 	commit := func(c context.Context) error {
 		if err := check(c); err != nil {

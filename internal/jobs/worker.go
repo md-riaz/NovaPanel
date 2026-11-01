@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+var errPHPRestored = errors.New("jobs: PHP original restored and failure reconciled")
+
 // Run owns one worker. SQL transactions never span the external runner.
 func (q *Queue) Run(ctx context.Context) error {
 	q.mu.Lock()
@@ -66,7 +68,7 @@ func (q *Queue) Run(ctx context.Context) error {
 			}
 			return e
 		}
-		if e = q.execute(ctx, j); e != nil {
+		if e = q.execute(ctx, j); e != nil && !errors.Is(e, errPHPRestored) {
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -105,12 +107,14 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 	// Caller identity is restored exclusively from durable trusted columns.
 	err := error(nil)
 	isOperation := false
+	phpRecovery := false
 	if s, ok := q.store.(operationStore); ok {
 		if op, loadErr := s.LoadOperation(ctx, j.ID); loadErr == nil {
 			isOperation = true
 			if op.Kind == store.PHPSet {
+				phpRecovery = op.Checkpoint == "config_published" || op.Checkpoint == "verified"
 				request, decodeErr := php.DecodeSetRequest(j.Args)
-				if decodeErr != nil || request.SiteID != op.SiteID || j.ObjectKey != "site:"+op.SiteID || request.Version != op.Identity.PHP.DesiredVersion {
+				if decodeErr != nil || op.Identity.PHP == nil || request.SiteID != op.SiteID || j.ObjectKey != "site:"+op.SiteID || request.Version != op.Identity.PHP.DesiredVersion {
 					err = rpcerr.Errf("invalid_argument", "invalid stored PHP request")
 				} else {
 					merged, mergeErr := php.MergeLimits(&op.Identity.PHP.OriginalLimits, request.Limits)
@@ -149,8 +153,17 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 	if errors.Is(err, nginx.ErrPHPRecoveryRequired) {
 		return errors.Join(ErrRecoveryBlocked, err)
 	}
+	if phpRecovery && !errors.Is(err, nginx.ErrPHPOriginalRestored) {
+		return errors.Join(ErrRecoveryBlocked, err)
+	}
 	if isOperation {
 		err = operationError(err)
+	}
+	if errors.Is(err, nginx.ErrPHPOriginalRestored) {
+		if e := q.finish(ctx, j, err); e != nil {
+			return e
+		}
+		return errPHPRestored
 	}
 	return q.finish(ctx, j, err)
 }
@@ -208,6 +221,18 @@ func (q *Queue) finish(ctx context.Context, j Job, err error) error {
 	}
 	if e = q.store.AppendJobEvent(ctx, store.JobEvent{ID: eid, JobID: j.ID, TS: now, Msg: j.State}); e != nil {
 		return e
+	}
+	if errors.Is(err, nginx.ErrPHPOriginalRestored) {
+		s, ok := q.store.(interface {
+			FailRestoredPHP(context.Context, string, string) error
+		})
+		if !ok {
+			return ErrRecoveryBlocked
+		}
+		if e := s.FailRestoredPHP(ctx, j.ID, j.Code); e != nil {
+			return e
+		}
+		return q.reconcileConfigRecord(ctx, j.ID)
 	}
 	if handled, e := q.operationTerminal(ctx, j); handled {
 		if e != nil {

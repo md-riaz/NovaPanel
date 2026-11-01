@@ -56,14 +56,16 @@ func (q *Queue) PrepareOperations(ctx context.Context) error {
 			if j.State != "queued" {
 				return ErrRecoveryBlocked
 			}
-			if err := q.execute(ctx, j); err != nil {
+			err := q.execute(ctx, j)
+			if err != nil && !errors.Is(err, errPHPRestored) {
 				return errors.Join(ErrRecoveryBlocked, err)
 			}
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+			restored := errors.Is(err, errPHPRestored)
 			op, err := q.store.(operationStore).LoadOperation(ctx, j.ID)
-			if err != nil || op.Checkpoint != "done" {
+			if err != nil || (op.Checkpoint != "done" && !(restored && op.Checkpoint == "expired")) {
 				return errors.Join(ErrRecoveryBlocked, err)
 			}
 		}

@@ -23,6 +23,8 @@ import (
 // blocked until recovery and terminal metadata have both been reconciled.
 type PHPDurableBinding struct {
 	Root, JobID, SiteID string
+	// RecoveryOnly forbids creating a snapshot or publishing new configuration.
+	RecoveryOnly bool
 	// Check must re-read the trusted journal's job binding, expiry, and recovery
 	// interlock. This prototype is not wired to a production journal.
 	Check func(context.Context) error
@@ -44,6 +46,9 @@ type phpEnvelope struct {
 
 // ErrPHPRecoveryRequired means saved originals have not been proved live.
 var ErrPHPRecoveryRequired = errors.New("PHP snapshot recovery required")
+
+// ErrPHPOriginalRestored proves the persisted snapshot was restored and probed.
+var ErrPHPOriginalRestored = errors.New("PHP original restored; journal reconciliation required")
 
 func openPHPJournal(b PHPDurableBinding) (*os.Root, string, error) {
 	if b.JobID == "" || b.SiteID == "" || len(b.JobID) > 128 || len(b.SiteID) > 128 {
@@ -213,7 +218,10 @@ func (a *Applier) ApplyPHPDurable(ctx context.Context, pools *php.Applier, d Des
 				if err = restorePHPOriginal(ctx, a, n, p, original, binding.Check, restoredProbe); err != nil {
 					return errors.Join(ErrPHPRecoveryRequired, err)
 				}
-				return fmt.Errorf("PHP original restored; journal reconciliation required")
+				return ErrPHPOriginalRestored
+			}
+			if binding.RecoveryOnly {
+				return ErrPHPRecoveryRequired
 			}
 			if err = binding.Check(ctx); err != nil {
 				return err

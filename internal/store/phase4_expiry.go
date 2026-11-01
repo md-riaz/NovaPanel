@@ -6,6 +6,15 @@ import (
 )
 
 func (s *Store) FailOperation(ctx context.Context, jid, code string) error {
+	return s.failOperation(ctx, jid, code, false)
+}
+
+// FailRestoredPHP atomically records a failed job and its verified restoration.
+func (s *Store) FailRestoredPHP(ctx context.Context, jid, code string) error {
+	return s.failOperation(ctx, jid, code, true)
+}
+
+func (s *Store) failOperation(ctx context.Context, jid, code string, restored bool) error {
 	return s.Tx(ctx, func(tx *sql.Tx) error {
 		if _, e := tx.ExecContext(ctx, "UPDATE phase4_operations SET updated=updated WHERE job_id=?", jid); e != nil {
 			return e
@@ -15,6 +24,9 @@ func (s *Store) FailOperation(ctx context.Context, jid, code string) error {
 			return e
 		}
 		now := s.clock.Now()
+		if restored && (op.Kind != PHPSet || op.Checkpoint == "done" || op.Checkpoint == "expired" || now >= op.Expires) {
+			return ErrSitePrecondition
+		}
 		expired := op.Checkpoint == "expired" || now >= op.Expires
 		if expired {
 			code = "interrupted"
@@ -29,7 +41,7 @@ func (s *Store) FailOperation(ctx context.Context, jid, code string) error {
 		if _, e = tx.ExecContext(ctx, "DELETE FROM job_claims WHERE job_id=?", jid); e != nil {
 			return e
 		}
-		_, e = tx.ExecContext(ctx, "UPDATE phase4_operations SET checkpoint='expired',nonce=NULL,ciphertext=NULL,updated=? WHERE job_id=? AND checkpoint<>'done'", now, jid)
+		_, e = tx.ExecContext(ctx, "UPDATE phase4_operations SET checkpoint='expired',nonce=NULL,ciphertext=NULL,updated=?,reconciled=? WHERE job_id=? AND checkpoint<>'done'", now, restored, jid)
 		return e
 	})
 }
