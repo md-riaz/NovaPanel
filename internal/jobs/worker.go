@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"novapanel/internal/id"
+	php "novapanel/internal/render/php"
 	"novapanel/internal/rpcerr"
 	"novapanel/internal/store"
 	"time"
@@ -106,7 +107,20 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 	if s, ok := q.store.(operationStore); ok {
 		if op, loadErr := s.LoadOperation(ctx, j.ID); loadErr == nil {
 			isOperation = true
-			err = s.CheckOperation(ctx, j.ID)
+			if op.Kind == store.PHPSet {
+				request, decodeErr := php.DecodeSetRequest(j.Args)
+				if decodeErr != nil || request.SiteID != op.SiteID || j.ObjectKey != "site:"+op.SiteID || request.Version != op.Identity.PHP.DesiredVersion {
+					err = rpcerr.Errf("invalid_argument", "invalid stored PHP request")
+				} else {
+					merged, mergeErr := php.MergeLimits(&op.Identity.PHP.OriginalLimits, request.Limits)
+					if mergeErr != nil || merged != op.Identity.PHP.DesiredLimits {
+						err = rpcerr.Errf("invalid_argument", "PHP request does not match journal")
+					}
+				}
+			}
+			if err == nil {
+				err = s.CheckOperation(ctx, j.ID)
+			}
 			if err == nil && len(op.Ciphertext) > 0 {
 				if op.Kind == store.WordPressInstall {
 					_, err = q.OpenWordPressCredentials(ctx, j.ID)
