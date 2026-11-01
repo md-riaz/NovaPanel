@@ -48,6 +48,7 @@ type OperationIdentity struct {
 	Attached                   []OperationDatabase `json:",omitempty"`
 	BindingID                  string              `json:",omitempty"`
 	PurgeFiles, PurgeDatabases bool
+	PublicationAudit           *PublicationAudit     `json:",omitempty"`
 	ConfigCleanup              string                `json:",omitempty"`
 	WordPress                  *WordPressReservation `json:",omitempty"`
 	PHP                        *PHPOperationIdentity `json:",omitempty"`
@@ -126,6 +127,9 @@ func scanOperation(row scanner) (o Operation, err error) {
 }
 
 func validOperationIdentity(o Operation) bool {
+	if !validPublication(o) {
+		return false
+	}
 	if o.Kind == PHPSet {
 		return validPHPSetIdentity(o)
 	}
@@ -553,6 +557,14 @@ func (s *Store) CompleteOperation(ctx context.Context, jid string, claim *JobCla
 		if op.Checkpoint != "verified" && !((op.Kind == DatabaseDelete || op.Kind == DBUserDelete || op.Kind == SiteDelete) && op.Checkpoint == "db_applied") {
 			return ErrSitePrecondition
 		}
+		if p := op.Identity.PublicationAudit; p != nil {
+			if p.State != "intent" {
+				return ErrSitePrecondition
+			}
+			if e = checkPublicationEvent(ctx, tx, op, p.IntentEventID, "intent"); e != nil {
+				return e
+			}
+		}
 		if op.Kind == SiteDelete {
 			if claim != nil {
 				return ErrSiteInvalid
@@ -625,6 +637,12 @@ func (s *Store) CompleteOperation(ctx context.Context, jid string, claim *JobCla
 }
 
 func finishOperation(ctx context.Context, tx *sql.Tx, op Operation, now int64, raw []byte) error {
+	if p := op.Identity.PublicationAudit; p != nil {
+		p.State = "committed"
+		if err := savePublication(ctx, tx, op); err != nil {
+			return err
+		}
+	}
 	r, e := tx.ExecContext(ctx, `UPDATE jobs SET state='done',step='phase4_committed',progress=1,result_json=?,error=NULL,code=NULL,updated=?,finished=? WHERE id=? AND state='running'`, string(raw), now, now, op.JobID)
 	if e = affected(r, e); e != nil {
 		return e

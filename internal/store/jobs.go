@@ -95,7 +95,19 @@ func nullableJSON(j json.RawMessage) any {
 	return string(j)
 }
 func (s *Store) GetJob(ctx context.Context, id string) (Job, error) {
-	return scanJob(s.db.QueryRowContext(ctx, "SELECT "+jobColumns+" FROM jobs WHERE id=?", id))
+	j, err := scanJob(s.db.QueryRowContext(ctx, "SELECT "+jobColumns+" FROM jobs WHERE id=?", id))
+	if err != nil {
+		return j, err
+	}
+	var pending bool
+	err = s.db.QueryRowContext(ctx, "SELECT "+publicationPendingSQL+" FROM jobs WHERE id=?", id).Scan(&pending)
+	if err != nil {
+		return Job{}, err
+	}
+	if pending {
+		return Job{}, ErrPublicationPending
+	}
+	return j, nil
 }
 func (s *Store) NextQueuedJob(ctx context.Context) (Job, error) {
 	return scanJob(s.db.QueryRowContext(ctx, "SELECT "+jobColumns+" FROM jobs WHERE state='queued' ORDER BY created,id LIMIT 1"))
@@ -125,11 +137,15 @@ func affected(r sql.Result, e error) error {
 	return nil
 }
 func (s *Store) ListJobs(ctx context.Context, f JobFilter) ([]Job, error) {
-	q := "SELECT " + jobColumns + " FROM jobs WHERE 1=1"
+	q := "SELECT " + jobColumns + "," + publicationPendingSQL + " FROM jobs WHERE 1=1"
 	a := []any{}
 	for _, p := range []struct{ k, v string }{{"state", f.State}, {"verb", f.Verb}} {
 		if p.v != "" {
-			q += " AND " + p.k + "=?"
+			column := p.k
+			if column == "state" {
+				column = "CASE WHEN " + publicationPendingSQL + " THEN 'running' ELSE state END"
+			}
+			q += " AND " + column + "=?"
 			a = append(a, p.v)
 		}
 	}
@@ -152,9 +168,19 @@ func (s *Store) ListJobs(ctx context.Context, f JobFilter) ([]Job, error) {
 	defer rows.Close()
 	out := []Job{}
 	for rows.Next() {
-		j, e := scanJob(rows)
+		var pending bool
+		j, e := scanJob(publicationScanner{scanner: rows, pending: &pending})
 		if e != nil {
 			return nil, e
+		}
+		if pending {
+			j.State = "running"
+			j.Step = "publication_pending"
+			j.Progress = 0
+			j.Result = nil
+			j.Error = ""
+			j.Code = ""
+			j.Finished = nil
 		}
 		out = append(out, j)
 	}
@@ -248,6 +274,9 @@ func (s *Store) ConsumeClaim(ctx context.Context, id, hash, owner string) (v Job
 	e = s.Tx(ctx, func(tx *sql.Tx) error {
 		if _, e := tx.ExecContext(ctx, "UPDATE job_claims SET claimed=claimed WHERE job_id=?", id); e != nil {
 			return e
+		}
+		if err := publicationPending(ctx, tx, id); err != nil {
+			return err
 		}
 		now := s.clock.Now()
 		if _, e := tx.ExecContext(ctx, "DELETE FROM job_claims WHERE job_id=? AND length(ciphertext)>0 AND expires<=?", id, now); e != nil {
