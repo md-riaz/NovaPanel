@@ -40,6 +40,17 @@ func checkTerminalWordPressConfig(ctx context.Context, tx *sql.Tx, jid string) (
 	if op.Kind != WordPressInstall || op.Checkpoint != "done" || len(op.Nonce) != 0 || len(op.Ciphertext) != 0 {
 		return op, ErrSitePrecondition
 	}
+	if p := op.Identity.PublicationAudit; p != nil {
+		if p.State != "acknowledged" {
+			return op, ErrPublicationPending
+		}
+		if err = checkPublicationEvent(ctx, tx, op, p.IntentEventID, "intent"); err != nil {
+			return op, err
+		}
+		if err = checkPublicationEvent(ctx, tx, op, p.FinalEventID, "committed"); err != nil {
+			return op, err
+		}
+	}
 	plan, err := wordpress.BuildInstall(op.Identity.WordPress.Input, op.Identity.WordPress.Evidence)
 	if err != nil {
 		return op, ErrSitePrecondition

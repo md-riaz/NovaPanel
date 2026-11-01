@@ -74,7 +74,9 @@ func (s *Store) PreparePublicationAudit(ctx context.Context, jid, intent, final 
 		if e = operationBlocked(ctx, tx, op); e != nil {
 			return e
 		}
-		if op.Kind == SiteDelete {
+		if op.Kind == PHPSet {
+			e = checkPHPSet(ctx, tx, op)
+		} else if op.Kind == SiteDelete {
 			e = checkSiteDelete(ctx, tx, op)
 		} else if op.Kind == WordPressInstall {
 			e = checkWordPress(ctx, tx, op)

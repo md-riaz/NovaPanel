@@ -134,10 +134,10 @@ func TestOperationRestartRestoresStoredAuthorityAndFileAudit(t *testing.T) {
 					deadline := time.After(3 * time.Second)
 					for {
 						j, e := s.GetJob(ctx, r.Job.ID)
-						if e != nil {
+						if e != nil && !errors.Is(e, store.ErrPublicationPending) {
 							t.Fatal(e)
 						}
-						if j.State == "done" {
+						if e == nil && j.State == "done" {
 							break
 						}
 						select {

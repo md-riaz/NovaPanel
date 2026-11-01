@@ -270,10 +270,10 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 	deadline := time.After(5 * time.Second)
 	for {
 		j, e := s.GetJob(ctx, en.Job.ID)
-		if e != nil {
+		if e != nil && !errors.Is(e, store.ErrPublicationPending) {
 			t.Fatal(e)
 		}
-		if j.State == "done" {
+		if e == nil && j.State == "done" {
 			break
 		}
 		select {
@@ -334,10 +334,10 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 	// A committed job alone is insufficient when its audit mirror is absent.
 	var saved string
 	if err = s.Tx(ctx, func(tx *sql.Tx) error {
-		if e := tx.QueryRowContext(ctx, `SELECT detail_json FROM events WHERE json_extract(detail_json,'$.job_id')=? AND json_extract(detail_json,'$.stage')='exec'`, en.Job.ID).Scan(&saved); e != nil {
+		if e := tx.QueryRowContext(ctx, `SELECT detail_json FROM events WHERE json_extract(detail_json,'$.job_id')=? AND json_extract(detail_json,'$.stage')='exec' AND json_extract(detail_json,'$.publication')='committed'`, en.Job.ID).Scan(&saved); e != nil {
 			return e
 		}
-		_, e := tx.ExecContext(ctx, `UPDATE events SET detail_json='{}' WHERE json_extract(detail_json,'$.job_id')=? AND json_extract(detail_json,'$.stage')='exec'`, en.Job.ID)
+		_, e := tx.ExecContext(ctx, `UPDATE events SET detail_json='{}' WHERE json_extract(detail_json,'$.job_id')=? AND json_extract(detail_json,'$.stage')='exec' AND json_extract(detail_json,'$.publication')='committed'`, en.Job.ID)
 		return e
 	}); err != nil {
 		t.Fatal(err)
@@ -505,7 +505,7 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 	q.SetRunner(func(context.Context, *Job) error { t.Error("historical effects replayed"); return nil })
 	// Acknowledgement retires only the live binding check, never terminal audit.
 	if err = s.Tx(ctx, func(tx *sql.Tx) error {
-		_, e := tx.ExecContext(ctx, `UPDATE events SET detail_json='{}' WHERE json_extract(detail_json,'$.job_id')=? AND json_extract(detail_json,'$.stage')='exec'`, en.Job.ID)
+		_, e := tx.ExecContext(ctx, `UPDATE events SET detail_json='{}' WHERE json_extract(detail_json,'$.job_id')=? AND json_extract(detail_json,'$.stage')='exec' AND json_extract(detail_json,'$.publication')='committed'`, en.Job.ID)
 		return e
 	}); err != nil {
 		t.Fatal(err)
