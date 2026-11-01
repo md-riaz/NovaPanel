@@ -47,13 +47,21 @@ type Event struct {
 	Detail                                      map[string]any
 }
 
-func (ev Event) validate() error {
+func (ev Event) validate() error { return ev.validateStage(false) }
+
+// Historical file records may contain the stage written by older versions.
+// This exception is never used for new events.
+func (ev Event) validateStage(historical bool) error {
 	if ev.Outcome != "ok" && ev.Outcome != "refused" && ev.Outcome != "error" {
 		return errors.New("invalid audit outcome")
 	}
 	if stage, ok := ev.Detail["stage"]; ok {
 		switch stage {
 		case "authz", "resolve", "enqueue", "exec", "claim":
+		case "publication":
+			if !historical {
+				return errors.New("invalid audit stage")
+			}
 		default:
 			return errors.New("invalid audit stage")
 		}
@@ -281,7 +289,7 @@ func decodeEvent(line []byte) (store.Event, error) {
 			return store.Event{}, e
 		}
 	}
-	if e = (Event{Outcome: v.Outcome, Detail: detail}).validate(); e != nil {
+	if e = (Event{Outcome: v.Outcome, Detail: detail}).validateStage(true); e != nil {
 		return store.Event{}, e
 	}
 	return store.Event{ID: v.ID, TS: *v.TS, Actor: *v.Actor, Role: v.Role, Verb: *v.Verb, ObjectKey: v.ObjectKey, Outcome: v.Outcome, Code: v.Code, Detail: v.Detail}, nil
