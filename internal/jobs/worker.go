@@ -189,6 +189,11 @@ func (q *Queue) finish(ctx context.Context, j Job, err error) error {
 			j.Code = coded.Code
 		}
 	}
+	if err == nil {
+		if handled, e := q.finishPublication(ctx, j); handled {
+			return e
+		}
+	}
 	// Do not persist external error text or panic payloads, which can contain secrets.
 	if e := q.record(j, outcome, j.Code, "exec"); e != nil {
 		return e

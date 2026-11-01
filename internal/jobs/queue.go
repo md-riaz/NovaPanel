@@ -30,6 +30,7 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Queue struct {
+	publicationErr  error  // sticky publication storage/audit failure
 	configCustody   string // trusted startup dependency, immutable while running
 	admission       func() error
 	startupReady    bool
@@ -172,6 +173,12 @@ func (q *Queue) Claim(ctx context.Context, jid, token string) (map[string]any, e
 }
 
 func (q *Queue) healthy() error {
+	q.mu.Lock()
+	err := q.publicationErr
+	q.mu.Unlock()
+	if err != nil {
+		return err
+	}
 	if q.audit == nil {
 		return errors.New("jobs: audit not configured")
 	}
