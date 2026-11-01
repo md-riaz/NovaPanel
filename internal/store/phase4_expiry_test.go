@@ -38,6 +38,15 @@ func TestOperationExpiryBlocksUntilReconciled(t *testing.T) {
 	if e != nil || got.Code != "interrupted" {
 		t.Fatalf("job %+v %v", got, e)
 	}
+	var claims int
+	if e = s.Tx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, "SELECT count(*) FROM job_claims WHERE job_id=?", j.ID).Scan(&claims)
+	}); e != nil {
+		t.Fatal(e)
+	}
+	if claims != 0 {
+		t.Fatalf("expired operation retained %d claim reservations", claims)
+	}
 	j.ID = "expiry-two"
 	if _, e = s.PrepareOperation(ctx, j, JobClaim{JobID: j.ID, ClaimHash: "hash"}, req, []byte{1}, []byte{2}); !errors.Is(e, ErrOperationLocked) {
 		t.Fatalf("blocker lost: %v", e)
