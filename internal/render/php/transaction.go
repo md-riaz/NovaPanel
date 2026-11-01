@@ -93,6 +93,27 @@ func (a *Applier) Transaction(ctx context.Context, d Desired, fn func(*Transacti
 	return fn(&Transaction{a: a, root: root, name: name, good: good, live: live, desired: append([]byte(marker), b...)})
 }
 
+// PoolSnapshot is the job-bound prior known-good state. A nil Config means
+// no prior pool; callers must persist it durably before any external effect.
+type PoolSnapshot struct {
+	Config []byte `json:"config"`
+}
+
+// Snapshot returns a detached copy, unaffected by later LKG promotion.
+func (t *Transaction) Snapshot() PoolSnapshot {
+	if t.good == nil {
+		return PoolSnapshot{}
+	}
+	return PoolSnapshot{Config: append([]byte{}, t.good...)}
+}
+
+// RestoreSnapshot restores the captured state rather than the current LKG.
+// It must only be given a trusted, validated job-bound snapshot.
+func (t *Transaction) RestoreSnapshot(s PoolSnapshot) error {
+	t.good = s.Config
+	return t.Restore()
+}
+
 // Unchanged requires both live bytes and the separately proven LKG.
 func (t *Transaction) Unchanged() bool {
 	return t.good != nil && bytes.Equal(t.good, t.desired) && bytes.Equal(t.live, t.desired)
