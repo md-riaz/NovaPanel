@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"novapanel/internal/dns"
 	"novapanel/internal/rpcerr"
+	"strings"
 )
 
 func (c *Client) Update(ctx context.Context, zone string, r dns.Record) error {
@@ -26,7 +27,7 @@ func (c *Client) Update(ctx context.Context, zone string, r dns.Record) error {
 		return err
 	}
 	result, err := env.Result.record(zone)
-	if !env.Success || err != nil || result.ID != r.ID {
+	if !env.Success || err != nil || result.ID != r.ID || result.Type != r.Type || !strings.EqualFold(result.Name, r.Name) {
 		return providerError()
 	}
 	return nil
