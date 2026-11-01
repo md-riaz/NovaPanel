@@ -3,6 +3,7 @@ package verbs_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,19 +12,27 @@ import (
 
 	"novapanel/internal/agent"
 	"novapanel/internal/audit"
+	runner "novapanel/internal/exec"
 	"novapanel/internal/jobs"
 	"novapanel/internal/render/nginx"
+	"novapanel/internal/render/php"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
+	"strings"
 )
 
+type phpScratchRunner struct{}
+
+func (phpScratchRunner) Run(context.Context, string, []string, runner.RunOpts) ([]byte, []byte, int, error) {
+	return nil, nil, 0, nil
+}
+
 // This exercises the dispatcher and the real queue, not a direct executor call.
-// The scratch appliers and typed runner must be wired before this can pass.
 func TestPHPSetQueuePublishesScratchConfiguration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	root := t.TempDir()
-	for _, dir := range []string{"sites-available", "sites-enabled"} {
+	for _, dir := range []string{"sites-available", "sites-enabled", "pool", "journal"} {
 		if err := os.Mkdir(filepath.Join(root, dir), 0700); err != nil {
 			t.Fatal(err)
 		}
@@ -33,14 +42,16 @@ func TestPHPSetQueuePublishesScratchConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	log, err := audit.Open(st, filepath.Join(t.TempDir(), "audit.log"))
+	auditPath := filepath.Join(t.TempDir(), "audit.log")
+	log, err := audit.Open(st, auditPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer log.Close()
 	a := agent.New()
 	a.Store, a.Audit = st, log
-	a.Nginx = &nginx.Applier{Root: root}
+	a.Nginx = &nginx.Applier{Root: root, Runner: phpScratchRunner{}, Probe: func(context.Context, nginx.Desired) error { return nil }}
+	a.PHP = &agent.PHPDependencies{Pools: &php.Applier{Root: filepath.Join(root, "pool"), Runner: phpScratchRunner{}, Probe: func(context.Context, php.Desired) error { return nil }}, RecoveryRoot: filepath.Join(root, "journal"), ResolveIdentity: func(context.Context, store.Site) (uint32, uint32, error) { return 1001, 1001, nil }}
 	server := rpc.NewServer(a)
 	server.ConfigureJobs()
 	if err := a.Jobs.PrepareOperations(ctx); err != nil {
@@ -71,6 +82,10 @@ func TestPHPSetQueuePublishesScratchConfiguration(t *testing.T) {
 	for {
 		j, err := st.GetJob(ctx, enqueued.Job.ID)
 		if err != nil {
+			if errors.Is(err, store.ErrPublicationPending) {
+				time.Sleep(10 * time.Millisecond)
+				continue
+			}
 			t.Fatal(err)
 		}
 		if j.State == "failed" {
@@ -84,11 +99,35 @@ func TestPHPSetQueuePublishesScratchConfiguration(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(root, "sites-available", "demo.conf")); err != nil {
 				t.Fatal(err)
 			}
+			pool, err := os.ReadFile(filepath.Join(root, "pool", "demo.conf"))
+			if err != nil || !strings.Contains(string(pool), "memory_limit] = 512M") {
+				t.Fatalf("pool: %s %v", pool, err)
+			}
+			op, err := st.LoadOperation(ctx, j.ID)
+			if err != nil {
+				t.Fatalf("audit operation: %+v %v", op, err)
+			}
+			if op.Identity.PublicationAudit == nil || op.Identity.PublicationAudit.State != "acknowledged" {
+				select {
+				case <-ctx.Done():
+					t.Fatal("audit acknowledgement timed out")
+				case <-time.After(10 * time.Millisecond):
+				}
+				continue
+			}
+			auditBytes, err := os.ReadFile(auditPath)
+			if err != nil || !strings.Contains(string(auditBytes), op.Identity.PublicationAudit.IntentEventID) || !strings.Contains(string(auditBytes), op.Identity.PublicationAudit.FinalEventID) {
+				t.Fatalf("audit evidence missing: %v", err)
+			}
 			return
 		}
 		select {
+		case e := <-done:
+			done <- e
+			t.Fatalf("worker exited: %v", e)
 		case <-ctx.Done():
-			t.Fatal(ctx.Err())
+			j, e := st.GetJob(context.Background(), enqueued.Job.ID)
+			t.Fatalf("%v job=%+v lookup=%v", ctx.Err(), j, e)
 		case <-time.After(10 * time.Millisecond):
 		}
 	}

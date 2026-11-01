@@ -10,6 +10,7 @@ import (
 	"novapanel/internal/jobs"
 	"novapanel/internal/platform"
 	"novapanel/internal/render/nginx"
+	"novapanel/internal/render/php"
 	"novapanel/internal/rpcerr"
 	"novapanel/internal/secret"
 	"novapanel/internal/store"
@@ -17,6 +18,15 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+// PHPDependencies is trusted configuration, not request input. The resolver must
+// verify the provisioned site's identity. RecoveryRoot requires an owner capable
+// of reconciling snapshots across startup; no default is installed.
+type PHPDependencies struct {
+	Pools           *php.Applier
+	RecoveryRoot    string
+	ResolveIdentity func(context.Context, store.Site) (uint32, uint32, error)
+}
 
 type Clock interface{ Now() int64 }
 type realClock struct{}
@@ -27,6 +37,8 @@ type Agent struct {
 	mutationsBlocked atomic.Bool
 	ProvisionSite    func(context.Context, string) error
 	Nginx            *nginx.Applier
+	// PHP publication is opt-in: no production recovery owner exists yet.
+	PHP              *PHPDependencies
 	PasswordFailures auth.FailureBudgets
 	UnknownFailures  auth.FailureBudgets
 	MFAFailures      auth.FailureBudgets

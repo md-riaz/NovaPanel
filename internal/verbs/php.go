@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"novapanel/internal/agent"
 	"novapanel/internal/jobs"
+	"novapanel/internal/render/nginx"
 	php "novapanel/internal/render/php"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
+	"path/filepath"
+	"time"
 )
 
 func init() {
@@ -31,9 +34,79 @@ func phpSet(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	return a.Jobs.EnqueueOperation(ctx, store.OperationRequest{Kind: store.PHPSet, SiteID: request.SiteID, PHP: &request}, nil)
 }
 
-// Execution must fail closed until FPM publication and recovery are wired.
-func phpSetExec(context.Context, *agent.Agent, *jobs.Job) error {
-	return rpc.Errf("unsupported", "PHP execution unavailable")
+// No default dependencies are installed until startup recovery owns snapshots.
+func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
+	if a == nil || j == nil || a.Store == nil || a.Jobs == nil || a.Nginx == nil || a.PHP == nil || a.PHP.Pools == nil || a.PHP.ResolveIdentity == nil || a.PHP.RecoveryRoot == "" || a.Nginx.Runner == nil || a.Nginx.Probe == nil || a.PHP.Pools.Runner == nil || a.PHP.Pools.Probe == nil {
+		return rpc.Errf("unsupported", "PHP execution unavailable")
+	}
+	op, err := a.Store.LoadOperation(ctx, j.ID)
+	if err != nil {
+		return err
+	}
+	if op.Kind != store.PHPSet || op.Identity.Site == nil || op.Identity.PHP == nil || j.ObjectKey != "site:"+op.SiteID || op.Checkpoint != "prepared" {
+		return rpc.Errf("precondition_failed", "Invalid PHP operation")
+	}
+	check := func(c context.Context) error { return a.Jobs.CheckPHPEffect(c, j.ID, op.SiteID) }
+	if err = check(ctx); err != nil {
+		return err
+	}
+	s := *op.Identity.Site
+	uid, gid, err := a.PHP.ResolveIdentity(ctx, s)
+	if err != nil {
+		return err
+	}
+	domains, err := a.Store.ListDomains(ctx, op.SiteID)
+	if err != nil {
+		return err
+	}
+	redirects, err := a.Store.ListRedirects(ctx, op.SiteID)
+	if err != nil {
+		return err
+	}
+	d := nginx.Desired{Name: s.Name, Docroot: s.Docroot, ACMERoot: filepath.Join(a.Cfg.ACMEWebroot, s.Name), Maintenance: s.Maintenance, ForceHTTPS: s.ForceHTTPS, HSTSMaxAge: s.HSTSMaxAge}
+	for _, v := range domains {
+		d.Domains = append(d.Domains, v.FQDN)
+	}
+	for _, v := range redirects {
+		d.Redirects = append(d.Redirects, nginx.Redirect{Source: v.Source, Target: v.Target, Code: v.Code})
+	}
+	if s.CertSource != "none" {
+		_, primary := sslNames(domains)
+		d.TLS, err = nginx.LoadTLS(a.Cfg.TLSDir, primary, tlsStaging(domains), time.UnixMilli(a.Now()))
+		if err != nil {
+			return err
+		}
+	}
+	p := op.Identity.PHP
+	d.PHP = &php.Desired{Name: s.Name, Type: s.Type, Version: p.DesiredVersion, UID: uid, GID: gid, Limits: &p.DesiredLimits}
+	old := d
+	oldPHP := *d.PHP
+	oldPHP.Version, oldPHP.Limits = p.OriginalVersion, &p.OriginalLimits
+	old.PHP = &oldPHP
+	binding := nginx.PHPDurableBinding{Root: a.PHP.RecoveryRoot, JobID: j.ID, SiteID: op.SiteID, Check: check}
+	// Terminal metadata and its audit are owned by Queue.finish, not this callback.
+	commit := func(c context.Context) error {
+		if err := check(c); err != nil {
+			return err
+		}
+		if err := a.Store.CheckpointOperation(c, j.ID, "prepared", "config_published"); err != nil {
+			return err
+		}
+		if err := check(c); err != nil {
+			return err
+		}
+		return a.Store.CheckpointOperation(c, j.ID, "config_published", "verified")
+	}
+	if err = a.Nginx.ApplyPHPDurable(ctx, a.PHP.Pools, d, binding, commit, func(c context.Context) error {
+		if err := a.PHP.Pools.Probe(c, oldPHP); err != nil {
+			return err
+		}
+		return a.Nginx.Probe(c, old)
+	}); err != nil {
+		return err
+	}
+	j.Result = json.RawMessage(`{}`)
+	return nil
 }
 
 var _ json.Unmarshaler = (*phpSetArgs)(nil)
