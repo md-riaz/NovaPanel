@@ -5,15 +5,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"novapanel/internal/agent"
 	"novapanel/internal/audit"
@@ -32,7 +31,7 @@ type restoreCrashRunner struct{ kill bool }
 
 func (r restoreCrashRunner) Run(ctx context.Context, name string, args []string, opts runner.RunOpts) ([]byte, []byte, int, error) {
 	if r.kill {
-		_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
+		_ = unix.Kill(os.Getpid(), unix.SIGKILL)
 		panic("SIGKILL failed")
 	}
 	return nil, nil, 0, nil
@@ -118,12 +117,9 @@ func TestPHPQueueDeathDuringRestore(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestPHPQueueDeathDuringRestore$")
-	cmd.Env = append(os.Environ(), "NOVAPANEL_PHP_RESTORE_CHILD=1", "NOVAPANEL_PHP_RESTORE_ROOT="+root)
-	out, err := cmd.CombinedOutput()
-	var ex *exec.ExitError
-	if !errors.As(err, &ex) || ex.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
-		t.Fatalf("expected recovery SIGKILL: %v %s", err, out)
+	out, stderr, exit, err := (runner.Real{}).Run(ctx, os.Args[0], []string{"-test.run=^TestPHPQueueDeathDuringRestore$"}, runner.RunOpts{Env: append(os.Environ(), "NOVAPANEL_PHP_RESTORE_CHILD=1", "NOVAPANEL_PHP_RESTORE_ROOT="+root)})
+	if exit != -1 || err == nil || err.Error() != "signal: killed" || ctx.Err() != nil {
+		t.Fatalf("expected recovery SIGKILL: exit=%d err=%v %s %s", exit, err, out, stderr)
 	}
 	// A clean reopen after the interrupted restore must finish the same job once.
 	before, err := os.Stat(filepath.Join(root, "panel.db"))
