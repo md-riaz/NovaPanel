@@ -25,7 +25,7 @@ func validPHPSetIdentity(op Operation) bool {
 		return false
 	}
 	// Reject fields belonging to another operation kind.
-	expected := OperationIdentity{Version: 1, Site: i.Site, PHP: i.PHP}
+	expected := OperationIdentity{Version: 1, Site: i.Site, PHP: i.PHP, PublicationAudit: i.PublicationAudit}
 	if !reflect.DeepEqual(i, expected) || len(op.Nonce) != 0 || len(op.Ciphertext) != 0 {
 		return false
 	}
