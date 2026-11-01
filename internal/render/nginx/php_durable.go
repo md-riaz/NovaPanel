@@ -42,6 +42,9 @@ type phpEnvelope struct {
 	SHA256  string          `json:"sha256"`
 }
 
+// ErrPHPRecoveryRequired means saved originals have not been proved live.
+var ErrPHPRecoveryRequired = errors.New("PHP snapshot recovery required")
+
 func openPHPJournal(b PHPDurableBinding) (*os.Root, string, error) {
 	if b.JobID == "" || b.SiteID == "" || len(b.JobID) > 128 || len(b.SiteID) > 128 {
 		return nil, "", fmt.Errorf("invalid durable binding")
@@ -208,7 +211,7 @@ func (a *Applier) ApplyPHPDurable(ctx context.Context, pools *php.Applier, d Des
 					return fmt.Errorf("recovery binding mismatch")
 				}
 				if err = restorePHPOriginal(ctx, a, n, p, original, binding.Check, restoredProbe); err != nil {
-					return fmt.Errorf("PHP recovery retained: %w", err)
+					return errors.Join(ErrPHPRecoveryRequired, err)
 				}
 				return fmt.Errorf("PHP original restored; journal reconciliation required")
 			}
@@ -230,7 +233,9 @@ func (a *Applier) ApplyPHPDurable(ctx context.Context, pools *php.Applier, d Des
 				if result != nil {
 					recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 					defer cancel()
-					result = errors.Join(result, restorePHPOriginal(recovery, a, n, p, original, binding.Check, restoredProbe))
+					if err := restorePHPOriginal(recovery, a, n, p, original, binding.Check, restoredProbe); err != nil {
+						result = errors.Join(result, ErrPHPRecoveryRequired, err)
+					}
 				}
 			}()
 			if err = ctx.Err(); err != nil {

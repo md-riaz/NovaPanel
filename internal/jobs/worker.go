@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"novapanel/internal/id"
+	"novapanel/internal/render/nginx"
 	php "novapanel/internal/render/php"
 	"novapanel/internal/rpcerr"
 	"novapanel/internal/store"
@@ -145,6 +146,9 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 	if ctx.Err() != nil {
 		return nil
 	} // leave running for restart's effectful/idempotent recovery
+	if errors.Is(err, nginx.ErrPHPRecoveryRequired) {
+		return errors.Join(ErrRecoveryBlocked, err)
+	}
 	if isOperation {
 		err = operationError(err)
 	}
