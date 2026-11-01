@@ -121,6 +121,7 @@ func TestPhase4SchemaContract(t *testing.T) {
 					t.Fatal("partial update lost omitted values")
 				}
 			})
+			t.Run("journal_kinds", func(t *testing.T) { phase4JournalKinds(t, s) })
 			t.Run("atomic_terminal_sql_and_consumed_claim_replay", func(t *testing.T) { phase4Atomic(t, s) })
 			t.Run("standalone_delete_journal_survives_reopen", func(t *testing.T) {
 				phase4Job(t, s.db.raw, "delete", "running")
@@ -214,6 +215,20 @@ func phase4Pair(t *testing.T, s *Store, db, user, site string) {
 func phase4Job(t *testing.T, db phase4SQL, id, state string) {
 	t.Helper()
 	phase4Exec(t, db, "INSERT INTO jobs(id,verb,args_json,object_key,actor,created_by,state,created,updated) VALUES(?,'database.create','{}','db:fixture','fixture','owner-session',?,1,1)", id, state)
+}
+
+func phase4JournalKinds(t *testing.T, s *Store) {
+	t.Helper()
+	for _, kind := range []string{"database_create", "database_rotate", "dbuser_create", "wordpress_install", "site_delete", "database_delete", "dbuser_delete", "php_set"} {
+		id := "kind-" + kind
+		phase4Job(t, s.db.raw, id, "running")
+		phase4Exec(t, s.db.raw, "INSERT INTO phase4_operations(job_id,kind,site_id,checkpoint,identities_json,expires,updated) VALUES(?,?,'s1','prepared','{}',100,1)", id, kind)
+	}
+	phase4Job(t, s.db.raw, "kind-invalid", "running")
+	phase4Refuse(t, s.db.raw, "INSERT INTO phase4_operations(job_id,kind,checkpoint,identities_json,expires,updated) VALUES('kind-invalid','php_other','prepared','{}',100,1)", "CHECK")
+	phase4Refuse(t, s.db.raw, "UPDATE phase4_operations SET checkpoint='invented' WHERE job_id='kind-php_set'", "CHECK")
+	phase4Refuse(t, s.db.raw, "UPDATE phase4_operations SET nonce=X'01' WHERE job_id='kind-php_set'", "CHECK")
+	phase4Refuse(t, s.db.raw, "DELETE FROM jobs WHERE id='kind-php_set'", "FOREIGN KEY")
 }
 
 func phase4Atomic(t *testing.T, s *Store) {

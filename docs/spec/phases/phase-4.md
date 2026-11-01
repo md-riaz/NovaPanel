@@ -155,6 +155,10 @@ FPM pool user so auto-updates work.
   never as root.
 - **No destructive WordPress ops until restore exists (Phase 6).**
 
+## PHP journal scope amendment
+
+The delegated narrow `php_set` journal-kind decision and lifecycle in [02-data-model](../02-data-model.md) supersede the supported maintenance policy's no-migration direction only for the unshipped Phase 4 kind CHECK. This is not permission to edit shipped migrations. Preserve the existing `php.set{site_id, version, limits?} → job → {}` API; use the original and desired full version/limit snapshots, original job and site lock through F8 publication/probe/revert and recovery, and F11 intent/final audit plus atomic terminal SQLite metadata/job/journal publication. No runtime wiring or acceptance is implied. PR #85 has a competing 0006; coordinate migration numbering and hashes before integration.
+
 ## Canonical Phase 4 amendment and entry gate
 
 Phase 3 PR #81 is merged at `2ff29a1a70f0ad678969d48006a4c21c183dd29a`. Its tree matches independently reviewed `6107f1d`; the parent verified all 13 safe gates. Phase 4 now opens from that merged main under the user's phase-by-phase authority, with one draft PR and no Phase 4 merge yet. The earlier stacked opening is historical, not current authorization. Preserve main's #86 reply/recovery and D2 trust-anchor rulings. Final privileged Ubuntu VM checks remain deferred and unpassed. Browser timeout history remains disclosed, not proven fixed. The current implementation boundary and missing contracts are recorded in `docs/phase4-foundation-handoff.md`.

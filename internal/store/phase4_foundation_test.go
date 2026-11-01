@@ -71,6 +71,14 @@ func TestPhase4ProductionMigration(t *testing.T) {
 	if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations"); n != 7 {
 		t.Fatalf("want seven production migrations, got %d", n)
 	}
+	phase4JournalKinds(t, s)
+	var recordedHash string
+	if err := s.db.raw.QueryRow("SELECT hash FROM schema_migrations WHERE version='0006'").Scan(&recordedHash); err != nil {
+		t.Fatal(err)
+	}
+	if recordedHash != hashes["0006"] {
+		t.Fatal("recorded Phase 4 hash differs from manifest")
+	}
 	candidate, err := os.ReadFile("testdata/phase4_candidate.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -78,6 +86,9 @@ func TestPhase4ProductionMigration(t *testing.T) {
 	production, err := migrations.ReadFile("migrations/0006_phase4.sql")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got := fmt.Sprintf("%x", sha256.Sum256(production)); got != hashes["0006"] {
+		t.Fatalf("Phase 4 migration hash = %s, manifest = %s", got, hashes["0006"])
 	}
 	if string(candidate) != string(production) {
 		t.Fatal("production DDL differs from approved candidate")
