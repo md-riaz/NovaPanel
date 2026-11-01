@@ -38,9 +38,16 @@ type Verb struct {
 	Internal             bool
 	MaxDeadlineMs        int
 	NewArgs              func() any
-	ObjectKey            func(any) string
-	Run                  func(context.Context, *agent.Agent, any) (any, error)
-	Exec                 func(context.Context, *agent.Agent, *jobs.Job) error
+	// Durable jobs may carry trusted fields that public admission must reject.
+	NewJobArgs   func() any
+	JobObjectKey func(any) string
+	ObjectKey    func(any) string
+	// ResolveObjectKey is read-only and runs only after registry authorization.
+	ResolveObjectKey func(context.Context, *agent.Agent, any) (string, error)
+	Run              func(context.Context, *agent.Agent, any) (any, error)
+	Exec             func(context.Context, *agent.Agent, *jobs.Job) error
+	ValidateRecovery func(context.Context, *agent.Agent, *jobs.Job) error
+	Recover          func(context.Context, *agent.Agent, *jobs.Job) error
 }
 
 var Registry = map[string]Verb{}
@@ -59,6 +66,7 @@ func Register(v Verb) {
 }
 
 type AuditEvent struct {
+	Principal                                   audit.Principal
 	Actor, Role, Verb, ObjectKey, Outcome, Code string
 	Detail                                      map[string]any
 }
@@ -90,14 +98,14 @@ func NewServer(a *agent.Agent) *Server {
 	}
 	if a.Audit != nil {
 		s.DurableAudit = func(e AuditEvent) error {
-			return a.Audit.Record(audit.Event{Actor: e.Actor, Role: e.Role, Verb: e.Verb, ObjectKey: e.ObjectKey, Outcome: e.Outcome, Code: e.Code, Detail: e.Detail})
+			return a.Audit.Record(audit.Event{Principal: e.Principal, Actor: e.Actor, Role: e.Role, Verb: e.Verb, ObjectKey: e.ObjectKey, Outcome: e.Outcome, Code: e.Code, Detail: e.Detail})
 		}
 	}
 	return s
 }
 func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	caller := CallerFrom(ctx)
-	event := AuditEvent{Actor: req.Actor, Role: caller.Role, Verb: req.Verb, Detail: map[string]any{"stage": "authz"}}
+	event := AuditEvent{Principal: callerPrincipal(caller), Actor: req.Actor, Role: caller.Role, Verb: req.Verb, Detail: map[string]any{"stage": "authz"}}
 	mutation := false
 	defer func() {
 		if r := recover(); r != nil {
@@ -138,9 +146,7 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	if v.Module != "" || (v.Effectful && !v.Slow) || (v.Slow && s.Agent.Jobs == nil) {
 		return Err("unsupported", "Unavailable in this phase")
 	}
-	if !object(req.Args) {
-		return Err("bad_request", "Object args required")
-	}
+	event.ObjectKey = requestObjectKey(req)
 	if caller.Role == "" && caller.Kind == "" && req.Session != "" {
 		resolver := s.Sessions
 		if resolver == nil {
@@ -162,7 +168,11 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 		resolved.Peer = caller.Peer
 		caller = resolved
 	}
+	event.Principal = callerPrincipal(caller)
 	event.Role = caller.Role
+	if !object(req.Args) {
+		return Err("bad_request", "Object args required")
+	}
 	if req.Verb == "session.start" && (caller.Kind == "user" || caller.Kind == "token" || caller.Role != "") {
 		return Err("precondition_failed", "Anonymous session required")
 	}
@@ -229,7 +239,14 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	}
 	ctx = WithCaller(ctx, caller)
 	ctx = context.WithValue(ctx, presentedSessionKey{}, req.Session)
-	ctx = jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: callerIdentity(caller), Actor: caller.Actor, Role: caller.Role, Scopes: caller.Scopes, Automation: caller.Automation, Effectful: v.Effectful})
+	// Job authority is an admission snapshot, not a dependency on a live session.
+	role, scopes := caller.Role, []string(nil)
+	authorized := v.MFA
+	if caller.Kind == "token" || caller.Role == "token" {
+		role, scopes = "token", caller.Scopes
+		authorized = caller.Automation
+	}
+	ctx = jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: callerIdentity(caller), Actor: caller.Actor, Role: role, Scopes: scopes, Automation: authorized, Effectful: v.Effectful})
 	args := v.NewArgs()
 	d := json.NewDecoder(bytes.NewReader(req.Args))
 	d.DisallowUnknownFields()
@@ -241,8 +258,10 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 			return errorReply(err)
 		}
 	}
-	if v.ObjectKey != nil {
-		event.ObjectKey = v.ObjectKey(args)
+	if v.ObjectKey != nil && v.ResolveObjectKey == nil {
+		if key := v.ObjectKey(args); key != "site:" {
+			event.ObjectKey = key
+		}
 	}
 	max := v.MaxDeadlineMs
 	if max <= 0 {
@@ -257,11 +276,29 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(ms)*time.Millisecond)
 	defer cancel()
+	if v.ResolveObjectKey != nil {
+		event.Detail["stage"] = "resolve"
+		key, err := v.ResolveObjectKey(ctx, s.Agent, args)
+		if err != nil {
+			return errorReply(err)
+		}
+		event.ObjectKey = key
+		event.Detail["stage"] = "authz"
+	}
 	if mutation && s.DurableAudit != nil {
 		pre := event
 		pre.Outcome = "ok"
 		if err := s.DurableAudit(pre); err != nil {
 			return Err("agent_error", "Durable audit unavailable")
+		}
+	}
+	if mutation && s.Agent.Store != nil {
+		pending, err := s.Agent.Store.TLSIntent(ctx)
+		if err != nil {
+			return errorReply(err)
+		}
+		if len(pending) > 0 {
+			return Err("precondition_failed", "Unresolved TLS publication")
 		}
 	}
 	event.Detail["stage"] = "exec"
@@ -295,7 +332,7 @@ func errorReply(err error) Reply {
 }
 func validCode(code string) bool {
 	switch code {
-	case "unknown_verb", "bad_request", "invalid_argument", "unauthenticated", "forbidden", "not_found", "conflict", "precondition_failed", "locked", "deadline_exceeded", "agent_error", "interrupted", "unsupported":
+	case "unknown_verb", "bad_request", "invalid_argument", "unauthenticated", "forbidden", "not_found", "conflict", "precondition_failed", "locked", "deadline_exceeded", "agent_error", "interrupted", "unsupported", "rate_limited":
 		return true
 	}
 	return false

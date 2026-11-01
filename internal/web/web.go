@@ -49,6 +49,7 @@ type view struct {
 	Page, CSRF, User, Role, Message, URI string
 	Codes                                []string
 	Status, Metrics                      any
+	Console                              *consoleView
 }
 
 func New(o Options) (http.Handler, error) {
@@ -94,7 +95,7 @@ func New(o Options) (http.Handler, error) {
 		}
 		_, _ = w.Write(data)
 	})
-	for _, rt := range routes {
+	for _, rt := range append(routes, consoleRoutes...) {
 		route := rt
 		r.MethodFunc(route.method, route.path, func(w http.ResponseWriter, r *http.Request) { s.serve(w, r, route) })
 	}
@@ -227,9 +228,17 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 			http.Error(w, "Form content type required", http.StatusUnsupportedMediaType)
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+		limit := int64(16 << 10)
+		if rt.verb == "ssl.upload" {
+			limit = 700 << 10
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		if e := r.ParseForm(); e != nil {
 			http.Error(w, "Invalid form", 400)
+			return
+		}
+		if isConsole(rt.path) {
+			s.console(w, r, c, rt, token, v)
 			return
 		}
 		args := map[string]any{}
@@ -287,6 +296,10 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 			v.Page = "/mfa"
 		}
 	}
+	if isConsole(rt.path) {
+		s.console(w, r, c, rt, token, v)
+		return
+	}
 	if rt.path == "/" {
 		v.Status = readDashboard(r, c, "system.status", token)
 		v.Metrics = readDashboard(r, c, "system.metrics", token)
@@ -310,6 +323,15 @@ func call(w http.ResponseWriter, r *http.Request, c RPCClient, verb string, args
 		}
 		status := http.StatusBadGateway
 		switch reply.Code {
+		case "rate_limited":
+			status = http.StatusTooManyRequests
+			w.Header().Set("Retry-After", "1")
+		case "not_found":
+			status = http.StatusNotFound
+		case "locked":
+			status = http.StatusConflict
+		case "unknown_verb":
+			status = http.StatusNotImplemented
 		case "unauthenticated":
 			status = 401
 		case "forbidden":
@@ -323,7 +345,13 @@ func call(w http.ResponseWriter, r *http.Request, c RPCClient, verb string, args
 		case "interrupted":
 			status = http.StatusConflict
 		}
-		http.Error(w, http.StatusText(status), status)
+		code := reply.Code
+		switch code {
+		case "unknown_verb", "unsupported", "precondition_failed", "locked", "rate_limited", "not_found", "unauthenticated", "forbidden", "bad_request", "invalid_argument", "conflict", "interrupted", "deadline_exceeded", "agent_error":
+		default:
+			code = "agent_unavailable"
+		}
+		render(w, status, view{Page: "/error", Message: code + ": " + http.StatusText(status) + ". Refresh the page before retrying. No success was confirmed."})
 		return nil, false
 	}
 	raw, e := json.Marshal(reply.Data)

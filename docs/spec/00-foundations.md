@@ -303,6 +303,11 @@ object_key = the resource a job serializes on (see the site rule below)
 - `reconcile{scope?}` re-renders derived config from the DB and reloads; heals drift and
   half-created state. Config files are **derived artifacts**, never parsed back into the DB.
 
+**Durable MFA admission.** Dispatch snapshots a successful MFA gate in the existing job authority
+columns as specified in 02's worker admission clarification. User/local-root admission is distinct
+from a token automation grant; the worker never requires an expired or rotated session to remain
+live. This changes no schedule automation policy and adds no migration.
+
 **Executor binding (how a slow verb runs).** A slow verb's `Verb.Run` (F13) **validates args,
 generates any new id, persists the row (e.g. a `sites` row in `state='creating'`), writes that id into
 the job's `args_json`, and enqueues** (returning `{job}`); the **worker** calls the same verb's
@@ -411,7 +416,7 @@ Record(Event) error                                    -- fail-closed: see sinks
   Audit is invariant 7: a privileged **mutation** must not be reported complete if its record could
   not be durably written. Reads are not gated.
 - **Outcome stays `{ok, refused, error}`** — never add new outcome values for auth/queue phases.
-  Where it matters, the **stage** goes in `detail_json` as `detail.stage ∈ {authz, enqueue, exec,
+  Where it matters, the **stage** goes in `detail_json` as `detail.stage ∈ {authz, resolve, enqueue, exec,
   claim}`. So an authorization refusal is `outcome=refused, detail.stage=authz`; a worker failure is
   `outcome=error, detail.stage=exec`.
 - **Required events:** a pre-authorization **refusal** event for any denied attempt (so denials are on
@@ -462,6 +467,40 @@ Record(Event) error                                    -- fail-closed: see sinks
   the installer and re-made by the agent if missing; **no `LogsDirectory=`** in the unit (systemd
   re-chowns an ExecDirectory on every start and fails against `chattr +a` — BHPanel incident).
 - Secrets are redacted before an event is written (F12 redaction helper).
+- **Resolved audit identity projection (ADR-0009).** New dispatch records carry
+  `detail.principal`, independent of the untrusted `actor` label. Its `kind` is `user`, `anon`,
+  `token`, `local-root`, or `unresolved`. Successful session resolution supplies `session_id`
+  and, for authenticated users, `user_id`; PAT resolution supplies only `token_id` because the
+  resolver does not provide a resolved user identity for PATs. These are agent-resolved row IDs, never the presented credential, token
+  secret, hash, sealed input or private bytes. Local root uses `{kind:"local-root"}`. Missing or
+  failed resolution uses `{kind:"unresolved"}` without deriving identity from actor or input IDs.
+  Capture occurs after session resolution and before argument decoding, authorization refusals
+  and execution; malformed arguments retain a successfully resolved principal. Unknown or
+  unavailable verbs rejected before resolution explicitly remain unresolved.
+  Admission and dispatch completion preserve the incoming principal, not a newly minted identity.
+  Queue enqueue and terminal execution records project existing durable `jobs.created_by` and
+  `role`: local-root sentinel, token ID for stored token authority, otherwise user session ID.
+  The existing job snapshot has no user ID column, so queued records omit `user_id` rather than
+  inventing one or consulting an expired/revoked live session. Correlate their `job_id` to the
+  dispatch records for the full admission identity. This projection uses existing `detail_json`;
+  no migration or DDL change is authorized or needed. Old replayed records remain unchanged.
+  Typed trusted principal fields bypass only key-name redaction for `token_id`; their string
+  values still undergo secret-shape redaction, and arbitrary detail retains normal redaction.
+  File-first mirroring/replay, sticky failure gates and actor-label semantics are unchanged.
+- **Phase-3 object attribution clarification.** Authorization precedes resource lookups, including
+  lookups used for audit attribution. Before authorization, `detail.stage='authz'` identifies a
+  refusal; `object_key` may identify only a validated resource ID supplied in the request
+  (`site:<site_id>`, `domain:<domain_id>`, `redirect:<redirect_id>`) or a validated create name.
+  Otherwise it is empty, never a fabricated parent or the incomplete key `site:`. The request key
+  does not assert existence or parent resolution. After registry role/scope/MFA authorization and
+  argument validation, a shared dispatcher resolution step may read persisted parent bindings.
+  Child-removal admission and completion then use `site:<persisted_site_id>`, as do their queued
+  events; resolution failures retain the safe request key with `detail.stage='resolve'`.
+  Synchronous `ssl.auto_set` admission and completion use `site:<site_id>`. Durable admission must
+  still precede every mutation; resolution is read-only and cannot bypass registry authorization.
+  Existing sticky fail-closed audit behavior, actor-label semantics and authenticated roles remain
+  unchanged. Test seams are the production dispatcher with file/SQLite audit mirrors and the real
+  queue worker in the confined Pebble/nginx lab.
 
 ---
 

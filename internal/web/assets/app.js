@@ -24,3 +24,38 @@ function renderEnrollmentQR() {
 }
 document.addEventListener('DOMContentLoaded', renderEnrollmentQR);
 document.addEventListener('htmx:afterSwap', renderEnrollmentQR);
+
+// Error responses include MFA and authentication refusals, never hide them behind HTMX's default.
+document.addEventListener('htmx:beforeSwap', function (event) {
+  if (event.detail.xhr.status >= 400) {
+    event.detail.shouldSwap = true;
+    event.detail.isError = false;
+  }
+});
+document.addEventListener('htmx:beforeSend', function (event) {
+  const form = event.detail.elt;
+  if (form && form.matches('[data-secret-form]')) {
+    form.querySelectorAll('textarea').forEach(function (field) { field.value = ''; });
+  }
+});
+document.addEventListener('submit', function (event) {
+  const form = event.target;
+  if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+}, true);
+let jobTimer;
+function pollJob() {
+  window.clearTimeout(jobTimer);
+  const target = document.querySelector('[data-job-poll]');
+  if (!target || typeof htmx === 'undefined') return;
+  jobTimer = window.setTimeout(function () {
+    if (target.isConnected) htmx.ajax('GET', target.dataset.jobPoll, {target:'body', swap:'innerHTML'});
+  }, 2000);
+}
+document.addEventListener('DOMContentLoaded', pollJob);
+document.addEventListener('htmx:afterSwap', pollJob);
+window.addEventListener('pagehide', function () {
+  document.querySelectorAll('[data-secret-form] textarea').forEach(function (field) { field.value = ''; });
+});

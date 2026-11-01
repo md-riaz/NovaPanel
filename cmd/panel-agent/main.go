@@ -11,6 +11,7 @@ import (
 	"novapanel/internal/agent"
 	"novapanel/internal/config"
 	"novapanel/internal/exec"
+	"novapanel/internal/jobs"
 	"novapanel/internal/rpc"
 	"novapanel/internal/validate"
 	_ "novapanel/internal/verbs"
@@ -141,6 +142,9 @@ running:
 		case e := <-results:
 			consumed++
 			// A worker may stop on sticky audit failure; reads must remain available.
+			if errors.Is(e, jobs.ErrRecoveryBlocked) {
+				continue
+			}
 			if health := a.Audit.Healthy(); health != nil && errors.Is(e, health) {
 				continue
 			}

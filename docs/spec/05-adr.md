@@ -212,7 +212,8 @@ erase it.
 **Decision.** The **agent** writes an append-only audit record for every privileged action, to a
 root-owned log made append-only (`chattr +a`). The web tier cannot write or alter it. Each record
 carries the resolved identity, role, verb, object key, outcome, and code. `actor` (ADR-0004) is the
-audit label, not an authz input.
+audit label, not an authz input. The canonical `detail.principal` projection and its dispatch/queue
+phase boundaries are specified in F11; this uses the existing events detail, not a schema change.
 
 **Consequences.** (+) The record is trustworthy even after a web-tier compromise. (−) Audit is on the
 agent's write path; it must be durable and cheap. (−) Rotation must respect the append-only attribute.

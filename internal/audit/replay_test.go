@@ -100,7 +100,7 @@ func TestOpenRejectsMalformedRecords(t *testing.T) {
 }
 
 func TestOpenReplaysHistoricalRecords(t *testing.T) {
-	for _, detail := range []string{"", `,"detail":null`, `,"detail":{}`, `,"detail":{"stage":"authz"}`, `,"detail":{"stage":"enqueue"}`, `,"detail":{"stage":"exec"}`, `,"detail":{"stage":"claim"}`} {
+	for _, detail := range []string{"", `,"detail":null`, `,"detail":{}`, `,"detail":{"stage":"authz"}`, `,"detail":{"stage":"resolve"}`, `,"detail":{"stage":"enqueue"}`, `,"detail":{"stage":"exec"}`, `,"detail":{"stage":"claim"}`} {
 		t.Run(detail, func(t *testing.T) {
 			dir := t.TempDir()
 			s, err := store.Open(filepath.Join(dir, "db"))

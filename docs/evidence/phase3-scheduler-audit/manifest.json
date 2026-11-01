@@ -1,0 +1,9 @@
+{
+  "sha": "0fc5c1d1e7321d5746df6cd0139bae07f4aa08ac",
+  "base_source_archive_sha256": "d1d538adac431e5e79c00f6dd10aefe47e540f9c80067e70ea6f2541a69e1b74",
+  "acceptance_binary_sha256": "d4f6c6c000d4dd171ede9875b5fda3a8984b5f9f285aa54742e7f96029f97ace",
+  "pebble_image": "ghcr.io/letsencrypt/pebble@sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199",
+  "exit": 0,
+  "network": "none; loopback only; HTTP01 validation port override 8080",
+  "scope": "no host mounts, services, public CA or ports; test-only additions to pinned source"
+}

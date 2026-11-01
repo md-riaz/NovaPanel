@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"novapanel/internal/audit"
 	"time"
 )
 
@@ -34,6 +35,18 @@ func callerIdentity(c Caller) string {
 		return "local-root"
 	}
 	return ""
+}
+func callerPrincipal(c Caller) audit.Principal {
+	if c.Kind == "token" || c.Role == "token" {
+		return audit.Principal{Kind: "token", TokenID: c.Session}
+	}
+	if c.Kind == "user" || c.Kind == "anon" {
+		return audit.Principal{Kind: c.Kind, UserID: c.UserID, SessionID: c.Session}
+	}
+	if callerIdentity(c) == "local-root" {
+		return audit.Principal{Kind: "local-root"}
+	}
+	return audit.Principal{Kind: "unresolved"}
 }
 func CallerFrom(ctx context.Context) Caller { c, _ := ctx.Value(callerKey{}).(Caller); return c }
 func RootCaller(uid uint32) Caller {
