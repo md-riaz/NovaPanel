@@ -56,8 +56,10 @@ func (q *Queue) enqueueOperation(ctx context.Context, r store.OperationRequest, 
 			return out, err
 		}
 	}
-	q.operationMu.Lock()
-	defer q.operationMu.Unlock()
+	// Recovery excludes all admissions, but unrelated admissions may wait on
+	// their object locks independently. Keep this guard before any object lock.
+	q.operationMu.RLock()
+	defer q.operationMu.RUnlock()
 	if !q.operationsReady {
 		return out, ErrRecoveryBlocked
 	}
