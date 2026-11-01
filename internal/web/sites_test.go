@@ -13,6 +13,7 @@ func TestConsoleMutationsCanonicalArgs(t *testing.T) {
 		path, body, verb string
 		want             map[string]any
 	}{
+		{"/sites/SITE/php", "version=8.3&memory_mb=512&upload_mb=100&max_exec_sec=120&hardened=true", "php.set", map[string]any{"site_id": "SITE", "version": "8.3", "limits": map[string]any{"memory_mb": 512, "upload_mb": 100, "max_exec_sec": 120}}},
 		{"/sites/create", "name=demo&type=static&primary_domain=example.test&evil=ignore", "site.create", map[string]any{"name": "demo", "type": "static", "primary_domain": "example.test"}},
 		{"/sites/SITE/update", "primary_domain_id=DOMAIN", "site.update", map[string]any{"site_id": "SITE", "primary_domain_id": "DOMAIN"}},
 		{"/sites/SITE/update", "maintenance=false", "site.update", map[string]any{"site_id": "SITE", "maintenance": false}},

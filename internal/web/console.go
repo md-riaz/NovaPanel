@@ -13,6 +13,8 @@ var consoleRoutes = []route{
 	{"GET", "/sites/{siteID}", "user", "site.get"},
 	{"GET", "/sites/{siteID}/ssl", "user", "ssl.status"},
 	{"GET", "/jobs/{jobID}", "user", "job.status"},
+	{"GET", "/sites/{siteID}/php/jobs/{jobID}", "user", "job.status"},
+	{"POST", "/sites/{siteID}/php", "user", "php.set"},
 	{"POST", "/sites/create", "user", "site.create"},
 	{"POST", "/sites/{siteID}/update", "user", "site.update"},
 	{"POST", "/sites/{siteID}/delete", "user", "site.delete"},
@@ -32,6 +34,7 @@ type consoleView struct {
 	SiteID   string
 	Section  string
 	Writable bool
+	PollURL  string
 }
 
 func isConsole(path string) bool {
@@ -64,6 +67,17 @@ func (s *server) console(w http.ResponseWriter, r *http.Request, c RPCClient, rt
 		return
 	}
 	cv.Data = data
+	if rt.verb == "job.status" && cv.SiteID != "" && data["verb"] == "php.set" && data["state"] == "done" {
+		cv.Data, ok = call(w, r, c, "site.get", map[string]any{"site_id": cv.SiteID}, token)
+		if !ok {
+			return
+		}
+		cv.Section = "site.get"
+		v.Message = "PHP settings job completed. Showing persisted settings."
+	}
+	if rt.verb == "job.status" && cv.SiteID != "" && cv.Section == "job.status" {
+		cv.PollURL = "/sites/" + cv.SiteID + "/php/jobs/" + chi.URLParam(r, "jobID")
+	}
 	status := 200
 	if r.Method == "POST" {
 		if rt.verb == "ssl.auto_set" {
@@ -81,6 +95,9 @@ func (s *server) console(w http.ResponseWriter, r *http.Request, c RPCClient, rt
 			}
 			cv.Section = "job.status"
 			cv.Data = job
+			if rt.verb == "php.set" {
+				cv.PollURL = "/sites/" + cv.SiteID + "/php/jobs/" + fmt.Sprint(job["id"])
+			}
 			status = 202
 		}
 	}
@@ -122,6 +139,23 @@ func consoleArgs(verb, site string, r *http.Request) (map[string]any, error) {
 		return nil
 	}
 	switch verb {
+	case "php.set":
+		if err := required("version"); err != nil {
+			return nil, err
+		}
+		limits := map[string]any{}
+		for _, name := range []string{"memory_mb", "upload_mb", "max_exec_sec"} {
+			values := r.PostForm[name]
+			if len(values) != 1 {
+				return nil, fmt.Errorf("%s required", name)
+			}
+			n, err := strconv.Atoi(values[0])
+			if err != nil {
+				return nil, fmt.Errorf("invalid %s", name)
+			}
+			limits[name] = n
+		}
+		args["limits"] = limits
 	case "site.create":
 		if err := required("type", "primary_domain"); err != nil {
 			return nil, err

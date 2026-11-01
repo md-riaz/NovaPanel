@@ -27,13 +27,13 @@ func TestPHPPersistedLimitsView(t *testing.T) {
 			if w.Code != 200 {
 				t.Fatalf("%d %s", w.Code, w.Body.String())
 			}
-			for _, text := range []string{"PHP desired settings", "Version: 8.3", "Memory: 512 MiB", "Upload: 100 MiB", "Execution time: 120 seconds", "PHP settings cannot be changed until runtime publication is available."} {
+			for _, text := range []string{"PHP desired settings", "Version: 8.3", "Memory: 512 MiB", "Upload: 100 MiB", "Execution time: 120 seconds"} {
 				if !strings.Contains(w.Body.String(), text) {
 					t.Errorf("missing %q", text)
 				}
 			}
-			if strings.Contains(w.Body.String(), `action="/sites/SITE/php"`) {
-				t.Fatal("unavailable PHP mutation exposed")
+			if strings.Contains(w.Body.String(), `action="/sites/SITE/php"`) != (role != "read_only") {
+				t.Fatal("PHP form role mismatch")
 			}
 			if len(f.rpcCalls) != 2 {
 				t.Fatal(f.rpcCalls)
