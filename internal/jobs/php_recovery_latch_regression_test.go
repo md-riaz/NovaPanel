@@ -30,6 +30,9 @@ func TestPHPRecoveryRequiredClosesQueueAdmission(t *testing.T) {
 	if err = q.PrepareOperations(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if err = q.PrepareStartup(ctx); err != nil {
+		t.Fatal(err)
+	}
 	memory := 512
 	r, err := q.EnqueueOperation(ctx, store.OperationRequest{Kind: store.PHPSet, SiteID: sid, PHP: &php.SetRequest{SiteID: sid, Version: version, Limits: php.LimitsPatch{MemoryMB: &memory}}}, nil)
 	if err != nil {
@@ -56,6 +59,9 @@ func TestPHPRecoveryRequiredClosesQueueAdmission(t *testing.T) {
 	unchanged, err := s.GetJob(ctx, other.Job.ID)
 	if err != nil || unchanged.State != "queued" {
 		t.Fatalf("latched job state changed: %+v %v", unchanged, err)
+	}
+	if err = q.PrepareStartup(ctx); err == nil {
+		t.Fatal("startup reported ready after unresolved PHP recovery")
 	}
 	if _, err = q.Enqueue(ctx, "reconcile", map[string]any{}, "system"); err == nil {
 		t.Fatal("queue admitted mutation after PHP recovery refusal")
