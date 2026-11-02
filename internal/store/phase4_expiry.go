@@ -38,7 +38,7 @@ func (s *Store) failOperation(ctx context.Context, jid, code string, restored bo
 		if e = affected(r, e); e != nil {
 			return e
 		}
-		if code == "interrupted" && !expired {
+		if code == "interrupted" && !expired && !restored {
 			return nil
 		}
 		if _, e = tx.ExecContext(ctx, "DELETE FROM job_claims WHERE job_id=?", jid); e != nil {
