@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"novapanel/internal/store"
 	"sync"
 )
@@ -19,7 +20,7 @@ func (k *keyedLock) lockSet(keys []string) func() {
 }
 
 type lockRef struct {
-	mu   sync.Mutex
+	gate chan struct{}
 	refs int
 }
 type keyedLock struct {
@@ -28,25 +29,45 @@ type keyedLock struct {
 }
 
 func (k *keyedLock) lock(key string) func() {
+	release, err := k.lockContext(context.Background(), key)
+	if err != nil {
+		panic(err)
+	}
+	return release
+}
+func (k *keyedLock) lockContext(ctx context.Context, key string) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	k.mu.Lock()
 	if k.keys == nil {
 		k.keys = make(map[string]*lockRef)
 	}
 	r := k.keys[key]
 	if r == nil {
-		r = &lockRef{}
+		r = &lockRef{gate: make(chan struct{}, 1)}
 		k.keys[key] = r
 	}
 	r.refs++
 	k.mu.Unlock()
-	r.mu.Lock()
-	return func() {
-		r.mu.Unlock()
+	drop := func() {
 		k.mu.Lock()
 		r.refs--
 		if r.refs == 0 {
 			delete(k.keys, key)
 		}
 		k.mu.Unlock()
+	}
+	select {
+	case r.gate <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-r.gate
+			drop()
+			return nil, err
+		}
+		return func() { <-r.gate; drop() }, nil
+	case <-ctx.Done():
+		drop()
+		return nil, ctx.Err()
 	}
 }

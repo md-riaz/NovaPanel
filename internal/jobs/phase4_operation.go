@@ -178,7 +178,10 @@ func (q *Queue) enqueueOperation(ctx context.Context, r store.OperationRequest, 
 	// Discover and snapshot attached identities while holding the same site lock
 	// used by attachment and the worker. The worker reacquires the full durable set.
 	if r.Kind == store.SiteDelete || r.Kind == store.PHPSet {
-		release := q.locks.lock("site:" + r.SiteID)
+		release, err := q.locks.lockContext(ctx, "site:"+r.SiteID)
+		if err != nil {
+			return out, err
+		}
 		defer release()
 	}
 	if _, e = s.PrepareOperation(ctx, j, store.JobClaim{JobID: jid, ClaimHash: claimHash(text)}, r, nonce, ciphertext); e != nil {
