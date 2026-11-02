@@ -10,6 +10,9 @@ import (
 // PrepareOperations is a synchronous startup boundary, before consumers are wired.
 // Failed recovery keeps admission closed; retry requires a new startup pass.
 func (q *Queue) PrepareOperations(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	q.operationMu.Lock()
 	defer q.operationMu.Unlock()
 	if err := ctx.Err(); err != nil {
