@@ -63,7 +63,9 @@ func (q *Queue) PrepareStartup(ctx context.Context) error {
 		return err
 	}
 	if q.startupReady {
-		q.operationMu.RLock()
+		if err := q.operationMu.RLockContext(ctx); err != nil {
+			return err
+		}
 		ready := q.operationsReady
 		q.operationMu.RUnlock()
 		if _, ok := q.store.(operationStore); ok && !ready {

@@ -13,7 +13,9 @@ func (q *Queue) PrepareOperations(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	q.operationMu.Lock()
+	if err := q.operationMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer q.operationMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err

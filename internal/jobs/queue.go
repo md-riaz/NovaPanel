@@ -39,7 +39,7 @@ type Queue struct {
 	sealer          Sealer
 	audit           Auditor
 	clock           Clock
-	operationMu     sync.RWMutex
+	operationMu     operationGuard
 	operationsReady bool
 	mu              sync.Mutex
 	runner          func(context.Context, *Job) error
