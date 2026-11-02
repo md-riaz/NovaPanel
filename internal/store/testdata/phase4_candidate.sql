@@ -31,7 +31,7 @@ CREATE TABLE wordpress_bindings (
 );
 CREATE TABLE phase4_operations (
   job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE RESTRICT,
-  kind TEXT NOT NULL CHECK(kind IN ('database_create','database_rotate','dbuser_create','wordpress_install','site_delete','database_delete','dbuser_delete')),
+  kind TEXT NOT NULL CHECK(kind IN ('database_create','database_rotate','dbuser_create','wordpress_install','site_delete','database_delete','dbuser_delete','php_set')),
   site_id TEXT,
   db_id TEXT,
   checkpoint TEXT NOT NULL CHECK(checkpoint IN ('prepared','db_applied','config_published','verified','done','expired')),
