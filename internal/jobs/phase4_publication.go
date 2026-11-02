@@ -74,6 +74,9 @@ func (q *Queue) finishPublication(ctx context.Context, j Job) (bool, error) {
 	}
 	p, err := s.PreparePublicationAudit(ctx, j.ID, intent, final)
 	if err != nil {
+		if op.Kind == store.PHPSet && (op.Checkpoint == "config_published" || op.Checkpoint == "verified") {
+			return true, q.latchPublication(errors.Join(ErrRecoveryBlocked, err))
+		}
 		return true, operationError(err)
 	}
 	if err = q.publicationRecord(j, p.IntentEventID, "intent", "ok", ""); err != nil {
@@ -111,6 +114,9 @@ func (q *Queue) finishPublication(ctx context.Context, j Job) (bool, error) {
 			}
 			if e = q.publicationRecord(j, failure.FailureEventID, "not_committed", "error", failure.FailureCode); e != nil {
 				return true, e
+			}
+			if committed.Kind == store.PHPSet {
+				return true, q.latchPublication(errors.Join(ErrRecoveryBlocked, err))
 			}
 			if code == "agent_error" {
 				return true, q.latchPublication(err)
