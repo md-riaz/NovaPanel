@@ -34,6 +34,7 @@ type Queue struct {
 	configCustody   string // trusted startup dependency, immutable while running
 	admission       func() error
 	startupReady    bool
+	startupMu       sync.Mutex
 	store           Persistence
 	sealer          Sealer
 	audit           Auditor
