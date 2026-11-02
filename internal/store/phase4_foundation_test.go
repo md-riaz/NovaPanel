@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -90,8 +91,11 @@ func TestPhase4ProductionMigration(t *testing.T) {
 	if got := fmt.Sprintf("%x", sha256.Sum256(production)); got != hashes["0006"] {
 		t.Fatalf("Phase 4 migration hash = %s, manifest = %s", got, hashes["0006"])
 	}
-	if string(candidate) != string(production) {
-		t.Fatal("production DDL differs from approved candidate")
+	// The candidate describes the resulting schema; 0006 remains the shipped DDL.
+	const oldKinds = "'site_delete','database_delete','dbuser_delete'"
+	const newKinds = oldKinds + ",'php_set'"
+	if strings.Count(string(production), oldKinds) != 1 || string(candidate) != strings.Replace(string(production), oldKinds, newKinds, 1) {
+		t.Fatal("candidate differs from shipped DDL beyond the PHP operation kind")
 	}
 	phase4Exec(t, s.db.raw, "INSERT INTO settings VALUES('phase4_upgrade','true')")
 	if err := s.Close(); err != nil {
