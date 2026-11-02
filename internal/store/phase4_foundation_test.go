@@ -68,8 +68,8 @@ func TestPhase4ProductionMigration(t *testing.T) {
 			s.Close()
 		}
 	}()
-	if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations"); n != 6 {
-		t.Fatalf("want six production migrations, got %d", n)
+	if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations"); n != 7 {
+		t.Fatalf("want seven production migrations, got %d", n)
 	}
 	candidate, err := os.ReadFile("testdata/phase4_candidate.sql")
 	if err != nil {
