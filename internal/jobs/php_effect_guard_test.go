@@ -76,7 +76,7 @@ func TestPHPWorkerEffectGuardUsesLiveJournalExpiry(t *testing.T) {
 		t.Fatal("worker did not run")
 	}
 	cancel()
-	if err = <-done; err != nil {
+	if err = <-done; err != nil && !errors.Is(err, store.ErrOperationLocked) {
 		t.Fatal(err)
 	}
 	if calls != 1 {

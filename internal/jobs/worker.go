@@ -151,10 +151,10 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 		return nil
 	} // leave running for restart's effectful/idempotent recovery
 	if errors.Is(err, nginx.ErrPHPRecoveryRequired) {
-		return errors.Join(ErrRecoveryBlocked, err)
+		return q.latchPublication(errors.Join(ErrRecoveryBlocked, err))
 	}
 	if phpRecovery && !errors.Is(err, nginx.ErrPHPOriginalRestored) {
-		return errors.Join(ErrRecoveryBlocked, err)
+		return q.latchPublication(errors.Join(ErrRecoveryBlocked, err))
 	}
 	if isOperation {
 		err = operationError(err)
