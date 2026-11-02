@@ -16,7 +16,10 @@ func (q *Queue) SetStartupRecovery(prepare func(context.Context) (*Job, error), 
 }
 
 func (q *Queue) recoverPublication(ctx context.Context, j Job) error {
-	unlock := q.locks.lock(j.ObjectKey)
+	unlock, err := q.locks.lockContext(ctx, j.ObjectKey)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	if err := q.healthy(); err != nil {
 		return err
@@ -27,7 +30,6 @@ func (q *Queue) recoverPublication(ctx context.Context, j Job) error {
 	if !ok {
 		return errors.New("jobs: TLS recovery unavailable")
 	}
-	var err error
 	j, err = s.ResumeTLSJob(ctx, j, q.clock.Now())
 	if err != nil {
 		return err
