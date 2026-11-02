@@ -44,6 +44,17 @@ func TestExpiredPHPPeriodicRecoveryRefusalClosesQueue(t *testing.T) {
 	if err = q.expireOperations(ctx); !errors.Is(err, store.ErrOperationLocked) {
 		t.Fatalf("missing expired journal block: %v", err)
 	}
+	j, err := s.GetJob(ctx, r.Job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = q.execute(ctx, j); err == nil {
+		t.Fatal("latched queue executed another job")
+	}
+	unchanged, err := s.GetJob(ctx, r.Job.ID)
+	if err != nil || unchanged.State != "queued" {
+		t.Fatalf("latched job was started: %+v %v", unchanged, err)
+	}
 	if _, err = q.Enqueue(ctx, "reconcile", map[string]any{}, "system"); err == nil {
 		t.Fatal("queue admitted new work after expiry recovery refusal")
 	}
