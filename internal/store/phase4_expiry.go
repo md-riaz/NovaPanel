@@ -28,6 +28,9 @@ func (s *Store) failOperation(ctx context.Context, jid, code string, restored bo
 			return ErrSitePrecondition
 		}
 		expired := op.Checkpoint == "expired" || now >= op.Expires
+		if op.Kind == PHPSet && !op.Reconciled && expired {
+			return ErrOperationLocked
+		}
 		if expired {
 			code = "interrupted"
 		}

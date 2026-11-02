@@ -36,6 +36,16 @@ func TestPHPExpiryRetainsRecoveryBlockAfterReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	clock.now = op.Expires
+	if _, err = s.StartJob(ctx, jid, clock.now); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.FailOperation(ctx, jid, "interrupted"); !errors.Is(err, ErrOperationLocked) {
+		t.Fatalf("expired PHP failure must retain recovery journal: %v", err)
+	}
+	still, err := s.LoadOperation(ctx, jid)
+	if err != nil || still.Checkpoint != "prepared" {
+		t.Fatalf("failure destroyed recovery journal: %+v %v", still, err)
+	}
 	if _, err = s.ExpireOperations(ctx); !errors.Is(err, ErrOperationLocked) {
 		t.Fatalf("expired PHP must block recovery admission: %v", err)
 	}
