@@ -24,11 +24,11 @@ func (s *Store) failOperation(ctx context.Context, jid, code string, restored bo
 			return e
 		}
 		now := s.clock.Now()
-		if restored && (op.Kind != PHPSet || op.Checkpoint == "done" || op.Checkpoint == "expired" || now >= op.Expires) {
+		if restored && (op.Kind != PHPSet || op.Checkpoint == "done" || op.Checkpoint == "expired") {
 			return ErrSitePrecondition
 		}
 		expired := op.Checkpoint == "expired" || now >= op.Expires
-		if op.Kind == PHPSet && !op.Reconciled && expired {
+		if op.Kind == PHPSet && !op.Reconciled && expired && !restored {
 			return ErrOperationLocked
 		}
 		if expired {

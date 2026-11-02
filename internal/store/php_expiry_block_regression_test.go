@@ -49,6 +49,16 @@ func TestPHPExpiryRetainsRecoveryBlockAfterReopen(t *testing.T) {
 	if _, err = s.ExpireOperations(ctx); !errors.Is(err, ErrOperationLocked) {
 		t.Fatalf("expired PHP must block recovery admission: %v", err)
 	}
+	if err = s.FailRestoredPHP(ctx, jid, "interrupted"); err != nil {
+		t.Fatalf("verified restoration must reconcile even at deadline: %v", err)
+	}
+	still, err = s.LoadOperation(ctx, jid)
+	if err != nil || still.Checkpoint != "expired" || !still.Reconciled {
+		t.Fatalf("verified restoration not reconciled: %+v %v", still, err)
+	}
+	if _, err = s.ExpireOperations(ctx); err != nil {
+		t.Fatalf("restored PHP must not block: %v", err)
+	}
 	if err = s.Tx(ctx, func(tx *sql.Tx) error {
 		_, e := tx.ExecContext(ctx, "UPDATE phase4_operations SET checkpoint='expired',reconciled=0 WHERE job_id=?", jid)
 		return e
