@@ -54,6 +54,12 @@ func (q *Queue) SetMutationAdmission(check func() error) { q.admission = check }
 // PrepareStartup runs recovery synchronously before the daemon publishes listeners.
 func (q *Queue) PrepareStartup(ctx context.Context) error {
 	if q.startupReady {
+		q.operationMu.RLock()
+		ready := q.operationsReady
+		q.operationMu.RUnlock()
+		if _, ok := q.store.(operationStore); ok && !ready {
+			return ErrRecoveryBlocked
+		}
 		return q.healthy()
 	}
 	// Refuse even recovery mutations if the audit sinks have failed.
