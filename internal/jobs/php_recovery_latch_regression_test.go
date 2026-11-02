@@ -36,8 +36,26 @@ func TestPHPRecoveryRequiredClosesQueueAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	q.SetRunner(func(context.Context, *Job) error { return nginx.ErrPHPRecoveryRequired })
+	otherSite := "01K8WMXZF57CGNZKX1FZ38DZMD"
+	if _, err = s.CreateSite(ctx, store.Site{ID: otherSite, Name: "other", Type: "static", Docroot: "/srv/sites/other/public"}, store.Domain{ID: "01K8WMXZF57CGNZKX1FZ38DZME", FQDN: "other.example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.CreateDatabasePrimary(ctx, store.DatabasePrimary{ID: "01K8WMXZF57CGNZKX1FZ38DZMF", UserID: "01K8WMXZF57CGNZKX1FZ38DZMG", SiteID: otherSite}); err != nil {
+		t.Fatal(err)
+	}
+	other, err := q.Enqueue(ctx, "site.delete", map[string]any{}, "site:"+otherSite)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err = q.execute(ctx, r.Job); !errors.Is(err, ErrRecoveryBlocked) {
 		t.Fatalf("expected recovery block: %v", err)
+	}
+	if err = q.execute(ctx, other.Job); err == nil {
+		t.Fatal("latched queue processed unsupported job")
+	}
+	unchanged, err := s.GetJob(ctx, other.Job.ID)
+	if err != nil || unchanged.State != "queued" {
+		t.Fatalf("latched job state changed: %+v %v", unchanged, err)
 	}
 	if _, err = q.Enqueue(ctx, "reconcile", map[string]any{}, "system"); err == nil {
 		t.Fatal("queue admitted mutation after PHP recovery refusal")

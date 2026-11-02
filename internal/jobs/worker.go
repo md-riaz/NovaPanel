@@ -81,6 +81,9 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 	if keyErr != nil {
 		var coded *rpcerr.CodedError
 		if errors.As(keyErr, &coded) && coded.Code == "unsupported" {
+			if err := q.healthy(); err != nil {
+				return err
+			}
 			started, err := q.store.StartJob(ctx, j.ID, q.clock.Now())
 			if err != nil {
 				return err
