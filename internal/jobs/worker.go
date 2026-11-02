@@ -174,8 +174,14 @@ func (q *Queue) finish(ctx context.Context, j Job, err error) error {
 	// outcome. CompleteOperation retains its transaction-local checks.
 	if err == nil {
 		if s, ok := q.store.(operationStore); ok {
-			if _, loadErr := s.LoadOperation(ctx, j.ID); loadErr == nil {
+			if op, loadErr := s.LoadOperation(ctx, j.ID); loadErr == nil {
 				if checkErr := s.CheckOperation(ctx, j.ID); checkErr != nil {
+					// A PHP executor may already have published live bytes. Its
+					// durable original must remain available for restoration; a
+					// generic failure would otherwise discard recovery authority.
+					if op.Kind == store.PHPSet && (op.Checkpoint == "config_published" || op.Checkpoint == "verified") {
+						return errors.Join(ErrRecoveryBlocked, checkErr)
+					}
 					mapped := operationError(checkErr)
 					var coded *rpcerr.CodedError
 					if !errors.As(mapped, &coded) {
