@@ -19,7 +19,10 @@ func (q *Queue) lockAttachedDatabases(ctx context.Context, siteID string) ([]sto
 	if !ok {
 		return nil, nil, errors.New("jobs: attached database discovery unavailable")
 	}
-	release := q.locks.lock("site:" + siteID)
+	release, err := q.locks.lockContext(ctx, "site:"+siteID)
+	if err != nil {
+		return nil, nil, err
+	}
 	before, err := s.AttachedDatabases(ctx, siteID)
 	release()
 	if err != nil {
@@ -29,7 +32,10 @@ func (q *Queue) lockAttachedDatabases(ctx context.Context, siteID string) ([]sto
 	for _, db := range before {
 		keys = append(keys, "db:"+db.ID)
 	}
-	release = q.locks.lockSet(keys)
+	release, err = q.locks.lockSetContext(ctx, keys)
+	if err != nil {
+		return nil, nil, err
+	}
 	after, err := s.AttachedDatabases(ctx, siteID)
 	if err == nil && !slices.Equal(before, after) {
 		err = store.ErrSiteConflict
@@ -48,7 +54,7 @@ func (q *Queue) lockJob(ctx context.Context, j Job) (func(), error) {
 	if s, ok := q.store.(operationStore); ok {
 		op, err := s.LoadOperation(ctx, j.ID)
 		if err == nil {
-			return q.locks.lockSet(op.Keys()), nil
+			return q.locks.lockSetContext(ctx, op.Keys())
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
@@ -70,5 +76,5 @@ func (q *Queue) lockJob(ctx context.Context, j Job) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	return q.locks.lockSet(keys), nil
+	return q.locks.lockSetContext(ctx, keys)
 }

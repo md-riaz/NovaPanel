@@ -7,16 +7,30 @@ import (
 )
 
 func (k *keyedLock) lockSet(keys []string) func() {
+	release, err := k.lockSetContext(context.Background(), keys)
+	if err != nil {
+		panic(err)
+	}
+	return release
+}
+
+func (k *keyedLock) lockSetContext(ctx context.Context, keys []string) (func(), error) {
 	keys = store.OrderedOperationKeys(keys)
 	releases := make([]func(), 0, len(keys))
-	for _, key := range keys {
-		releases = append(releases, k.lock(key))
-	}
-	return func() {
+	unlock := func() {
 		for i := len(releases) - 1; i >= 0; i-- {
 			releases[i]()
 		}
 	}
+	for _, key := range keys {
+		release, err := k.lockContext(ctx, key)
+		if err != nil {
+			unlock()
+			return nil, err
+		}
+		releases = append(releases, release)
+	}
+	return unlock, nil
 }
 
 type lockRef struct {
