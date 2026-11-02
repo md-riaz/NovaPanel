@@ -180,7 +180,7 @@ func (q *Queue) finish(ctx context.Context, j Job, err error) error {
 					// durable original must remain available for restoration; a
 					// generic failure would otherwise discard recovery authority.
 					if op.Kind == store.PHPSet && (op.Checkpoint == "config_published" || op.Checkpoint == "verified") {
-						return errors.Join(ErrRecoveryBlocked, checkErr)
+						return q.latchPublication(errors.Join(ErrRecoveryBlocked, checkErr))
 					}
 					mapped := operationError(checkErr)
 					var coded *rpcerr.CodedError

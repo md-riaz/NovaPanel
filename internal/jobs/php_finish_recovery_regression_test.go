@@ -55,4 +55,7 @@ func TestPHPFinishEligibilityFailurePreservesRecovery(t *testing.T) {
 	if err != nil || j.State != "running" {
 		t.Fatalf("job must remain recoverable: %+v %v", j, err)
 	}
+	if _, err := q.Enqueue(ctx, "reconcile", map[string]any{}, "system"); err == nil {
+		t.Fatal("unrelated mutation admitted after unresolved PHP publication")
+	}
 }
