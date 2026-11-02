@@ -34,7 +34,7 @@ type Queue struct {
 	configCustody   string // trusted startup dependency, immutable while running
 	admission       func() error
 	startupReady    bool
-	startupMu       sync.Mutex
+	startupGate     chan struct{}
 	store           Persistence
 	sealer          Sealer
 	audit           Auditor
@@ -51,7 +51,7 @@ type Queue struct {
 }
 
 func NewQueue(s Persistence, sealer Sealer, log Auditor) *Queue {
-	return &Queue{store: s, sealer: sealer, audit: log, clock: realClock{}, wake: make(chan struct{}, 1)}
+	return &Queue{store: s, sealer: sealer, audit: log, clock: realClock{}, wake: make(chan struct{}, 1), startupGate: make(chan struct{}, 1)}
 }
 func (q *Queue) SetClock(c Clock) { q.clock = c }
 func (q *Queue) SetRunner(run func(context.Context, *Job) error) {

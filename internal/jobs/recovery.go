@@ -53,8 +53,12 @@ func (q *Queue) SetMutationAdmission(check func() error) { q.admission = check }
 
 // PrepareStartup runs recovery synchronously before the daemon publishes listeners.
 func (q *Queue) PrepareStartup(ctx context.Context) error {
-	q.startupMu.Lock()
-	defer q.startupMu.Unlock()
+	select {
+	case q.startupGate <- struct{}{}:
+		defer func() { <-q.startupGate }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
