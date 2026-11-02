@@ -12,6 +12,9 @@ import (
 func (q *Queue) PrepareOperations(ctx context.Context) error {
 	q.operationMu.Lock()
 	defer q.operationMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	q.operationsReady = false
 	s, ok := q.store.(interface {
 		ExpireOperations(context.Context) (int, error)
