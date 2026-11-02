@@ -222,6 +222,9 @@ func (q *Queue) expireOperations(ctx context.Context) error {
 		return e
 	}
 	_, e := s.ExpireOperations(ctx)
+	if errors.Is(e, store.ErrOperationLocked) {
+		return q.latchPublication(errors.Join(ErrRecoveryBlocked, e))
+	}
 	return e
 }
 
