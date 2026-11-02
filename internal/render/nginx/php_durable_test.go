@@ -32,9 +32,9 @@ func testPHPDurableCrash(t *testing.T, point string) {
 				t.Fatal(err)
 			}
 		}
-		_, stderr, exit, err := (runnerexec.Real{}).Run(context.Background(), os.Args[0], []string{"-test.run=^TestPHPDurableReopenRestoresOriginalAfterDeath$"}, runnerexec.RunOpts{Env: append(os.Environ(), "DURABLE_CRASH_ROOT="+root, "DURABLE_CRASH_POINT="+point), MaxOutput: 1 << 20})
+		stdout, stderr, exit, err := (runnerexec.Real{}).Run(context.Background(), os.Args[0], []string{"-test.run=^TestPHPDurableReopenRestoresOriginalAfterDeath$"}, runnerexec.RunOpts{Env: append(os.Environ(), "DURABLE_CRASH_ROOT="+root, "DURABLE_CRASH_POINT="+point), MaxOutput: 1 << 20})
 		if exit != 42 {
-			t.Fatalf("child: exit=%d err=%v stderr=%s", exit, err, stderr)
+			t.Fatalf("child: exit=%d err=%v stdout=%s stderr=%s", exit, err, stdout, stderr)
 		}
 	}
 	events := []string{}
@@ -72,7 +72,9 @@ func testPHPDurableCrash(t *testing.T, point string) {
 				return nil
 			}
 		}
-		_ = a.ApplyPHPDurable(context.Background(), p, d, binding, func(context.Context) error { os.Exit(42); return nil }, func(context.Context) error { return nil })
+		if err := a.ApplyPHPDurable(context.Background(), p, d, binding, func(context.Context) error { os.Exit(42); return nil }, func(context.Context) error { return nil }); err != nil {
+			t.Fatalf("commit not reached: %v", err)
+		}
 		t.Fatal("commit not reached")
 	}
 	committed := false
