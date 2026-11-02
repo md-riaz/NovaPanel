@@ -90,7 +90,10 @@ func (q *Queue) reconcileConfigRecords(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		release := q.locks.lockSet(op.Keys())
+		release, err := q.locks.lockSetContext(ctx, op.Keys())
+		if err != nil {
+			return err
+		}
 		err = q.reconcileConfigRecord(ctx, jid)
 		release()
 		if err != nil {

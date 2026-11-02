@@ -15,6 +15,9 @@ func (k *keyedLock) lockSet(keys []string) func() {
 }
 
 func (k *keyedLock) lockSetContext(ctx context.Context, keys []string) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	keys = store.OrderedOperationKeys(keys)
 	releases := make([]func(), 0, len(keys))
 	unlock := func() {
