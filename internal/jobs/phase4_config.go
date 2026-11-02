@@ -158,6 +158,10 @@ func runConfigIsolation(ctx context.Context, binding configcustody.ConfigBinding
 			mu.Unlock()
 			return refuse
 		}
+		if err := effectCtx.Err(); err != nil {
+			mu.Unlock()
+			return err
+		}
 		called, active = true, true
 		mu.Unlock()
 		defer func() {
