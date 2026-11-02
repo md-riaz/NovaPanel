@@ -54,7 +54,7 @@ func TestPHPSetQueuePublishesScratchConfiguration(t *testing.T) {
 	a.PHP = &agent.PHPDependencies{Pools: &php.Applier{Root: filepath.Join(root, "pool"), Runner: phpScratchRunner{}, Probe: func(context.Context, php.Desired) error { return nil }}, RecoveryRoot: filepath.Join(root, "journal"), ResolveIdentity: func(context.Context, store.Site) (uint32, uint32, error) { return 1001, 1001, nil }}
 	server := rpc.NewServer(a)
 	server.ConfigureJobs()
-	if err := a.Jobs.PrepareOperations(ctx); err != nil {
+	if err := a.PrepareStartup(ctx); err != nil {
 		t.Fatal(err)
 	}
 	const sid = "01K8WMXZF57CGNZKX1FZ38DZMA"
