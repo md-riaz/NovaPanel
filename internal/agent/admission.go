@@ -7,6 +7,9 @@ import (
 
 // PrepareStartup is synchronous; recovery audit and effects do not use RPC admission.
 func (a *Agent) PrepareStartup(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	a.CloseMutationAdmission()
 	if err := a.Jobs.PrepareStartup(ctx); err != nil {
 		return err
