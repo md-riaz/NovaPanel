@@ -54,6 +54,16 @@ func (s *Store) ExpireOperations(ctx context.Context) (count int, err error) {
 			return e
 		}
 		now := s.clock.Now()
+		// PHP publication can leave externally visible configuration behind.
+		// Do not convert it to an expired tombstone and reopen startup admission
+		// until an authorized recovery has established a safe disposition.
+		var unresolved int
+		if e := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM phase4_operations WHERE kind='php_set' AND reconciled=0 AND (checkpoint='expired' OR (checkpoint<>'done' AND expires<=?)))`, now).Scan(&unresolved); e != nil {
+			return e
+		}
+		if unresolved != 0 {
+			return ErrOperationLocked
+		}
 		rows, e := tx.QueryContext(ctx, `SELECT job_id FROM phase4_operations INDEXED BY idx_phase4_operations_expiry WHERE expires<=? AND checkpoint NOT IN ('done','expired') ORDER BY expires,job_id LIMIT 100`, now)
 		if e != nil {
 			return e
