@@ -89,7 +89,7 @@ func (s *Store) ExpireOperations(ctx context.Context) (count int, err error) {
 			if _, e = tx.ExecContext(ctx, "UPDATE phase4_operations SET checkpoint='expired',nonce=NULL,ciphertext=NULL,updated=? WHERE job_id=?", now, id); e != nil {
 				return e
 			}
-			if _, e = tx.ExecContext(ctx, "DELETE FROM job_claims WHERE job_id=?", id); e != nil {
+			if _, e = tx.ExecContext(ctx, "DELETE FROM job_claims WHERE job_id=? AND EXISTS (SELECT 1 FROM jobs WHERE id=? AND state<>'done')", id, id); e != nil {
 				return e
 			}
 			if _, e = tx.ExecContext(ctx, `UPDATE jobs SET state='failed',code='interrupted',error='operation recovery expired',updated=?,finished=? WHERE id=? AND state IN ('queued','running')`, now, now, id); e != nil {
