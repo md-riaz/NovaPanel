@@ -9,6 +9,12 @@ import (
 	"strings"
 )
 
+// WordPressDatabaseID reads the persisted site/database binding.
+func (s *Store) WordPressDatabaseID(ctx context.Context, siteID string) (id string, err error) {
+	err = s.db.QueryRowContext(ctx, "SELECT db_id FROM wordpress_bindings WHERE site_id=?", siteID).Scan(&id)
+	return
+}
+
 // GetPHPLimits reads desired metadata, never a pool file.
 func (s *Store) GetPHPLimits(ctx context.Context, id string) (v php.Limits, err error) {
 	err = s.db.QueryRowContext(ctx, "SELECT memory_mb,upload_mb,max_exec_sec FROM site_php_limits WHERE site_id=?", id).Scan(&v.MemoryMB, &v.UploadMB, &v.MaxExecSec)

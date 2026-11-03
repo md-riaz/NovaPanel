@@ -117,13 +117,21 @@ func siteGet(ctx context.Context, a *agent.Agent, args any) (any, error) {
 		// A creating/failed site can lack committed desired limits. Do not
 		// invent defaults or infer state from a pool that may not be published.
 	}
+	var wordpressDatabaseID string
+	if v.Type == "wordpress" {
+		wordpressDatabaseID, e = a.Store.WordPressDatabaseID(ctx, v.ID)
+		if e != nil && !errors.Is(e, sql.ErrNoRows) {
+			return nil, e
+		}
+	}
 	return struct {
-		Site      siteSummary    `json:"site"`
-		Domains   []siteDomain   `json:"domains"`
-		Redirects []siteRedirect `json:"redirects"`
-		Cert      any            `json:"cert"`
-		PHPLimits *php.Limits    `json:"php_limits"`
-	}{summarizeSite(v, domains), out, redirects, cert, limits}, nil
+		WordPressDatabaseID string         `json:"wordpress_database_id,omitempty"`
+		Site                siteSummary    `json:"site"`
+		Domains             []siteDomain   `json:"domains"`
+		Redirects           []siteRedirect `json:"redirects"`
+		Cert                any            `json:"cert"`
+		PHPLimits           *php.Limits    `json:"php_limits"`
+	}{wordpressDatabaseID, summarizeSite(v, domains), out, redirects, cert, limits}, nil
 }
 func siteError(e error) error {
 	switch {
