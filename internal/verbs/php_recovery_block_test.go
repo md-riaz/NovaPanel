@@ -29,6 +29,7 @@ func (phpBrokenRunner) Run(context.Context, string, []string, runner.RunOpts) ([
 // A failed rollback must not be finalized as a normal failed job: the original
 // job and its snapshot are still required for recovery after process restart.
 func TestPHPQueueBlocksOnUnresolvedRollback(t *testing.T) {
+	requireRootPHPCustody(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	root := t.TempDir()

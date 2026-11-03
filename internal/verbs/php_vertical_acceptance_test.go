@@ -27,8 +27,16 @@ func (phpScratchRunner) Run(context.Context, string, []string, runner.RunOpts) (
 	return nil, nil, 0, nil
 }
 
+func requireRootPHPCustody(t *testing.T) {
+	t.Helper()
+	if os.Geteuid() != 0 {
+		t.Skip("requires root-owned recovery custody; exercised separately in CI")
+	}
+}
+
 // This exercises the dispatcher and the real queue, not a direct executor call.
 func TestPHPSetQueuePublishesScratchConfiguration(t *testing.T) {
+	requireRootPHPCustody(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	root := t.TempDir()

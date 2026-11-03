@@ -23,6 +23,7 @@ import (
 // A terminal SQL failure occurs after the renderer has published and promoted
 // both desired files. A fresh startup must restore the original, not replay it.
 func TestPHPRecoveryAuditReplayPersistent(t *testing.T) {
+	requireRootPHPCustody(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	root := t.TempDir()

@@ -13,6 +13,9 @@ import (
 )
 
 func TestPHPDurableReopenRestoresOriginalAfterDeath(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root-owned recovery custody; exercised separately in CI")
+	}
 	root := os.Getenv("DURABLE_CRASH_ROOT")
 	if root == "" {
 		for _, point := range []string{"first", "second"} {

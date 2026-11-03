@@ -23,6 +23,7 @@ import (
 // A terminal SQL failure occurs after the renderer has published and promoted
 // both desired files. A fresh startup must restore the original, not replay it.
 func TestPHPStartupRestorationRecordsFailure(t *testing.T) {
+	requireRootPHPCustody(t)
 	for _, mode := range []string{"restore", "missing snapshot"} {
 		t.Run(mode, func(t *testing.T) { testPHPStartupRestoration(t, mode) })
 	}
