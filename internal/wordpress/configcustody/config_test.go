@@ -180,16 +180,47 @@ func TestProtectedConfigRefusesUnmanagedAndTamperedFiles(t *testing.T) {
 }
 
 func TestProtectedConfigPublicEntryRejectsWritableAncestor(t *testing.T) {
-	b, dir, seal := configFixture(t)
-	// Even under root, the production API must reject group/world-writable
-	// ancestors. The private fixture policy is not available through it.
-	if err := os.Chmod(filepath.Dir(dir), 0777); err != nil {
+	if os.Geteuid() != 0 {
+		t.Skip("production custody requires root")
+	}
+	base, err := os.MkdirTemp("/", "config-custody-test-")
+	if err != nil {
 		t.Fatal(err)
 	}
-	b.UID = 12345
-	b.GID = 12345
-	if err := PublishConfig(context.Background(), dir, b, []byte("private"), seal); err != errConfigCustody {
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+	dir := filepath.Join(base, "custody")
+	home := filepath.Join(base, "site")
+	docroot := filepath.Join(home, "public")
+	for _, path := range []string{dir, home, docroot} {
+		if err := os.Mkdir(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{home, docroot} {
+		if err := os.Chown(path, 12345, 12345); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(home, 0751); err != nil {
 		t.Fatal(err)
+	}
+	if err := os.Chmod(docroot, os.ModeSetgid|0750); err != nil {
+		t.Fatal(err)
+	}
+	seal, err := secret.New(bytes.Repeat([]byte{17}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := ConfigBinding{JobID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", SiteID: "01ARZ3NDEKTSV4RRFFQ69G5FAW", DatabaseID: "01ARZ3NDEKTSV4RRFFQ69G5FAX", AccountID: "01ARZ3NDEKTSV4RRFFQ69G5FAY", Docroot: docroot, UID: 12345, GID: 12345}
+	plain := []byte("private")
+	if err := PublishConfig(context.Background(), dir, b, plain, seal); err != nil {
+		t.Fatalf("secure baseline publish: %v", err)
+	}
+	if err := os.Chmod(base, 0777); err != nil {
+		t.Fatal(err)
+	}
+	if err := PublishConfig(context.Background(), dir, b, plain, seal); err != errConfigCustody {
+		t.Fatalf("writable ancestor: got %v", err)
 	}
 }
 
