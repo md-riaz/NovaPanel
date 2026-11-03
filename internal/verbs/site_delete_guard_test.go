@@ -27,6 +27,7 @@ func TestLegacySiteDeleteRefusesBeforeEffects(t *testing.T) {
 			defer st.Close()
 			a := agent.New()
 			a.Store = st
+			a.Jobs = jobs.NewQueue(st, nil, nil)
 			a.Cfg.SitesRoot = filepath.Join(root, "sites")
 			sid, _ := id.New()
 			did, _ := id.New()
@@ -47,7 +48,11 @@ func TestLegacySiteDeleteRefusesBeforeEffects(t *testing.T) {
 			raw, _ := json.Marshal(map[string]any{"site_id": sid, "purge_files": true})
 			server := rpc.NewServer(a)
 			reply := server.Dispatch(rpc.WithCaller(ctx, rpc.RootCaller(0)), rpc.Request{Verb: "site.delete", Args: raw})
-			if reply.OK || reply.Code != "unsupported" {
+			want := "Legacy deletion supports static sites only"
+			if tc.attached {
+				want = "Attached site deletion requires a durable journal"
+			}
+			if reply.OK || reply.Code != "unsupported" || reply.Error != want {
 				t.Fatalf("unsafe deletion admitted: %+v", reply)
 			}
 			j := jobs.Job{Args: raw}
