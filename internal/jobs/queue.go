@@ -75,6 +75,13 @@ func (q *Queue) Enqueue(ctx context.Context, verb string, args any, objectKey st
 }
 func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey string, sealed bool) (EnqueueResult, error) {
 	var result EnqueueResult
+	// Fail fast while agent startup is closed; recheck under the lease below
+	// so a concurrent close cannot admit work after this initial check.
+	if q.admission != nil {
+		if err := q.admission(); err != nil {
+			return result, err
+		}
+	}
 	ctx, release, err := q.AdmitMutation(ctx)
 	if err != nil {
 		return result, err
