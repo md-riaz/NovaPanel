@@ -55,6 +55,9 @@ func (q *Queue) SetMutationAdmission(check func() error) { q.admission = check }
 
 // PrepareStartup runs recovery synchronously before the daemon publishes listeners.
 func (q *Queue) PrepareStartup(ctx context.Context) error {
+	if err := q.rejectRecoveryReentry(ctx); err != nil {
+		return err
+	}
 	select {
 	case q.startupGate <- struct{}{}:
 		defer func() { <-q.startupGate }()
@@ -69,12 +72,22 @@ func (q *Queue) PrepareStartup(ctx context.Context) error {
 			return err
 		}
 		ready := q.operationsReady
+		blocked := q.recoveryBlocked || q.startupBlocked
 		q.operationMu.RUnlock()
-		if _, ok := q.store.(operationStore); ok && !ready {
+		if _, ok := q.store.(operationStore); blocked || (ok && !ready) {
 			return ErrRecoveryBlocked
 		}
 		return q.healthy()
 	}
+	if err := q.operationMu.LockContext(ctx); err != nil {
+		return err
+	}
+	defer q.operationMu.Unlock()
+	q.startupBlocked = true
+	leaseCtx, cancelLease := context.WithCancel(ctx)
+	lease := &mutationLease{queue: q, active: true, refs: 1, drained: make(chan struct{}), exclusive: true, ctx: leaseCtx, cancel: cancelLease}
+	ctx = context.WithValue(leaseCtx, mutationKey{}, lease)
+	defer lease.release(true)
 	// Refuse even recovery mutations if the audit sinks have failed.
 	if q.audit == nil {
 		return errors.New("jobs: audit not configured")
@@ -112,7 +125,7 @@ func (q *Queue) PrepareStartup(ctx context.Context) error {
 		}
 	}
 	if _, ok := q.store.(operationStore); ok {
-		if e := q.PrepareOperations(ctx); e != nil {
+		if e := q.prepareOperationsLocked(ctx); e != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -126,5 +139,7 @@ func (q *Queue) PrepareStartup(ctx context.Context) error {
 		return e
 	}
 	q.startupReady = true
+	q.startupBlocked = false
+	q.recoveryBlocked = false
 	return nil
 }

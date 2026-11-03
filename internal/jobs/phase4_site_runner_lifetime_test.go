@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	runner "novapanel/internal/exec"
 	"novapanel/internal/secret"
 	"novapanel/internal/store"
@@ -57,15 +59,43 @@ func TestWordPressSiteRunnerWorkerLifetime(t *testing.T) {
 	for _, child := range []bool{false, true} {
 		for _, ending := range []string{"return", "panic", "cancel"} {
 			t.Run(map[bool]string{false: "lookup", true: "active-child"}[child]+"/"+ending, func(t *testing.T) {
-				if child && os.Geteuid() != 0 {
-					t.Skip("root credential-drop fixture")
+				if child {
+					if os.Geteuid() != 0 {
+						t.Skip("root credential-drop fixture")
+					}
+					var caps [2]unix.CapUserData
+					header := unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}
+					if err := unix.Capget(&header, &caps[0]); err != nil {
+						t.Fatalf("read effective capabilities: %v", err)
+					}
+					const required = 1<<unix.CAP_SETUID | 1<<unix.CAP_SETGID
+					if caps[0].Effective&required != required {
+						t.Skip("credential-drop fixture requires effective CAP_SETUID and CAP_SETGID")
+					}
+					ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+					defer stop()
+					_, _, code, err := (runner.Real{}).Run(ctx, "/usr/bin/id", nil, runner.RunOpts{Uid: 23451, Gid: 23452})
+					if err != nil || code != 0 {
+						t.Fatalf("credential-drop preflight: exit=%d err=%v", code, err)
+					}
 				}
 				c := WithMetadata(context.Background(), Metadata{CreatedBy: "session", Role: "owner", Effectful: true})
 				s, err := store.Open(filepath.Join(t.TempDir(), "panel.db"))
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer s.Close()
+				workerStarted, workerJoined, invocationSafe := false, false, true
+				retainedDone := make(chan struct{})
+				retainedStarted := false
+				t.Cleanup(func() {
+					if (!workerStarted || workerJoined) && !retainedStarted && invocationSafe {
+						if err := s.Close(); err != nil {
+							t.Errorf("close store: %v", err)
+						}
+					} else {
+						t.Error("store left open: worker or retained calls did not exit")
+					}
+				})
 				seal, _ := secret.New(make([]byte, 32))
 				q := NewQueue(s, seal, &fakeAudit{})
 				if err = q.PrepareOperations(c); err != nil {
@@ -81,10 +111,48 @@ func TestWordPressSiteRunnerWorkerLifetime(t *testing.T) {
 				b := &runnerLifetimeBoundary{child: child, entered: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{})}
 				callDone := make(chan error, 1)
 				workerDone := make(chan error, 1)
+				invocationDone := make(chan struct{})
+				invocationStarted := make(chan struct{})
 				var retained runner.Runner
 				var original context.Context
 				run, cancel := context.WithCancel(c)
-				defer cancel()
+				released := false
+				release := func() {
+					if !released {
+						close(b.release)
+						released = true
+					}
+				}
+				t.Cleanup(func() {
+					cancel()
+					release()
+					if !workerJoined {
+						select {
+						case <-workerDone:
+							workerJoined = true
+						case <-time.After(5 * time.Second):
+							t.Error("worker did not exit during cleanup")
+						}
+					}
+					if retainedStarted {
+						select {
+						case <-retainedDone:
+							retainedStarted = false
+						case <-time.After(5 * time.Second):
+							t.Error("retained calls did not exit during cleanup")
+						}
+					}
+					select {
+					case <-invocationStarted:
+						select {
+						case <-invocationDone:
+						case <-time.After(5 * time.Second):
+							invocationSafe = false
+							t.Error("invocation did not exit during cleanup")
+						}
+					default:
+					}
+				})
 				q.SetRunner(func(w context.Context, j *Job) error {
 					r, e := q.WordPressSiteRunner(w, j.ID, b)
 					if e != nil {
@@ -92,12 +160,20 @@ func TestWordPressSiteRunnerWorkerLifetime(t *testing.T) {
 					}
 					retained, original = r, w
 					b.armed.Store(true)
+					close(invocationStarted)
 					go func() {
+						defer close(invocationDone)
 						// WithoutCancel preserves lease values but must not detach worker lifetime.
 						_, _, _, e := r.Run(context.WithoutCancel(w), map[bool]string{false: "/usr/bin/id", true: "/usr/bin/sleep"}[child], []string{"30"}, runner.RunOpts{})
 						callDone <- e
 					}()
-					<-b.entered
+					select {
+					case <-b.entered:
+					case e := <-callDone:
+						return errors.Join(errors.New("invocation ended before entry"), e)
+					case <-w.Done():
+						return w.Err()
+					}
 					if ending == "cancel" {
 						cancel()
 						<-w.Done()
@@ -107,16 +183,24 @@ func TestWordPressSiteRunnerWorkerLifetime(t *testing.T) {
 					}
 					return errors.New("worker returned")
 				})
+				workerStarted = true
 				go func() { workerDone <- q.execute(run, en.Job) }()
 				select {
 				case <-b.canceled:
+				case e := <-workerDone:
+					workerJoined = true
+					t.Fatalf("worker exited before invocation cancellation: %v", e)
 				case <-time.After(5 * time.Second):
-					close(b.release)
 					t.Fatal("admitted invocation not canceled")
 				}
 				select {
+				case <-b.entered:
+				default:
+					t.Fatal("child failed to start")
+				}
+				select {
 				case e := <-workerDone:
-					close(b.release)
+					workerJoined = true
 					t.Fatalf("worker returned before drain: %v", e)
 				default:
 				}
@@ -136,22 +220,45 @@ func TestWordPressSiteRunnerWorkerLifetime(t *testing.T) {
 					t.Error("operation locks released before drain")
 				}
 				var wg sync.WaitGroup
+				retainedResults := make(chan error, 16)
+				retainedStarted = true
 				for i := 0; i < 16; i++ {
 					wg.Add(1)
 					go func() {
 						defer wg.Done()
-						if _, _, _, e := retained.Run(context.WithoutCancel(original), "/usr/bin/id", nil, runner.RunOpts{}); e == nil {
-							t.Error("retained concurrent invocation accepted")
-						}
+						_, _, _, e := retained.Run(context.WithoutCancel(original), "/usr/bin/id", nil, runner.RunOpts{})
+						retainedResults <- e
 					}()
 				}
-				wg.Wait()
-				close(b.release)
-				if e := <-callDone; e == nil {
-					t.Error("canceled invocation succeeded")
+				go func() { wg.Wait(); close(retainedDone) }()
+				select {
+				case <-retainedDone:
+					retainedStarted = false
+					for i := 0; i < 16; i++ {
+						if <-retainedResults == nil {
+							t.Error("retained concurrent invocation accepted")
+						}
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("retained concurrent invocations did not exit before release")
 				}
-				if e := <-workerDone; e != nil {
-					t.Fatal(e)
+				release()
+				select {
+				case e := <-callDone:
+					if e == nil {
+						t.Error("canceled invocation succeeded")
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("invocation did not exit after release")
+				}
+				select {
+				case e := <-workerDone:
+					workerJoined = true
+					if e != nil {
+						t.Fatal(e)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("worker did not exit after release")
 				}
 				if got := b.effects.Load(); got != map[bool]int32{false: 0, true: 1}[child] {
 					t.Errorf("unexpected child admissions: %d", got)

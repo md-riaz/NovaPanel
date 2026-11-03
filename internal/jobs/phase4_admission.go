@@ -10,13 +10,29 @@ import (
 // PrepareOperations is a synchronous startup boundary, before consumers are wired.
 // Failed recovery keeps admission closed; retry requires a new startup pass.
 func (q *Queue) PrepareOperations(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
+	if err := q.rejectRecoveryReentry(ctx); err != nil {
 		return err
 	}
 	if err := q.operationMu.LockContext(ctx); err != nil {
 		return err
 	}
 	defer q.operationMu.Unlock()
+	if q.startupBlocked {
+		return ErrRecoveryBlocked
+	}
+	q.recoveryBlocked = true
+	leaseCtx, cancelLease := context.WithCancel(ctx)
+	lease := &mutationLease{queue: q, active: true, refs: 1, drained: make(chan struct{}), exclusive: true, ctx: leaseCtx, cancel: cancelLease}
+	ctx = context.WithValue(leaseCtx, mutationKey{}, lease)
+	defer lease.release(true)
+	err := q.prepareOperationsLocked(ctx)
+	if err == nil {
+		q.recoveryBlocked = false
+	}
+	return err
+}
+
+func (q *Queue) prepareOperationsLocked(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

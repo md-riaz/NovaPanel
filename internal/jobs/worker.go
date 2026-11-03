@@ -41,11 +41,25 @@ func (q *Queue) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-expiryTick.C:
-			if e := q.expireOperations(ctx); e != nil {
+			guardCtx, release, e := q.AdmitMutation(ctx)
+			if e == nil {
+				e = q.expireOperations(guardCtx)
+				release()
+				if e != nil && ctx.Err() == nil {
+					return e
+				}
 				if ctx.Err() != nil {
 					return nil
 				}
-				return e
+				break
+			}
+			if e != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				if !errors.Is(e, ErrRecoveryBlocked) {
+					return e
+				}
 			}
 		default:
 		}
@@ -68,7 +82,24 @@ func (q *Queue) Run(ctx context.Context) error {
 			}
 			return e
 		}
-		if e = q.execute(ctx, j); e != nil && !errors.Is(e, errPHPRestored) {
+		workCtx, release, e := q.AdmitMutation(ctx)
+		if e != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			if !errors.Is(e, ErrRecoveryBlocked) {
+				return e
+			}
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-tick.C:
+			}
+			continue
+		}
+		e = q.execute(workCtx, j)
+		release()
+		if e != nil && !errors.Is(e, errPHPRestored) {
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -77,6 +108,11 @@ func (q *Queue) Run(ctx context.Context) error {
 	}
 }
 func (q *Queue) execute(ctx context.Context, j Job) error {
+	ctx, release, err := q.AdmitMutation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	unlock, keyErr := q.lockJob(ctx, j)
 	if keyErr != nil {
 		var coded *rpcerr.CodedError
@@ -108,7 +144,7 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 	run := q.runner
 	q.mu.Unlock()
 	// Caller identity is restored exclusively from durable trusted columns.
-	err := error(nil)
+	err = nil
 	isOperation := false
 	phpRecovery := false
 	if s, ok := q.store.(operationStore); ok {

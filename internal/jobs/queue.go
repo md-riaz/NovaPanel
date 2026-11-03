@@ -41,6 +41,8 @@ type Queue struct {
 	clock           Clock
 	operationMu     operationGuard
 	operationsReady bool
+	recoveryBlocked bool
+	startupBlocked  bool
 	mu              sync.Mutex
 	runner          func(context.Context, *Job) error
 	running         bool
@@ -73,6 +75,11 @@ func (q *Queue) Enqueue(ctx context.Context, verb string, args any, objectKey st
 }
 func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey string, sealed bool) (EnqueueResult, error) {
 	var result EnqueueResult
+	ctx, release, err := q.AdmitMutation(ctx)
+	if err != nil {
+		return result, err
+	}
+	defer release()
 	if q.admission != nil {
 		if err := q.admission(); err != nil {
 			return result, err
@@ -139,6 +146,11 @@ func (q *Queue) List(ctx context.Context, f store.JobFilter) ([]Job, error) {
 	return q.store.ListJobs(ctx, f)
 }
 func (q *Queue) PublishClaim(ctx context.Context, jid string, fields map[string]any) error {
+	ctx, release, err := q.AdmitMutation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if e := q.healthy(); e != nil {
 		return e
 	}
