@@ -16,7 +16,7 @@ import (
 // owner must first prove durable successful terminality and exclude root writers.
 // It never opens or deletes the live site configuration.
 func RemoveConfigRecord(ctx context.Context, custody string, b ConfigBinding, seal *secret.Sealer) error {
-	if b.UID == 0 || b.GID == 0 {
+	if b.UID == 0 || b.GID == 0 || b.UID == ^uint32(0) || b.GID == ^uint32(0) {
 		return errConfigCustody
 	}
 	return removeConfigRecord(ctx, custody, b, seal, 0, configOps{})
@@ -26,7 +26,7 @@ func RemoveConfigRecord(ctx context.Context, custody string, b ConfigBinding, se
 // authenticating a present record, but before unlink. Absence authorizes before
 // directory sync. A failed open/authentication cannot retire a live binding.
 func RemoveConfigRecordAuthorized(ctx context.Context, custody string, b ConfigBinding, seal *secret.Sealer, authorize func() error) error {
-	if b.UID == 0 || b.GID == 0 || authorize == nil {
+	if b.UID == 0 || b.GID == 0 || b.UID == ^uint32(0) || b.GID == ^uint32(0) || authorize == nil {
 		return errConfigCustody
 	}
 	authorized := false

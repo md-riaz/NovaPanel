@@ -52,7 +52,7 @@ func (o configOps) check(ctx context.Context, stage string) error {
 // custody must already be root-owned 0700 on the docroot filesystem. Retain the
 // record until the operation owner reconciles terminality; this is not completion.
 func PublishConfig(ctx context.Context, custody string, b ConfigBinding, config []byte, seal *secret.Sealer) error {
-	if b.UID == 0 || b.GID == 0 {
+	if b.UID == 0 || b.GID == 0 || b.UID == ^uint32(0) || b.GID == ^uint32(0) {
 		return errConfigCustody
 	}
 	return publishConfig(ctx, custody, b, config, seal, 0, configOps{})
