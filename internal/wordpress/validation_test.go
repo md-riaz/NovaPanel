@@ -16,6 +16,8 @@ func TestInstallInputRefusals(t *testing.T) {
 	}{
 		{"root uid", func(i *InstallInput) { i.UID = 0 }},
 		{"root gid", func(i *InstallInput) { i.GID = 0 }},
+		{"sentinel uid", func(i *InstallInput) { i.UID = ^uint32(0) }},
+		{"sentinel gid", func(i *InstallInput) { i.GID = ^uint32(0) }},
 		{"unsupported locale", func(i *InstallInput) { i.Locale = "fr_FR" }},
 		{"missing locale", func(i *InstallInput) { i.Locale = "" }},
 		{"bad database id", func(i *InstallInput) { i.DatabaseID = "d_arbitrary" }},
@@ -75,6 +77,15 @@ func TestInstallInputRefusals(t *testing.T) {
 				t.Fatalf("invalid refusal: %v %#v", err, p)
 			}
 		})
+	}
+}
+
+func TestInstallIdentityAdjacentToSentinel(t *testing.T) {
+	in := validInput()
+	in.UID, in.GID = ^uint32(0)-1, ^uint32(0)-1
+	p, err := BuildInstall(in, artifactEvidence(t))
+	if err != nil || p.UID != in.UID || p.GID != in.GID {
+		t.Fatalf("valid identity changed or rejected: %#v, %v", p, err)
 	}
 }
 

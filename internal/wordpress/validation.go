@@ -29,7 +29,8 @@ func validateInput(in InstallInput) error {
 	if err := v.Hostname(in.PrimaryDomain); err != nil {
 		return invalid("primary domain")
 	}
-	if in.UID == 0 || in.GID == 0 {
+	// The all-ones Unix identity is a sentinel, not an assignable owner.
+	if in.UID == 0 || in.GID == 0 || in.UID == ^uint32(0) || in.GID == ^uint32(0) {
 		return invalid("site identity")
 	}
 	if !id.Valid(in.DatabaseID) || !id.Valid(in.DatabaseUserID) {
