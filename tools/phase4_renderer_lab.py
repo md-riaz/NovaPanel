@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import secrets
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -20,15 +21,18 @@ USER = "u_01arz3ndektsv4rrffq69g5faw"
 
 
 def main():
+    if not __debug__:
+        raise RuntimeError("Python optimization disables required acceptance checks")
     evidence = Path(tempfile.mkdtemp(prefix="phase4-renderers-", dir=os.environ["TMPDIR"]))
     owned = []
 
-    def run(*args, data=None, check=True):
+    def run(*args, data=None, check=True, log_output=True):
         result = subprocess.run(args, input=data, capture_output=True, cwd=ROOT, timeout=180)
         # Stdin may contain ephemeral credentials. Never record it.
         with (evidence / "commands.log").open("ab") as log:
             log.write(("$ " + " ".join(args) + "\n").encode())
-            log.write(result.stdout + result.stderr)
+            if log_output:
+                log.write(result.stdout + result.stderr)
             log.write(f"\nexit={result.returncode}\n".encode())
         if check and result.returncode:
             raise RuntimeError(f"command failed; evidence={evidence}: {args}")
@@ -52,23 +56,27 @@ def main():
 
     def create(image, uid):
         name = "novapanel-p4-" + uuid.uuid4().hex[:12]
-        run("docker", "create", "--name", name, "--label", "novapanel.lab=" + name,
+        token = uuid.uuid4().hex
+        record = {"name": name, "token": token, "id": None, "settled": False}
+        owned.append(record)
+        result = run("docker", "create", "--name", name, "--label", "novapanel.lab=" + token,
             "--user", uid, "--read-only", "--network", "none", "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges:true", "--memory", "768m", "--memory-swap", "768m",
             "--cpus", "1", "--pids-limit", "96", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777",
             "--tmpfs", "/var/lib/mysql:rw,nosuid,nodev,noexec,size=384m,mode=0700,uid=" + uid.split(":")[0] + ",gid=" + uid.split(":")[1],
             "--entrypoint", "/bin/sh", image, "-c", "exec sleep 300")
-        owned.append(name)
+        record["settled"] = True
+        record["id"] = result.stdout.decode().strip()
         inspect(name, "before")
         run("docker", "start", name)
         return name
 
     def write(name, path, content):
-        run("docker", "exec", "-i", name, "sh", "-c", 'umask 077; cat > "$1"', "sh", path, data=content.encode())
+        run("docker", "exec", "-i", name, "sh", "-c", 'umask 077; cat > "$1"', "sh", path, data=content.encode(), log_output=False)
 
-    def sql(name, query, app=False, check=True):
+    def sql(name, query, app=False, check=True, log_output=True):
         opts = ["--defaults-extra-file=/tmp/app.cnf"] if app else ["--no-defaults", "--socket=/tmp/db.sock", "--user=root"]
-        return run("docker", "exec", "-i", name, "mariadb", *opts, "--batch", "--skip-column-names", data=query.encode(), check=check)
+        return run("docker", "exec", "-i", name, "mariadb", *opts, "--batch", "--skip-column-names", data=query.encode(), check=check, log_output=log_output)
 
     try:
         sha = run("git", "rev-parse", "HEAD").stdout.decode().strip()
@@ -88,7 +96,8 @@ def main():
         (evidence / "fpm-scratch.conf").write_text(adapted)
         write(php, "/tmp/scratch.conf", adapted)
         run("docker", "exec", "-d", php, "php-fpm", "-F", "-y", "/tmp/scratch.conf")
-        run("docker", "exec", php, "sh", "-c", 'i=0; until test -S /tmp/lab-site.sock; do i=$((i+1)); test "$i" -lt 50 || exit 1; sleep .1; done; stat -c "%u:%g %a %F" /tmp/lab-site.sock')
+        socket = run("docker", "exec", php, "sh", "-c", 'i=0; until test -S /tmp/lab-site.sock; do i=$((i+1)); test "$i" -lt 50 || exit 1; sleep .1; done; stat -c "%u:%g %a %F" /tmp/lab-site.sock')
+        assert socket.stdout.strip() == b"33:33 660 socket", "unexpected scratch socket ownership, mode or type"
         db = create(DB, "999:999")
         run("docker", "exec", db, "id")
         run("docker", "exec", db, "mariadb-install-db", "--no-defaults", "--datadir=/var/lib/mysql", "--auth-root-authentication-method=normal", "--skip-test-db")
@@ -107,11 +116,12 @@ def main():
         password = secrets.token_urlsafe(32)
         write(db, "/tmp/app.cnf", f"[client]\nprotocol=tcp\nhost=127.0.0.1\nuser={USER}\npassword={password}\n")
         lookalike = DATABASE.replace("_", "x", 1)
-        sql(db, fixtures["Grants"]["CreateDatabase"] + f"\nCREATE USER '{USER}'@'127.0.0.1' IDENTIFIED BY '{password}';\n" + fixtures["Grants"]["Grant"] + f"\nCREATE DATABASE `{lookalike}`; CREATE DATABASE unrelated; CREATE TABLE `{lookalike}`.probe (n INT); CREATE TABLE unrelated.probe (n INT);")
-        grants = sql(db, f"SHOW GRANTS FOR '{USER}'@'127.0.0.1';").stdout.decode()
+        sql(db, fixtures["Grants"]["CreateDatabase"] + f"\nCREATE USER '{USER}'@'127.0.0.1' IDENTIFIED BY '{password}';\n" + fixtures["Grants"]["Grant"] + f"\nCREATE DATABASE `{lookalike}`; CREATE DATABASE unrelated; CREATE TABLE `{lookalike}`.probe (n INT); CREATE TABLE unrelated.probe (n INT);", log_output=False)
+        grants = sql(db, f"SHOW GRANTS FOR '{USER}'@'127.0.0.1';", log_output=False).stdout.decode()
         # SHOW GRANTS includes a password hash; retain only grant statements without IDENTIFIED.
         safe = "\n".join(line for line in grants.splitlines() if " IDENTIFIED " not in line)
         (evidence / "show-grants.txt").write_text(safe + "\n")
+        assert f"ON `{DATABASE.replace('_', chr(92) + '_')}`.* TO '{USER}'@'127.0.0.1'" in safe
         assert "GRANT OPTION" not in grants and "FILE" not in grants and "SUPER" not in grants
         allowed = sql(db, f"CREATE TABLE `{DATABASE}`.probe (n INT); INSERT INTO `{DATABASE}`.probe VALUES (42); SELECT n FROM `{DATABASE}`.probe;", app=True)
         assert allowed.stdout.strip() == b"42"
@@ -119,16 +129,55 @@ def main():
             refused = sql(db, f"SELECT * FROM `{target}`." + ("user" if target == "mysql" else "probe") + ";", app=True, check=False)
             assert refused.returncode != 0 and b"1142" in refused.stderr, refused.stderr
         sql(db, fixtures["Grants"]["DropDatabase"])
-        for name in owned:
-            inspect(name, "after")
-        (evidence / "result.txt").write_text("PASS exact FPM syntax, self-UID scratch socket, MariaDB rendered CREATE/GRANT/DROP, permitted CRUD, denied lookalike/unrelated/mysql reads. VM boundary remains unpassed.\n")
-        print("PASS", evidence)
+        for record in owned:
+            inspect(record["name"], "after")
     finally:
-        for name in owned:
-            inspect(name, "teardown")
-            run("docker", "rm", "-f", name)
-            assert run("docker", "inspect", name, check=False).returncode != 0
+        active_error = sys.exc_info()[1]
+        cleanup_errors = []
+        for record in owned:
+            name = record["name"]
+            container_id = record["id"]
+            if not record["settled"]:
+                message = (f"Unresolved create outcome for {name} (label novapanel.lab={record['token']}); "
+                           "Docker may create it later. After the daemon request has settled, inspect the label "
+                           "and remove only its matching container ID manually.")
+                print(message, file=sys.stderr)
+                cleanup_errors.append((name, "create outcome unresolved", RuntimeError(message)))
+            if not container_id:
+                try:
+                    probe = run("docker", "inspect", name, check=False)
+                    if probe.returncode:
+                        raise RuntimeError(f"Cannot determine container ownership: {name}")
+                    item = json.loads(probe.stdout)[0]
+                    # This random marker prevents accidental collisions, not a hostile Docker administrator.
+                    if item["Config"].get("Labels", {}).get("novapanel.lab") != record["token"]:
+                        continue
+                    container_id = item["Id"]
+                except Exception as exc:
+                    cleanup_errors.append((name, "ownership inspection", exc))
+                    continue
+            try:
+                inspect(container_id, "teardown")
+            except Exception as exc:
+                cleanup_errors.append((container_id, "teardown inspection", exc))
+            try:
+                run("docker", "rm", "-f", container_id)
+            except Exception as exc:
+                cleanup_errors.append((container_id, "remove", exc))
+            try:
+                result = run("docker", "ps", "-a", "--no-trunc", "--filter", f"id={container_id}", "--format", "{{.ID}}")
+                if container_id in result.stdout.decode().splitlines():
+                    raise RuntimeError("container still exists")
+            except Exception as exc:
+                cleanup_errors.append((container_id, "verify removal", exc))
         print("Evidence:", evidence)
+        if cleanup_errors:
+            for target, operation, exc in cleanup_errors:
+                print(f"Cleanup {operation} failed for {target} ({type(exc).__name__}); see evidence: {evidence}", file=sys.stderr)
+            if active_error is None:
+                raise RuntimeError(f"Cleanup encountered {len(cleanup_errors)} error(s); see evidence: {evidence}") from cleanup_errors[0][2]
+    (evidence / "result.txt").write_text("PASS exact FPM syntax, self-UID scratch socket, MariaDB rendered CREATE/GRANT/DROP, permitted CRUD, denied lookalike/unrelated/mysql reads. VM boundary remains unpassed.\n")
+    print("PASS", evidence)
 
 
 if __name__ == "__main__":

@@ -32,7 +32,7 @@ This plan prepares the exception, it does not assert that parent has recorded it
 
 ## Actual existing seams and non-overlapping ownership
 
-These signatures were read at the candidate; `existing-api-inventory.md` records their source lines.
+These signatures and ownership assignments describe the candidate `82f76cc0ec17dfa8f3fc46a0536e371c5fe9b08f`, not necessarily the current tree. The source paths and symbols are listed below; inspect that revision for the historical implementations.
 
 - `internal/jobs/keyedlock.go` has only `(*keyedLock).lock(key string) func()`. `Queue.execute` in worker.go takes that singleton before StartJob and invokes `finish`. A full lock-set API does not exist yet. B must replace the acquisition once at that boundary, not recursively take its primary lock.
 - `internal/jobs/queue.go` exposes `Enqueue`, `EnqueueSealed` through input.go, `PublishClaim(ctx,jid,fields)`, `Claim(ctx,jid,token)` and `SetClock`. Existing `PublishClaim` seals then calls the store separately; it does not implement the new atomic terminal contract.

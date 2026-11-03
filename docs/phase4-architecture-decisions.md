@@ -1,5 +1,7 @@
 # Phase 4 architecture decisions
 
+> Historical pre-merge record. For later authority and implementation status, see the [Phase 4 foundation handoff](phase4-foundation-handoff.md). PR #81 merged at `2ff29a1a70f0ad678969d48006a4c21c183dd29a`; the pending-merge, unapplied-patch and stacked-development statements below describe the earlier snapshot.
+
 # Phase 4 canonical amendment proposal
 
 Status: internally approved canonical decision text under delegated planning authority, based on 82f76cc0ec17dfa8f3fc46a0536e371c5fe9b08f. This scratch packet supersedes the earlier proposal and independent-review corrections where resolved here. The accompanying patch is drafted and checked, not applied or published. Production integration remains gated; the narrowly documented stacked-development alternative needs an explicit parent record.
