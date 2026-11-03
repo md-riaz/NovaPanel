@@ -9,6 +9,7 @@ import (
 )
 
 var consoleRoutes = []route{
+	{"GET", "/databases", "user", "database.list"},
 	{"GET", "/sites", "user", "site.list"},
 	{"GET", "/sites/{siteID}", "user", "site.get"},
 	{"GET", "/sites/{siteID}/ssl", "user", "ssl.status"},
@@ -38,7 +39,7 @@ type consoleView struct {
 }
 
 func isConsole(path string) bool {
-	return strings.HasPrefix(path, "/sites") || strings.HasPrefix(path, "/jobs/")
+	return path == "/databases" || strings.HasPrefix(path, "/sites") || strings.HasPrefix(path, "/jobs/")
 }
 func (s *server) console(w http.ResponseWriter, r *http.Request, c RPCClient, rt route, token string, v view) {
 	cv := &consoleView{SiteID: chi.URLParam(r, "siteID"), Section: rt.verb, Writable: v.Role == "owner" || v.Role == "admin"}
