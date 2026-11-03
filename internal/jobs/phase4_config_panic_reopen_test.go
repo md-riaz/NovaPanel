@@ -117,7 +117,9 @@ func TestWordPressConfigIsolationPanicRetainsRecovery(t *testing.T) {
 	seal, _ := secret.New(make([]byte, 32))
 	auditSink := &fakeAudit{}
 	q := NewQueue(s, seal, auditSink)
-	if err = q.PrepareOperations(ctx); err != nil {
+	// Start recovery before enqueueing so this exercises a live worker, not
+	// replay of a journal that was already pending at startup.
+	if err = q.PrepareStartup(ctx); err != nil {
 		t.Fatal(err)
 	}
 	m := wordpress.ApprovedArtifacts()
