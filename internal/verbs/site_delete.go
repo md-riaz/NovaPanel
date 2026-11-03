@@ -26,8 +26,12 @@ func init() {
 }
 func siteDelete(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*siteDeleteArgs)
-	if _, e := a.Store.SiteByID(ctx, v.SiteID); e != nil {
+	s, e := a.Store.SiteByID(ctx, v.SiteID)
+	if e != nil {
 		return nil, siteError(e)
+	}
+	if e = legacySiteDeletePreflight(ctx, a, s); e != nil {
+		return nil, e
 	}
 	return a.Jobs.Enqueue(ctx, "site.delete", v, "site:"+v.SiteID)
 }
@@ -50,6 +54,10 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 		return nil
 	}
 	if e != nil {
+		return e
+	}
+	// The job queue holds the site lock here; recheck persisted state on every run.
+	if e = legacySiteDeletePreflight(ctx, a, s); e != nil {
 		return e
 	}
 	if e = (&validate.V{}).SiteName(s.Name); e != nil {
@@ -90,6 +98,20 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	j.Result = json.RawMessage(`{}`)
 	return nil
 }
+func legacySiteDeletePreflight(ctx context.Context, a *agent.Agent, s store.Site) error {
+	if s.Type != "static" {
+		return rpc.Errf("unsupported", "Legacy deletion supports static sites only")
+	}
+	dbs, err := a.Store.AttachedDatabases(ctx, s.ID)
+	if err != nil {
+		return err
+	}
+	if len(dbs) != 0 {
+		return rpc.Errf("unsupported", "Attached site deletion requires a durable journal")
+	}
+	return nil
+}
+
 func removeSiteCertificates(path string, domains []store.Domain) error {
 	resolved, e := filepath.EvalSymlinks(path)
 	if os.IsNotExist(e) {
