@@ -98,6 +98,7 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	j.Result = json.RawMessage(`{}`)
 	return nil
 }
+
 type legacyDeleteState struct{ agent *agent.Agent }
 
 func (d legacyDeleteState) preflight(ctx context.Context, s store.Site) error {
