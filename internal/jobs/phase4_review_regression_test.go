@@ -188,6 +188,9 @@ func TestReviewRunChangedPreconditions(t *testing.T) {
 				if e != nil {
 					t.Fatal(e)
 				}
+				// Queue ordering is created,id; millisecond ties otherwise let the
+				// random IDs select the successor before the operation under test.
+				reviewSQL(t, s, `UPDATE jobs SET created=? WHERE id=?`, r.Job.Created+1, successor.Job.ID)
 			}
 			calls := 0
 			q.SetRunner(func(c context.Context, j *Job) error {
