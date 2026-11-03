@@ -30,13 +30,23 @@ func (v *phpSetArgs) UnmarshalJSON(raw []byte) error {
 }
 
 func phpSet(ctx context.Context, a *agent.Agent, args any) (any, error) {
+	if !(phpSetRuntime{a}).available() {
+		return nil, rpc.Errf("unsupported", "PHP execution unavailable")
+	}
 	request := args.(*phpSetArgs).request
 	return a.Jobs.EnqueueOperation(ctx, store.OperationRequest{Kind: store.PHPSet, SiteID: request.SiteID, PHP: &request}, nil)
 }
 
 // No default dependencies are installed until startup recovery owns snapshots.
+type phpSetRuntime struct{ agent *agent.Agent }
+
+func (r phpSetRuntime) available() bool {
+	a := r.agent
+	return a != nil && a.Store != nil && a.Jobs != nil && a.Nginx != nil && a.PHP != nil && a.PHP.Pools != nil && a.PHP.ResolveIdentity != nil && a.PHP.RecoveryRoot != "" && a.Nginx.Runner != nil && a.Nginx.Probe != nil && a.PHP.Pools.Runner != nil && a.PHP.Pools.Probe != nil
+}
+
 func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
-	if a == nil || j == nil || a.Store == nil || a.Jobs == nil || a.Nginx == nil || a.PHP == nil || a.PHP.Pools == nil || a.PHP.ResolveIdentity == nil || a.PHP.RecoveryRoot == "" || a.Nginx.Runner == nil || a.Nginx.Probe == nil || a.PHP.Pools.Runner == nil || a.PHP.Pools.Probe == nil {
+	if j == nil || !(phpSetRuntime{a}).available() {
 		return rpc.Errf("unsupported", "PHP execution unavailable")
 	}
 	op, err := a.Store.LoadOperation(ctx, j.ID)

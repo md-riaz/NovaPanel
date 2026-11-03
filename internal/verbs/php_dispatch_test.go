@@ -11,6 +11,7 @@ import (
 	"novapanel/internal/agent"
 	"novapanel/internal/audit"
 	"novapanel/internal/jobs"
+	"novapanel/internal/render/nginx"
 	php "novapanel/internal/render/php"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
@@ -64,6 +65,55 @@ func TestPHPSetProductionDispatch(t *testing.T) {
 	}
 	admin := rpc.Caller{Kind: "user", Role: "admin", Session: "admin-session", UserID: "admin-user"}
 	valid := fmt.Sprintf(`{"site_id":%q,"version":"8.3","limits":{"memory_mb":512}}`, sid)
+	if r := request(admin, valid); r.OK || r.Code != "unsupported" {
+		t.Fatalf("missing runtime dependencies must refuse admission: %+v", r)
+	}
+	if rows, e := st.ListJobs(ctx, store.JobFilter{Limit: 100}); e != nil || len(rows) != 0 {
+		t.Fatalf("refusal created jobs: %v %v", rows, e)
+	}
+	a.Nginx = &nginx.Applier{Runner: phpScratchRunner{}, Probe: func(context.Context, nginx.Desired) error { return nil }}
+	a.PHP = &agent.PHPDependencies{Pools: &php.Applier{Runner: phpScratchRunner{}, Probe: func(context.Context, php.Desired) error { return nil }}, RecoveryRoot: t.TempDir(), ResolveIdentity: func(context.Context, store.Site) (uint32, uint32, error) { return 1001, 1001, nil }}
+	for _, tc := range []struct {
+		name   string
+		remove func() func()
+	}{
+		{"nginx", func() func() { old := a.Nginx; a.Nginx = nil; return func() { a.Nginx = old } }},
+		{"nginx runner", func() func() { old := a.Nginx.Runner; a.Nginx.Runner = nil; return func() { a.Nginx.Runner = old } }},
+		{"nginx probe", func() func() { old := a.Nginx.Probe; a.Nginx.Probe = nil; return func() { a.Nginx.Probe = old } }},
+		{"php", func() func() { old := a.PHP; a.PHP = nil; return func() { a.PHP = old } }},
+		{"pools", func() func() { old := a.PHP.Pools; a.PHP.Pools = nil; return func() { a.PHP.Pools = old } }},
+		{"pool runner", func() func() {
+			old := a.PHP.Pools.Runner
+			a.PHP.Pools.Runner = nil
+			return func() { a.PHP.Pools.Runner = old }
+		}},
+		{"pool probe", func() func() {
+			old := a.PHP.Pools.Probe
+			a.PHP.Pools.Probe = nil
+			return func() { a.PHP.Pools.Probe = old }
+		}},
+		{"identity", func() func() {
+			old := a.PHP.ResolveIdentity
+			a.PHP.ResolveIdentity = nil
+			return func() { a.PHP.ResolveIdentity = old }
+		}},
+		{"recovery root", func() func() {
+			old := a.PHP.RecoveryRoot
+			a.PHP.RecoveryRoot = ""
+			return func() { a.PHP.RecoveryRoot = old }
+		}},
+	} {
+		t.Run("missing "+tc.name, func(t *testing.T) {
+			restore := tc.remove()
+			defer restore()
+			if r := request(admin, valid); r.OK || r.Code != "unsupported" {
+				t.Fatalf("refusal: %+v", r)
+			}
+			if rows, e := st.ListJobs(ctx, store.JobFilter{Limit: 100}); e != nil || len(rows) != 0 {
+				t.Fatalf("unexpected jobs: %v %v", rows, e)
+			}
+		})
+	}
 	for _, tc := range []struct {
 		name       string
 		caller     rpc.Caller
@@ -95,9 +145,12 @@ func TestPHPSetProductionDispatch(t *testing.T) {
 			}
 		})
 	}
+	deps := a.PHP
+	a.PHP = nil
 	if err = s.ExecuteJob(ctx, &jobs.Job{Verb: "php.set", CreatedBy: "admin-session", Role: "admin", ObjectKey: "site:" + sid, Args: []byte(valid)}); err == nil || err.Error() != "PHP execution unavailable" {
 		t.Fatalf("unfinished executor must fail closed: %v", err)
 	}
+	a.PHP = deps
 	for _, raw := range []string{
 		fmt.Sprintf(`{"site_id":%q,"version":"8.3","version":"8.3"}`, sid),
 		fmt.Sprintf(`{"site_id":%q,"version":"8.3","limits":{"upload_mb":1,"upload_mb":2}}`, sid),
