@@ -72,6 +72,25 @@ func (s *Store) CreateDatabasePrimary(ctx context.Context, p DatabasePrimary) er
 		return siteWriteError(e)
 	})
 }
+
+// ListDatabases returns persisted database metadata without credentials.
+func (s *Store) ListDatabases(ctx context.Context) ([]Database, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT id,coalesce(site_id,''),name,engine,primary_user_id,created FROM databases ORDER BY name,id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Database{}
+	for rows.Next() {
+		var v Database
+		if err := rows.Scan(&v.ID, &v.SiteID, &v.Name, &v.Engine, &v.PrimaryUserID, &v.Created); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) GetDatabase(ctx context.Context, id string) (v Database, err error) {
 	err = s.db.QueryRowContext(ctx, "SELECT id,coalesce(site_id,''),name,engine,primary_user_id,created FROM databases WHERE id=?", id).Scan(&v.ID, &v.SiteID, &v.Name, &v.Engine, &v.PrimaryUserID, &v.Created)
 	return
