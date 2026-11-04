@@ -110,6 +110,57 @@ GRANT SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,ALTER,INDEX,CREATE TEMPORARY TABLE
   outside the DB and web root; **never `MYSQL_PWD`** (deprecated, leaks via `/proc`), never `-p<pw>`
   on argv.
 
+### MariaDB create/replay provenance (F20 — resolves the two-store boundary; head ruling 2026-11-04)
+MariaDB DDL and the agent's SQLite are not one transaction, so a crash after `CREATE DATABASE`/
+`CREATE USER` but before the SQLite success write would leave existence unable to distinguish *our own
+half-finished resource* from *an unmanaged collision*. Resolve it with the **F20 provenance marker held
+in MariaDB itself** — not a SQLite-only reservation (which proves the name, not far-side ownership).
+
+Agent-owned root control schema, created once at bootstrap (no site user holds any grant on it):
+```sql
+CREATE DATABASE IF NOT EXISTS `novapanel`;                 -- control schema (agent/root only)
+CREATE TABLE IF NOT EXISTS `novapanel`.`managed_objects` (
+  kind       ENUM('schema','user') NOT NULL,
+  name       VARCHAR(190)          NOT NULL,                -- schema name, or 'user@127.0.0.1'
+  op_id      CHAR(26)              NOT NULL,                -- the slow op's ULID (SQLite operation id)
+  phase      ENUM('reserved','created','deleting') NOT NULL,
+  created_at BIGINT                NOT NULL,                -- unix-ms
+  PRIMARY KEY (kind, name)
+);
+```
+`database.create` / `dbuser.create`, under the `db:<name>` lock, root via `unix_socket`:
+1. **SQLite write-ahead** (F20.1): operation `prepared` with the generated `db`/`dbuser` names and the
+   minted password **sealed (F12)**. Replay reuses these exact values.
+2. **Pre-flight** (F20.3): object absent from `information_schema.SCHEMATA` / `mysql.user`? If present
+   and no `managed_objects` row owns it for this `op_id` → **`conflict`** (unmanaged collision — never
+   adopt, never `CREATE … IF NOT EXISTS`, never `DROP`).
+3. **Reserve** (F20.2): `INSERT novapanel.managed_objects(kind,name,op_id,phase='reserved')`; a row
+   already present under a different `op_id` → `conflict`.
+4. **Create**: `CREATE DATABASE …` / `CREATE USER …@'127.0.0.1' IDENTIFIED BY <sealed>` + least-priv
+   `GRANT` (names/password from the sealed input; never `*.*`).
+5. **Commit**: `UPDATE … phase='created'`; SQLite success row; publish the **F19 claim** from the sealed
+   password.
+
+**Replay** (op `prepared`, no success) per F20.4: provenance row owns this `op_id` → ours, re-run the
+idempotent `GRANT`/`ALTER` with the sealed password and publish the claim; no row but object present →
+unmanaged collision → `conflict` surfaced for **operator reconciliation** (never auto-adopt or
+auto-delete); no row and object absent → restart the op with the same sealed identities.
+
+**`database.rotate_password`**: seal the new password write-ahead (F12/F20.1) **before**
+`ALTER USER …@'127.0.0.1' IDENTIFIED BY <sealed>`; the claim publishes from the sealed value, so a crash
+between `ALTER` and claim re-applies the same password (idempotent) and re-publishes — the new secret is
+never lost and the old is never silently retained.
+
+**`database.delete` / `dbuser.delete`** is **provenance-last** (F20.5): `DROP … ` (ensure-absent, F7),
+then delete the `managed_objects` row; a crash leaves `phase='deleting'` with the object maybe gone →
+replay completes the `DROP` idempotently. (`DROP IF EXISTS` is correct for delete; `CREATE IF NOT
+EXISTS` is still forbidden for create — F20.3.)
+
+This is the authorized mechanism for the whole `database.*`/`dbuser.*` family; it is the minimal F20
+contract, not a bespoke recovery framework, and does not reopen the #90 scope freeze. Power-loss/VM
+acceptance of the crash window stays deferred (#90); the contract is proven by the F7 crash-safety
+replay test against a simulated mid-op stop.
+
 ### WordPress install (reference — fixed argv, run as the site user)
 ```
 wp core download --version=<v> --path=/srv/sites/{{site}}/public        # refuse if docroot non-empty → precondition_failed
