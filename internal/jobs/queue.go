@@ -73,7 +73,16 @@ func (q *Queue) record(j Job, outcome, code, stage string) error {
 func (q *Queue) Enqueue(ctx context.Context, verb string, args any, objectKey string) (EnqueueResult, error) {
 	return q.enqueue(ctx, verb, args, objectKey, false)
 }
+
+// EnqueueSiteCreate uses the ordinary admission and audit path while reserving
+// site metadata together with its job and claim.
+func (q *Queue) EnqueueSiteCreate(ctx context.Context, args any, objectKey string, reserve func(context.Context, Job, store.JobClaim) (Job, error)) (EnqueueResult, error) {
+	return q.enqueueWithReservation(ctx, "site.create", args, objectKey, false, reserve)
+}
 func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey string, sealed bool) (EnqueueResult, error) {
+	return q.enqueueWithReservation(ctx, verb, args, objectKey, sealed, nil)
+}
+func (q *Queue) enqueueWithReservation(ctx context.Context, verb string, args any, objectKey string, sealed bool, reserve func(context.Context, Job, store.JobClaim) (Job, error)) (EnqueueResult, error) {
 	var result EnqueueResult
 	// Fail fast while agent startup is closed; recheck under the lease below
 	// so a concurrent close cannot admit work after this initial check.
@@ -129,7 +138,12 @@ func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey st
 	}
 	claim := store.JobClaim{JobID: j.ID, ClaimHash: claimHash(text), Expires: 0}
 	// Persist both rows atomically so a claim failure cannot orphan a queued job.
-	if e = q.store.CreateJobWithClaim(ctx, j, claim); e != nil {
+	if reserve != nil {
+		j, e = reserve(ctx, j, claim)
+	} else {
+		e = q.store.CreateJobWithClaim(ctx, j, claim)
+	}
+	if e != nil {
 		return result, e
 	}
 	if e = q.record(j, "ok", "", "enqueue"); e != nil {
