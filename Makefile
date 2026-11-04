@@ -32,5 +32,6 @@ integration:
 systemd-verify:
 	python3 tools/arch/systemd_verify.py
 ci: build lint test arch
+	python3 -m unittest discover -s tools -p test_phase4_wp_offline_lab.py -v
 	$(GOVULNCHECK) ./...
 	$(MAKE) systemd-verify

@@ -30,21 +30,30 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Queue struct {
-	store   Persistence
-	sealer  Sealer
-	audit   Auditor
-	clock   Clock
-	mu      sync.Mutex
-	runner  func(context.Context, *Job) error
-	running bool
-	startup func(context.Context) (*Job, error)
-	resume  func(context.Context, *Job) error
-	wake    chan struct{}
-	locks   keyedLock
+	publicationErr  error  // sticky publication storage/audit failure
+	configCustody   string // trusted startup dependency, immutable while running
+	admission       func() error
+	startupReady    bool
+	startupGate     chan struct{}
+	store           Persistence
+	sealer          Sealer
+	audit           Auditor
+	clock           Clock
+	operationMu     operationGuard
+	operationsReady bool
+	recoveryBlocked bool
+	startupBlocked  bool
+	mu              sync.Mutex
+	runner          func(context.Context, *Job) error
+	running         bool
+	startup         func(context.Context) (*Job, error)
+	resume          func(context.Context, *Job) error
+	wake            chan struct{}
+	locks           keyedLock
 }
 
 func NewQueue(s Persistence, sealer Sealer, log Auditor) *Queue {
-	return &Queue{store: s, sealer: sealer, audit: log, clock: realClock{}, wake: make(chan struct{}, 1)}
+	return &Queue{store: s, sealer: sealer, audit: log, clock: realClock{}, wake: make(chan struct{}, 1), startupGate: make(chan struct{}, 1)}
 }
 func (q *Queue) SetClock(c Clock) { q.clock = c }
 func (q *Queue) SetRunner(run func(context.Context, *Job) error) {
@@ -64,8 +73,34 @@ func (q *Queue) record(j Job, outcome, code, stage string) error {
 func (q *Queue) Enqueue(ctx context.Context, verb string, args any, objectKey string) (EnqueueResult, error) {
 	return q.enqueue(ctx, verb, args, objectKey, false)
 }
+
+// EnqueueSiteCreate uses the ordinary admission and audit path while reserving
+// site metadata together with its job and claim.
+func (q *Queue) EnqueueSiteCreate(ctx context.Context, args any, objectKey string, reserve func(context.Context, Job, store.JobClaim) (Job, error)) (EnqueueResult, error) {
+	return q.enqueueWithReservation(ctx, "site.create", args, objectKey, false, reserve)
+}
 func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey string, sealed bool) (EnqueueResult, error) {
+	return q.enqueueWithReservation(ctx, verb, args, objectKey, sealed, nil)
+}
+func (q *Queue) enqueueWithReservation(ctx context.Context, verb string, args any, objectKey string, sealed bool, reserve func(context.Context, Job, store.JobClaim) (Job, error)) (EnqueueResult, error) {
 	var result EnqueueResult
+	// Fail fast while agent startup is closed; recheck under the lease below
+	// so a concurrent close cannot admit work after this initial check.
+	if q.admission != nil {
+		if err := q.admission(); err != nil {
+			return result, err
+		}
+	}
+	ctx, release, err := q.AdmitMutation(ctx)
+	if err != nil {
+		return result, err
+	}
+	defer release()
+	if q.admission != nil {
+		if err := q.admission(); err != nil {
+			return result, err
+		}
+	}
 	m, ok := MetadataFrom(ctx)
 	if !ok || m.CreatedBy == "" {
 		return result, rpcerr.Errf("forbidden", "trusted job identity required")
@@ -103,7 +138,12 @@ func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey st
 	}
 	claim := store.JobClaim{JobID: j.ID, ClaimHash: claimHash(text), Expires: 0}
 	// Persist both rows atomically so a claim failure cannot orphan a queued job.
-	if e = q.store.CreateJobWithClaim(ctx, j, claim); e != nil {
+	if reserve != nil {
+		j, e = reserve(ctx, j, claim)
+	} else {
+		e = q.store.CreateJobWithClaim(ctx, j, claim)
+	}
+	if e != nil {
 		return result, e
 	}
 	if e = q.record(j, "ok", "", "enqueue"); e != nil {
@@ -115,12 +155,23 @@ func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey st
 	}
 	return EnqueueResult{Job: j, ClaimToken: text}, nil
 }
-func claimHash(s string) string                                      { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
-func (q *Queue) Status(ctx context.Context, jid string) (Job, error) { return q.store.GetJob(ctx, jid) }
+func claimHash(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
+func (q *Queue) Status(ctx context.Context, jid string) (Job, error) {
+	j, err := q.store.GetJob(ctx, jid)
+	if errors.Is(err, store.ErrPublicationPending) {
+		return Job{}, rpcerr.Errf("agent_error", "publication audit pending")
+	}
+	return j, err
+}
 func (q *Queue) List(ctx context.Context, f store.JobFilter) ([]Job, error) {
 	return q.store.ListJobs(ctx, f)
 }
 func (q *Queue) PublishClaim(ctx context.Context, jid string, fields map[string]any) error {
+	ctx, release, err := q.AdmitMutation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if e := q.healthy(); e != nil {
 		return e
 	}
@@ -149,6 +200,9 @@ func (q *Queue) Claim(ctx context.Context, jid, token string) (map[string]any, e
 		return nil, errors.New("jobs: sealer not configured")
 	}
 	c, e := q.store.ConsumeClaim(ctx, jid, claimHash(token), m.CreatedBy)
+	if errors.Is(e, store.ErrPublicationPending) {
+		return nil, rpcerr.Errf("agent_error", "publication audit pending")
+	}
 	if e != nil {
 		return nil, e
 	}
@@ -162,6 +216,12 @@ func (q *Queue) Claim(ctx context.Context, jid, token string) (map[string]any, e
 }
 
 func (q *Queue) healthy() error {
+	q.mu.Lock()
+	err := q.publicationErr
+	q.mu.Unlock()
+	if err != nil {
+		return err
+	}
 	if q.audit == nil {
 		return errors.New("jobs: audit not configured")
 	}

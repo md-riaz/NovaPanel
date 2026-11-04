@@ -66,12 +66,16 @@ func siteCreate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	if e != nil {
 		return nil, e
 	}
-	site, e := a.Store.CreateSite(ctx, store.Site{ID: sid, Name: v.Name, Type: v.Type, Docroot: filepath.Join(a.Cfg.SitesRoot, v.Name, "public")}, store.Domain{ID: did, FQDN: v.PrimaryDomain})
+	result, e := a.Jobs.EnqueueSiteCreate(ctx, &v, "site:"+v.Name, func(ctx context.Context, j jobs.Job, claim store.JobClaim) (jobs.Job, error) {
+		return a.Store.CreateSiteWithJob(ctx, store.Site{ID: sid, Name: v.Name, Type: v.Type, Docroot: filepath.Join(a.Cfg.SitesRoot, v.Name, "public")}, store.Domain{ID: did, FQDN: v.PrimaryDomain}, j, claim, func(siteID string) (json.RawMessage, error) {
+			v.SiteID = siteID
+			return json.Marshal(&v)
+		})
+	})
 	if e != nil {
 		return nil, siteError(e)
 	}
-	v.SiteID = site.ID
-	return a.Jobs.Enqueue(ctx, "site.create", &v, "site:"+v.Name)
+	return result, nil
 }
 func siteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error) {
 	var v siteCreateArgs

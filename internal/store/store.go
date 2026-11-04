@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -143,7 +144,16 @@ func (s *Store) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
 	if e = fn(tx); e != nil {
 		return e
 	}
-	return tx.Commit()
+	if e = tx.Commit(); e != nil {
+		// SQLite can retain a transaction after deferred-FK COMMIT failure,
+		// even though database/sql has already marked its Tx finished.
+		if _, rollbackErr := conn.ExecContext(context.Background(), "ROLLBACK"); rollbackErr != nil {
+			// Never return an uncertain transaction to the pool.
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+		return e
+	}
+	return nil
 }
 func (s *Store) migrate() error {
 	entries, e := migrations.ReadDir("migrations")

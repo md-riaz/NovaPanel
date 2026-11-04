@@ -65,6 +65,11 @@ func scheduleOwner(ctx context.Context) (Metadata, error) {
 	return m, nil
 }
 func (s *Scheduler) Set(ctx context.Context, r ScheduleRequest) (store.Schedule, error) {
+	ctx, release, err := s.q.AdmitMutation(ctx)
+	if err != nil {
+		return store.Schedule{}, err
+	}
+	defer release()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m, e := scheduleOwner(ctx)
@@ -124,6 +129,11 @@ func (s *Scheduler) List(ctx context.Context) ([]store.Schedule, error) {
 	return s.q.store.ListSchedules(ctx)
 }
 func (s *Scheduler) Enable(ctx context.Context, jid string, enabled bool) error {
+	ctx, release, err := s.q.AdmitMutation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, e := scheduleOwner(ctx)
@@ -145,6 +155,16 @@ func (s *Scheduler) Enable(ctx context.Context, jid string, enabled bool) error 
 
 // Tick delegates cadence CAS, busy-object skip and job insertion to one store transaction.
 func (s *Scheduler) Tick(ctx context.Context) error {
+	ctx, release, err := s.q.AdmitMutation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if s.q.admission != nil {
+		if err := s.q.admission(); err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if e := s.q.healthy(); e != nil {
@@ -227,14 +247,26 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		if e := s.Tick(ctx); e != nil {
+		workCtx, release, err := s.q.AdmitMutation(ctx)
+		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
-			if health := s.q.healthy(); health == nil || !errors.Is(e, health) {
-				return e
+			if !errors.Is(err, ErrRecoveryBlocked) {
+				return err
 			}
-			// Sticky audit failure pauses mutations, not read RPC or cancellation.
+		} else {
+			err = s.Tick(workCtx)
+			release()
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				if health := s.q.healthy(); health == nil || !errors.Is(err, health) {
+					return err
+				}
+				// Sticky audit failure pauses mutations, not read RPC or cancellation.
+			}
 		}
 		select {
 		case <-ctx.Done():

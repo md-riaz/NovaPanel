@@ -18,6 +18,9 @@ jobs:
           go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
           go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
       - run: make ci
+      - name: PHP root-owned recovery custody tests
+        run: |
+          sudo env "PATH=$PATH" "GOCACHE=$RUNNER_TEMP/root-go-cache" go test ./internal/render/nginx ./internal/verbs -run '^(TestPHPDurableReopenRestoresOriginalAfterDeath|TestPHPRecoveryAuditReplayPersistent|TestPHPQueueBlocksOnUnresolvedRollback|TestPHPStartupRestoresAfterTerminalSQLFailure|TestPHPStartupRestorationRecordsFailure|TestPHPSetQueuePublishesScratchConfiguration)$' -count=1
   integration:
     runs-on: ubuntu-24.04
     steps:

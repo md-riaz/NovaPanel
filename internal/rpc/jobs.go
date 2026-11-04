@@ -123,6 +123,7 @@ func AuthorizeSchedule(ctx context.Context, name string) error {
 func (s *Server) ConfigureJobs() {
 	a := s.Agent
 	a.Jobs = jobs.NewQueue(a.Store, a.Secret, a.Audit)
+	a.Jobs.SetMutationAdmission(a.CheckMutationAdmission)
 	a.Jobs.SetRunner(s.ExecuteJob)
 	a.Jobs.SetStartupRecovery(s.prepareTLSRecovery, s.resumeTLSRecovery)
 	policies := map[string]jobs.SchedulePolicy{}

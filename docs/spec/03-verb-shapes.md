@@ -59,12 +59,12 @@ panel.backup_config{repo_id}                            → job → {snapshot_id
 
 ## sites / domains / ssl / php (Phase 3)
 ```
-site.create{name?, type:'static'|'php'|'wordpress', primary_domain, php_version?} → job → {site_id}
+site.create{name?, type:'static'|'php'|'wordpress', primary_domain, php_version?, wordpress?:{title:string,admin_username:string,admin_email:string}} → job → {site_id}
                                                         # name generated from the domain if omitted
 site.update{site_id, primary_domain_id?:string, php_version?, force_https?:bool, hsts_max_age?:int, maintenance?:bool} → job → {}
-site.delete{site_id, purge_files?:bool}                 → job → {}      # MFA; removes user/docroot/certs/DB rows per flags
+site.delete{site_id, purge_files?:bool=false, purge_databases?:bool=false}                 → job → {}      # MFA; independent file and database purge flags, defaults retain
 site.list{}                                            → {sites:[{id,name,type,primary_domain,status,php_version}]}
-site.get{site_id}                                       → {site:{…}, domains:[…], redirects:[{id,source,target,code}], cert:{state,not_after}}
+site.get{site_id}                                       → {site:{…}, domains:[…], redirects:[{id,source,target,code}], cert:{state,not_after}, wordpress_database_id?:string, php_limits:null|{memory_mb,upload_mb,max_exec_sec}}
 domain.add{site_id, fqdn}                               → job → {domain_id}
 domain.remove{domain_id}                                → job → {}
 ssl.issue{site_id, staging?:bool, wildcard?:bool}       → job → {fqdns:[string], not_after}
@@ -107,11 +107,11 @@ A metadata-only TLS promotion is not an implementation of re-keying. `site.get` 
 
 ## databases (Phase 4)
 ```
-database.create{site_id?, name?}                        → job → {db_id, db_name, db_user}  + claim(password)
+database.create{site_id?}                        → job → {db_id, db_name, db_user}  + claim(password)
 database.rotate_password{db_id}                         → job → {}                          + claim(password)
 database.delete{db_id}                                  → job → {}      # MFA
-database.list{}                                         → {databases:[{id,name,site_id,engine}]}
-dbuser.create{db_id, username?}                         → job → {dbuser_id}                 + claim(password)
+database.list{}                                         → {databases:[{id,name,site_id,engine,primary_user_id}]}
+dbuser.create{db_id}                         → job → {dbuser_id}                 + claim(password)
 dbuser.delete{dbuser_id}                                → job → {}
 ```
 
@@ -183,3 +183,44 @@ deploy.hook_create{site_id, branch}                     → {hook_id, secret}   
 deploy.hook_list{site_id}/deploy.hook_delete{hook_id}   → {…}/{}
 # internal (web-uid peer only): tokens.verify{token}→{token_id,scopes,automation}; deploy.hook{hook_id,body_b64,signature,timestamp}→{} (uniform)
 ```
+
+## Phase 4 exact input, output and deletion rules
+
+Replace the existing site.create shape with:
+
+```text
+site.create{name?, type:'static'|'php'|'wordpress', primary_domain,
+            php_version?, wordpress?:{title:string,admin_username:string,admin_email:string}}
+  -> job -> {site_id} + claim only for type=wordpress
+```
+
+`wordpress` is required exactly when type is wordpress and forbidden otherwise. Version is absent or `8.3` for php/wordpress and forbidden for static. No caller-supplied administrator password, DB name, DB username, download URL or arbitrary CLI argument is accepted. The server generates independent DB and WordPress administrator passwords with crypto/rand, 32 random bytes encoded base64url without padding. Both are sealed before any durable write or external mutation and reused by this operation on restart.
+
+Use these exact validation rules before resource creation: title is nonempty valid UTF-8, at most 200 bytes, has no C0/DEL characters; admin_username matches `^[A-Za-z][A-Za-z0-9_.-]{0,59}$`; admin_email is at most 254 bytes and is a single bare address accepted by net/mail.ParseAddress with Address equal to the input, no display name, CR, LF or NUL. Reject invalid values with invalid_argument. Render title only as typed argv and HTML-escape display. The authoritative domain supplies the installation URL. Do not invent email addresses or external credentials.
+
+WordPress job result remains `{site_id}`. One F19 claim contains exactly:
+
+```json
+{"database":{"db_id":"<ULID>","name":"<generated>","username":"<generated>","host":"127.0.0.1","password":"<generated>"},"wordpress":{"admin_username":"<validated input>","admin_email":"<validated input>","admin_password":"<generated>"}}
+```
+
+DB create claim is `{password:<generated>}` and result is `{db_id,db_name,db_user}`. DB rotation claim is `{password:<generated>}` and result is `{}`. dbuser.create claim is `{password:<generated>}` and result is `{dbuser_id}`. Preserve the original owner-session/token-plus-claim-token check, publication-anchored TTL checked inside SQL, delete-on-first-read, memory-only browser token and already-consumed-claim completion-audit exception. No credential in result/events/audit/plaintext SQLite or WAL/browser persistence. The protected application wp-config necessarily retains its DB password; show-once governs panel delivery, not application storage.
+
+Separate calls use separate stdin consumers:
+
+```text
+/usr/bin/php8.3 /usr/local/lib/novapanel/wp-cli-2.12.0.phar config create ... --prompt=dbpass
+/usr/bin/php8.3 /usr/local/lib/novapanel/wp-cli-2.12.0.phar core install ... --admin_user=<validated> --admin_email=<validated> --skip-email --prompt=admin_password
+```
+
+The applicable password plus newline is stdin. Do not use --dbpass, --admin_password=value, --admin_pass, --allow-root, a shell, PHP eval, or a password-update workaround. Suppress raw child output from persistent job/audit logs and sanitize returned failures. Prove the stdin contract in the chosen target runtime before installing a site.
+
+Replace database.create args with `{site_id?}` and dbuser.create args with `{db_id}`. Remove raw optional name/username rather than silently accepting them. Generate the DB name as `d_` plus the lowercase resource ULID and the user as `u_` plus the lowercase user ULID; validate through F9. MariaDB username length must also fit 10.11. Collisions fail conflict without adopting an unmanaged DB/account.
+
+A database has exactly one primary db_users account, created with it. database.rotate_password targets that persisted primary account, never first-row selection. Additional accounts made by dbuser.create receive the same per-database allowlist and are not primary. There is no secondary-user rotation API in this phase. database.list adds primary_user_id; site.get adds wordpress_database_id when bound, and php_limits for PHP/WordPress, null for static. Do not expose passwords in these projections.
+
+Keep database.delete `{db_id}` and dbuser.delete `{dbuser_id}`. Refuse deletion of a WordPress-bound DB or any primary account with precondition_failed. Delete the DB through site.delete purge_databases or first delete its site with retention to detach it. Additional dbuser deletion remains allowed under the parent DB/site locks. Unknown target is not_found at initial resolution; durable ensure-absent replay is a no-op only for the job's recorded resource identities.
+
+Extend site.delete to `{site_id,purge_files?:bool=false,purge_databases?:bool=false}`. Keep registry MFA and roles/scopes unchanged. purge_files controls only the existing Phase 3 file/account contract. purge_databases=false drops the WordPress binding and detaches every attached DB with site_id=NULL in the final metadata transaction; DB data/accounts and any retained application files/config remain. Warn that retained wp-config still contains a live credential. purge_databases=true drops every attached MariaDB DB and its managed accounts before removing their SQLite rows, then completes the existing site deletion sequence. This is intentionally all attached databases, not only WordPress. No inferred consent from purge_files. Flags are independent; retaining files while purging DBs is allowed and warns that the retained app will be unusable. Replay uses a durable snapshot of generated DB/account identifiers taken under locks before any deletion. Never delete unmanaged resources or recreate retained accounts on replay.
+
+Defer the owner opt-in hardened PHP profile until a later owner-approved request shape, persistence model and compatibility-warning acceptance contract. Phase 4 exposes no hardened field, toggle or claim of support. Its verification and DoD require the compatibility default, cgi.fix_pathinfo=0, bounded limits, log confinement, UID/filesystem/socket/DB isolation and explicit UI statement that optional hardened PHP is unavailable. The optional feature is outside this phase's amended completion contract, not a silently skipped required test. Home 0751 enables traversal only; docroot site:www-data 2750 and private files/subtrees enforce confidentiality.

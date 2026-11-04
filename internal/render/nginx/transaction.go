@@ -2,6 +2,7 @@ package nginx
 
 import (
 	"context"
+	"golang.org/x/sys/unix"
 	"novapanel/internal/platform"
 	"novapanel/internal/rpcerr"
 	"novapanel/internal/validate"
@@ -81,6 +82,24 @@ func (t *Transaction) Snapshot(name string) (Snapshot, error) {
 	defer a.Close()
 	defer e.Close()
 	file := name + ".conf"
+	for _, entry := range []string{file, file + ".lkg", file + ".tmp", file + ".lkg.tmp"} {
+		f, e := a.OpenFile(entry, os.O_RDONLY|unix.O_NOFOLLOW, 0)
+		if os.IsNotExist(e) {
+			continue
+		}
+		if e != nil {
+			return s, e
+		}
+		var st unix.Stat_t
+		e = unix.Fstat(int(f.Fd()), &st)
+		f.Close()
+		if e != nil {
+			return s, e
+		}
+		if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Mode&0022 != 0 || st.Uid != uint32(os.Geteuid()) || st.Nlink != 1 || st.Size > 1024*1024 {
+			return s, rpcerr.Errf("invalid_argument", "Invalid nginx custody")
+		}
+	}
 	s.Config, err = readRegular(a, file)
 	if err != nil && !os.IsNotExist(err) {
 		return s, err

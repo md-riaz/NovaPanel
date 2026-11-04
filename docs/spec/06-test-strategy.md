@@ -50,6 +50,20 @@ unit job        (every push): build, vet, staticcheck, gofmt, go test ./... (Tie
 integration job (every push to main / nightly / label): Tier 2 in a privileged container/VM
 supply-chain    : govulncheck; systemd-analyze verify on packaged units
 ```
-A phase is "done" only when **both** tiers' checks in its Verification gate pass.
+Full privileged/release acceptance requires both tiers. Under the delegated completion amendment below, implementation/local-safe completion is a distinct qualified status and does not mark deferred checks passed.
 
 [pebble]: https://github.com/letsencrypt/pebble
+
+## Phase 4 acceptance amendment
+
+Require actual Go SQLite fresh/upgrade/reopen tests for all five shipped migrations plus the new migration, deferred primary-user and same-site binding constraints, atomic terminal rollback, indexed bounded expiry, and immutable shipped hashes. Require lock-order concurrency and journaled standalone deletion replay; literal GRANT underscore lookalike refusal in real MariaDB 10.11; independent stdin password consumers and F19 publication TTL/leak tests; unchanged official WordPress checksum verification plus tamper refusal.
+
+Optional hardened PHP is deferred until a later approved request shape and is not a Phase 4 completion check. Test that no unsupported field/toggle is exposed and that the UI states unavailability.
+
+Nonroot isolated labs may prove parsing, real program execution, TCP/socket transport and application grants, never root@localhost peer authentication, root FPM UID switching, www-data ownership or multiple-site-UID denial. Those remain explicit final Ubuntu 24.04 VM checks along with paths/systemd/tmpfiles/reboot, append-only audit, public ports and power-loss. Do not run privileged containers as a substitute under this bounded authorization. The project-end privileged VM exception does not mark either phase fully verified. Standard integration still requires prior-phase publication/review/merge; the explicit stacked exception below permits only bounded independent development before those external dependencies finish.
+
+## Delegated phase-completion amendment
+
+Phase 3 PR #81 is merged at `2ff29a1a70f0ad678969d48006a4c21c183dd29a`. Its tree matches independently reviewed `6107f1d`; the parent verified all 13 safe gates. Phase 4 now opens from that merged main under the user's phase-by-phase authority, with one draft PR and no Phase 4 merge yet. The earlier stacked opening is historical, not current authorization. Preserve main's #86 reply/recovery and D2 trust-anchor rulings. Final privileged Ubuntu VM checks remain deferred and unpassed. Browser timeout history remains disclosed, not proven fixed. The current implementation boundary and missing contracts are recorded in `docs/phase4-foundation-handoff.md`.
+
+See `docs/phase3-completion-ledger.md` and `docs/phase4-implementation-opening.md` for exact remaining gates, accepted browser risk, test ownership and restrictions.

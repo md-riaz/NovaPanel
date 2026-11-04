@@ -13,7 +13,9 @@ review candidate, not a production-deployment-ready VPS control panel.
 - TLS supports sealed manual input, durable certificate publication/recovery,
   ACME HTTP01, environment-separated accounts and persistent issuance budgets.
   Automatic renewal uses persisted daily schedules. Wildcard issuance is unsupported.
-- PHP/FPM, MariaDB and WordPress are Phase 4 work, not implemented site types.
+- Phase 4 has pure PHP/grant renderers and a durable SQLite migration with typed
+  PHP/primary-database metadata helpers. Runtime PHP/FPM, MariaDB and WordPress
+  remain unavailable site types. See the [foundation handoff](docs/phase4-foundation-handoff.md).
   Dashboard metrics remain placeholders for later agent verbs.
 
 The implementation contracts are [foundations](docs/spec/00-foundations.md),
@@ -75,9 +77,9 @@ This creates `panel-agent`, `panel-web`, `novapanelctl` and `maintenance.tar`.
 The maintenance archive contains the committed maintenance page; staging does not
 install it into production or start services.
 There is no Go installer in this branch. Review the
-[next-phase dependency map](docs/phase4-dependency-map.md) before authorizing
-Phase 4 implementation. Phase 3 review readiness is a prerequisite, not implied
-by a successful build.
+[Phase 4 foundation handoff](docs/phase4-foundation-handoff.md) for the opened
+bounded foundation and remaining runtime gates. Phase 3 PR #81 is merged;
+Phase 4 is an incomplete draft, not release approval.
 
 ## Legacy PHP application
 

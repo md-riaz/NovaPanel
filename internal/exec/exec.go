@@ -20,6 +20,7 @@ type RunOpts struct {
 	Uid, Gid  uint32
 	Groups    []uint32
 	MaxOutput int
+	Cgroup    *Cgroup
 }
 type Runner interface {
 	Run(context.Context, string, []string, RunOpts) ([]byte, []byte, int, error)
@@ -64,6 +65,15 @@ func (Real) Run(ctx context.Context, prog string, args []string, o RunOpts) ([]b
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if o.Cgroup != nil {
+		held, err := o.Cgroup.duplicate()
+		if err != nil {
+			return nil, nil, -1, err
+		}
+		defer held.Close()
+		cmd.SysProcAttr.UseCgroupFD = true
+		cmd.SysProcAttr.CgroupFD = int(held.Fd())
+	}
 	if o.Uid != 0 || o.Gid != 0 {
 		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: o.Uid, Gid: o.Gid, Groups: o.Groups}
 	}

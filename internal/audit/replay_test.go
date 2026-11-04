@@ -172,3 +172,15 @@ func TestAuditRejectsInvalidStage(t *testing.T) {
 		t.Fatal("validation failure did not latch")
 	}
 }
+
+func TestAuditRejectsPublicationStage(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	l := New(s, &fakeSink{})
+	if err := l.Record(Event{Outcome: "error", Detail: map[string]any{"stage": "publication", "publication": "not_committed"}}); err == nil {
+		t.Fatal("F11 forbids publication as a stage")
+	}
+}

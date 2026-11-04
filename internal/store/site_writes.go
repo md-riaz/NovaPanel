@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 )
 
@@ -230,38 +231,64 @@ func (s *Store) CreateSite(ctx context.Context, v Site, d Domain) (out Site, err
 	if v.ID == "" || v.Name == "" || v.Type == "" || v.Docroot == "" || d.ID == "" || d.FQDN == "" {
 		return out, ErrSiteInvalid
 	}
-	err = s.Tx(ctx, func(tx *sql.Tx) error {
-		old, e := scanSite(tx.QueryRowContext(ctx, "SELECT "+siteColumns+" FROM sites WHERE name=?", v.Name))
-		if e == nil {
-			if old.Status == "deleting" {
-				return ErrSitePrecondition
-			}
-			var primary string
-			if e = tx.QueryRowContext(ctx, "SELECT fqdn FROM domains WHERE site_id=? AND is_primary=1", old.ID).Scan(&primary); e != nil {
-				return e
-			}
-			if old.Type != v.Type || old.Docroot != v.Docroot || primary != d.FQDN || (old.PHPVersion == nil) != (v.PHPVersion == nil) || (old.PHPVersion != nil && v.PHPVersion != nil && *old.PHPVersion != *v.PHPVersion) {
-				return ErrSiteConflict
-			}
-			out = old
-			return nil
-		}
-		if !errors.Is(e, sql.ErrNoRows) {
-			return e
-		}
-		now := s.clock.Now()
-		if _, e = tx.ExecContext(ctx, "INSERT INTO sites(id,name,type,docroot,php_version,created,updated) VALUES(?,?,?,?,?,?,?)", v.ID, v.Name, v.Type, v.Docroot, v.PHPVersion, now, now); e != nil {
-			return siteWriteError(e)
-		}
-		if _, e = tx.ExecContext(ctx, "INSERT INTO domains(id,site_id,fqdn,is_primary,created) VALUES(?,?,?,1,?)", d.ID, v.ID, d.FQDN, now); e != nil {
-			return siteWriteError(e)
-		}
-		out, e = scanSite(tx.QueryRowContext(ctx, "SELECT "+siteColumns+" FROM sites WHERE id=?", v.ID))
-		return e
-	})
+	err = s.Tx(ctx, func(tx *sql.Tx) error { var e error; out, e = s.createSiteTx(ctx, tx, v, d); return e })
 	return
 }
-
+func (s *Store) createSiteTx(ctx context.Context, tx *sql.Tx, v Site, d Domain) (out Site, err error) {
+	old, e := scanSite(tx.QueryRowContext(ctx, "SELECT "+siteColumns+" FROM sites WHERE name=?", v.Name))
+	if e == nil {
+		if old.Status == "deleting" {
+			return out, ErrSitePrecondition
+		}
+		var primary string
+		if e = tx.QueryRowContext(ctx, "SELECT fqdn FROM domains WHERE site_id=? AND is_primary=1", old.ID).Scan(&primary); e != nil {
+			return out, e
+		}
+		if old.Type != v.Type || old.Docroot != v.Docroot || primary != d.FQDN || (old.PHPVersion == nil) != (v.PHPVersion == nil) || (old.PHPVersion != nil && v.PHPVersion != nil && *old.PHPVersion != *v.PHPVersion) {
+			return out, ErrSiteConflict
+		}
+		out = old
+		return out, nil
+	}
+	if !errors.Is(e, sql.ErrNoRows) {
+		return out, e
+	}
+	now := s.clock.Now()
+	if _, e = tx.ExecContext(ctx, "INSERT INTO sites(id,name,type,docroot,php_version,created,updated) VALUES(?,?,?,?,?,?,?)", v.ID, v.Name, v.Type, v.Docroot, v.PHPVersion, now, now); e != nil {
+		return out, siteWriteError(e)
+	}
+	if _, e = tx.ExecContext(ctx, "INSERT INTO domains(id,site_id,fqdn,is_primary,created) VALUES(?,?,?,1,?)", d.ID, v.ID, d.FQDN, now); e != nil {
+		return out, siteWriteError(e)
+	}
+	out, e = scanSite(tx.QueryRowContext(ctx, "SELECT "+siteColumns+" FROM sites WHERE id=?", v.ID))
+	return out, e
+}
+func (s *Store) CreateSiteWithJob(ctx context.Context, v Site, d Domain, j Job, c JobClaim, args func(string) (json.RawMessage, error)) (Job, error) {
+	if v.ID == "" || v.Name == "" || v.Type == "" || v.Docroot == "" || d.ID == "" || d.FQDN == "" {
+		return Job{}, ErrSiteInvalid
+	}
+	if c.JobID != j.ID {
+		return Job{}, errors.New("claim job mismatch")
+	}
+	err := s.Tx(ctx, func(tx *sql.Tx) error {
+		site, e := s.createSiteTx(ctx, tx, v, d)
+		if e != nil {
+			return e
+		}
+		j.Args, e = args(site.ID)
+		if e != nil {
+			return e
+		}
+		if e = insertJob(ctx, tx, j); e != nil {
+			return e
+		}
+		c.Expires = 0
+		c.Nonce = nil
+		c.Ciphertext = nil
+		return insertClaim(ctx, tx, c)
+	})
+	return j, err
+}
 func (s *Store) SetSiteStatus(ctx context.Context, id, status string) error {
 	switch status {
 	case "creating", "active", "failed", "deleting":
