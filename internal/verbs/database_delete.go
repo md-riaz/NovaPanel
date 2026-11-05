@@ -12,8 +12,9 @@ import (
 )
 
 type databaseDeleteJob struct {
-	DBID string `json:"db_id"`
-	Name string `json:"name"`
+	DBID   string  `json:"db_id"`
+	Name   string  `json:"name"`
+	SiteID *string `json:"site_id,omitempty"`
 }
 
 func (v *databaseDeleteJob) Validate() error { return (&databaseIDArgs{DBID: v.DBID}).Validate() }
@@ -28,7 +29,7 @@ func databaseDelete(ctx context.Context, a *agent.Agent, args any) (any, error) 
 	if e != nil {
 		return nil, e
 	}
-	return a.Jobs.Enqueue(ctx, "database.delete", databaseDeleteJob{DBID: d.ID, Name: d.Name}, "db:"+d.ID)
+	return a.Jobs.Enqueue(ctx, "database.delete", databaseDeleteJob{DBID: d.ID, Name: d.Name, SiteID: d.SiteID}, "db:"+d.ID)
 }
 func databaseDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	var v databaseDeleteJob

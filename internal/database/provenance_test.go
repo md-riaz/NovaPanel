@@ -23,6 +23,31 @@ func (r *provenanceRunner) Run(_ context.Context, _ string, _ []string, opts exe
 	}
 	return nil, nil, 0, nil
 }
+func TestCreatePreflightsUserBeforeCreatingSchema(t *testing.T) {
+	r := &collisionRunner{}
+	err := ManagedCreate(context.Background(), r, "01ARZ3NDEKTSV4RRFFQ69G5FAV", "01ARZ3NDEKTSV4RRFFQ69G5FAW", "d_test", "u_test", "secret")
+	if !errors.Is(err, ErrConflict) || r.created {
+		t.Fatalf("error=%v schema created=%v", err, r.created)
+	}
+}
+
+type collisionRunner struct{ created bool }
+
+func (r *collisionRunner) Run(_ context.Context, _ string, _ []string, opts exec.RunOpts) ([]byte, []byte, int, error) {
+	b, _ := io.ReadAll(opts.Stdin)
+	s := string(b)
+	if strings.Contains(s, "CREATE DATABASE `d_test`") {
+		r.created = true
+	}
+	if strings.Contains(s, "SELECT COALESCE") {
+		if strings.Contains(s, "kind='user'") {
+			return []byte("none\t1\t\n"), nil, 0, nil
+		}
+		return []byte("none\t0\t\n"), nil, 0, nil
+	}
+	return nil, nil, 0, nil
+}
+
 func TestBootstrapRejectsUnverifiedExistingSchema(t *testing.T) {
 	r := &provenanceRunner{state: "1"}
 	if err := Bootstrap(context.Background(), r); err == nil {

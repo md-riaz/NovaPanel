@@ -13,6 +13,7 @@ import (
 	"novapanel/internal/validate"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type siteDeleteArgs struct {
@@ -57,6 +58,19 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	}
 	if s.Docroot != filepath.Join(a.Cfg.SitesRoot, s.Name, "public") {
 		return rpc.Errf("precondition_failed", "Unexpected site docroot")
+	}
+	dbs, e := a.Store.ListDatabases(ctx)
+	if e != nil {
+		return e
+	}
+	var attached []string
+	for _, db := range dbs {
+		if db.SiteID != nil && *db.SiteID == s.ID {
+			attached = append(attached, db.ID)
+		}
+	}
+	if len(attached) != 0 {
+		return rpc.Errf("precondition_failed", "Attached databases: %s", strings.Join(attached, ", "))
 	}
 	if s.Status != "deleting" {
 		if e = a.Store.SetSiteStatus(ctx, s.ID, "deleting"); e != nil {

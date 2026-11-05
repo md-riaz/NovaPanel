@@ -3,6 +3,7 @@ package verbs
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -117,18 +118,58 @@ func databaseCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 		return e
 	}
 	defer unlock()
+	if strings.HasPrefix(durable.Step, "database_cleanup:") {
+		if e = databaseReady(ctx, a.Exec); e != nil { return jobs.ErrRetry }
+		return cleanupDatabaseCreate(ctx, a, j, v, strings.TrimPrefix(durable.Step, "database_cleanup:"))
+	}
+	if v.SiteID != nil {
+		site, err := a.Store.SiteByID(ctx, *v.SiteID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return rpc.Errf("not_found", "Site not found")
+		}
+		if err != nil {
+			return err
+		}
+		if site.Status == "deleting" || site.Status == "failed" {
+			return rpc.Errf("precondition_failed", "Site is not createable")
+		}
+	}
 	if e = databaseReady(ctx, a.Exec); e != nil {
 		return e
 	}
 	if e = database.ManagedCreate(ctx, a.Exec, v.DBID, v.UserID, v.Name, v.Username, v.Password); e != nil {
-		if errors.Is(e, database.ErrConflict) {
-			return rpc.Errf("conflict", "Database provenance conflict")
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
-		return e
+		code := "agent_error"
+		if errors.Is(e, database.ErrConflict) {
+			code = "conflict"
+		}
+		return cleanupDatabaseCreate(ctx, a, j, v, code)
 	}
 	result, e := json.Marshal(map[string]string{"db_id": v.DBID, "db_name": v.Name, "db_user": v.Username})
 	if e != nil {
 		return e
 	}
-	return a.Jobs.PublishDatabaseClaim(ctx, j, result, map[string]any{"password": v.Password})
+	if e = a.Jobs.PublishDatabaseClaim(ctx, j, result, map[string]any{"password": v.Password}); e != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return cleanupDatabaseCreate(ctx, a, j, v, "agent_error")
+	}
+	return nil
+}
+
+func cleanupDatabaseCreate(ctx context.Context, a *agent.Agent, j *jobs.Job, v databaseJobArgs, code string) error {
+	j.Step = "database_cleanup:" + code
+	if err := a.Store.UpdateJob(ctx, *j); err != nil {
+		return jobs.ErrRetry
+	}
+	if err := database.ManagedDeleteUser(ctx, a.Exec, v.Username, v.UserID); err != nil && !errors.Is(err, database.ErrConflict) {
+		return jobs.ErrRetry
+	}
+	if err := database.ManagedDelete(ctx, a.Exec, v.Name, v.DBID, nil); err != nil && !errors.Is(err, database.ErrConflict) {
+		return jobs.ErrRetry
+	}
+	return rpc.Errf(code, "Database create failed")
 }

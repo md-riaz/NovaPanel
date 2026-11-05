@@ -15,6 +15,11 @@ func ManagedCreate(ctx context.Context, runner exec.Runner, dbID, userID, db, us
 	if (&validate.V{}).DBName(db) != nil || (&validate.V{}).DBName(user) != nil || len(user) > 32 || !safePassword(password) {
 		return errors.New("invalid database input")
 	}
+	for _, item := range []struct{ kind, name, owner string }{{"schema", db, dbID}, {"user", user, userID}} {
+		if err := preflightManaged(ctx, runner, item.kind, item.name, item.owner); err != nil {
+			return err
+		}
+	}
 	if err := createManaged(ctx, runner, "schema", db, dbID, fmt.Sprintf("CREATE DATABASE `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", db), nil); err != nil {
 		return err
 	}

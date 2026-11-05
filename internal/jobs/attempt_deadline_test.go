@@ -7,6 +7,24 @@ import (
 	"time"
 )
 
+func TestEffectfulAttemptDeadlineIsInterrupted(t *testing.T) {
+	q, s, _, ctx := fixture(t)
+	ctx = WithMetadata(ctx, Metadata{CreatedBy: "owner", Effectful: true})
+	r, err := q.Enqueue(ctx, "test.effectful", nil, "effect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.SetAttemptDeadline(func(string) time.Duration { return 10 * time.Millisecond })
+	q.SetRunner(func(ctx context.Context, _ *Job) error { <-ctx.Done(); return ctx.Err() })
+	if err := q.execute(ctx, r.Job); err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.GetJob(ctx, r.Job.ID)
+	if err != nil || j.State != "failed" || j.Code != "interrupted" {
+		t.Fatalf("effectful deadline: %+v %v", j, err)
+	}
+}
+
 func TestAttemptDeadlineBoundsLockWait(t *testing.T) {
 	q, s, _, ctx := fixture(t)
 	r, err := q.Enqueue(ctx, "test.slow", nil, "object")

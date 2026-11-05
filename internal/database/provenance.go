@@ -128,6 +128,32 @@ func bootstrapShape(ctx context.Context, runner exec.Runner) (string, error) {
  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='novapanel' AND TABLE_NAME='managed_objects' AND (EXTRA<>'' OR GENERATION_EXPRESSION IS NOT NULL OR COLUMN_DEFAULT IS NOT NULL)));`)
 }
 
+func preflightManaged(ctx context.Context, runner exec.Runner, kind, name, owner string) error {
+	if runner == nil || !id.Valid(owner) || (&validate.V{}).DBName(name) != nil {
+		return errors.New("invalid database input")
+	}
+	marker := name
+	exists := fmt.Sprintf("SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='%s'", name)
+	if kind == "user" {
+		marker += "@127.0.0.1"
+		exists = fmt.Sprintf("SELECT COUNT(*) FROM mysql.user WHERE User='%s' AND Host='127.0.0.1'", name)
+	} else if kind != "schema" {
+		return errors.New("invalid database input")
+	}
+	state, err := runSQL(ctx, runner, fmt.Sprintf("SELECT COALESCE((SELECT phase FROM novapanel.managed_objects WHERE kind='%s' AND name='%s'),'none'),(%s),COALESCE((SELECT obj_id FROM novapanel.managed_objects WHERE kind='%s' AND name='%s'),'');", kind, marker, exists, kind, marker))
+	if err != nil {
+		return err
+	}
+	parts := strings.Split(state, "\t")
+	if len(parts) != 3 {
+		return errors.New("invalid mariadb provenance response")
+	}
+	if parts[0] == "none" && parts[1] == "0" || parts[2] == owner && ((parts[0] == "reserved" && parts[1] == "0") || (parts[0] == "created" && parts[1] == "1")) {
+		return nil
+	}
+	return ErrConflict
+}
+
 // createManaged requires the caller to hold the database-name job lock.
 func createManaged(ctx context.Context, runner exec.Runner, kind, name, op, create string, finish func() error) error {
 	if runner == nil || !id.Valid(op) || (&validate.V{}).DBName(name) != nil || (kind != "schema" && kind != "user") {

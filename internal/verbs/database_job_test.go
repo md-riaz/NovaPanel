@@ -3,6 +3,7 @@ package verbs_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"novapanel/internal/agent"
@@ -23,6 +24,7 @@ import (
 type interruptAfterSchema struct {
 	delegate exec.Runner
 	stopped  bool
+	cancel   context.CancelFunc
 }
 
 func (r *interruptAfterSchema) Run(ctx context.Context, program string, args []string, o exec.RunOpts) ([]byte, []byte, int, error) {
@@ -33,7 +35,8 @@ func (r *interruptAfterSchema) Run(ctx context.Context, program string, args []s
 	o.Stdin = strings.NewReader(string(b))
 	if !r.stopped && strings.Contains(string(b), "INSERT INTO novapanel.managed_objects") && strings.Contains(string(b), "'user'") {
 		r.stopped = true
-		return nil, nil, 1, nil
+		r.cancel()
+		return nil, nil, -1, context.Canceled
 	}
 	return r.delegate.Run(ctx, program, args, o)
 }
@@ -92,6 +95,44 @@ func (r *databaseRunner) Run(_ context.Context, _ string, _ []string, o exec.Run
 	}
 	return nil, nil, 0, nil
 }
+func TestDatabaseCreateUnknownSiteHasNoExternalEffects(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	log, err := audit.Open(s, filepath.Join(t.TempDir(), "audit"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	seal, err := secret.New(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := agent.New()
+	a.Store = s
+	a.Audit = log
+	a.Jobs = jobs.NewQueue(s, seal, log)
+	runner := &databaseRunner{}
+	a.Exec = runner
+	server := rpc.NewServer(a)
+	reply := server.Dispatch(rpc.WithCaller(ctx, rpc.Caller{Role: "admin", Session: "owner"}), rpc.Request{Verb: "database.create", Args: json.RawMessage(`{"site_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV"}`)})
+	if !reply.OK {
+		t.Fatalf("admission: %+v", reply)
+	}
+	job, err := s.StartJob(ctx, reply.Data.(jobs.EnqueueResult).Job.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = server.ExecuteJob(ctx, &job)
+	var coded *rpc.CodedError
+	if !errors.As(err, &coded) || coded.Code != "not_found" || runner.calls != 0 {
+		t.Fatalf("err=%v calls=%d", err, runner.calls)
+	}
+}
+
 func TestDatabaseCreateJobAndClaim(t *testing.T) {
 	ctx := context.Background()
 	s, e := store.Open(":memory:")
@@ -163,9 +204,11 @@ func TestDatabaseCreateJobAndClaim(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	interrupt := &interruptAfterSchema{delegate: a.Exec}
+	attemptCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	interrupt := &interruptAfterSchema{delegate: a.Exec, cancel: cancel}
 	a.Exec = interrupt
-	if e = server.ExecuteJob(ctx, &j); e == nil || !interrupt.stopped {
+	if e = server.ExecuteJob(attemptCtx, &j); !errors.Is(e, context.Canceled) || !interrupt.stopped {
 		t.Fatal("expected interruption after schema provenance committed")
 	}
 	a.Exec = interrupt.delegate

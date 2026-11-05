@@ -3,12 +3,16 @@ package jobs
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"novapanel/internal/id"
 	"novapanel/internal/rpcerr"
 	"novapanel/internal/store"
 	"time"
 )
+
+// ErrRetry retains a running job for roll-forward when cleanup could not finish.
+var ErrRetry = errors.New("jobs: retry required")
 
 // Run owns one worker. SQL transactions never span the external runner.
 func (q *Queue) Run(ctx context.Context) error {
@@ -102,6 +106,16 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 			defer cancel()
 		}
 	}
+	if key := databaseSiteKey(j); key != "" {
+		unlockSite, err := q.locks.lock(attemptCtx, key)
+		if err != nil {
+			if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
+				return nil
+			}
+			return err
+		}
+		defer unlockSite()
+	}
 	unlock, err := q.locks.lock(attemptCtx, j.ObjectKey)
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
@@ -129,7 +143,10 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 	if ctx.Err() != nil {
 		return nil
 	} // leave running for restart's effectful/idempotent recovery
-	if errors.Is(attemptCtx.Err(), context.DeadlineExceeded) {
+	if j.Effectful && errors.Is(attemptCtx.Err(), context.DeadlineExceeded) {
+		return q.finish(ctx, j, rpcerr.Errf("interrupted", "Effectful job interrupted"))
+	}
+	if errors.Is(err, ErrRetry) || errors.Is(attemptCtx.Err(), context.DeadlineExceeded) {
 		current, getErr := q.store.GetJob(ctx, j.ID)
 		if getErr != nil {
 			return getErr
@@ -139,6 +156,19 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 		return q.store.UpdateJob(ctx, current)
 	}
 	return q.finish(ctx, j, err)
+}
+
+func databaseSiteKey(j Job) string {
+	if j.Verb != "database.create" && j.Verb != "database.delete" {
+		return ""
+	}
+	var args struct {
+		SiteID string `json:"site_id"`
+	}
+	if json.Unmarshal(j.Args, &args) != nil || !id.Valid(args.SiteID) {
+		return ""
+	}
+	return "site:" + args.SiteID
 }
 
 func (q *Queue) finish(ctx context.Context, j Job, err error) error {

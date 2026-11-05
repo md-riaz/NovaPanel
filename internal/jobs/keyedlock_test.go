@@ -37,6 +37,15 @@ func TestKeyedLockSerializesAndReleasesReferences(t *testing.T) {
 	}
 }
 
+func TestDatabaseGrandparentLockKey(t *testing.T) {
+	for _, verb := range []string{"database.create", "database.delete"} {
+		j := Job{Verb: verb, Args: []byte(`{"site_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV"}`)}
+		if got := databaseSiteKey(j); got != "site:01ARZ3NDEKTSV4RRFFQ69G5FAV" {
+			t.Fatalf("%s: %q", verb, got)
+		}
+	}
+}
+
 func TestKeyedLockContextContention(t *testing.T) {
 	for _, key := range []string{"db:parent", "dbname:example", "dbuser:example"} {
 		t.Run(key, func(t *testing.T) {
