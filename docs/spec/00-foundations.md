@@ -1050,8 +1050,17 @@ ownership is provable on the far side of the transaction boundary.
    Because reconcile acts only on `obj_id`-proven-own markers and only ever `DROP`s an object under a
    `deleting` marker it owns (never a `reserved`-present or foreign one), it preserves rules 3–4 (never
    adopt, never delete an object of uncertain ownership) while guaranteeing **convergence**: whatever
-   inter-store crash state a stop leaves, the next boot (plus the periodic pass) drives it to a correct
-   terminal state with no orphan and no stranded marker.
+   inter-store crash state a stop leaves, the next boot (plus the periodic pass) drives it to **a correct
+   terminal state**. For every *provable* state that means **no orphan and no stranded marker** — the
+   object and its marker are either both present (healthy), or both removed (tombstone/abort). The **one
+   deliberate exception** is the unprovable `reserved`+present (an indeterminate-exit `CREATE`
+   indistinguishable from a foreign object): there the correct terminal state is the **fail-closed
+   operator-conflict that preserves *both* the object and its `reserved` marker** — the retained marker is
+   **not** a "stranded marker" bug but the durable record of an unresolved-ownership conflict awaiting the
+   operator, and the retained object is **not** an "orphan" to reclaim but a possibly-foreign object we are
+   forbidden to `DROP`. Convergence therefore means "reaches its correct terminal state," which for that one
+   case is preservation-for-operator, not removal (never-delete-uncertain, rules 3–4, wins over automatic
+   cleanup).
 
 **Completeness & freeze.** Rules 1–9 are the *closed* contract for a two-store create/rotate/delete: the
 provenance `phase` is the external authority, the SQLite terminal state is ordered against it (rule 8),
