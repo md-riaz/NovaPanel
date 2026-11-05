@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -40,6 +41,7 @@ type Queue struct {
 	running         bool
 	startup         func(context.Context) (*Job, error)
 	resume          func(context.Context, *Job) error
+	postRecovery    func(context.Context) error
 	wake            chan struct{}
 	locks           keyedLock
 }
@@ -90,6 +92,70 @@ func (q *Queue) EnqueueDatabase(ctx context.Context, verb string, args any, obje
 	return q.enqueue(ctx, verb, args, objectKey, false, &databaseIntent{password, database, user})
 }
 
+type idempotencyKey struct{}
+type idempotencyRequest struct{ key, hash string }
+
+// WithIdempotency is called by trusted RPC dispatch after authentication.
+func WithIdempotency(ctx context.Context, key, hash string) context.Context {
+	return context.WithValue(ctx, idempotencyKey{}, idempotencyRequest{key, hash})
+}
+
+// LockIdempotency serializes dispatch through admission, including handler preconditions.
+func (q *Queue) LockIdempotency(ctx context.Context) (func(), error) {
+	m, ok := MetadataFrom(ctx)
+	r, _ := ctx.Value(idempotencyKey{}).(idempotencyRequest)
+	if !ok || m.CreatedBy == "" || r.key == "" {
+		return nil, rpcerr.Errf("forbidden", "trusted job identity required")
+	}
+	return q.locks.lock(ctx, "idempotency:"+claimHash(m.CreatedBy+"\x00"+r.key))
+}
+
+func (q *Queue) Replay(ctx context.Context) (EnqueueResult, bool, error) {
+	m, ok := MetadataFrom(ctx)
+	r, _ := ctx.Value(idempotencyKey{}).(idempotencyRequest)
+	if !ok || m.CreatedBy == "" || r.key == "" {
+		return EnqueueResult{}, false, rpcerr.Errf("forbidden", "trusted job identity required")
+	}
+	if err := q.healthy(); err != nil {
+		return EnqueueResult{}, false, err
+	}
+	p, ok := q.store.(interface {
+		ReplayJob(context.Context, string, string, string) (store.Job, []byte, bool, error)
+	})
+	if !ok || q.sealer == nil {
+		return EnqueueResult{}, false, errors.New("jobs: idempotency unavailable")
+	}
+	j, saved, found, err := p.ReplayJob(ctx, m.CreatedBy, claimHash(m.CreatedBy+"\x00"+r.key), r.hash)
+	if errors.Is(err, store.ErrIdempotencyConflict) {
+		return EnqueueResult{}, false, rpcerr.Errf("conflict", "Idempotency key reused")
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return EnqueueResult{}, false, rpcerr.Errf("not_found", "Claim unavailable")
+	}
+	if err != nil || !found {
+		return EnqueueResult{}, found, err
+	}
+	result, err := q.replayResult(j, saved)
+	return result, true, err
+}
+
+func (q *Queue) replayResult(j Job, saved []byte) (EnqueueResult, error) {
+	var sealed secret.Sealed
+	if json.Unmarshal(saved, &sealed) != nil || q.sealer == nil {
+		return EnqueueResult{}, errors.New("jobs: invalid saved claim")
+	}
+	plain, err := q.sealer.Open(sealed)
+	if err != nil {
+		return EnqueueResult{}, errors.New("jobs: saved claim unavailable")
+	}
+	defer clear(plain)
+	var binding struct{ JobID, Owner, Token string }
+	if json.Unmarshal(plain, &binding) != nil || binding.JobID != j.ID || binding.Owner != j.CreatedBy || binding.Token == "" {
+		return EnqueueResult{}, errors.New("jobs: saved claim binding mismatch")
+	}
+	return EnqueueResult{Job: j, ClaimToken: binding.Token}, nil
+}
+
 func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey string, sealed bool, intent *databaseIntent) (EnqueueResult, error) {
 	var result EnqueueResult
 	m, ok := MetadataFrom(ctx)
@@ -128,12 +194,9 @@ func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey st
 		return result, e
 	}
 	claim := store.JobClaim{JobID: j.ID, ClaimHash: claimHash(text), Expires: 0}
-	// Persist both rows atomically so a claim failure cannot orphan a queued job.
+	var nonce, ciphertext []byte
 	if intent != nil {
-		p, ok := q.store.(interface {
-			CreateDatabaseIntent(context.Context, store.Job, store.JobClaim, []byte, []byte, *store.Database, *store.DatabaseUser) error
-		})
-		if !ok || q.sealer == nil || intent.password == "" {
+		if q.sealer == nil || intent.password == "" {
 			return result, errors.New("jobs: database intent unavailable")
 		}
 		payload, err := json.Marshal(inputPayload{j.ID, j.Verb, j.ObjectKey, json.RawMessage(raw)})
@@ -154,19 +217,55 @@ func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey st
 		if err != nil {
 			return result, errors.New("jobs: input sealing failed")
 		}
-		e = p.CreateDatabaseIntent(ctx, j, claim, sealedSecret.Nonce, sealedSecret.Ciphertext, intent.database, intent.user)
-	} else {
-		e = q.store.CreateJobWithClaim(ctx, j, claim)
+		nonce, ciphertext = sealedSecret.Nonce, sealedSecret.Ciphertext
+	}
+	request, _ := ctx.Value(idempotencyKey{}).(idempotencyRequest)
+	p, ok := q.store.(interface {
+		AdmitJob(context.Context, store.Job, store.JobClaim, string, string, []byte, []byte, []byte) (store.Job, []byte, bool, error)
+	})
+	if !ok {
+		return result, errors.New("jobs: atomic admission unavailable")
+	}
+	var sealedToken []byte
+	key := ""
+	if request.key != "" {
+		if q.sealer == nil || request.hash == "" {
+			return result, errors.New("jobs: idempotency unavailable")
+		}
+		key = claimHash(m.CreatedBy + "\x00" + request.key)
+		binding, err := json.Marshal(struct{ JobID, Owner, Token string }{j.ID, m.CreatedBy, text})
+		if err != nil {
+			return result, err
+		}
+		s, err := q.sealer.Seal(binding)
+		clear(binding)
+		if err != nil {
+			return result, errors.New("jobs: claim sealing failed")
+		}
+		sealedToken, e = json.Marshal(s)
+		if e != nil {
+			return result, e
+		}
+	}
+	existing, saved, replay, e := p.AdmitJob(ctx, j, claim, key, request.hash, sealedToken, nonce, ciphertext)
+	if errors.Is(e, store.ErrIdempotencyConflict) {
+		return result, rpcerr.Errf("conflict", "Idempotency key reused")
+	}
+	if errors.Is(e, sql.ErrNoRows) {
+		return result, rpcerr.Errf("not_found", "Claim unavailable")
 	}
 	if e != nil {
 		return result, e
 	}
-	if e = q.record(j, "ok", "", "enqueue"); e != nil {
-		return result, e
+	if replay {
+		return q.replayResult(existing, saved)
 	}
 	select {
 	case q.wake <- struct{}{}:
 	default:
+	}
+	if e = q.record(j, "ok", "", "enqueue"); e != nil {
+		return result, e
 	}
 	return EnqueueResult{Job: j, ClaimToken: text}, nil
 }

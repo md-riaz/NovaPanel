@@ -68,7 +68,7 @@ func (s *Scheduler) Set(ctx context.Context, r ScheduleRequest) (store.Schedule,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m, e := scheduleOwner(ctx)
-	if strings.HasPrefix(r.ID, "acme:auto:") {
+	if strings.HasPrefix(r.ID, "acme:auto:") || r.ID == "reconcile:auto" {
 		return store.Schedule{}, rpcerr.Errf("forbidden", "Automatic schedule is agent owned")
 	}
 	if e != nil {
@@ -156,6 +156,15 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 	}); ok {
 		if e := automatic.PrepareACMESchedules(ctx, now); e != nil {
 			return e
+		}
+	}
+	if _, enabled := s.policies["reconcile"]; enabled {
+		if automatic, ok := s.q.store.(interface {
+			PrepareReconcileSchedule(context.Context, int64) error
+		}); ok {
+			if e := automatic.PrepareReconcileSchedule(ctx, now); e != nil {
+				return e
+			}
 		}
 	}
 	rows, e := s.q.store.DueSchedules(ctx, now)

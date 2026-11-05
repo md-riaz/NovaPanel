@@ -9,6 +9,7 @@ import (
 	"errors"
 	"novapanel/internal/agent"
 	"novapanel/internal/database"
+	"novapanel/internal/exec"
 	"novapanel/internal/id"
 	"novapanel/internal/jobs"
 	"novapanel/internal/rpc"
@@ -119,8 +120,8 @@ func databaseCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 	}
 	defer unlock()
 	if strings.HasPrefix(durable.Step, "database_cleanup:") {
-		if e = databaseReady(ctx, a.Exec); e != nil { return jobs.ErrRetry }
-		return cleanupDatabaseCreate(ctx, a, j, v, strings.TrimPrefix(durable.Step, "database_cleanup:"))
+		// Legacy cleanup checkpoints cannot authorize an external deletion.
+		return rpc.Errf("conflict", "Database cleanup requires reconciliation")
 	}
 	if v.SiteID != nil {
 		site, err := a.Store.SiteByID(ctx, *v.SiteID)
@@ -141,11 +142,14 @@ func databaseCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if errors.Is(e, database.ErrIndeterminate) {
+			return jobs.ErrRetry
+		}
 		code := "agent_error"
 		if errors.Is(e, database.ErrConflict) {
 			code = "conflict"
 		}
-		return cleanupDatabaseCreate(ctx, a, j, v, code)
+		return cleanupDatabaseCreate(ctx, a.Exec, v, code)
 	}
 	result, e := json.Marshal(map[string]string{"db_id": v.DBID, "db_name": v.Name, "db_user": v.Username})
 	if e != nil {
@@ -155,21 +159,15 @@ func databaseCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return cleanupDatabaseCreate(ctx, a, j, v, "agent_error")
+		return cleanupDatabaseCreate(ctx, a.Exec, v, "agent_error")
 	}
 	return nil
 }
 
-func cleanupDatabaseCreate(ctx context.Context, a *agent.Agent, j *jobs.Job, v databaseJobArgs, code string) error {
-	j.Step = "database_cleanup:" + code
-	if err := a.Store.UpdateJob(ctx, *j); err != nil {
+func cleanupDatabaseCreate(ctx context.Context, runner exec.Runner, v databaseJobArgs, code string) error {
+	objects := []database.AbortObject{{Kind: "user", Name: v.Username, ID: v.UserID}, {Kind: "schema", Name: v.Name, ID: v.DBID}}
+	if err := database.AbortCreate(ctx, runner, objects); err != nil {
 		return jobs.ErrRetry
 	}
-	if err := database.ManagedDeleteUser(ctx, a.Exec, v.Username, v.UserID); err != nil && !errors.Is(err, database.ErrConflict) {
-		return jobs.ErrRetry
-	}
-	if err := database.ManagedDelete(ctx, a.Exec, v.Name, v.DBID, nil); err != nil && !errors.Is(err, database.ErrConflict) {
-		return jobs.ErrRetry
-	}
-	return rpc.Errf(code, "Database create failed")
+	return rpc.Errf(code, "Database create failed; reconciliation required")
 }

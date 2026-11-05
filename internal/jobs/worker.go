@@ -64,6 +64,14 @@ func (q *Queue) Run(ctx context.Context) error {
 		}
 		return e
 	}
+	if q.postRecovery != nil {
+		if err := q.postRecovery(ctx); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return errors.Join(ErrRecoveryBlocked, err)
+		}
+	}
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -159,7 +167,7 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 }
 
 func databaseSiteKey(j Job) string {
-	if j.Verb != "database.create" && j.Verb != "database.delete" {
+	if j.Verb != "database.create" && j.Verb != "database.delete" && j.Verb != "database.rotate_password" && j.Verb != "dbuser.create" && j.Verb != "dbuser.delete" {
 		return ""
 	}
 	var args struct {

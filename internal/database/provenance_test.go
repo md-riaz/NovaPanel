@@ -76,23 +76,19 @@ func TestProvenanceUsesResourceIDColumn(t *testing.T) {
 	}
 }
 
-func TestProvenanceCommitsAfterFinish(t *testing.T) {
+func TestProvenanceCommitsBeforeFinish(t *testing.T) {
 	r := &provenanceRunner{state: "none\t0\t"}
 	err := createManaged(context.Background(), r, "schema", "d_test", "01ARZ3NDEKTSV4RRFFQ69G5FAV", "CREATE DATABASE `d_test`", func() error {
 		for _, s := range r.statements {
 			if strings.Contains(s, "SET phase='created'") {
-				t.Fatal("committed before finish")
+				return errors.New("grant failed")
 			}
 		}
-		return errors.New("grant failed")
+		t.Fatal("finish ran before ownership was recorded")
+		return nil
 	})
 	if err == nil {
 		t.Fatal("expected finish error")
-	}
-	for _, s := range r.statements {
-		if strings.Contains(s, "SET phase='created'") {
-			t.Fatal("committed after failed finish")
-		}
 	}
 }
 
@@ -122,6 +118,51 @@ func TestProvenanceConflictMatrix(t *testing.T) {
 				t.Fatalf("%q changed unowned object: %s", state, s)
 			}
 		}
+	}
+}
+
+func TestClearReservationRefusesPresentUser(t *testing.T) {
+	r := &deleteReplayRunner{present: "1"}
+	err := ClearUserReservation(context.Background(), r, "u_test", "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected conflict, got %v", err)
+	}
+	for _, s := range r.statements {
+		if strings.Contains(s, "DELETE ") {
+			t.Fatalf("removed ambiguous reservation: %s", s)
+		}
+	}
+}
+
+func TestDeletingMarkerIsNotRemovedByCreateReplay(t *testing.T) {
+	r := &provenanceRunner{state: "deleting\t1\t01ARZ3NDEKTSV4RRFFQ69G5FAV"}
+	err := createManaged(context.Background(), r, "schema", "d_test", "01ARZ3NDEKTSV4RRFFQ69G5FAV", "CREATE DATABASE `d_test`", nil)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected conflict, got %v", err)
+	}
+	for _, s := range r.statements {
+		if strings.Contains(s, "DROP ") || strings.Contains(s, "DELETE ") {
+			t.Fatalf("create replay changed abort marker: %s", s)
+		}
+	}
+}
+
+type failedCreateRunner struct{ provenanceRunner }
+
+func (r *failedCreateRunner) Run(ctx context.Context, program string, args []string, opts exec.RunOpts) ([]byte, []byte, int, error) {
+	b, _ := io.ReadAll(opts.Stdin)
+	if strings.HasPrefix(string(b), "CREATE DATABASE `d_test`") {
+		return nil, nil, 1, nil
+	}
+	opts.Stdin = strings.NewReader(string(b))
+	return r.provenanceRunner.Run(ctx, program, args, opts)
+}
+
+func TestIndeterminateCreateRequiresReplay(t *testing.T) {
+	r := &failedCreateRunner{provenanceRunner{state: "none\t0\t"}}
+	err := createManaged(context.Background(), r, "schema", "d_test", "01ARZ3NDEKTSV4RRFFQ69G5FAV", "CREATE DATABASE `d_test`", nil)
+	if !errors.Is(err, ErrIndeterminate) {
+		t.Fatalf("expected indeterminate create outcome, got %v", err)
 	}
 }
 

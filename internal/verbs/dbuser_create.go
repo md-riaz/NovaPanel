@@ -36,11 +36,12 @@ func (v *dbuserCreateArgs) Validate() error {
 }
 
 type dbuserCreateJob struct {
-	DBID     string `json:"db_id"`
-	DBName   string `json:"db_name"`
-	UserID   string `json:"user_id"`
-	Username string `json:"username"`
-	Password string `json:"password,omitempty"`
+	DBID     string  `json:"db_id"`
+	SiteID   *string `json:"site_id,omitempty"`
+	DBName   string  `json:"db_name"`
+	UserID   string  `json:"user_id"`
+	Username string  `json:"username"`
+	Password string  `json:"password,omitempty"`
 }
 
 func (v *dbuserCreateJob) Validate() error {
@@ -76,7 +77,7 @@ func dbuserCreate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	pw := hex.EncodeToString(key[:])
 	clear(key[:])
 	u := store.DatabaseUser{ID: uid, DatabaseID: d.ID, Username: name}
-	result, err := a.Jobs.EnqueueDatabase(ctx, "dbuser.create", dbuserCreateJob{DBID: d.ID, DBName: d.Name, UserID: uid, Username: name}, "db:"+d.ID, pw, nil, &u)
+	result, err := a.Jobs.EnqueueDatabase(ctx, "dbuser.create", dbuserCreateJob{DBID: d.ID, SiteID: d.SiteID, DBName: d.Name, UserID: uid, Username: name}, "db:"+d.ID, pw, nil, &u)
 	if errors.Is(err, store.ErrSiteConflict) {
 		return nil, rpc.Errf("conflict", "Database user conflict")
 	}
@@ -138,14 +139,30 @@ func dbuserCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	}
 	defer unlock()
 	if e = database.ManagedCreateUser(ctx, a.Exec, v.UserID, v.DBName, v.Username, v.Password); e != nil {
-		if errors.Is(e, database.ErrConflict) {
-			return rpc.Errf("conflict", "Database provenance conflict")
+		if errors.Is(e, database.ErrIndeterminate) {
+			return jobs.ErrRetry
 		}
-		return e
+		code := "agent_error"
+		if errors.Is(e, database.ErrConflict) {
+			code = "conflict"
+		}
+		if err := database.AbortCreate(ctx, a.Exec, []database.AbortObject{{Kind: "user", Name: v.Username, ID: v.UserID}}); err != nil {
+			return jobs.ErrRetry
+		}
+		return rpc.Errf(code, "Database user create failed; reconciliation required")
 	}
 	result, e := json.Marshal(map[string]string{"dbuser_id": v.UserID})
 	if e != nil {
 		return e
 	}
-	return a.Jobs.PublishDatabaseClaim(ctx, j, result, map[string]any{"password": v.Password})
+	if e = a.Jobs.PublishDatabaseClaim(ctx, j, result, map[string]any{"password": v.Password}); e != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err := database.AbortCreate(ctx, a.Exec, []database.AbortObject{{Kind: "user", Name: v.Username, ID: v.UserID}}); err != nil {
+			return jobs.ErrRetry
+		}
+		return rpc.Errf("agent_error", "Database user create failed; reconciliation required")
+	}
+	return nil
 }

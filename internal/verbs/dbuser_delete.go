@@ -24,10 +24,11 @@ func (v *dbuserIDArgs) Validate() error {
 }
 
 type dbuserDeleteJob struct {
-	UserID   string `json:"dbuser_id"`
-	DBID     string `json:"db_id"`
-	DBName   string `json:"db_name"`
-	Username string `json:"username"`
+	UserID   string  `json:"dbuser_id"`
+	DBID     string  `json:"db_id"`
+	SiteID   *string `json:"site_id,omitempty"`
+	DBName   string  `json:"db_name"`
+	Username string  `json:"username"`
 }
 
 func (v *dbuserDeleteJob) Validate() error {
@@ -54,7 +55,7 @@ func dbuserDelete(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	if e != nil {
 		return nil, e
 	}
-	return a.Jobs.Enqueue(ctx, "dbuser.delete", dbuserDeleteJob{UserID: u.ID, DBID: d.ID, DBName: d.Name, Username: u.Username}, "db:"+d.ID)
+	return a.Jobs.Enqueue(ctx, "dbuser.delete", dbuserDeleteJob{UserID: u.ID, DBID: d.ID, SiteID: d.SiteID, DBName: d.Name, Username: u.Username}, "db:"+d.ID)
 }
 func dbuserDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	var v dbuserDeleteJob

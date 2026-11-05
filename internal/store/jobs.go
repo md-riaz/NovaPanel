@@ -259,6 +259,10 @@ func (s *Store) ConsumeClaim(ctx context.Context, id, hash, owner string) (v Job
 			missing = true
 			return nil
 		}
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE idempotency SET result_json=NULL WHERE job_id=?`, id)
 		return err
 	})
 	if e == nil && missing {
@@ -269,6 +273,9 @@ func (s *Store) ConsumeClaim(ctx context.Context, id, hash, owner string) (v Job
 func (s *Store) DeleteExpiredClaims(ctx context.Context) error {
 	return s.Tx(ctx, func(tx *sql.Tx) error {
 		if _, e := tx.ExecContext(ctx, "UPDATE job_claims SET claimed=claimed WHERE 0"); e != nil {
+			return e
+		}
+		if _, e := tx.ExecContext(ctx, "UPDATE idempotency SET result_json=NULL WHERE job_id IN (SELECT job_id FROM job_claims WHERE length(ciphertext)>0 AND expires<=?)", s.clock.Now()); e != nil {
 			return e
 		}
 		_, e := tx.ExecContext(ctx, "DELETE FROM job_claims WHERE length(ciphertext)>0 AND expires<=?", s.clock.Now())

@@ -27,11 +27,12 @@ func (v *databaseIDArgs) Validate() error {
 }
 
 type databaseRotateJob struct {
-	DBID     string `json:"db_id"`
-	Name     string `json:"name"`
-	UserID   string `json:"user_id"`
-	Username string `json:"username"`
-	Password string `json:"password,omitempty"`
+	DBID     string  `json:"db_id"`
+	SiteID   *string `json:"site_id,omitempty"`
+	Name     string  `json:"name"`
+	UserID   string  `json:"user_id"`
+	Username string  `json:"username"`
+	Password string  `json:"password,omitempty"`
 }
 
 func (v *databaseRotateJob) Validate() error {
@@ -67,7 +68,7 @@ func databaseRotate(ctx context.Context, a *agent.Agent, args any) (any, error) 
 	}
 	pw := hex.EncodeToString(key[:])
 	clear(key[:])
-	v := databaseRotateJob{DBID: d.ID, Name: d.Name, UserID: owner.ID, Username: owner.Username}
+	v := databaseRotateJob{DBID: d.ID, SiteID: d.SiteID, Name: d.Name, UserID: owner.ID, Username: owner.Username}
 	return a.Jobs.EnqueueDatabase(ctx, "database.rotate_password", v, "db:"+d.ID, pw, nil, nil)
 }
 func databaseRotateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {

@@ -13,6 +13,7 @@ import (
 )
 
 var ErrConflict = errors.New("database provenance conflict")
+var ErrIndeterminate = errors.New("database create outcome indeterminate")
 
 func runSQL(ctx context.Context, runner exec.Runner, statement string) (string, error) {
 	out, _, code, err := runner.Run(ctx, "/usr/bin/mariadb", []string{"--no-defaults", "--protocol=socket", "--user=root", "--batch", "--skip-column-names"}, exec.RunOpts{Stdin: strings.NewReader(statement)})
@@ -192,9 +193,8 @@ func createManaged(ctx context.Context, runner exec.Runner, kind, name, op, crea
 			return ErrConflict
 		}
 	case "deleting":
-		if err := managedDrop(ctx, runner, kind, name, op); err != nil {
-			return err
-		}
+		// The deleting marker is the durable abort decision. Only the ordered
+		// cleanup path may remove it after the job is terminal (F20.8).
 		return ErrConflict
 	case "created":
 		if present != "1" {
@@ -208,13 +208,16 @@ func createManaged(ctx context.Context, runner exec.Runner, kind, name, op, crea
 		return ErrConflict
 	}
 	if _, err = runSQL(ctx, runner, create+";"); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return ErrIndeterminate
+	}
+	if _, err = runSQL(ctx, runner, fmt.Sprintf("UPDATE novapanel.managed_objects SET phase='created' WHERE kind='%s' AND name='%s' AND obj_id='%s' AND phase='reserved';", kind, marker, op)); err != nil {
 		return err
 	}
 	if finish != nil {
-		if err = finish(); err != nil {
-			return err
-		}
+		return finish()
 	}
-	_, err = runSQL(ctx, runner, fmt.Sprintf("UPDATE novapanel.managed_objects SET phase='created' WHERE kind='%s' AND name='%s' AND obj_id='%s' AND phase='reserved';", kind, marker, op))
-	return err
+	return nil
 }

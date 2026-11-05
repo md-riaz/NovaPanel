@@ -143,6 +143,11 @@ func (s *Server) ConfigureJobs() {
 		return time.Duration(ms) * time.Millisecond
 	})
 	a.Jobs.SetStartupRecovery(s.prepareTLSRecovery, s.resumeTLSRecovery)
+	a.Jobs.SetPostRecovery(func(ctx context.Context) error {
+		ctx = jobs.WithMetadata(ctx, jobs.Metadata{Actor: "startup@local", Role: "owner", CreatedBy: "local-root", Effectful: true})
+		_, err := a.Jobs.Enqueue(ctx, "reconcile", struct{}{}, "system")
+		return err
+	})
 	policies := map[string]jobs.SchedulePolicy{}
 	for _, name := range []string{"reconcile"} {
 		v, ok := s.Registry[name]

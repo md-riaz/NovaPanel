@@ -92,7 +92,14 @@ func ClearUserReservation(ctx context.Context, runner exec.Runner, user, userID 
 	if runner == nil || !id.Valid(userID) || (&validate.V{}).DBName(user) != nil || len(user) > 32 {
 		return errors.New("invalid database input")
 	}
-	_, err := runSQL(ctx, runner, fmt.Sprintf("DELETE FROM novapanel.managed_objects WHERE kind='user' AND name='%s@127.0.0.1' AND obj_id='%s' AND phase='reserved';", user, userID))
+	state, err := runSQL(ctx, runner, fmt.Sprintf("SELECT COUNT(*) FROM mysql.user WHERE User='%s' AND Host='127.0.0.1';", user))
+	if err != nil {
+		return err
+	}
+	if state != "0" {
+		return ErrConflict
+	}
+	_, err = runSQL(ctx, runner, fmt.Sprintf("DELETE FROM novapanel.managed_objects WHERE kind='user' AND name='%s@127.0.0.1' AND obj_id='%s' AND phase='reserved';", user, userID))
 	return err
 }
 
