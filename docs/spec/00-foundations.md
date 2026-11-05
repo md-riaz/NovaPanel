@@ -290,6 +290,32 @@ object_key = the resource a job serializes on (see the site rule below)
 
 - A slow verb's handler **enqueues a row and returns** `202`-style `{ ok:true, data:{ job } }`
   immediately. The web tier polls `job.status{id}` or `job.list`.
+- **Enqueue admission & uncertain-reply (head ruling — resolves the enqueue-audit finding, F6/F11).**
+  The enqueue is **one atomic SQLite transaction** — the same shape as the scheduler's
+  `EnqueueScheduledJob` (F18): it commits the `queued` **job row**, the **sealed input** (F12), the
+  **`job_claims`** reservation (when the verb mints a show-once secret), **and** the **`idempotency`**
+  row (`idempotency_key → job_id`, when a key is present) **all-or-nothing**. This commit **is** the
+  admission boundary: the operation is admitted iff the tx commits, so a failure *before* it leaves
+  **nothing queued** and the caller's failure is truthful.
+  - **The job row is the sole execution authority.** The worker and `PrepareOperations` execute **only**
+    a committed `queued`/`running` job row — **never** an audit line. So a mutation runs **iff** its
+    admission tx committed; there is no path by which an un-admitted operation executes.
+  - **Audit ordering is unchanged (F11): job-tx first, then the enqueue event (file append first, then
+    the `events` row), reconciled at startup.** A committed job is admitted and **runs regardless of the
+    enqueue-audit write** — the enqueue event *records* an admitted op, it is **not** a second gate that
+    can un-admit a durable job. No effect is ever unaudited: the **terminal** event (F11, mandatory)
+    records the effect, and a torn enqueue event is backfilled by the F11 file-only reconcile; an audit
+    **sink failure** trips F11's sticky-`unhealthy` gate, stopping the *next* mutation. (This is why the
+    finding's "enqueue-audit `Record` failed, yet `PrepareOperations` runs the job" is **safe**: the job
+    ran because it was durably admitted, and its effect is terminal-audited.)
+  - **Uncertain/lost reply is bounded and recoverable, never prevented** — losing the reply after the job
+    is durably queued is unavoidable for any durable async job. **At-most-once effect:** the single
+    admission tx + the `idempotency` mapping — a retry with the same `idempotency_key` returns the
+    **existing** `job_id` (and re-reads the F19 claim within TTL), never a second operation; without a
+    key the agent cannot dedup, so sending an `Idempotency-Key` for mutations is the web tier's job
+    (F2/B-D5). **Undeliverable show-once secret:** if the reply is lost and the claim's TTL lapses (or no
+    key), the minted secret is recovered by `rotate_password` (fresh F12 seal + F19 claim) — never
+    silently wrong, never a second uncommitted operation.
 - **One worker goroutine** drains `queued` oldest-first. Concurrency is bounded by a **keyed mutex on
   `object_key`** (`internal/jobs/keyedlock.go`): two jobs on the same object never interleave; jobs on
   different objects may run on a small worker pool (default 1; configurable, still per-object serial).
@@ -480,6 +506,11 @@ Record(Event) error                                    -- fail-closed: see sinks
   the record, not just successes — aaPanel/BHPanel log only post-auth actions; we log the refusal too),
   and a **final outcome** event. A slow verb records **enqueue** (`ok`, stage=enqueue) at `Run` and the
   worker's **terminal** event (`ok`/`error`, stage=exec) at the end, correlated by `job_id` in detail.
+  The **enqueue** event records an **already-admitted** operation (admission is the atomic job tx, F6) —
+  it never gates whether a committed `queued` job runs; the **terminal** event is the mandatory
+  "no effect reported complete without a durable record". So an enqueue-audit `Record` failure does not
+  un-admit the job (it trips the sticky-`unhealthy` gate for the *next* mutation and is backfilled by the
+  startup reconcile); the job's effect is still terminal-audited.
 - **Dual-sink ordering (decided): file append **first**, then the `events` row.** The `chattr +a` file
   is the tamper-proof source of truth; if the two ever diverge, the file wins. The two are **not
   atomic** and we do not promise they are: a crash between them can leave a **file-only** event (never
