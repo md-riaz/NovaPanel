@@ -1025,8 +1025,25 @@ ownership is provable on the far side of the transaction boundary.
    - `phase='deleting'`, object **absent** → completed-delete **tombstone** → remove the row.
    - `phase='deleting'`, object **present** → an authorized teardown of *our own* `obj_id` that didn't
      finish → complete the `DROP`, remove the row.
-   - `phase='reserved'`/`'created'`, **no** owning resource row, owning job **terminal or gone** → a
-     create that can never commit its SQLite owner → drive the rule-8 abort (`deleting` → `DROP` → remove).
+   - `phase='created'`, **no** owning resource row, owning job **terminal (`failed`) or gone** → our own
+     object (ownership **proven** by `created` — rule 4: `created` is written only *after* our own create
+     confirmed) whose SQLite owner can never commit → drive the rule-8 abort (`deleting` → `DROP` by
+     `obj_id` → remove). This is safe to `DROP` **because `created` proves ownership**. (It stays within
+     the `obj_id`-provable guard above: if neither the job nor any resource row carries this `obj_id`, the
+     marker is unmatchable → treated as foreign → operator, never dropped.)
+   - `phase='reserved'`, object **absent**, no owning row, owning job **terminal or gone** → a create that
+     died before a confirmed `CREATE` and can never commit its owner → there is **no object to drop** →
+     remove the stranded `reserved` marker (frees the name; the marker is `obj_id`-proven ours and nothing
+     external is touched).
+   - `phase='reserved'`, object **present**, no owning row, owning job **terminal or gone** → **`conflict`
+     → operator; never `DROP`, never adopt.** This is exactly rule 4's unprovable `reserved`+present: our
+     own `CREATE` with an indeterminate exit (`created` never written) *or* a foreign object that landed in
+     the reserve→create window — **indistinguishable** from external state. A terminal/gone job only
+     removes the *replay* that would have owned it; it does **not** make the present object's ownership
+     provable, so reconcile must fail closed to the operator, identically to rule 4 — it may **not** `DROP`
+     on the strength of a `reserved` row. (Rule 4's owed `obj_id`-stamp optimization would let reconcile
+     read the stamp, prove ownership and resolve this automatically; out of scope — the operator path is
+     the contract.)
    - `phase='created'`, owning resource row **present** → live and healthy → leave.
    - `phase='reserved'`, object **present**, no owning row, a job still **live** → leave it to that job's
      replay (rules 3–4); reconcile never races a live job on the same `obj_id`.
