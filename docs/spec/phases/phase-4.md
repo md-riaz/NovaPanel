@@ -223,14 +223,18 @@ what serializes a `database.create` against a concurrent `site.delete` of its si
 
 **No orphaned external object (F20.8).** The pre-flight above makes the common cases (unknown `site_id`,
 name collision) fail with **zero external effect**. For a **terminal** failure that still strands an
-object this create provably made — a TOCTOU collision landing after `CREATE DATABASE`, or a SQLite
-owning-row commit that cannot succeed — the create **rolls its own `obj_id`-owned objects back to absent**
-(DROP by `obj_id`, provenance-last, F20.5) and records the F3 code; it never leaves an external schema/user
-with no committed `databases`/`db_users` row to own it. A **replay** of such a job therefore rolls to
-**cleanup, not completion** — it removes only what its own `obj_id` owns (not an object of uncertain
-ownership, which stays `conflict` for the operator). Net: a `database.create` is all-or-nothing across the
-two stores — success leaves externals **+** SQLite row **+** `created` provenance; any terminal failure
-leaves **none** of its own externals.
+object this create provably made — a TOCTOU collision landing after `CREATE DATABASE` — the create cleans
+up via the **delete path**: advance the owned `managed_objects` row to **`phase='deleting'`**, `DROP` by
+`obj_id`, remove the row (provenance-last, F20.5), then record the F3 code and mark the **job `failed`**
+(after the DROP + row removal). **The cleanup-commit is the `phase='deleting'` write in `managed_objects`
+itself — never a separate SQLite "cleanup intent" flag** (prohibited per-feature durability, and unsafe:
+if that write is lost, replay rolls forward). Once `deleting` is persisted, the replay `deleting` branch
+below completes the cleanup on every attempt. **Before** `deleting` is persisted, the intent is
+deliberately **not** persisted separately — replay re-runs the create idempotently: the deterministic
+collision is re-hit → re-enter cleanup; if it has cleared, the `obj_id`-keyed create **completes** into a
+valid managed database. Both are correct terminal states, neither an orphan. Net: a `database.create` is
+all-or-nothing across the two stores — success leaves externals **+** SQLite row **+** `created`
+provenance; any terminal failure leaves **none** of its own externals.
 
 **Replay** (job not yet `done`) per F20.4, **branching on `managed_objects.phase`** — an *owned row* is
 one carrying **this resource's `obj_id`**; the reserve row is written one DDL statement *before* the
@@ -240,8 +244,11 @@ object, so an owned row does not by itself prove the object exists:
 - owned row `phase='reserved'` → creation **unconfirmed**; pre-flight the object: **absent** → resume at
   `CREATE` (we hold the reservation + the `db:<db_id>`/`dbuser:<username>` locks — a clean resume, not
   adoption) → `GRANT`/`ALTER` → advance to `created` → publish the claim; **present** → ownership cannot
-  be proven across the reserve→create window → `conflict`, operator reconcile (never adopt on a
-  `reserved` row alone).
+  be proven across the reserve→create window (an out-of-band create, **or our own `CREATE` whose client
+  exit was indeterminate** — the two look identical) → `conflict`, operator reconcile (never adopt, never
+  `DROP`, on a `reserved` row alone). A **nonzero/indeterminate `mysql` client exit** (server-side outcome
+  unknown) is **`agent_error`**, the op is **not** `done` and rolls forward into this branch; stamping the
+  object with its `obj_id` to shrink this window is the **owed** optimization (out of Step-1 scope).
 - owned row `phase='deleting'` → complete the `DROP` idempotently, then delete the row.
 - no owned row for this `obj_id` (none for the name, or one under a *different* `obj_id`), object
   **present** → not ours → `conflict`, operator reconcile; object **absent** → restart the op with the
