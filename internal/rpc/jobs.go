@@ -7,6 +7,7 @@ import (
 	"io"
 	"novapanel/internal/jobs"
 	"slices"
+	"time"
 )
 
 // ExecuteJob authorizes only durable authority, never a live session or argument label.
@@ -131,6 +132,16 @@ func (s *Server) ConfigureJobs() {
 	a := s.Agent
 	a.Jobs = jobs.NewQueue(a.Store, a.Secret, a.Audit)
 	a.Jobs.SetRunner(s.ExecuteJob)
+	a.Jobs.SetAttemptDeadline(func(name string) time.Duration {
+		ms := s.Registry[name].MaxDeadlineMs
+		if ms <= 0 {
+			ms = a.Cfg.DeadlineDefaultMs
+		}
+		if ms <= 0 {
+			ms = 120000
+		}
+		return time.Duration(ms) * time.Millisecond
+	})
 	a.Jobs.SetStartupRecovery(s.prepareTLSRecovery, s.resumeTLSRecovery)
 	policies := map[string]jobs.SchedulePolicy{}
 	for _, name := range []string{"reconcile"} {

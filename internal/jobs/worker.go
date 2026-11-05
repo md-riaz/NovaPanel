@@ -91,8 +91,22 @@ func (q *Queue) Run(ctx context.Context) error {
 	}
 }
 func (q *Queue) execute(ctx context.Context, j Job) error {
-	unlock, err := q.locks.lock(ctx, j.ObjectKey)
+	q.mu.Lock()
+	deadline := q.attemptDeadline
+	q.mu.Unlock()
+	attemptCtx := ctx
+	if deadline != nil {
+		if limit := deadline(j.Verb); limit > 0 {
+			var cancel context.CancelFunc
+			attemptCtx, cancel = context.WithTimeout(ctx, limit)
+			defer cancel()
+		}
+	}
+	unlock, err := q.locks.lock(attemptCtx, j.ObjectKey)
 	if err != nil {
+		if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
+			return nil
+		}
 		return err
 	}
 	defer unlock()
@@ -111,10 +125,19 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 	run := q.runner
 	q.mu.Unlock()
 	// Caller identity is restored exclusively from durable trusted columns.
-	err = invoke(WithMetadata(ctx, metadata(j)), run, &j)
+	err = invoke(WithMetadata(attemptCtx, metadata(j)), run, &j)
 	if ctx.Err() != nil {
 		return nil
 	} // leave running for restart's effectful/idempotent recovery
+	if errors.Is(attemptCtx.Err(), context.DeadlineExceeded) {
+		current, getErr := q.store.GetJob(ctx, j.ID)
+		if getErr != nil {
+			return getErr
+		}
+		current.State = "queued"
+		current.Updated = q.clock.Now()
+		return q.store.UpdateJob(ctx, current)
+	}
 	return q.finish(ctx, j, err)
 }
 

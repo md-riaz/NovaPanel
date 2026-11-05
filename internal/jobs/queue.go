@@ -30,17 +30,18 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Queue struct {
-	store   Persistence
-	sealer  Sealer
-	audit   Auditor
-	clock   Clock
-	mu      sync.Mutex
-	runner  func(context.Context, *Job) error
-	running bool
-	startup func(context.Context) (*Job, error)
-	resume  func(context.Context, *Job) error
-	wake    chan struct{}
-	locks   keyedLock
+	store           Persistence
+	sealer          Sealer
+	audit           Auditor
+	clock           Clock
+	mu              sync.Mutex
+	runner          func(context.Context, *Job) error
+	attemptDeadline func(string) time.Duration
+	running         bool
+	startup         func(context.Context) (*Job, error)
+	resume          func(context.Context, *Job) error
+	wake            chan struct{}
+	locks           keyedLock
 }
 
 func NewQueue(s Persistence, sealer Sealer, log Auditor) *Queue {
@@ -51,6 +52,11 @@ func (q *Queue) SetRunner(run func(context.Context, *Job) error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.runner = run
+}
+func (q *Queue) SetAttemptDeadline(deadline func(string) time.Duration) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.attemptDeadline = deadline
 }
 func (q *Queue) record(j Job, outcome, code, stage string) error {
 	if q.audit == nil {
