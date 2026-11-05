@@ -123,41 +123,48 @@ CREATE DATABASE IF NOT EXISTS `novapanel`;                 -- control schema (ag
 CREATE TABLE IF NOT EXISTS `novapanel`.`managed_objects` (
   kind       ENUM('schema','user') NOT NULL,
   name       VARCHAR(190)          NOT NULL,                -- schema name, or 'user@127.0.0.1'
-  op_id      CHAR(26)              NOT NULL,                -- the slow op's ULID (SQLite operation id)
+  obj_id     CHAR(26)              NOT NULL,                -- owning SQLite resource ULID: databases.id (schema) / db_users.id (user)
   phase      ENUM('reserved','created','deleting') NOT NULL,
   created_at BIGINT                NOT NULL,                -- unix-ms
-  PRIMARY KEY (kind, name)
+  PRIMARY KEY (kind, name)                                  -- name unique; OWNERSHIP is obj_id (F20.2), matched on create replay AND delete
 );
 ```
-`database.create` / `dbuser.create`, under the `db:<name>` lock, root via `unix_socket`:
-1. **SQLite write-ahead** (F20.1): the verb's **job** (02 `jobs`; `op_id = jobs.id`) carries the
-   generated `db`/`dbuser` names in `args_json` and the minted password **sealed** in `secrets` (F12),
-   written by `Verb.Run` before enqueue — **no new table or `prepared` state is added to 02**;
-   "prepared, no success" = the job not yet `done` (the F6 `running`→`queued` roll-forward set). Replay
-   reuses these exact values.
-2. **Pre-flight** (F20.3): object absent from `information_schema.SCHEMATA` / `mysql.user`? If present
-   and no `managed_objects` row owns it for this `op_id` → **`conflict`** (unmanaged collision — never
-   adopt, never `CREATE … IF NOT EXISTS`, never `DROP`).
-3. **Reserve** (F20.2): `INSERT novapanel.managed_objects(kind,name,op_id,phase='reserved')`; a row
-   already present under a different `op_id` → `conflict`.
+**Locks (F20.7):** `database.create` touches both a schema and its owner user, so it holds **both**
+`db:<db_id>` and `dbuser:<username>` (fixed order: `db:` then `dbuser:`); `dbuser.create` holds
+`db:<db_id>` (parent) + `dbuser:<username>`. The username is a MariaDB-global namespace, so its own lock
+is what serializes two different databases contending the same username — the `db:` lock alone does not.
+Root via `unix_socket`:
+1. **SQLite write-ahead** (F20.1): the verb's **job** (02 `jobs`) carries, in `args_json`, the generated
+   `db`/`dbuser` names **and the durable resource id** (`databases.id` / `db_users.id`, the `obj_id`),
+   and the minted password **sealed** in `secrets` (F12) — written by `Verb.Run` before enqueue. **No new
+   table or `prepared` state in 02**; "no success" = the job not yet `done` (replay trigger). **Ownership
+   is the `obj_id`, not `jobs.id`** — create, replay, and the later delete are different jobs sharing one
+   `obj_id`. Replay reuses these exact values.
+2. **Pre-flight** (F20.3): object absent from `information_schema.SCHEMATA` / `mysql.user`? If present and
+   no `managed_objects` row carries **this resource's `obj_id`** → **`conflict`** (unmanaged collision —
+   never adopt, never `CREATE … IF NOT EXISTS`, never `DROP`).
+3. **Reserve** (F20.2): `INSERT novapanel.managed_objects(kind,name,obj_id,phase='reserved')`; the
+   `(kind,name)` PK already present under a *different* `obj_id` → `conflict`.
 4. **Create**: `CREATE DATABASE …` / `CREATE USER …@'127.0.0.1' IDENTIFIED BY <sealed>` + least-priv
    `GRANT` (names/password from the sealed input; never `*.*`).
-5. **Commit**: `UPDATE … phase='created'`; SQLite success row; publish the **F19 claim** from the sealed
-   password.
+5. **Commit**: `UPDATE … phase='created'`; **the SQLite `databases`/`db_users` row is committed here, at
+   success** (so a conflicted/failed create leaves no orphan resource row whose name could mislead a
+   later delete); publish the **F19 claim** from the sealed password.
 
-**Replay** (job not yet `done`) per F20.4, **branching on `managed_objects.phase`** — the reserve row
-is written one DDL statement *before* the object, so an owned row does not by itself prove the object
-exists:
+**Replay** (job not yet `done`) per F20.4, **branching on `managed_objects.phase`** — an *owned row* is
+one carrying **this resource's `obj_id`**; the reserve row is written one DDL statement *before* the
+object, so an owned row does not by itself prove the object exists:
 - owned row `phase='created'` → object proven **ours** → re-run idempotent `GRANT`/`ALTER` with the
   sealed password, publish the claim (object unexpectedly absent → `conflict`, operator reconcile).
 - owned row `phase='reserved'` → creation **unconfirmed**; pre-flight the object: **absent** → resume at
-  `CREATE` (we hold the reservation + the `db:<name>` lock — a clean resume, not adoption) →
-  `GRANT`/`ALTER` → advance to `created` → publish the claim; **present** → ownership cannot be proven
-  across the reserve→create window → `conflict`, operator reconcile (never adopt on a `reserved` row
-  alone).
+  `CREATE` (we hold the reservation + the `db:<db_id>`/`dbuser:<username>` locks — a clean resume, not
+  adoption) → `GRANT`/`ALTER` → advance to `created` → publish the claim; **present** → ownership cannot
+  be proven across the reserve→create window → `conflict`, operator reconcile (never adopt on a
+  `reserved` row alone).
 - owned row `phase='deleting'` → complete the `DROP` idempotently, then delete the row.
-- no owned row, object **present** → unmanaged collision → `conflict`, operator reconcile; object
-  **absent** → restart the op with the same sealed identities.
+- no owned row for this `obj_id` (none for the name, or one under a *different* `obj_id`), object
+  **present** → not ours → `conflict`, operator reconcile; object **absent** → restart the op with the
+  same sealed identities.
 
 **`database.rotate_password{db_id}` — which account.** A database has exactly one **owner** db_user
 (the single `db_user` `database.create` returns; `db_users.owner=1`, one per database — enforced by a
@@ -181,10 +188,26 @@ site backs the database (built in Step 3), that step's rotation path additionall
 `wp-config.php` atomically as the site user. Step 1 therefore proves rotate end-to-end **without**
 WordPress; the wp-config coupling is deferred to Step 3 and is **not** silently waived.
 
-**`database.delete` / `dbuser.delete`** is **provenance-last** (F20.5): `DROP … ` (ensure-absent, F7),
-then delete the `managed_objects` row; a crash leaves `phase='deleting'` with the object maybe gone →
-replay completes the `DROP` idempotently. (`DROP IF EXISTS` is correct for delete; `CREATE IF NOT
-EXISTS` is still forbidden for create — F20.3.)
+**`database.delete` / `dbuser.delete`** is **provenance-last and `obj_id`-matched** (F20.5) — it never
+DROPs by name alone. The delete job knows the resource id from its args and the name from the SQLite row;
+it DROPs **only** a `managed_objects` row matching **both** `(kind,name)` **and** that `obj_id`:
+`phase='deleting'` → `DROP … IF EXISTS` (ensure-absent, F7) → delete the row (a crash mid-delete leaves
+`phase='deleting'`, object maybe gone → replay completes the `DROP` idempotently). A row for the name
+under a **different** `obj_id` → **not ours**: never `DROP`; the SQLite row is a failed-create/stale
+artifact → remove it, leaving the other owner's object untouched. No owned row + SQLite row present → the
+object was never created under us → drop the SQLite row only. Already-deleted replay is a no-op; name
+reuse is safe (a new resource reserves the freed name under its own `obj_id`, which a stale delete can
+never match). (`DROP IF EXISTS` is correct for delete; `CREATE IF NOT EXISTS` stays forbidden for create
+— F20.3.)
+
+**`database.delete` cascade & queue ordering (F20.7).** Under `db:<db_id>`, `database.delete` removes the
+schema **and every db_user of that database**, each by its own `obj_id` (owner + secondaries), provenance-
+last. The object-key lock serializes **execution**, not admission: a `dbuser.create{db_id}` that was
+admitted while a `database.delete{db_id}` sat queued is not rejected at admission — instead it
+**re-validates its parent under the `db:<db_id>` lock at execution** (ensure-state) and, finding the
+database gone/deleting, fails `precondition_failed` and clears any `reserved` row it left. So a stale
+queued child can never resurrect a deleted parent, and the cascade never has to guess ownership of a
+not-yet-created user. No admission-time machinery is added.
 
 This is the authorized mechanism for the whole `database.*`/`dbuser.*` family; it is the minimal F20
 contract, not a bespoke recovery framework, and does not reopen the #90 scope freeze. Power-loss/VM

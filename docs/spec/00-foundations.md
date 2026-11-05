@@ -314,7 +314,10 @@ the job's `args_json`, and enqueues** (returning `{job}`); the **worker** calls 
 `Verb.Exec(ctx, a, *Job)`. So `Exec` re-runs idempotently from `args_json` alone after a crash (the id
 is already there). `Verb.ObjectKey(args) string` derives the lock key **from ids in args** — the
 convention is `site:<site_id>` / `db:<db_id>` / `zone:<zone>` / `system` / `firewall` (an **id**, which
-`Run` has already ensured is present; it never needs a store lookup). `step` names the last completed
+`Run` has already ensured is present; it never needs a store lookup). A resource with an identity in a
+store-global namespace distinct from its parent takes its **own** lock as well — a MariaDB user is
+global (`user@host`), so user verbs lock `dbuser:<username>` **and** the parent `db:<db_id>` in a fixed
+order (F20.7); a verb may hold more than one keyed lock when it spans namespaces. `step` names the last completed
 step; the worker updates `progress` and appends `job_events`. A panic inside `Exec` is recovered →
 `state=failed`, `code="agent_error"`, audited with the job's stored `actor`/`role` (F11). **Recovery**
 reads `jobs.effectful` (a column, 02) so `internal/jobs` needs no Registry: on start, an idempotent
@@ -810,22 +813,28 @@ ownership is provable on the far side of the transaction boundary.
    the operation row with its generated **identities** (names) and any minted **secret sealed** per
    F12. Replay reuses these exact values (so a re-applied step is idempotent and an F19 claim
    re-publishes the *same* secret — never a second, unseen one). TTL/claim semantics are unchanged (F19).
-   **This "operation" is the verb's existing Phase-1 job — 02 `jobs` — not a new table or state:**
-   `op_id` = `jobs.id` (ULID); the generated identities live in `args_json` and the sealed secret in
-   `secrets` (F12), both written by `Verb.Run` before enqueue (F6). "An op in `prepared` with no success
-   record" means **a job not yet `done`** — exactly the F6 roll-forward set (`running`→`queued`, re-run
-   from the top). No `prepared` state and no operation table are added to 02.
+   **This "operation" is the verb's existing Phase-1 job — 02 `jobs` — not a new table or state:** the
+   generated identities (names **and** the durable **resource id** — `databases.id` / `db_users.id`, a
+   ULID) live in `args_json`, the sealed secret in `secrets` (F12), both written by `Verb.Run` before
+   enqueue (F6). "An op with no success record" = **a job not yet `done`** (the F6 `running`→`queued`
+   roll-forward set) — this is the **replay trigger**. **Ownership, however, is keyed to the durable
+   resource id, not the job id** (rule 2): the create job, its replay, and the later *delete* job are
+   three different `jobs.id` but share the one resource id, so that id — never the name, never a job id —
+   is what proves far-side ownership across the whole lifecycle. No `prepared` state or operation table
+   is added to 02.
 2. **Provenance-before-object, under the per-name lock.** Record a durable provenance row **in the
-   external store** — `(name, kind, op_id, phase)` — **before** creating the object, and create the
-   object only after a pre-flight check shows it absent. The object is therefore never created without a
-   matching provenance row that names *this* `op_id`.
-3. **Never adopt.** A pre-flight collision (object present, no provenance row owned by this op) **fails
-   closed** with `conflict` — never `IF NOT EXISTS`-adopt, never auto-delete someone else's object. A
-   provenance row owned by a *different* op is likewise `conflict`.
+   external store** — `(kind, name, obj_id, phase)`, where **`obj_id` is the owning SQLite resource's
+   stable id** (not the job id) — **before** creating the object, and create the object only after a
+   pre-flight check shows it absent. The object is therefore never created without a matching provenance
+   row that names *this resource*. The name is unique in the store (a PK on `(kind, name)`); **ownership
+   is the `obj_id`**.
+3. **Never adopt.** A pre-flight collision (object present, no provenance row carrying **this resource's
+   `obj_id`**) **fails closed** with `conflict` — never `IF NOT EXISTS`-adopt, never auto-delete someone
+   else's object. A provenance row carrying a *different* `obj_id` is likewise `conflict`.
 4. **Replay decision (roll-forward), branching on the provenance `phase`.** For a job not yet `done`
    (the object may or may not exist, because the provenance row is written one DDL statement *before*
    the object — the reserve→create window):
-   - provenance row for the name owned by **this** `op_id`:
+   - provenance row for the name carrying **this resource's** `obj_id`:
      - `phase='created'` → the object is proven **ours** (it is only ever created *after* its row is
        advanced past `reserved`) → re-run the remaining idempotent steps with the sealed
        identities/secret (`GRANT`/`ALTER`), publish the claim, finish. If the object is unexpectedly
@@ -838,17 +847,39 @@ ownership is provable on the far side of the transaction boundary.
          reserve→create window, which the per-name lock bounds but does not forbid) → `conflict` for
          operator reconciliation. **Never adopt** on the strength of a `reserved` row alone.
      - `phase='deleting'` → complete the delete idempotently (F20.5), then remove the row.
-   - **no** provenance row for the name, object **present** in the external store → an **unmanaged
-     collision** (we never reserved it) → `conflict`, surfaced for **operator reconciliation** (rename/
-     remove the external object, or a future explicit adopt verb — never automatic).
-   - no provenance row, object **absent** → we died before reserving → restart the op cleanly with the
-     same sealed identities.
-5. **Delete is provenance-last.** Remove the external object, then its provenance row, so a crash
-   mid-delete leaves `phase=deleting` + object-maybe-gone → replay completes the delete idempotently.
+   - **no** provenance row carrying this resource's `obj_id` (none for the name, or one under a
+     *different* `obj_id`), object **present** in the external store → not ours (an **unmanaged
+     collision**, or another resource's object) → `conflict`, surfaced for **operator reconciliation**
+     (rename/remove the external object, or a future explicit adopt verb — never automatic).
+   - no provenance row for this resource, object **absent** → we died before reserving → restart the op
+     cleanly with the same sealed identities.
+5. **Delete is provenance-last, and verifies ownership by `obj_id` — never by name alone.** The delete
+   job knows the resource id (from its args) and resolves the name from the SQLite row. It DROPs **only**
+   when a provenance row matches **both** `(kind, name)` **and** this resource's `obj_id`: set
+   `phase=deleting`, `DROP`, then remove the row (a crash mid-delete leaves `phase=deleting` + object-
+   maybe-gone → replay completes the `DROP` idempotently). A provenance row for the name carrying a
+   *different* `obj_id` → **not ours**: never `DROP`; the SQLite row is a failed-create / stale artifact
+   → remove it (surface the mismatch), leaving the other owner's object untouched. No provenance row and
+   the SQLite row present → the object was never created under us → remove the SQLite row, no `DROP`.
+   Already-deleted replay (no owned row, object absent) is a no-op. Name reuse is safe: a new resource
+   reserves the freed name under *its own* `obj_id`, which a stale delete can never match.
 6. **No weaker substitute.** A SQLite-only reservation does **not** satisfy this (it cannot prove
    far-side ownership). If a store genuinely cannot hold a provenance marker, that is a **blocker to
    raise**, not a license to adopt by name or to fail every retry.
+7. **Cross-namespace locking & admission (serialize the right key; re-validate at execution).** The
+   object-key lock (F6) serializes **execution**, not admission, so the ordering safety is at execution
+   time under the lock, not in the queue. (a) **Lock the object's own namespace.** A resource with an
+   identity in a store-global namespace distinct from its parent takes its *own* lock, not only the
+   parent's — e.g. a MariaDB user is global (`user@host`), so user verbs lock `dbuser:<username>` **and**
+   the parent `db:<db_id>` (fixed acquisition order to avoid deadlock); a create that makes both a schema
+   and its owner user holds both. Two creates contending the same global name then serialize, and the
+   loser hits the pre-flight/PK conflict. (b) **Execution re-validates its preconditions under the
+   lock** (ensure-state): a child create whose parent was deleted while it sat queued finds the parent
+   gone and fails `precondition_failed` — admission need not reject the ordering, because the lock +
+   re-validation make a stale queued op fail closed rather than resurrect a deleted parent. A cascade
+   delete removes the parent's children by their own `obj_id` provenance (rule 5), so a not-yet-created
+   queued child leaves nothing to adopt.
 
 Phases instantiate this: Phase 4 with a MariaDB control schema (see `phases/phase-4.md`), Phase 7 with
-the provider's own record keyed by `op_id`. Power-loss/VM acceptance of the window stays deferred (#90);
+the provider's own record keyed by the resource `obj_id`. Power-loss/VM acceptance of the window stays deferred (#90);
 the contract itself is verified by the crash-safety replay test (F7) against a simulated mid-op stop.
