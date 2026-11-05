@@ -140,6 +140,9 @@ func (q *Queue) Replay(ctx context.Context) (EnqueueResult, bool, error) {
 }
 
 func (q *Queue) replayResult(j Job, saved []byte) (EnqueueResult, error) {
+	if len(saved) == 0 {
+		return EnqueueResult{Job: j}, nil
+	}
 	var sealed secret.Sealed
 	if json.Unmarshal(saved, &sealed) != nil || q.sealer == nil {
 		return EnqueueResult{}, errors.New("jobs: invalid saved claim")

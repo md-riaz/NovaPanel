@@ -32,8 +32,76 @@ func TestReplayOwnerExpiryAndConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.now.Store(1000 + ClaimTTLMillis)
-	if _, _, _, err = s.ReplayJob(ctx, "owner", "key", "payload"); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("expiry: %v", err)
+	got, token, found, err := s.ReplayJob(ctx, "owner", "key", "payload")
+	if err != nil || !found || got.ID != j.ID || len(token) != 0 {
+		t.Fatalf("expiry: job=%s token=%q found=%v err=%v", got.ID, token, found, err)
+	}
+	var saved sql.NullString
+	if err = s.db.QueryRowContext(ctx, "SELECT result_json FROM idempotency WHERE id='key'").Scan(&saved); err != nil || saved.Valid {
+		t.Fatalf("expired token retained: %v %v", saved, err)
+	}
+	c.now.Store(1000 + 24*60*60*1000 - 1)
+	if got, _, found, err = s.ReplayJob(ctx, "owner", "key", "payload"); err != nil || !found || got.ID != j.ID {
+		t.Fatalf("before 24h: found=%v err=%v", found, err)
+	}
+	c.now.Store(1000 + 24*60*60*1000)
+	if _, _, found, err = s.ReplayJob(ctx, "owner", "key", "payload"); err != nil || found {
+		t.Fatalf("24h expiry: found=%v err=%v", found, err)
+	}
+	fresh := Job{ID: "fresh", Verb: "test", Args: []byte(`{}`), CreatedBy: "owner"}
+	if _, _, replay, err := s.AdmitJob(ctx, fresh, JobClaim{JobID: fresh.ID, ClaimHash: "new"}, "key", "payload", []byte("new"), nil, nil); err != nil || replay {
+		t.Fatalf("new admission after 24h: replay=%v err=%v", replay, err)
+	}
+}
+
+func TestFailedPublishedClaimReplay(t *testing.T) {
+	for _, end := range []string{"consume", "expire"} {
+		t.Run(end, func(t *testing.T) {
+			c := &testClock{}
+			c.now.Store(1000)
+			s, err := OpenWithClock(filepath.Join(t.TempDir(), "db"), c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			ctx := context.Background()
+			j := Job{ID: "job", Verb: "test", Args: []byte(`{}`), CreatedBy: "owner"}
+			if _, _, _, err = s.AdmitJob(ctx, j, JobClaim{JobID: j.ID, ClaimHash: "hash"}, "key", "payload", []byte("sealed"), nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err = s.PublishClaim(ctx, j.ID, []byte("nonce"), []byte("cipher")); err != nil {
+				t.Fatal(err)
+			}
+			j.State, j.Code = "failed", "agent_error"
+			if err = s.UpdateJob(ctx, j); err != nil {
+				t.Fatal(err)
+			}
+			got, token, found, err := s.ReplayJob(ctx, "owner", "key", "payload")
+			if err != nil || !found || got.ID != j.ID || string(token) != "sealed" {
+				t.Fatalf("live replay: job=%s token=%q found=%v err=%v", got.ID, token, found, err)
+			}
+			if _, _, _, err = s.ReplayJob(ctx, "other", "key", "payload"); !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("owner: %v", err)
+			}
+			if _, _, _, err = s.ReplayJob(ctx, "owner", "key", "different"); !errors.Is(err, ErrIdempotencyConflict) {
+				t.Fatalf("payload: %v", err)
+			}
+			if end == "consume" {
+				if _, err = s.ConsumeClaim(ctx, j.ID, "hash", "owner"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				c.now.Store(1000 + ClaimTTLMillis)
+			}
+			got, token, found, err = s.ReplayJob(ctx, "owner", "key", "payload")
+			if err != nil || !found || got.ID != j.ID || len(token) != 0 {
+				t.Fatalf("unavailable replay: job=%s token=%q found=%v err=%v", got.ID, token, found, err)
+			}
+			var saved sql.NullString
+			if err = s.db.QueryRowContext(ctx, "SELECT result_json FROM idempotency WHERE id='key'").Scan(&saved); err != nil || saved.Valid {
+				t.Fatalf("token retained: %v %v", saved, err)
+			}
+		})
 	}
 }
 

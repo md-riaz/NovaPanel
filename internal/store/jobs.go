@@ -171,7 +171,12 @@ func (s *Store) UpdateJob(ctx context.Context, j Job) error {
 			return e
 		}
 		if terminal {
-			_, e = tx.ExecContext(ctx, `DELETE FROM secrets WHERE id=? AND name=?`, j.ID, "database-job:"+j.ID)
+			if _, e = tx.ExecContext(ctx, `DELETE FROM secrets WHERE id=? AND name=?`, j.ID, "database-job:"+j.ID); e != nil {
+				return e
+			}
+		}
+		if j.State == "failed" && j.Code != "interrupted" {
+			_, e = tx.ExecContext(ctx, `UPDATE idempotency SET result_json=NULL WHERE job_id=? AND EXISTS (SELECT 1 FROM job_claims WHERE job_id=? AND length(ciphertext)=0)`, j.ID, j.ID)
 		}
 		return e
 	})
@@ -251,7 +256,11 @@ func (s *Store) ConsumeClaim(ctx context.Context, id, hash, owner string) (v Job
 			return e
 		}
 		now := s.clock.Now()
-		if _, e := tx.ExecContext(ctx, "DELETE FROM job_claims WHERE job_id=? AND length(ciphertext)>0 AND expires<=?", id, now); e != nil {
+		// Targeted expiry cleanup requires the same owner and hash as consumption.
+		if _, e := tx.ExecContext(ctx, `UPDATE idempotency SET result_json=NULL WHERE job_id IN (SELECT job_id FROM job_claims WHERE job_id=? AND claim_hash=? AND claimed=0 AND length(ciphertext)>0 AND expires<=? AND EXISTS(SELECT 1 FROM jobs WHERE id=job_id AND created_by=? AND created_by<>''))`, id, hash, now, owner); e != nil {
+			return e
+		}
+		if _, e := tx.ExecContext(ctx, `DELETE FROM job_claims WHERE job_id=? AND claim_hash=? AND claimed=0 AND length(ciphertext)>0 AND expires<=? AND EXISTS(SELECT 1 FROM jobs WHERE id=job_id AND created_by=? AND created_by<>'')`, id, hash, now, owner); e != nil {
 			return e
 		}
 		err := tx.QueryRowContext(ctx, `DELETE FROM job_claims WHERE job_id=? AND claim_hash=? AND expires>? AND claimed=0 AND length(ciphertext)>0 AND EXISTS(SELECT 1 FROM jobs WHERE id=job_id AND created_by=? AND created_by<>'') RETURNING job_id,claim_hash,nonce,ciphertext,expires`, id, hash, now, owner).Scan(&v.JobID, &v.ClaimHash, &v.Nonce, &v.Ciphertext, &v.Expires)
@@ -275,10 +284,11 @@ func (s *Store) DeleteExpiredClaims(ctx context.Context) error {
 		if _, e := tx.ExecContext(ctx, "UPDATE job_claims SET claimed=claimed WHERE 0"); e != nil {
 			return e
 		}
-		if _, e := tx.ExecContext(ctx, "UPDATE idempotency SET result_json=NULL WHERE job_id IN (SELECT job_id FROM job_claims WHERE length(ciphertext)>0 AND expires<=?)", s.clock.Now()); e != nil {
+		now := s.clock.Now()
+		if _, e := tx.ExecContext(ctx, "UPDATE idempotency SET result_json=NULL WHERE job_id IN (SELECT job_id FROM job_claims WHERE length(ciphertext)>0 AND expires<=?)", now); e != nil {
 			return e
 		}
-		_, e := tx.ExecContext(ctx, "DELETE FROM job_claims WHERE length(ciphertext)>0 AND expires<=?", s.clock.Now())
+		_, e := tx.ExecContext(ctx, "DELETE FROM job_claims WHERE length(ciphertext)>0 AND expires<=?", now)
 		return e
 	})
 }

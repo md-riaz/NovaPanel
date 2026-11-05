@@ -127,8 +127,14 @@ func TestDispatchReplayBeforeResolution(t *testing.T) {
 	if _, err := a.Jobs.Claim(claimCtx, x.Job.ID, x.ClaimToken); err != nil {
 		t.Fatal(err)
 	}
-	if r := s.Dispatch(ctx, req); r.Code != "not_found" {
+	if r := wire(req); !r.OK {
 		t.Fatalf("consumed: %+v", r)
+	} else {
+		b, _ := json.Marshal(r.Data)
+		var replay jobs.EnqueueResult
+		if err := json.Unmarshal(b, &replay); err != nil || replay.Job.ID != x.Job.ID || replay.ClaimToken != "" {
+			t.Fatalf("consumed replay: %s, %v", b, err)
+		}
 	}
 }
 

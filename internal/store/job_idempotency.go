@@ -40,7 +40,12 @@ func (s *Store) replayJob(ctx context.Context, tx *sql.Tx, owner, key, payload s
 		return
 	}
 	var live int
-	err = tx.QueryRowContext(ctx, "SELECT 1 FROM job_claims WHERE job_id=? AND claimed=0 AND (length(ciphertext)=0 OR expires>?)", id, s.clock.Now()).Scan(&live)
+	err = tx.QueryRowContext(ctx, `SELECT 1 FROM job_claims WHERE job_id=? AND claimed=0 AND
+		((length(ciphertext)>0 AND expires>?) OR (length(ciphertext)=0 AND ?))`, id, s.clock.Now(), j.State != "failed" || j.Code == "interrupted").Scan(&live)
+	if errors.Is(err, sql.ErrNoRows) {
+		token = nil
+		_, err = tx.ExecContext(ctx, "UPDATE idempotency SET result_json=NULL WHERE id=?", key)
+	}
 	return
 }
 

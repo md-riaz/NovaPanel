@@ -1,6 +1,11 @@
 package jobs
 
-import "testing"
+import (
+	"errors"
+	"testing"
+
+	"novapanel/internal/store"
+)
 
 func TestEnqueueIdempotentReplay(t *testing.T) {
 	q, _, _, ctx := fixture(t)
@@ -34,7 +39,28 @@ func TestEnqueueIdempotentReplay(t *testing.T) {
 	if _, err = q.Claim(ctx, a.Job.ID, a.ClaimToken); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = q.Enqueue(ctx, "reconcile", nil, "system"); err == nil {
-		t.Fatal("consumed claim replayed")
+	replayed, err := q.Enqueue(ctx, "reconcile", nil, "system")
+	if err != nil || replayed.Job.ID != a.Job.ID || replayed.ClaimToken != "" {
+		t.Fatalf("consumed replay: %+v %v", replayed, err)
+	}
+}
+
+func TestFailedJobReplayOmitsClaim(t *testing.T) {
+	q, s, _, ctx := fixture(t)
+	ctx = WithIdempotency(ctx, "failure", "payload")
+	first, err := q.Enqueue(ctx, "test", nil, "system")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = q.finish(ctx, first.Job, errors.New("failure")); err != nil {
+		t.Fatal(err)
+	}
+	replay, found, err := q.Replay(ctx)
+	if err != nil || !found || replay.Job.ID != first.Job.ID || replay.Job.State != "failed" || replay.ClaimToken != "" {
+		t.Fatalf("failed replay: %+v found=%v err=%v", replay, found, err)
+	}
+	list, err := s.ListJobs(ctx, store.JobFilter{})
+	if err != nil || len(list) != 1 {
+		t.Fatalf("jobs=%d err=%v", len(list), err)
 	}
 }
