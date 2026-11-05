@@ -180,8 +180,12 @@ Only after structure + grant verification passes does the executor trust `manage
 authorize a `DROP`.
 
 **Bounded contention.** Acquiring the `db:`/`dbuser:` lock and any MariaDB-side wait are **bounded with
-cancellation** under the F6 clamped deadline — never an unbounded block — failing closed
-`deadline_exceeded` (F3) on timeout. This is a liveness correction, not a policy relaxation.
+cancellation** under the **per-attempt worker deadline** (F6: `Verb.MaxDeadlineMs`, `0` →
+`deadline_default_ms`) — **not** the caller's request deadline, which ends at enqueue — never an unbounded
+block, failing closed `deadline_exceeded` (F3) on timeout. The timeout is a **transient** attempt outcome:
+the job rolls forward (`running`→`queued`) and retries with the **same sealed input unchanged** (F6
+per-attempt deadline rule); it is not a terminal `failed`. This is a liveness correction, not a policy
+relaxation.
 
 **Locks (F20.7):** `database.create` touches both a schema and its owner user, so it holds **both**
 `db:<db_id>` and `dbuser:<username>` (fixed order: `db:` then `dbuser:`); `dbuser.create` holds

@@ -93,7 +93,9 @@ Rules:
 - **`code`** is a stable, lowercase_snake string the UI/clients branch on (catalog F3). Never
   localize or reword `code`; `error` is the human string and may change.
 - **`deadline_ms`** is advisory from the caller; the agent clamps it to a per-verb max and enforces
-  it on the handler's `context.Context`.
+  it on the handler's `context.Context`. For a **slow** verb this bounds only the synchronous dispatch
+  leg (validate → enqueue → return); its queued execution is bounded **per attempt** by
+  `Verb.MaxDeadlineMs`, **not** the caller deadline (which is gone after enqueue) — see F6.
 
 Codec lives in `internal/rpc/codec.go`: the server reads a line with a `bufio.Scanner` (buffer cap
 **1 MiB**, the request cap) and calls `DecodeLine([]byte) (Request, error)` on it (so Decode composes
@@ -297,6 +299,28 @@ object_key = the resource a job serializes on (see the site rule below)
   provider DNS) and is itself idempotent.
   > Supersedes `vpspanel-plan.md` §7 Phase-1's older "compensation/rollback" wording — local
   > multi-resource jobs roll forward, they do not compensate.
+- **Per-attempt worker deadline (head ruling, 2026-11-05).** The caller's F2 `deadline_ms` bounds only
+  the **synchronous dispatch leg** (validate → enqueue → the `202`-style return) and is **consumed at
+  enqueue**; a slow verb's real work runs later on the worker, where there is **no live caller** and the
+  original request deadline is gone. So a queued/replayed attempt is **not** bound by the caller deadline,
+  and `jobs` stores **no** deadline column (the bound is a property of the **verb**, not the row).
+  Instead **each execution attempt** — first run and every replay — runs under a fresh `Exec` context
+  bounded by **`Verb.MaxDeadlineMs`** (`0` → `deadline_default_ms`), recomputed per attempt. This is a
+  **liveness clamp, not the caller's SLA**: it exists so a stuck `db:`/`dbuser:` lock-wait or a hung
+  external call fails **`deadline_exceeded`** rather than pinning the worker; a normal attempt finishes
+  well under it. Binding worker execution to the original request deadline would be **wrong** — a durable
+  job must stay completable long after the RPC returned, which is the whole point of the queue.
+- **Attempt `deadline_exceeded` is transient, not terminal.** It aborts the attempt and releases its
+  locks; the job returns to the roll-forward set (`running`→`queued`) and is retried on a later pass — it
+  is **not** marked `failed`. Idempotent ensure-state (F7) + provenance-phase branching (F20.4) make the
+  retry safe (the next attempt re-reads recorded state and resumes). The **sealed input is
+  deadline-invariant**: the write-ahead sealed args/password (F12/F20.1) are reused **unchanged** on every
+  replay, including one after a timeout — a timeout never re-mints, re-seals, or invalidates them, and the
+  F19 claim publishes from that same sealed value when an attempt finally commits. (A genuine business
+  precondition failure stays terminal `failed` with its F3 code; a resource that is persistently
+  unreachable fails fast at the verb's own pre-check — e.g. MariaDB down → `precondition_failed`, not a
+  deadline spin — and a job that never reaches `done` stays visible to the operator; no max-attempts or
+  backoff machinery is added here.)
 - **Lock = liveness-checked**, never a bare lockfile. The single-worker invariant is held in-process;
   a second agent instance is prevented by an advisory lock on the DB + a pidfile checked for liveness
   (ISPConfig's stale `.ispconfig_lock` wedge is the anti-pattern).
