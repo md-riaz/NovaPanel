@@ -19,7 +19,7 @@ func TestValidators(t *testing.T) {
 		{"hostname", v.Hostname, []string{"example.com", "xn--bcher-kva.example"}, []string{"", "a..b", "a_b", "*.example.com", "x;evil", "-a.com", "a.", strings.Repeat("x", 64)}},
 		{"site", v.SiteName, []string{"ab", "site-1"}, []string{"root", "a", "a_b", "a;id", "UPPER", "novapanel"}},
 		{"user", v.UnixUser, []string{"web-1"}, []string{"root", "daemon", "nobody", "a\n"}},
-		{"db", v.DBName, []string{"db_1"}, []string{"a", "db-name", "mysql", "information_schema"}},
+		{"db", v.DBName, []string{"db_1"}, []string{"a", "db-name", "mysql", "information_schema", "novapanel"}},
 		{"unit", v.UnitName, []string{"nginx.service", "php8.3-fpm.service"}, []string{"../nginx.service", "a;id.service", "-bad.service", "x\n.service"}},
 		{"git", v.GitURL, []string{"https://github.com/user/repo.git", "ssh://git@example.com/repo"}, []string{"file:///etc/passwd", "ext::evil", "git@example.com:x", "https://x/a\n", "https:///x", "https://x/repo?x=1", "https://x/repo%0aevil", "https://x/repo%00evil"}},
 		{"cidr", v.CIDR, []string{"127.0.0.0/8", "::1/128"}, []string{"127.0.0.1", "0/0", "x;id"}},

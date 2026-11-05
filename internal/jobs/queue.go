@@ -62,9 +62,29 @@ func (q *Queue) record(j Job, outcome, code, stage string) error {
 	return q.audit.Record(audit.Event{Principal: audit.JobPrincipal(j.CreatedBy, j.Role, j.Scopes), Actor: j.Actor, Role: j.Role, Verb: j.Verb, ObjectKey: j.ObjectKey, Outcome: outcome, Code: code, Detail: map[string]any{"job_id": j.ID, "stage": stage}})
 }
 func (q *Queue) Enqueue(ctx context.Context, verb string, args any, objectKey string) (EnqueueResult, error) {
-	return q.enqueue(ctx, verb, args, objectKey, false)
+	return q.enqueue(ctx, verb, args, objectKey, false, nil)
 }
-func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey string, sealed bool) (EnqueueResult, error) {
+
+type databaseIntent struct {
+	password string
+	database *store.Database
+	user     *store.DatabaseUser
+}
+
+// Secondary locks are acquired after the parent database job lock.
+func (q *Queue) LockDatabaseName(ctx context.Context, name string) (func(), error) {
+	return q.locks.lock(ctx, "dbname:"+name)
+}
+
+func (q *Queue) LockDatabaseUser(ctx context.Context, username string) (func(), error) {
+	return q.locks.lock(ctx, "dbuser:"+username)
+}
+
+func (q *Queue) EnqueueDatabase(ctx context.Context, verb string, args any, objectKey, password string, database *store.Database, user *store.DatabaseUser) (EnqueueResult, error) {
+	return q.enqueue(ctx, verb, args, objectKey, false, &databaseIntent{password, database, user})
+}
+
+func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey string, sealed bool, intent *databaseIntent) (EnqueueResult, error) {
 	var result EnqueueResult
 	m, ok := MetadataFrom(ctx)
 	if !ok || m.CreatedBy == "" {
@@ -103,7 +123,36 @@ func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey st
 	}
 	claim := store.JobClaim{JobID: j.ID, ClaimHash: claimHash(text), Expires: 0}
 	// Persist both rows atomically so a claim failure cannot orphan a queued job.
-	if e = q.store.CreateJobWithClaim(ctx, j, claim); e != nil {
+	if intent != nil {
+		p, ok := q.store.(interface {
+			CreateDatabaseIntent(context.Context, store.Job, store.JobClaim, []byte, []byte, *store.Database, *store.DatabaseUser) error
+		})
+		if !ok || q.sealer == nil || intent.password == "" {
+			return result, errors.New("jobs: database intent unavailable")
+		}
+		payload, err := json.Marshal(inputPayload{j.ID, j.Verb, j.ObjectKey, json.RawMessage(raw)})
+		if err != nil {
+			return result, errors.New("jobs: input encoding failed")
+		}
+		// Bind the secret to the exact public intent as well as its job identity.
+		secretPayload, err := json.Marshal(struct {
+			Binding  json.RawMessage `json:"binding"`
+			Password string          `json:"password"`
+		}{payload, intent.password})
+		clear(payload)
+		if err != nil {
+			return result, errors.New("jobs: input encoding failed")
+		}
+		sealedSecret, err := q.sealer.Seal(secretPayload)
+		clear(secretPayload)
+		if err != nil {
+			return result, errors.New("jobs: input sealing failed")
+		}
+		e = p.CreateDatabaseIntent(ctx, j, claim, sealedSecret.Nonce, sealedSecret.Ciphertext, intent.database, intent.user)
+	} else {
+		e = q.store.CreateJobWithClaim(ctx, j, claim)
+	}
+	if e != nil {
 		return result, e
 	}
 	if e = q.record(j, "ok", "", "enqueue"); e != nil {
@@ -131,6 +180,7 @@ func (q *Queue) PublishClaim(ctx context.Context, jid string, fields map[string]
 	if e != nil {
 		return e
 	}
+	defer clear(raw)
 	s, e := q.sealer.Seal(raw)
 	if e != nil {
 		return e
@@ -156,6 +206,7 @@ func (q *Queue) Claim(ctx context.Context, jid, token string) (map[string]any, e
 	if e != nil {
 		return nil, e
 	}
+	defer clear(raw)
 	var fields map[string]any
 	e = json.Unmarshal(raw, &fields)
 	return fields, e

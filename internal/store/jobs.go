@@ -98,7 +98,7 @@ func (s *Store) GetJob(ctx context.Context, id string) (Job, error) {
 	return scanJob(s.db.QueryRowContext(ctx, "SELECT "+jobColumns+" FROM jobs WHERE id=?", id))
 }
 func (s *Store) NextQueuedJob(ctx context.Context) (Job, error) {
-	return scanJob(s.db.QueryRowContext(ctx, "SELECT "+jobColumns+" FROM jobs WHERE state='queued' ORDER BY created,id LIMIT 1"))
+	return scanJob(s.db.QueryRowContext(ctx, "SELECT "+jobColumns+" FROM jobs WHERE state='queued' ORDER BY rowid LIMIT 1"))
 }
 func (s *Store) StartJob(ctx context.Context, id string, now int64) (j Job, e error) {
 	e = s.Tx(ctx, func(tx *sql.Tx) error {
@@ -165,8 +165,16 @@ func (s *Store) ListJobs(ctx context.Context, f JobFilter) ([]Job, error) {
 // An interrupted failure is operational retry state and keeps its input.
 func (s *Store) UpdateJob(ctx context.Context, j Job) error {
 	terminal := j.State == "done" || (j.State == "failed" && j.Code != "interrupted")
-	r, e := s.db.ExecContext(ctx, `UPDATE jobs SET args_json=CASE WHEN ? AND json_valid(args_json) THEN CASE WHEN json_extract(args_json,'$._sealed_job_input')=1 THEN '{}' ELSE args_json END ELSE args_json END,state=?,step=?,progress=?,result_json=?,error=?,code=?,updated=?,finished=? WHERE id=?`, terminal, j.State, j.Step, j.Progress, nullableJSON(j.Result), j.Error, j.Code, j.Updated, j.Finished, j.ID)
-	return affected(r, e)
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		r, e := tx.ExecContext(ctx, `UPDATE jobs SET args_json=CASE WHEN ? AND json_valid(args_json) THEN CASE WHEN json_extract(args_json,'$._sealed_job_input')=1 THEN '{}' ELSE args_json END ELSE args_json END,state=?,step=?,progress=?,result_json=?,error=?,code=?,updated=?,finished=? WHERE id=?`, terminal, j.State, j.Step, j.Progress, nullableJSON(j.Result), j.Error, j.Code, j.Updated, j.Finished, j.ID)
+		if e = affected(r, e); e != nil {
+			return e
+		}
+		if terminal {
+			_, e = tx.ExecContext(ctx, `DELETE FROM secrets WHERE id=? AND name=?`, j.ID, "database-job:"+j.ID)
+		}
+		return e
+	})
 }
 func (s *Store) RecoverJobs(ctx context.Context, now int64) error {
 	return s.Tx(ctx, func(tx *sql.Tx) error {

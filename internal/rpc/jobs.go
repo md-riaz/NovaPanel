@@ -62,6 +62,13 @@ func (s *Server) executeJob(ctx context.Context, j *jobs.Job, recovery bool) err
 			return Errf("bad_request", "Invalid sealed arguments")
 		}
 		defer clear(raw)
+	} else if v.SealedInput {
+		var err error
+		raw, err = s.Agent.Jobs.OpenInput(j)
+		if err != nil {
+			return Errf("bad_request", "Invalid sealed arguments")
+		}
+		defer clear(raw)
 	}
 	newArgs, objectKey := v.NewArgs, v.ObjectKey
 	if v.NewJobArgs != nil {

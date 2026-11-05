@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/go-chi/chi/v5"
 	"net/http"
@@ -9,6 +10,11 @@ import (
 )
 
 var consoleRoutes = []route{
+	{"GET", "/databases", "user", "database.list"},
+	{"POST", "/databases/create", "user", "database.create"},
+	{"POST", "/databases/{dbID}/rotate", "user", "database.rotate_password"},
+	{"POST", "/databases/{dbID}/delete", "user", "database.delete"},
+	{"POST", "/jobs/{jobID}/claim", "user", "job.claim"},
 	{"GET", "/sites", "user", "site.list"},
 	{"GET", "/sites/{siteID}", "user", "site.get"},
 	{"GET", "/sites/{siteID}/ssl", "user", "ssl.status"},
@@ -35,7 +41,7 @@ type consoleView struct {
 }
 
 func isConsole(path string) bool {
-	return strings.HasPrefix(path, "/sites") || strings.HasPrefix(path, "/jobs/")
+	return strings.HasPrefix(path, "/databases") || strings.HasPrefix(path, "/sites") || strings.HasPrefix(path, "/jobs/")
 }
 func (s *server) console(w http.ResponseWriter, r *http.Request, c RPCClient, rt route, token string, v view) {
 	cv := &consoleView{SiteID: chi.URLParam(r, "siteID"), Section: rt.verb, Writable: v.Role == "owner" || v.Role == "admin"}
@@ -48,12 +54,22 @@ func (s *server) console(w http.ResponseWriter, r *http.Request, c RPCClient, rt
 		args["id"] = chi.URLParam(r, "jobID")
 	}
 	if r.Method == "POST" {
+		if (rt.verb == "database.create" || rt.verb == "database.rotate_password") && r.Header.Get("HX-Request") != "true" {
+			http.Error(w, "JavaScript is required to receive the one-time password", http.StatusBadRequest)
+			return
+		}
 		if !cv.Writable {
 			http.Error(w, "forbidden: read-only account", http.StatusForbidden)
 			return
 		}
 		var err error
-		args, err = consoleArgs(rt.verb, cv.SiteID, r)
+		if rt.verb == "job.claim" {
+			args = map[string]any{"job_id": chi.URLParam(r, "jobID"), "claim": r.PostForm.Get("claim")}
+		} else if rt.verb == "database.rotate_password" || rt.verb == "database.delete" {
+			args = map[string]any{"db_id": chi.URLParam(r, "dbID")}
+		} else {
+			args, err = consoleArgs(rt.verb, cv.SiteID, r)
+		}
 		if err != nil {
 			http.Error(w, "Invalid form: "+err.Error(), 400)
 			return
@@ -61,6 +77,11 @@ func (s *server) console(w http.ResponseWriter, r *http.Request, c RPCClient, rt
 	}
 	data, ok := call(w, r, c, rt.verb, args, token)
 	if !ok {
+		return
+	}
+	if rt.verb == "job.claim" {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(data)
 		return
 	}
 	cv.Data = data
@@ -78,6 +99,14 @@ func (s *server) console(w http.ResponseWriter, r *http.Request, c RPCClient, rt
 			if !valid || job["id"] == nil || job["state"] == nil {
 				http.Error(w, "Invalid agent job reply", http.StatusBadGateway)
 				return
+			}
+			if rt.verb == "database.create" || rt.verb == "database.rotate_password" {
+				claim, ok := data["claim"].(string)
+				if !ok || claim == "" || r.Header.Get("HX-Request") != "true" {
+					http.Error(w, "Claim requires JavaScript; rerun the operation", http.StatusBadGateway)
+					return
+				}
+				w.Header().Set("X-Job-Claim", claim)
 			}
 			cv.Section = "job.status"
 			cv.Data = job
@@ -122,6 +151,12 @@ func consoleArgs(verb, site string, r *http.Request) (map[string]any, error) {
 		return nil
 	}
 	switch verb {
+	case "database.create":
+		for _, name := range []string{"name", "site_id"} {
+			if value := r.PostForm.Get(name); value != "" {
+				args[name] = value
+			}
+		}
 	case "site.create":
 		if err := required("type", "primary_domain"); err != nil {
 			return nil, err

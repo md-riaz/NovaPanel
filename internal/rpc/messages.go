@@ -34,6 +34,7 @@ type Verb struct {
 	ReadOnly             bool
 	Scope                string
 	Slow, Effectful, MFA bool
+	SealedInput          bool
 	Module               string
 	Internal             bool
 	MaxDeadlineMs        int
@@ -56,7 +57,7 @@ func Register(v Verb) {
 	if v.Name == "" || v.NewArgs == nil || v.Run == nil {
 		panic("incomplete verb registration")
 	}
-	if v.Slow != (v.Exec != nil) || (v.Effectful && !v.Slow) {
+	if v.Slow != (v.Exec != nil) || (v.Effectful && !v.Slow) || (v.SealedInput && !v.Slow) {
 		panic("inconsistent slow/effectful handler registration")
 	}
 	if _, ok := Registry[v.Name]; ok {
