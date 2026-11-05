@@ -191,16 +191,28 @@ relaxation.
 `db:<db_id>` and `dbuser:<username>` (fixed order: `db:` then `dbuser:`); `dbuser.create` holds
 `db:<db_id>` (parent) + `dbuser:<username>`. The username is a MariaDB-global namespace, so its own lock
 is what serializes two different databases contending the same username — the `db:` lock alone does not.
-Root via `unix_socket`:
+**A site-associated `database.create`/`database.delete` (non-null `site_id`) also holds the grandparent
+`site:<site_id>`**, acquired **first** (order `site:` → `db:` → `dbuser:`), because `site.delete` locks
+only `site:<site_id>` and the `db:`/`dbuser:` locks do not overlap it (F20.7 grandparent rule) — this is
+what serializes a `database.create` against a concurrent `site.delete` of its site. A detached database
+(NULL `site_id`) takes no `site:` lock. Root via `unix_socket`:
 1. **SQLite write-ahead** (F20.1): the verb's **job** (02 `jobs`) carries, in `args_json`, the generated
    `db`/`dbuser` names **and the durable resource id** (`databases.id` / `db_users.id`, the `obj_id`),
    and the minted password **sealed** in `secrets` (F12) — written by `Verb.Run` before enqueue. **No new
    table or `prepared` state in 02**; "no success" = the job not yet `done` (replay trigger). **Ownership
    is the `obj_id`, not `jobs.id`** — create, replay, and the later delete are different jobs sharing one
    `obj_id`. Replay reuses these exact values.
-2. **Pre-flight** (F20.3): object absent from `information_schema.SCHEMATA` / `mysql.user`? If present and
-   no `managed_objects` row carries **this resource's `obj_id`** → **`conflict`** (unmanaged collision —
-   never adopt, never `CREATE … IF NOT EXISTS`, never `DROP`).
+2. **Pre-flight** (F20.3 + F20.8), **before any external mutation**, under the locks:
+   - **Site association** (F20.8a): if `site_id` is non-null, the `sites` row must exist and be in a
+     createable state → else **`not_found`** (unknown `site_id`) / **`precondition_failed`** (site
+     `deleting`/`failed`), with **zero external effect**. A re-validation here under the held
+     `site:<site_id>` lock is what closes the "valid at admission, `site.delete` racing in" window. A
+     NULL `site_id` is a valid **detached** database — no site check.
+   - **Names**: the schema **and** the owner username absent from `information_schema.SCHEMATA` /
+     `mysql.user`? If present and no `managed_objects` row carries **this resource's `obj_id`** →
+     **`conflict`** (unmanaged collision — never adopt, never `CREATE … IF NOT EXISTS`, never `DROP`).
+     Pre-flighting **both** names here means an owner-username collision fails `conflict` before the
+     schema is created, so no half-made schema is stranded.
 3. **Reserve** (F20.2): `INSERT novapanel.managed_objects(kind,name,obj_id,phase='reserved')`; the
    `(kind,name)` PK already present under a *different* `obj_id` → `conflict`.
 4. **Create**: `CREATE DATABASE …` / `CREATE USER …@'127.0.0.1' IDENTIFIED BY <sealed>` + least-priv
@@ -208,6 +220,17 @@ Root via `unix_socket`:
 5. **Commit**: `UPDATE … phase='created'`; **the SQLite `databases`/`db_users` row is committed here, at
    success** (so a conflicted/failed create leaves no orphan resource row whose name could mislead a
    later delete); publish the **F19 claim** from the sealed password.
+
+**No orphaned external object (F20.8).** The pre-flight above makes the common cases (unknown `site_id`,
+name collision) fail with **zero external effect**. For a **terminal** failure that still strands an
+object this create provably made — a TOCTOU collision landing after `CREATE DATABASE`, or a SQLite
+owning-row commit that cannot succeed — the create **rolls its own `obj_id`-owned objects back to absent**
+(DROP by `obj_id`, provenance-last, F20.5) and records the F3 code; it never leaves an external schema/user
+with no committed `databases`/`db_users` row to own it. A **replay** of such a job therefore rolls to
+**cleanup, not completion** — it removes only what its own `obj_id` owns (not an object of uncertain
+ownership, which stays `conflict` for the operator). Net: a `database.create` is all-or-nothing across the
+two stores — success leaves externals **+** SQLite row **+** `created` provenance; any terminal failure
+leaves **none** of its own externals.
 
 **Replay** (job not yet `done`) per F20.4, **branching on `managed_objects.phase`** — an *owned row* is
 one carrying **this resource's `obj_id`**; the reserve row is written one DDL statement *before* the
@@ -266,6 +289,17 @@ admitted while a `database.delete{db_id}` sat queued is not rejected at admissio
 database gone/deleting, fails `precondition_failed` and clears any `reserved` row it left. So a stale
 queued child can never resurrect a deleted parent, and the cascade never has to guess ownership of a
 not-yet-created user. No admission-time machinery is added.
+
+**`site.delete` × `database.*` (the grandparent boundary).** Phase 4 extends the Phase-3 `site.delete`:
+on a site with any attached managed database (`databases.site_id` = this site), `site.delete`
+**REFUSES** with `precondition_failed` listing the attached `db_id`s — it does **not** cascade or
+silently drop a database (data-loss-safe; a cascade-with-typed-confirm flag is owed, not built — see
+phase-3). The create↔delete **race** is settled by the F20.7 grandparent lock: because a site-associated
+`database.create` holds `site:<site_id>` and `site.delete` holds the same, they serialize — whichever
+runs second re-validates under the lock (`database.create` finds the site `deleting`/gone →
+`precondition_failed` and rolls back its own `obj_id` externals per F20.8; `site.delete` finds the
+database still attached → `precondition_failed`). The `databases.site_id ON DELETE SET NULL` FK stays a
+backstop only; the verb refuses before the FK matters.
 
 This is the authorized mechanism for the whole `database.*`/`dbuser.*` family; it is the minimal F20
 contract, not a bespoke recovery framework, and does not reopen the #90 scope freeze. Power-loss/VM

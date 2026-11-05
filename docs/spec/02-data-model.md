@@ -267,7 +267,7 @@ disk under `tls_dir/<fqdn>/` (versioned dir + symlink swap, B-D9), not in the DB
 ```sql
 CREATE TABLE databases (
   id        TEXT PRIMARY KEY,
-  site_id   TEXT REFERENCES sites(id) ON DELETE SET NULL,
+  site_id   TEXT REFERENCES sites(id) ON DELETE SET NULL, -- NULL = detached DB (valid). Verb policy: site.delete REFUSES while a DB is attached (phase-4); SET NULL is a defensive backstop only. site-bound create/delete also lock site:<site_id> (F20.7).
   name      TEXT NOT NULL UNIQUE,    -- ^[a-z][a-z0-9_]{1,46}$ (generated)
   engine    TEXT NOT NULL DEFAULT 'mariadb',
   created   INTEGER NOT NULL

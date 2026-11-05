@@ -313,7 +313,13 @@ object_key = the resource a job serializes on (see the site rule below)
 - **Attempt `deadline_exceeded` is transient, not terminal.** It aborts the attempt and releases its
   locks; the job returns to the roll-forward set (`running`→`queued`) and is retried on a later pass — it
   is **not** marked `failed`. Idempotent ensure-state (F7) + provenance-phase branching (F20.4) make the
-  retry safe (the next attempt re-reads recorded state and resumes). The **sealed input is
+  retry safe (the next attempt re-reads recorded state and resumes). **This transient re-queue is for an
+  idempotent attempt only.** For an **effectful** verb (external/billed side-effect: ACME issuance,
+  provider DNS, an object-store/`restic` run — the same class F6 recovers as `interrupted`, not blind
+  re-run), an attempt `deadline_exceeded` **mid-effect** takes that **same `interrupted` + reconcile
+  path** — the verb's effect-specific idempotence check / intent journal decides whether the external
+  call landed — and is **not** blindly re-queued, because a naive replay could double-issue, burn a
+  rate-limit, or duplicate a provider record. The **sealed input is
   deadline-invariant**: the write-ahead sealed args/password (F12/F20.1) are reused **unchanged** on every
   replay, including one after a timeout — a timeout never re-mints, re-seals, or invalidates them, and the
   F19 claim publishes from that same sealed value when an attempt finally commits. (A genuine business
@@ -915,12 +921,34 @@ ownership is provable on the far side of the transaction boundary.
    parent's — e.g. a MariaDB user is global (`user@host`), so user verbs lock `dbuser:<username>` **and**
    the parent `db:<db_id>` (fixed acquisition order to avoid deadlock); a create that makes both a schema
    and its owner user holds both. Two creates contending the same global name then serialize, and the
-   loser hits the pre-flight/PK conflict. (b) **Execution re-validates its preconditions under the
-   lock** (ensure-state): a child create whose parent was deleted while it sat queued finds the parent
-   gone and fails `precondition_failed` — admission need not reject the ordering, because the lock +
-   re-validation make a stale queued op fail closed rather than resurrect a deleted parent. A cascade
-   delete removes the parent's children by their own `obj_id` provenance (rule 5), so a not-yet-created
-   queued child leaves nothing to adopt.
+   loser hits the pre-flight/PK conflict. A resource parented to another in a **non-transactional parent
+   store** — a site-associated MariaDB database/user whose SQLite `site` row governs it — also holds the
+   **grandparent** lock (`site:<site_id>`) in the fixed order `site:` → `db:` → `dbuser:`, so a create
+   serializes against a parent `site.delete` that locks only `site:<site_id>` (the `db:`/`dbuser:` locks
+   do not overlap it). A detached resource (NULL `site_id`) takes no grandparent lock. (b) **Execution
+   re-validates its preconditions under the lock** (ensure-state): a child create whose parent **or
+   grandparent** (its `site`) was deleted while it sat queued finds it gone and fails
+   `precondition_failed` — admission need not reject the ordering, because the lock + re-validation make a
+   stale queued op fail closed rather than resurrect a deleted parent. A cascade delete removes the
+   parent's children by their own `obj_id` provenance (rule 5), so a not-yet-created queued child leaves
+   nothing to adopt.
+8. **Two-store atomicity of the owning SQLite row (no orphan in either direction).** The external object
+   and the SQLite resource row are all-or-nothing **for this `obj_id`**. The SQLite row is committed **at
+   success** (rule 2: the `obj_id` is minted write-ahead, but the row is written only once the external
+   create + provenance have committed), so a failed create leaves **no orphan row**. The converse is
+   equally binding: an external object must **never outlive a create that cannot commit its owning SQLite
+   row**. So (a) **pre-flight every parent the row's FK requires** — any SQLite parent (e.g. a
+   `databases.site_id`, when non-null) is validated **before the first external mutation**; a
+   missing/invalid parent fails `not_found`/`precondition_failed` with **zero external effect** — and so
+   are the create's own names (schema **and** owner-username absent/unowned) so a name collision fails
+   `conflict` before either object is made. And (b) if a **terminal** failure still strands an external
+   object the create provably made (its own `obj_id`: a TOCTOU collision landing after `CREATE DATABASE`,
+   or an owning-row commit that cannot succeed), the create **rolls its own `obj_id`-owned objects back to
+   absent** (provenance-last, rule 5, matched by `obj_id` — never by name) and records the F3 code; a
+   replay of such a job rolls to **cleanup, not completion**. This removes **only** objects whose
+   ownership is **proven** by this resource's `obj_id` — it is roll-forward of the create's *own* effect,
+   and is distinct from (never a license to weaken) rules 3–4's "never auto-delete an object of uncertain
+   ownership."
 
 Phases instantiate this: Phase 4 with a MariaDB control schema (see `phases/phase-4.md`), Phase 7 with
 the provider's own record keyed by the resource `obj_id`. Power-loss/VM acceptance of the window stays deferred (#90);
