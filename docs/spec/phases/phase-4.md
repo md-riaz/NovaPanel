@@ -149,18 +149,39 @@ existing** `novapanel` schema is unsafe (it could be a foreign or planted schema
 can write). `CREATE … IF NOT EXISTS` is correct **only for a fresh box** (schema absent → create it
 clean, grants root/agent-only). A **pre-existing** `novapanel` is **verified before any marker in it is
 trusted**:
-- **Structure:** `managed_objects` has exactly the expected columns/types/PK. Malformed/unexpected →
-  **fail closed** (`agent_error`, audited; DB verbs refuse), surface to the operator; never `ALTER` or
-  adopt a foreign structure.
-- **Grants:** **no non-root/site account holds any grant** on `novapanel.*`. Any site-reachable grant →
+- **Structure (table-absent vs malformed — head ruling, 2026-11-05).** The two-statement bootstrap
+  (`CREATE DATABASE` then `CREATE TABLE`) is **not** transactional, so an interrupt between them leaves
+  the schema present with `managed_objects` **absent** — the agent's own mid-bootstrap window, **not**
+  evidence of foreign state. Distinguish by **table presence**:
+  - **Table absent → incomplete bootstrap, not malformed.** Provided the Grant check (below) passes,
+    **complete the bootstrap** (`CREATE TABLE IF NOT EXISTS`) and proceed — **no operator**. An
+    empty/tableless schema holds **no markers**, so there is nothing to adopt and no trust to misplace:
+    ownership proof exists only to protect *marker trust*, and zero markers need none; the one residual
+    risk (a site user having written the schema) is exactly what the Grant check closes. The bootstrap is
+    therefore an **F7/F20 roll-forward** — `CREATE DATABASE IF NOT EXISTS` → grant-verify →
+    `CREATE TABLE IF NOT EXISTS` — that **replays cleanly across the inter-statement crash**; a fresh box
+    is never wedged on its own partial bootstrap.
+  - **Table present but malformed** (wrong columns/types/PK) → **fail closed** (`agent_error`, audited;
+    DB verbs refuse), surface to the operator; never `ALTER` or adopt a foreign structure. The agent's
+    own fixed DDL never produces a malformed table, so a malformed table is **positive evidence of
+    foreign state**.
+- **Grants.** **No non-root/site account holds any grant** on `novapanel.*`. Any site-reachable grant →
   the trust root is compromised → **fail closed**, refuse DB lifecycle, surface for operator
-  reconciliation. The agent **never** trusts a marker from a schema a site user can write.
-- **Never take over foreign state:** a pre-existing `novapanel` that fails verification is **not**
-  dropped/altered/adopted — fail closed and let the operator reconcile (rename/remove it). The trust
-  root is never auto-repaired.
+  reconciliation. The agent **never** trusts a marker from a schema a site user can write — and because
+  this check **gates the table-absent completion above**, a **site-writable empty schema is not
+  completed**. The root/agent exemption is by **exact account identity (`user@host`)** — the agent's own
+  local-socket admin principal(s) — **never by username**: a `root@'10.0.0.5'`, `root@'%'`, or any
+  `root@<non-local>` is a **different, non-exempt principal** and counts as a foreign grant holder here.
+- **Never take over foreign state:** a pre-existing `novapanel` that fails verification (malformed table,
+  or any site-reachable grant) is **not** dropped/altered/adopted — fail closed and let the operator
+  reconcile (rename/remove it). The trust root is never auto-repaired.
 
 Only after structure + grant verification passes does the executor trust `managed_objects` markers to
 authorize a `DROP`.
+
+**Bounded contention.** Acquiring the `db:`/`dbuser:` lock and any MariaDB-side wait are **bounded with
+cancellation** under the F6 clamped deadline — never an unbounded block — failing closed
+`deadline_exceeded` (F3) on timeout. This is a liveness correction, not a policy relaxation.
 
 **Locks (F20.7):** `database.create` touches both a schema and its owner user, so it holds **both**
 `db:<db_id>` and `dbuser:<username>` (fixed order: `db:` then `dbuser:`); `dbuser.create` holds
