@@ -6,6 +6,78 @@ import (
 	"testing"
 )
 
+func TestProvenanceIdentityMatchesDeleteAfterResourceRemoved(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const db = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+	const user = "01ARZ3NDEKTSV4RRFFQ69G5FAW"
+	for _, j := range []Job{
+		{ID: "01ARZ3NDEKTSV4RRFFQ69G5FAX", Verb: "database.delete", ObjectKey: "db:" + db, State: "done", Args: json.RawMessage(`{"db_id":"` + db + `","name":"sample_db"}`)},
+		{ID: "01ARZ3NDEKTSV4RRFFQ69G5FAY", Verb: "dbuser.delete", ObjectKey: "db:" + db, State: "done", Args: json.RawMessage(`{"db_id":"` + db + `","dbuser_id":"` + user + `","username":"sample_user","db_name":"sample_db"}`)},
+	} {
+		if err := s.CreateJob(ctx, j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct{ kind, name, id string }{{"schema", "sample_db", db}, {"user", "sample_user", user}} {
+		got, err := s.ProvenanceIdentity(ctx, tc.kind, tc.name, tc.id)
+		if err != nil || !got.Known || got.Resource || got.Live || got.DatabaseID != db {
+			t.Errorf("%s identity: %+v %v", tc.kind, got, err)
+		}
+	}
+}
+
+func TestProvenanceIdentityMatchesCascadeDeleteAfterCreateJobsGone(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const db = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+	const user = "01ARZ3NDEKTSV4RRFFQ69G5FAW"
+	j := Job{ID: "01ARZ3NDEKTSV4RRFFQ69G5FAX", Verb: "database.delete", ObjectKey: "db:" + db, State: "done", Args: json.RawMessage(`{"db_id":"` + db + `","name":"sample_db","users":[{"id":"` + user + `","username":"sample_user"}]}`)}
+	if err := s.CreateJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ProvenanceIdentity(ctx, "user", "sample_user", user)
+	if err != nil || !got.Known || got.DatabaseID != db {
+		t.Fatalf("cascade identity lost: %+v %v", got, err)
+	}
+}
+
+func TestDeleteDatabaseForJobPersistsCascadeIdentity(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const db = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+	const user = "01ARZ3NDEKTSV4RRFFQ69G5FAW"
+	const job = "01ARZ3NDEKTSV4RRFFQ69G5FAX"
+	if _, err = s.db.ExecContext(ctx, `INSERT INTO databases(id,name,created) VALUES(?,?,1)`, db, "sample_db"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.ExecContext(ctx, `INSERT INTO db_users(id,db_id,username,created) VALUES(?,?,?,1)`, user, db, "sample_user"); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.CreateJob(ctx, Job{ID: job, Verb: "database.delete", ObjectKey: "db:" + db, State: "running", Args: json.RawMessage(`{"db_id":"` + db + `","name":"sample_db"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.DeleteDatabaseForJob(ctx, db, "sample_db", job); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ProvenanceIdentity(ctx, "user", "sample_user", user)
+	if err != nil || !got.Known || got.Resource || !got.Live || got.DatabaseID != db {
+		t.Fatalf("cascade evidence: %+v %v", got, err)
+	}
+}
+
 func TestProvenanceIdentityMatchesDurableCreate(t *testing.T) {
 	ctx := context.Background()
 	s, err := Open(":memory:")

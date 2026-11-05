@@ -52,6 +52,19 @@ func (s *Store) DeleteDatabase(ctx context.Context, id, name string) error {
 	return err
 }
 
+func (s *Store) DeleteDatabaseForJob(ctx context.Context, id, name, jobID string) error {
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		// Preserve cascade identities in the existing job authority before the FK
+		// cascade removes them; the snapshot and deletion must commit together.
+		r, err := tx.ExecContext(ctx, `UPDATE jobs SET args_json=json_set(args_json,'$.users',json((SELECT json_group_array(json_object('id',id,'username',username)) FROM db_users WHERE db_id=? AND host='127.0.0.1'))) WHERE id=? AND verb='database.delete' AND state='running' AND object_key=?`, id, jobID, "db:"+id)
+		if err = affected(r, err); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `DELETE FROM databases WHERE id=? AND name=?`, id, name)
+		return err
+	})
+}
+
 func (s *Store) ListDatabases(ctx context.Context) ([]Database, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, name, site_id, engine FROM databases ORDER BY id`)
 	if err != nil {

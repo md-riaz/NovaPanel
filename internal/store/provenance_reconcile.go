@@ -33,14 +33,14 @@ func (s *Store) ProvenanceIdentity(ctx context.Context, kind, name, objID string
 	}
 	// Invalid JSON or a mismatched object key is not valid proof. Match both
 	// resource ID and name, not merely a substring of arbitrary job arguments.
-	rows, err := s.db.QueryContext(ctx, `SELECT state, coalesce(code,''), json_extract(args_json,'$.db_id') FROM jobs WHERE json_valid(args_json) AND object_key = 'db:' || json_extract(args_json,'$.db_id') AND ((?='schema' AND verb='database.create' AND json_extract(args_json,'$.db_id')=? AND json_extract(args_json,'$.name')=?) OR (?='user' AND verb IN ('database.create','dbuser.create') AND json_extract(args_json,'$.user_id')=? AND json_extract(args_json,'$.username')=?))`, kind, objID, name, kind, objID, name)
+	rows, err := s.db.QueryContext(ctx, `SELECT verb, state, coalesce(code,''), json_extract(args_json,'$.db_id') FROM jobs WHERE json_valid(args_json) AND object_key = 'db:' || json_extract(args_json,'$.db_id') AND ((?='schema' AND verb IN ('database.create','database.delete') AND json_extract(args_json,'$.db_id')=? AND json_extract(args_json,'$.name')=?) OR (?='user' AND ((json_extract(args_json,'$.username')=? AND ((verb IN ('database.create','dbuser.create') AND json_extract(args_json,'$.user_id')=?) OR (verb='dbuser.delete' AND json_extract(args_json,'$.dbuser_id')=?))) OR (verb='database.delete' AND EXISTS (SELECT 1 FROM json_each(args_json,'$.users') WHERE json_extract(value,'$.id')=? AND json_extract(value,'$.username')=?)))))`, kind, objID, name, kind, name, objID, objID, objID, name)
 	if err != nil {
 		return out, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var state, code, jobDB string
-		if err = rows.Scan(&state, &code, &jobDB); err != nil {
+		var verb, state, code, jobDB string
+		if err = rows.Scan(&verb, &state, &code, &jobDB); err != nil {
 			return out, err
 		}
 		if out.DatabaseID != "" && out.DatabaseID != jobDB {
@@ -48,7 +48,7 @@ func (s *Store) ProvenanceIdentity(ctx context.Context, kind, name, objID string
 		}
 		out.Known, out.DatabaseID = true, jobDB
 		if state == "done" {
-			out.Success = true
+			out.Success = out.Success || verb == "database.create" || verb == "dbuser.create"
 		} else if state != "failed" || code == "interrupted" {
 			out.Live = true
 		}

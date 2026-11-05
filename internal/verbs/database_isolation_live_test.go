@@ -12,6 +12,7 @@ import (
 
 	"novapanel/internal/agent"
 	"novapanel/internal/audit"
+	"novapanel/internal/database"
 	"novapanel/internal/exec"
 	"novapanel/internal/id"
 	"novapanel/internal/jobs"
@@ -200,9 +201,21 @@ func TestMariaDBClaimedCredentialIsolation(t *testing.T) {
 	if _, err := a.Jobs.Claim(jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: "owner"}), rotation.Job.ID, rotation.ClaimToken); err == nil {
 		t.Fatal("rotation claim returned twice")
 	}
+	_, users, err := s.DatabaseWithUsers(ctx, created["db_id"])
+	if err != nil || len(users) != 1 || users[0].Username != created["db_user"] {
+		t.Fatalf("owner user metadata: %+v: %v", users, err)
+	}
 	deleted := dispatch("database.delete", map[string]string{"db_id": created["db_id"]})
 	execute(deleted)
-	out, code, err := run(rootArgs, fmt.Sprintf("SELECT (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='%s')+(SELECT COUNT(*) FROM mysql.user WHERE User='%s' AND Host='127.0.0.1')+(SELECT COUNT(*) FROM novapanel.managed_objects WHERE (kind='schema' AND name='%s') OR (kind='user' AND name='%s@127.0.0.1'));", name, created["db_user"], name, created["db_user"]), "")
+	tombstones := fmt.Sprintf("SELECT (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='%s'),(SELECT COUNT(*) FROM mysql.user WHERE User='%s' AND Host='127.0.0.1'),(SELECT COUNT(*) FROM novapanel.managed_objects WHERE (kind='schema' AND name='%s') OR (kind='user' AND name='%s@127.0.0.1')),(SELECT COUNT(*) FROM novapanel.managed_objects WHERE phase='deleting' AND ((kind='schema' AND name='%s' AND obj_id='%s') OR (kind='user' AND name='%s@127.0.0.1' AND obj_id='%s')));", name, created["db_user"], name, created["db_user"], name, created["db_id"], created["db_user"], users[0].ID)
+	out, code, err := run(rootArgs, tombstones, "")
+	if err != nil || code != 0 || !strings.Contains(out, "\n0\t0\t2\t2\n") {
+		t.Fatalf("delete terminal objects or tombstones incorrect (%d): %v: %s", code, err, out)
+	}
+	if _, err := database.Reconcile(ctx, a.Exec, s, a.Jobs.LockReconcileDatabase); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	out, code, err = run(rootArgs, fmt.Sprintf("SELECT (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='%s')+(SELECT COUNT(*) FROM mysql.user WHERE User='%s' AND Host='127.0.0.1')+(SELECT COUNT(*) FROM novapanel.managed_objects WHERE (kind='schema' AND name='%s') OR (kind='user' AND name='%s@127.0.0.1'));", name, created["db_user"], name, created["db_user"]), "")
 	if err != nil || code != 0 || !strings.Contains(out, "\n0\n") {
 		t.Fatalf("delete left objects or provenance (%d): %v: %s", code, err, out)
 	}

@@ -15,6 +15,10 @@ type databaseDeleteJob struct {
 	DBID   string  `json:"db_id"`
 	Name   string  `json:"name"`
 	SiteID *string `json:"site_id,omitempty"`
+	Users  []struct {
+		ID       string `json:"id"`
+		Username string `json:"username"`
+	} `json:"users,omitempty"`
 }
 
 func (v *databaseDeleteJob) Validate() error { return (&databaseIDArgs{DBID: v.DBID}).Validate() }
@@ -78,7 +82,7 @@ func databaseDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 		}
 		return e
 	}
-	if e = a.Store.DeleteDatabase(ctx, d.ID, d.Name); e != nil {
+	if e = a.Store.DeleteDatabaseForJob(ctx, d.ID, d.Name, j.ID); e != nil {
 		return e
 	}
 	j.Result = json.RawMessage(`{}`)

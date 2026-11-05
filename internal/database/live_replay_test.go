@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"testing"
@@ -44,24 +43,6 @@ func liveFixture(t *testing.T) (context.Context, exec.Runner, string, string) {
 		}
 	})
 	return ctx, r, name, ident
-}
-
-type stopBeforeMarkerDelete struct {
-	delegate exec.Runner
-	stopped  bool
-}
-
-func (r *stopBeforeMarkerDelete) Run(ctx context.Context, program string, args []string, o exec.RunOpts) ([]byte, []byte, int, error) {
-	b, err := io.ReadAll(o.Stdin)
-	if err != nil {
-		return nil, nil, -1, err
-	}
-	o.Stdin = strings.NewReader(string(b))
-	if strings.HasPrefix(string(b), "DELETE FROM novapanel.managed_objects") {
-		r.stopped = true
-		return nil, nil, 1, nil
-	}
-	return r.delegate.Run(ctx, program, args, o)
 }
 
 func TestLiveManagedRotateOwnership(t *testing.T) {
@@ -106,9 +87,8 @@ func TestLiveManagedDeleteReplay(t *testing.T) {
 	if err := createManaged(ctx, r, "schema", name, ident, create, nil); err != nil {
 		t.Fatal(err)
 	}
-	interrupted := &stopBeforeMarkerDelete{delegate: r}
-	if err := ManagedDelete(ctx, interrupted, name, ident, nil); err == nil || !interrupted.stopped {
-		t.Fatalf("expected interruption before marker removal: %v", err)
+	if err := ManagedDelete(ctx, r, name, ident, nil); err != nil {
+		t.Fatal(err)
 	}
 	query := fmt.Sprintf("SELECT (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='%s'),COALESCE((SELECT phase FROM novapanel.managed_objects WHERE kind='schema' AND name='%s' AND obj_id='%s'),'none');", name, name, ident)
 	state, err := runSQL(ctx, r, query)
@@ -119,7 +99,7 @@ func TestLiveManagedDeleteReplay(t *testing.T) {
 		t.Fatalf("replay: %v", err)
 	}
 	state, err = runSQL(ctx, r, query)
-	if err != nil || state != "0\tnone" {
+	if err != nil || state != "0\tdeleting" {
 		t.Fatalf("replayed state %q: %v", state, err)
 	}
 	if err := ManagedDelete(ctx, r, name, ident, nil); err != nil {

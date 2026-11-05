@@ -126,5 +126,10 @@ func databaseRotateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 		}
 		return e
 	}
-	return a.Jobs.PublishDatabaseClaim(ctx, j, json.RawMessage(`{}`), map[string]any{"password": v.Password})
+	if e = a.Jobs.PublishDatabaseClaim(ctx, j, json.RawMessage(`{}`), map[string]any{"password": v.Password}); e != nil {
+		// The external password has changed. Keep the sealed input for roll-forward;
+		// publishing the claim and its checkpoint is atomic.
+		return jobs.ErrRetry
+	}
+	return nil
 }

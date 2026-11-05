@@ -42,7 +42,7 @@ func ManagedRotate(ctx context.Context, runner exec.Runner, user, userID, passwo
 	return Rotate(ctx, runner, user, password)
 }
 
-// ManagedDelete marks each owned object deleting before dropping and removes its marker last.
+// ManagedDelete retains deleting markers for reconciliation after the job terminalizes.
 func ManagedDelete(ctx context.Context, runner exec.Runner, db, dbID string, users map[string]string) error {
 	for user, userID := range users {
 		if err := managedDrop(ctx, runner, "user", user, userID); err != nil {
@@ -83,8 +83,7 @@ func managedDrop(ctx context.Context, runner exec.Runner, kind, name, objID stri
 	if _, err = runSQL(ctx, runner, statement+";"); err != nil {
 		return err
 	}
-	_, err = runSQL(ctx, runner, fmt.Sprintf("DELETE FROM novapanel.managed_objects WHERE kind='%s' AND name='%s' AND obj_id='%s' AND phase='deleting';", kind, marker, objID))
-	return err
+	return nil
 }
 
 // ClearUserReservation discards only this job's uncreated reservation, never an object.
