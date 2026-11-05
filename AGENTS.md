@@ -118,3 +118,12 @@ reference. Mapped to the checklist:
 | 6 Concurrency | Locks `db:<db_id>` **and** `dbuser:<username>` (the global user namespace) in a fixed order; a child create queued behind a parent delete re-validates the parent at execution and fails `precondition_failed`. |
 
 If your resource's ruling cannot fill a row like this (or justify an N/A), it is not ready to confirm.
+
+**The MariaDB two-store lifecycle is now a *closed* contract** (`00-foundations.md` F20 rules 1–9: the
+provenance `phase` is the external authority, the SQLite terminal state is ordered against it, and a
+startup/periodic reconcile converges every residue). Every inter-store crash point is covered by F6
+roll-forward **or** the F20.9 reconcile, proven by the F7 crash-safety replay test across the enumerated
+stops. **Do not re-litigate individual crash windows of this class** — a sub-statement timing window the
+table + reconcile already converge is covered, with power-loss/VM acceptance deferred (#90). A new
+two-store resource *instantiates* this closed contract (fill the table + add its reconcile); raise a
+ruling only for a genuine contract gap the table does not cover, not for each crash point.

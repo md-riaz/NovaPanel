@@ -179,6 +179,27 @@ trusted**:
 Only after structure + grant verification passes does the executor trust `managed_objects` markers to
 authorize a `DROP`.
 
+**Startup/periodic provenance reconcile (F20.9 — the catch-all).** After F6 job roll-forward at agent
+start, and periodically via the F18 scheduler, a reconcile pass sweeps `novapanel.managed_objects` against
+`jobs` + `databases`/`db_users`, acting **only** on markers whose `obj_id` matches our own SQLite (a
+foreign/unknown `obj_id` is never touched → operator). Per the F20.9 table: `deleting` + object absent →
+remove the tombstone row; `deleting` + object present → complete the `DROP`, remove the row;
+`reserved`/`created` with **no** owning `databases`/`db_users` row and the owning job terminal/gone → drive
+the F20.8 abort (`deleting` → `DROP` → remove); `created` + owning row present → healthy, leave;
+`reserved` + present with a **live** job → leave to that job's replay. This converges any inter-store crash
+residue (tombstones, a create whose SQLite row never committed) that a terminal job cannot itself clean,
+without adopting or deleting an object of uncertain ownership. It is the F20 counterpart of F6's startup
+roll-forward — generic, idempotent, using only canonical state; **not** per-feature machinery.
+
+**Crash-safety is complete (freeze).** F20 rules 1–9 close the two-store `database.*` lifecycle: every
+inter-store crash point is covered by F6 roll-forward **or** the F20.9 reconcile. Prove it with the F7
+crash-safety replay test at each enumerated stop — before/after **reserve, `CREATE`, phase→`created`,
+SQLite commit**, and for teardown **→`deleting`, `DROP`, terminal commit, row removal** — each followed by
+a reconcile pass, asserting convergence (no orphan object, no stranded marker, the job terminal and
+correct). A sub-statement timing window already converged by rules 1–9 + reconcile is **not** a fresh
+contract gap; power-loss/VM acceptance of the residue stays deferred (#90). Raise a new ruling only for a
+genuine *contract* gap the table does not cover.
+
 **Bounded contention.** Acquiring the `db:`/`dbuser:` lock and any MariaDB-side wait are **bounded with
 cancellation** under the **per-attempt worker deadline** (F6: `Verb.MaxDeadlineMs`, `0` →
 `deadline_default_ms`) — **not** the caller's request deadline, which ends at enqueue — never an unbounded
@@ -224,17 +245,21 @@ what serializes a `database.create` against a concurrent `site.delete` of its si
 **No orphaned external object (F20.8).** The pre-flight above makes the common cases (unknown `site_id`,
 name collision) fail with **zero external effect**. For a **terminal** failure that still strands an
 object this create provably made — a TOCTOU collision landing after `CREATE DATABASE` — the create cleans
-up via the **delete path**: advance the owned `managed_objects` row to **`phase='deleting'`**, `DROP` by
-`obj_id`, remove the row (provenance-last, F20.5), then record the F3 code and mark the **job `failed`**
-(after the DROP + row removal). **The cleanup-commit is the `phase='deleting'` write in `managed_objects`
-itself — never a separate SQLite "cleanup intent" flag** (prohibited per-feature durability, and unsafe:
-if that write is lost, replay rolls forward). Once `deleting` is persisted, the replay `deleting` branch
-below completes the cleanup on every attempt. **Before** `deleting` is persisted, the intent is
-deliberately **not** persisted separately — replay re-runs the create idempotently: the deterministic
-collision is re-hit → re-enter cleanup; if it has cleared, the `obj_id`-keyed create **completes** into a
-valid managed database. Both are correct terminal states, neither an orphan. Net: a `database.create` is
-all-or-nothing across the two stores — success leaves externals **+** SQLite row **+** `created`
-provenance; any terminal failure leaves **none** of its own externals.
+up via the **delete path**, in this **exact order** (F20.8): (1) advance the owned `managed_objects`
+row(s) → **`phase='deleting'`** (the durable abort decision, in `managed_objects`, never a separate SQLite
+"cleanup-intent" flag); (2) `DROP` by `obj_id`; (3) **commit the job `failed` + `code`** (SQLite
+`jobs.state`/`jobs.code`) **before removing the last row**; (4) remove the `managed_objects` row(s). Step 3
+is the linearization point: a `failed` job **never rolls forward**, so "no marker + no object" is reached
+**only after** the job is terminal — closing the #101 window where removing the row first left a
+non-terminal job with no signal (→ wrong re-create). **Replay before step 3** finds this create's **own
+`obj_id` in `phase='deleting'`** → **abort, not create**: complete the `DROP`, finalize `failed` (code
+from `jobs.code`, else re-derived by re-running pre-flight), remove the row — it **never** re-creates even
+if the collision cleared. A leftover `deleting` row with the object absent (crash after step 3) is a
+harmless **tombstone** — the `databases`/`db_users` names are generated-unique so no new create collides;
+a startup reconcile or the next op on that name removes it (object absent under `deleting` = delete done →
+remove row, never `DROP`). Net: a `database.create` is all-or-nothing across the two stores — success
+leaves externals **+** SQLite row **+** `created` provenance; any terminal failure leaves **none** of its
+own externals.
 
 **Replay** (job not yet `done`) per F20.4, **branching on `managed_objects.phase`** — an *owned row* is
 one carrying **this resource's `obj_id`**; the reserve row is written one DDL statement *before* the
@@ -249,7 +274,10 @@ object, so an owned row does not by itself prove the object exists:
   `DROP`, on a `reserved` row alone). A **nonzero/indeterminate `mysql` client exit** (server-side outcome
   unknown) is **`agent_error`**, the op is **not** `done` and rolls forward into this branch; stamping the
   object with its `obj_id` to shrink this window is the **owed** optimization (out of Step-1 scope).
-- owned row `phase='deleting'` → complete the `DROP` idempotently, then delete the row.
+- owned row `phase='deleting'` → complete the `DROP` idempotently, then delete the row. For a
+  `database.delete`/`dbuser.delete` this finalizes `done`; for a `database.create` finding its **own**
+  `obj_id` here (an F20.8 abort) it finalizes **`failed`** (never re-creates) with the terminal state
+  committed **before** the row is removed.
 - no owned row for this `obj_id` (none for the name, or one under a *different* `obj_id`), object
   **present** → not ours → `conflict`, operator reconcile; object **absent** → restart the op with the
   same sealed identities.
