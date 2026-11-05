@@ -44,7 +44,13 @@ F6, F7, F9, F10, F11.
   per-site `GIT_SSH_COMMAND` identity file `0600` owned by the site user at use, removed after.
 - **`internal/verbs/cron.go`** — render a `novapanel-cron-<site>-<id>.{service,timer}` (or site
   crontab line); validate `OnCalendar`/schedule; `ExecStart` is a fixed argv with the site user;
-  `daemon-reload` + enable/start via `internal/exec`.
+  `daemon-reload` + enable/start via `internal/exec`. **Multi-step bootstrap window (Rule B):** writing
+  `.service`, writing `.timer`, `daemon-reload`, enable and start is non-transactional, so a crash
+  mid-sequence leaves a **partial unit** (a `.service` with no `.timer`, or an enabled-but-not-started
+  timer). `cron.create`/`enable` are **ensure-state** over their own named units — re-render both files,
+  re-`daemon-reload`, re-enable/start idempotently, **completing their own partial install** — rather
+  than keying on the presence of one file; the `<site>-<id>` names are agent-owned, so this completes
+  our own state and never adopts a foreign unit.
 - **`internal/verbs/sshkey.go`** — parse/validate the public key (`ssh-ed25519`/`ssh-rsa` with a
   sane length), append to the site user's `~/.ssh/authorized_keys` (`0600`, owned by site user,
   `O_NOFOLLOW` parent), idempotent (no duplicate keys). **`sshkey.add`/`remove` do a read-modify-write of
@@ -72,7 +78,16 @@ F6, F7, F9, F10, F11.
   `git ls-remote`/`rev-parse` **before** fetching, records it in `deploys.sha`, fetches enough depth
   to contain it, and checks it out detached — so the deployed commit is pinned even though the input
   was a ref. First deploy does `git init` + `remote add` (or a shallow `clone`) when `<projdir>` is
-  not yet a repo. Harden git against repo-supplied hooks/filters: run with
+  not yet a repo. **Multi-statement bootstrap crash window (Rule B, F7/F20 analog of the MariaDB
+  `CREATE DATABASE`→`CREATE TABLE` case).** `git init` + `remote add` is non-transactional, so a crash
+  between them leaves a **repo shell with no (or a partial) remote** — the direct analog of
+  "schema present, table absent". The first-deploy gate must therefore **not** key on bare repo-presence
+  (`.git` exists → skip init), which would then `git fetch origin` against a missing remote: it
+  **ensure-states the whole shell** — repo present **and** the expected `origin` present and pointing at
+  the configured URL — and **completes its own partial bootstrap** (add/fix `origin`) idempotently. A
+  pre-existing `<projdir>` that is a repo with a **different** remote is **not** silently repointed
+  (unmanaged/foreign state) → fail closed (`conflict`), never adopt. Harden git against repo-supplied
+  hooks/filters: run with
   `-c core.hooksPath=/dev/null -c core.fsmonitor=false` and never execute post-checkout build hooks
   from the agent (a build step, if offered, is a separate explicit verb).
 

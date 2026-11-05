@@ -153,6 +153,12 @@ post-reload request probe is the real safety net.
   pair appears under a new versioned dir and `current` points at it; a second `ssl.issue` within the
   renewal window is a no-op (does not re-hit ACME) — the effectful-verb test in place of "run twice =
   no change".
+- **Per-attempt timeout is effectful, not transient (F6 per-attempt deadline).** `ssl.issue`/`ssl.renew`
+  are **effectful** (external ACME). A per-attempt `deadline_exceeded` mid-order therefore follows the
+  F6 **`interrupted` + reconcile** path — **not** the transient `running`→`queued` re-queue of an
+  idempotent verb: the next pass re-checks the renewal-window / installed-pair state and reuses the
+  sealed account key + any pending order rather than blindly re-hitting ACME, so a timeout cannot burn
+  the local issuance caps (50/7 d · 5 duplicate-set/7 d · 5 auth-failures/hour → `rate_limited`).
 
 ### Resolved contract details (Phase-3 rulings)
 - **Reads are synchronous (01 wins).** `site.list`/`site.get`/`ssl.status`/`php.list` are sync per 01;

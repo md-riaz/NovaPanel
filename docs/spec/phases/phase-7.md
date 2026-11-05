@@ -49,7 +49,8 @@ type Record struct {
     Proxied  bool   // only valid for A/AAAA/CNAME (guard)
 }
 // zone is identified by name; the impl maps name→provider_zone_id via dns_zones (02-data-model).
-// Every method takes ctx (deadline, F2/F10).
+// Every method takes ctx. dns.record.* are SLOW (run on the worker), so that ctx is the F6
+// per-attempt worker deadline (Verb.MaxDeadlineMs), NOT the caller's F2 deadline_ms (gone at enqueue).
 ```
 - **Provenance is OWED before build (F20, head marker).** A provider DNS record is a **two-store**
   resource (provider vs SQLite) and F20 names it explicitly (`00-foundations.md` F20 intro + "Phase 7
@@ -61,6 +62,14 @@ type Record struct {
   when a `dns.record.create` is queued against a zone/integration being deleted (`dns_zones` is
   `ON DELETE CASCADE`). F6 already requires idempotent **compensation** for provider DNS; F20 is **how**.
   This marker is the ruling that it is owed; the mechanism is designed at Phase-7 build, not here.
+  - **Owed with it (F6 per-attempt deadline): effectful-timeout replay.** A `dns.record.create/update/
+    delete` is an external/billed provider call. Today it is **not** flagged Effectful (`01`), yet a
+    per-attempt `deadline_exceeded` (or crash) mid-call leaves the provider's state uncertain — a naive
+    idempotent re-run would re-hit the provider and could duplicate a record. So the Phase-7 build owes,
+    together with the F20 `obj_id` provenance above, the **effectful-timeout contract**: either mark
+    `dns.record.*` effectful (recover as `interrupted`, reconcile the provider record by `obj_id` before
+    any re-issue), or prove replay is safe purely via the owed provenance (`obj_id`-keyed upsert that
+    cannot duplicate). Decide at build; do not leave the timeout path to a blind re-queue.
 - **Token storage:** `integration.set{kind:"cloudflare", token, zones[]}` (admin, MFA) seals the token
   (`secrets` name `integration:<id>:token`) and records zones in `dns_zones`. The Cloudflare token
   must carry **Zone:Read + DNS:Edit + Cache Purge** on exactly the listed zones (least privilege but

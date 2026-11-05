@@ -56,6 +56,14 @@ Phases 1–4 (jobs, sites, DB). Reads: `00-foundations.md` F6, F7, F10, F11, F12
   ok); `11` = failed to lock repo; `12` = wrong password; unknown code = failure. On `11`: `restic
   unlock` (stale-only) + retry once; `--retry-lock` on normal runs; `unlock --remove-all` only after
   confirming via `list locks` + process check that nothing is live.
+- **Per-attempt timeout is effectful, not transient (F6 per-attempt deadline, head ruling 2026-11-05).**
+  `backup.create`, `backup.restore` and `panel.backup_config` are **effectful** (external object store).
+  A per-attempt `deadline_exceeded` mid-run follows the F6 **`interrupted` + reconcile** path, **not** the
+  idempotent transient re-queue: the next pass reconciles against restic's own crash-safe state (an
+  incomplete snapshot is never referenced; `restore` does **not** auto-reswap — it reports the
+  `interrupted` restore leaving `<db>__old` + the pre-restore dump for the operator). A long restic run
+  that needs more than the default ceiling raises that verb's `MaxDeadlineMs`; the timeout never
+  re-issues the external effect blindly.
 
 ### UFW safe-apply (the deadman — reference)
 ```
