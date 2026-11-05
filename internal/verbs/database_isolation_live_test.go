@@ -70,9 +70,19 @@ func TestMariaDBClaimedCredentialIsolation(t *testing.T) {
 	a := agent.New()
 	a.Store = s
 	a.Audit = log
-	a.Jobs = jobs.NewQueue(s, seal, log)
+	a.Secret = seal
 	a.Exec = exec.Real{}
 	server := rpc.NewServer(a)
+	server.ConfigureJobs()
+	workerCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- a.Jobs.Run(workerCtx) }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}()
 	caller := rpc.Caller{Kind: "user", Role: "admin", Session: "owner", MFAat: time.Now().UnixMilli()}
 	dispatch := func(verb string, args any) jobs.EnqueueResult {
 		t.Helper()
@@ -88,12 +98,24 @@ func TestMariaDBClaimedCredentialIsolation(t *testing.T) {
 	}
 	execute := func(r jobs.EnqueueResult) map[string]string {
 		t.Helper()
-		j, err := s.StartJob(ctx, r.Job.ID, 1)
-		if err != nil {
-			t.Fatal(err)
+		deadline := time.Now().Add(30 * time.Second)
+		var j jobs.Job
+		var err error
+		for {
+			j, err = s.GetJob(ctx, r.Job.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if j.State == "done" || j.State == "failed" {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("worker timeout")
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
-		if err = server.ExecuteJob(ctx, &j); err != nil {
-			t.Fatal(err)
+		if j.State != "done" {
+			t.Fatalf("job failed: %+v", j)
 		}
 		var result map[string]string
 		if err = json.Unmarshal(j.Result, &result); err != nil {
@@ -154,4 +176,13 @@ func TestMariaDBClaimedCredentialIsolation(t *testing.T) {
 	}
 	allowed(next)
 	denied(tcp, password, "SELECT 1;", "1045")
+	if _, err := a.Jobs.Claim(jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: "owner"}), rotation.Job.ID, rotation.ClaimToken); err == nil {
+		t.Fatal("rotation claim returned twice")
+	}
+	deleted := dispatch("database.delete", map[string]string{"db_id": created["db_id"]})
+	execute(deleted)
+	out, code, err := run(rootArgs, fmt.Sprintf("SELECT (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='%s')+(SELECT COUNT(*) FROM mysql.user WHERE User='%s' AND Host='127.0.0.1')+(SELECT COUNT(*) FROM novapanel.managed_objects WHERE (kind='schema' AND name='%s') OR (kind='user' AND name='%s@127.0.0.1'));", name, created["db_user"], name, created["db_user"]), "")
+	if err != nil || code != 0 || !strings.Contains(out, "\n0\n") {
+		t.Fatalf("delete left objects or provenance (%d): %v: %s", code, err, out)
+	}
 }
