@@ -891,9 +891,17 @@ ownership is provable on the far side of the transaction boundary.
      - `phase='reserved'` → creation was **not** confirmed; pre-flight the object:
        - **absent** → resume at `CREATE` (we hold the reservation and the per-name lock — a clean
          resume, not adoption), then the remaining idempotent steps, advance to `created`, publish.
-       - **present** → we **cannot** prove we created it (vs an out-of-band create landing in the
-         reserve→create window, which the per-name lock bounds but does not forbid) → `conflict` for
-         operator reconciliation. **Never adopt** on the strength of a `reserved` row alone.
+       - **present** → we **cannot** prove we created it — an out-of-band create landing in the
+         reserve→create window (which the per-name lock bounds but cannot forbid), **or our own `CREATE`
+         that the client reported with a nonzero/indeterminate exit** so success was never confirmed and
+         `created` never written; the two are **indistinguishable** from the external state → `conflict`
+         for operator reconciliation. **Never adopt** (ownership unprovable) and **never `DROP`** (it may
+         be a foreign object) on the strength of a `reserved` row alone. An **indeterminate external exit**
+         (a nonzero client exit where the server-side outcome is unknown) is classified **`agent_error`**,
+         the op is **not** `done`, and it rolls forward into exactly this branch — the ambiguity is *why*
+         the window is unresolvable. Stamping the object with its `obj_id` at creation (so an
+         ambiguous-exit replay can prove ownership and advance to `created`) is the **owed** optimization
+         to shrink the window — out of current scope; the `conflict`-to-operator path is the contract.
      - `phase='deleting'` → complete the delete idempotently (F20.5), then remove the row.
    - **no** provenance row carrying this resource's `obj_id` (none for the name, or one under a
      *different* `obj_id`), object **present** in the external store → not ours (an **unmanaged
@@ -942,13 +950,23 @@ ownership is provable on the far side of the transaction boundary.
    missing/invalid parent fails `not_found`/`precondition_failed` with **zero external effect** — and so
    are the create's own names (schema **and** owner-username absent/unowned) so a name collision fails
    `conflict` before either object is made. And (b) if a **terminal** failure still strands an external
-   object the create provably made (its own `obj_id`: a TOCTOU collision landing after `CREATE DATABASE`,
-   or an owning-row commit that cannot succeed), the create **rolls its own `obj_id`-owned objects back to
-   absent** (provenance-last, rule 5, matched by `obj_id` — never by name) and records the F3 code; a
-   replay of such a job rolls to **cleanup, not completion**. This removes **only** objects whose
-   ownership is **proven** by this resource's `obj_id` — it is roll-forward of the create's *own* effect,
-   and is distinct from (never a license to weaken) rules 3–4's "never auto-delete an object of uncertain
-   ownership."
+   object the create provably made (its own `obj_id`: a TOCTOU collision landing after `CREATE DATABASE`),
+   the create **rolls its own `obj_id`-owned objects back to absent by the rule-5 delete path** — advance
+   the owned provenance row to **`phase='deleting'`**, `DROP` by `obj_id`, remove the row — then records
+   the F3 code and marks the **job terminal `failed`** (after the DROP + row removal, so a crash between
+   leaves the job not-`done` → replay). **The cleanup-commit is the `phase='deleting'` write in the
+   provenance store itself — never a separate SQLite "cleanup intent" flag:** such a flag would be
+   prohibited per-feature durability, and relying on it is unsafe (if that write is lost, replay rolls
+   forward). The discipline is instead: once `deleting` is persisted, rule-4's `deleting` branch makes
+   **every replay complete the cleanup**, never roll forward. **Before** `deleting` is persisted (object
+   exists, cleanup uncommitted) the create's intent to clean up is **deliberately not persisted
+   separately** — replay re-runs the create **idempotently** against current reality and still reaches a
+   correct terminal state: a **deterministic** obstacle (the colliding unmanaged name still present) is
+   re-hit → re-enter cleanup (re-attempt the `deleting` write); if it has cleared, the `obj_id`-keyed
+   create **completes** into a valid managed database. Both are correct, neither is an orphan — so no extra
+   durable intent is needed or permitted. This removes **only** objects whose ownership is **proven** by
+   this resource's `obj_id` — it is roll-forward of the create's *own* effect, and is distinct from (never
+   a license to weaken) rules 3–4's "never auto-delete an object of uncertain ownership."
 
 Phases instantiate this: Phase 4 with a MariaDB control schema (see `phases/phase-4.md`), Phase 7 with
 the provider's own record keyed by the resource `obj_id`. Power-loss/VM acceptance of the window stays deferred (#90);
