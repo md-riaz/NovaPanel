@@ -64,6 +64,42 @@ func (r *stopBeforeMarkerDelete) Run(ctx context.Context, program string, args [
 	return r.delegate.Run(ctx, program, args, o)
 }
 
+func TestLiveManagedRotateOwnership(t *testing.T) {
+	ctx, r, user, ident := liveFixture(t)
+	other, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = runSQL(ctx, r, fmt.Sprintf("CREATE USER '%s'@'127.0.0.1' IDENTIFIED BY 'Original123';", user)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := runSQL(ctx, r, fmt.Sprintf("DROP USER IF EXISTS '%s'@'127.0.0.1'; DELETE FROM novapanel.managed_objects WHERE kind='user' AND name='%s@127.0.0.1';", user, user)); err != nil {
+			t.Errorf("user cleanup: %v", err)
+		}
+	})
+	for _, owner := range []string{"", other, ident} {
+		if owner != "" {
+			if _, err = runSQL(ctx, r, fmt.Sprintf("INSERT INTO novapanel.managed_objects(kind,name,obj_id,phase,created_at) VALUES('user','%s@127.0.0.1','%s','created',0);", user, owner)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		err = ManagedRotate(ctx, r, user, ident, "Changed123")
+		if owner != ident && !errors.Is(err, ErrConflict) || owner == ident && err != nil {
+			t.Fatalf("owner %q: %v", owner, err)
+		}
+		out, err := runSQL(ctx, r, fmt.Sprintf("SELECT authentication_string=PASSWORD('%s') FROM mysql.user WHERE User='%s' AND Host='127.0.0.1';", map[bool]string{true: "Changed123", false: "Original123"}[owner == ident], user))
+		if err != nil || out != "1" {
+			t.Fatalf("password changed unexpectedly: %q %v", out, err)
+		}
+		if owner != "" {
+			if _, err = runSQL(ctx, r, fmt.Sprintf("DELETE FROM novapanel.managed_objects WHERE kind='user' AND name='%s@127.0.0.1';", user)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
 func TestLiveManagedDeleteReplay(t *testing.T) {
 	ctx, r, name, ident := liveFixture(t)
 	create := fmt.Sprintf("CREATE DATABASE `%s`", name)

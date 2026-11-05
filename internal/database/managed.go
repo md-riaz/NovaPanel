@@ -21,6 +21,22 @@ func ManagedCreate(ctx context.Context, runner exec.Runner, dbID, userID, db, us
 	return ManagedCreateUser(ctx, runner, userID, db, user, password)
 }
 
+// ManagedRotate requires the caller to hold the database and user namespace locks.
+func ManagedRotate(ctx context.Context, runner exec.Runner, user, userID, password string) error {
+	if runner == nil || !id.Valid(userID) || (&validate.V{}).DBName(user) != nil || len(user) > 32 || !safePassword(password) {
+		return errors.New("invalid database input")
+	}
+	query := fmt.Sprintf("SELECT COALESCE((SELECT phase FROM novapanel.managed_objects WHERE kind='user' AND name='%s@127.0.0.1'),'none'),(SELECT COUNT(*) FROM mysql.user WHERE User='%s' AND Host='127.0.0.1'),COALESCE((SELECT obj_id FROM novapanel.managed_objects WHERE kind='user' AND name='%s@127.0.0.1'),'');", user, user, user)
+	state, err := runSQL(ctx, runner, query)
+	if err != nil {
+		return err
+	}
+	if state != "created\t1\t"+userID {
+		return ErrConflict
+	}
+	return Rotate(ctx, runner, user, password)
+}
+
 // ManagedDelete marks each owned object deleting before dropping and removes its marker last.
 func ManagedDelete(ctx context.Context, runner exec.Runner, db, dbID string, users map[string]string) error {
 	for user, userID := range users {

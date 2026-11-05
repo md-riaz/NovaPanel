@@ -240,6 +240,17 @@ func TestDatabaseCreateJobAndClaim(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	if os.Getenv("NOVAPANEL_MARIADB_TEST") != "1" {
+		key := "user:" + created["db_user"] + "@127.0.0.1"
+		original := runner.objects[key]
+		for _, state := range []string{"created\t1\t01ARZ3NDEKTSV4RRFFQ69G5FAV", "none\t1\t", "reserved\t1\t" + strings.Split(original, "\t")[2], "created\t0\t" + strings.Split(original, "\t")[2]} {
+			runner.objects[key] = state
+			if err := server.ExecuteJob(ctx, &rj); err == nil {
+				t.Fatalf("rotation accepted unproven user %q", state)
+			}
+		}
+		runner.objects[key] = original
+	}
 	if e = server.ExecuteJob(ctx, &rj); e != nil {
 		t.Fatal(e)
 	}

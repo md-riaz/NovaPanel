@@ -119,7 +119,10 @@ func databaseRotateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 	if e = databaseReady(ctx, a.Exec); e != nil {
 		return e
 	}
-	if e = database.Rotate(ctx, a.Exec, v.Username, v.Password); e != nil {
+	if e = database.ManagedRotate(ctx, a.Exec, v.Username, v.UserID, v.Password); e != nil {
+		if errors.Is(e, database.ErrConflict) {
+			return rpc.Errf("conflict", "Database user provenance conflict")
+		}
 		return e
 	}
 	return a.Jobs.PublishDatabaseClaim(ctx, j, json.RawMessage(`{}`), map[string]any{"password": v.Password})
