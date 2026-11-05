@@ -158,7 +158,7 @@ func TestDatabaseCreateReservedPresentDoesNotAdoptOrDrop(t *testing.T) {
 		t.Fatalf("reservation changed: %q", runner.objects[key])
 	}
 	for _, statement := range runner.statements {
-		if strings.HasPrefix(statement, "DROP ") || strings.HasPrefix(statement, "CREATE DATABASE `d_foreign`") || strings.Contains(statement, "SET phase='created'") || strings.Contains(statement, "SET phase='deleting'") {
+		if strings.HasPrefix(statement, "DROP ") || strings.HasPrefix(statement, "CREATE DATABASE `d_foreign`") || strings.HasPrefix(statement, "DELETE FROM novapanel.managed_objects") || strings.Contains(statement, "SET phase='created'") || strings.Contains(statement, "SET phase='deleting'") {
 			t.Fatalf("unproven object mutated: %s", statement)
 		}
 	}
