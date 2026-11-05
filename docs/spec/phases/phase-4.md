@@ -8,6 +8,42 @@ lifecycle, and a checksum-verified WordPress install. One supported PHP version 
 Phases 1–3 (jobs, auth, sites+nginx renderer). Reads: `00-foundations.md` F6–F12; `vpspanel-plan.md`
 §6 (per-site isolation).
 
+## Scope freeze & build order (head ruling — 2026-11-04)
+
+This ruling governs **how** Phase 4 is built, after PR #87 reached 0/7 requirements in 143 commits /
++29k lines by building open-ended "durable foundation" scaffolding instead of closing deliverables.
+It does not change the Deliverables, Verification, or DoD below — it bounds them.
+
+**What "done" means here.** A deliverable counts only when its **Verification row passes end-to-end
+with the runtime consumer open** — a `php.set` call, a `database.create` call, a `wordpress` site
+create that actually runs. A "pure contract", "typed reservation", "journal", or "foundation" that
+does not open the runtime path **counts for nothing** toward a deliverable (PR #87's own ledger says
+the same). Build the feature, not the floor under the floor.
+
+**Out of Phase 4 — do NOT build (anti-gold-plating).** Durability is already delivered by the Phase-1
+job engine (roll-forward recovery, append-only audit, F19 claims). Phase 4 **consumes** it and does
+**not** re-implement per-feature durability. Specifically out of scope, and not to be added to this
+phase: power-loss / crash-recovery proofs, bespoke descriptor-custody protocols, cgroup execution
+domains, fanotify extraction barriers, and any recovery/expiry/admission machinery beyond what the
+Phase-1 job contract already provides. Final privileged-VM, cross-UID and power-loss **acceptance is
+deferred to product finish** (owner ruling) and must not gate or expand source work. If a corner here
+seems to need new durability machinery, that is a **blocker to raise to the head**, not a license to
+build it.
+
+**Build order — independent-first, each runtime-open and verified before the next:**
+1. **MariaDB DB/user lifecycle** (Deliverable 3): `database.create/rotate_password/delete/list`,
+   `dbuser.*`; `unix_socket` root admin, least-privilege grant (never `*.*`), show-once password via
+   the F6 claim. No PHP/WordPress needed. Closes Verification rows 3, 4 (transport), 7.
+2. **PHP runtime** (Deliverables 1–2): per-site user + FPM pool with the socket-owner **502 fix**, then
+   `php.set` / `php.list`. Closes Verification rows 1, 2, 7.
+3. **WordPress install** (Deliverable 4): `download → verify-checksums → config create → install`, run
+   as the site user, wp-config 440/400, non-empty-docroot refusal; destructive ops stay `unsupported`
+   (Deliverable 5 / row 6). Closes Verification rows 5, 6.
+
+**One PR per step** (steps 1 and 2 may each ship on their own), each small and independently
+mergeable — not one 285-file mega-draft. Drive each with `docs/spec/PHASE-DRIVER-PROMPT.md`
+(`{{TARGET}}` = the step), with **one independent verifier pass per step, not per commit.**
+
 ## Deliverables
 1. **Per-site Unix user + FPM pool** (§6): one non-login user per site (`/usr/sbin/nologin`, `0750`
    home); one PHP-FPM pool over a Unix socket where the **worker runs as the site user** but the
@@ -73,6 +109,57 @@ GRANT SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,ALTER,INDEX,CREATE TEMPORARY TABLE
   by OS identity via `unix_socket`. If a file credential is ever unavoidable, root-owned `0600`
   outside the DB and web root; **never `MYSQL_PWD`** (deprecated, leaks via `/proc`), never `-p<pw>`
   on argv.
+
+### MariaDB create/replay provenance (F20 — resolves the two-store boundary; head ruling 2026-11-04)
+MariaDB DDL and the agent's SQLite are not one transaction, so a crash after `CREATE DATABASE`/
+`CREATE USER` but before the SQLite success write would leave existence unable to distinguish *our own
+half-finished resource* from *an unmanaged collision*. Resolve it with the **F20 provenance marker held
+in MariaDB itself** — not a SQLite-only reservation (which proves the name, not far-side ownership).
+
+Agent-owned root control schema, created once at bootstrap (no site user holds any grant on it):
+```sql
+CREATE DATABASE IF NOT EXISTS `novapanel`;                 -- control schema (agent/root only)
+CREATE TABLE IF NOT EXISTS `novapanel`.`managed_objects` (
+  kind       ENUM('schema','user') NOT NULL,
+  name       VARCHAR(190)          NOT NULL,                -- schema name, or 'user@127.0.0.1'
+  op_id      CHAR(26)              NOT NULL,                -- the slow op's ULID (SQLite operation id)
+  phase      ENUM('reserved','created','deleting') NOT NULL,
+  created_at BIGINT                NOT NULL,                -- unix-ms
+  PRIMARY KEY (kind, name)
+);
+```
+`database.create` / `dbuser.create`, under the `db:<name>` lock, root via `unix_socket`:
+1. **SQLite write-ahead** (F20.1): operation `prepared` with the generated `db`/`dbuser` names and the
+   minted password **sealed (F12)**. Replay reuses these exact values.
+2. **Pre-flight** (F20.3): object absent from `information_schema.SCHEMATA` / `mysql.user`? If present
+   and no `managed_objects` row owns it for this `op_id` → **`conflict`** (unmanaged collision — never
+   adopt, never `CREATE … IF NOT EXISTS`, never `DROP`).
+3. **Reserve** (F20.2): `INSERT novapanel.managed_objects(kind,name,op_id,phase='reserved')`; a row
+   already present under a different `op_id` → `conflict`.
+4. **Create**: `CREATE DATABASE …` / `CREATE USER …@'127.0.0.1' IDENTIFIED BY <sealed>` + least-priv
+   `GRANT` (names/password from the sealed input; never `*.*`).
+5. **Commit**: `UPDATE … phase='created'`; SQLite success row; publish the **F19 claim** from the sealed
+   password.
+
+**Replay** (op `prepared`, no success) per F20.4: provenance row owns this `op_id` → ours, re-run the
+idempotent `GRANT`/`ALTER` with the sealed password and publish the claim; no row but object present →
+unmanaged collision → `conflict` surfaced for **operator reconciliation** (never auto-adopt or
+auto-delete); no row and object absent → restart the op with the same sealed identities.
+
+**`database.rotate_password`**: seal the new password write-ahead (F12/F20.1) **before**
+`ALTER USER …@'127.0.0.1' IDENTIFIED BY <sealed>`; the claim publishes from the sealed value, so a crash
+between `ALTER` and claim re-applies the same password (idempotent) and re-publishes — the new secret is
+never lost and the old is never silently retained.
+
+**`database.delete` / `dbuser.delete`** is **provenance-last** (F20.5): `DROP … ` (ensure-absent, F7),
+then delete the `managed_objects` row; a crash leaves `phase='deleting'` with the object maybe gone →
+replay completes the `DROP` idempotently. (`DROP IF EXISTS` is correct for delete; `CREATE IF NOT
+EXISTS` is still forbidden for create — F20.3.)
+
+This is the authorized mechanism for the whole `database.*`/`dbuser.*` family; it is the minimal F20
+contract, not a bespoke recovery framework, and does not reopen the #90 scope freeze. Power-loss/VM
+acceptance of the crash window stays deferred (#90); the contract is proven by the F7 crash-safety
+replay test against a simulated mid-op stop.
 
 ### WordPress install (reference — fixed argv, run as the site user)
 ```

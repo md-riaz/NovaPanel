@@ -781,3 +781,50 @@ idempotent replay returns the same (still-unclaimed) `claim` or `410`-style `not
   reports the job done. If the page is lost before claiming, the secret is recovered only by re-running
   the verb (rotate/recreate) — never re-read. This is the single browser-side claim path for **every**
   `+ claim(…)` verb.
+
+---
+
+## F20. External-resource provenance & two-store roll-forward (F6 detail)
+
+Some slow verbs mutate a store that is **not transactional with the agent's SQLite** — MariaDB DDL
+(Phase 4), a DNS provider (Phase 7), the filesystem. F6 requires roll-forward recovery, and invariant 4
+/ the phase guardrails forbid **adopting a pre-existing unmanaged object** (no blind `IF NOT EXISTS`,
+no inferring ownership from a matching name). Those two collide in one window: if the agent creates the
+external object and dies **before** recording success in SQLite, a restart cannot tell *its own
+half-finished resource* from *an unmanaged collision* by existence alone. A reservation held only in
+SQLite proves the intended **name**, not **ownership** of a separately-created external object.
+
+This is a **contract**, not per-feature recovery machinery (it does not reopen the #90 scope freeze):
+it is the minimum needed for any two-store create to roll forward safely without adoption. The
+mechanism is a **provenance marker written in the external store itself, keyed to the operation**, so
+ownership is provable on the far side of the transaction boundary.
+
+**Rules (every two-store mutating verb).**
+1. **Write-ahead intent + sealed inputs in SQLite first.** Before touching the external store, commit
+   the operation row with its generated **identities** (names) and any minted **secret sealed** per
+   F12. Replay reuses these exact values (so a re-applied step is idempotent and an F19 claim
+   re-publishes the *same* secret — never a second, unseen one). TTL/claim semantics are unchanged (F19).
+2. **Provenance-before-object, under the per-name lock.** Record a durable provenance row **in the
+   external store** — `(name, kind, op_id, phase)` — **before** creating the object, and create the
+   object only after a pre-flight check shows it absent. The object is therefore never created without a
+   matching provenance row that names *this* `op_id`.
+3. **Never adopt.** A pre-flight collision (object present, no provenance row owned by this op) **fails
+   closed** with `conflict` — never `IF NOT EXISTS`-adopt, never auto-delete someone else's object. A
+   provenance row owned by a *different* op is likewise `conflict`.
+4. **Replay decision (roll-forward).** For an op in `prepared` with no success record:
+   - provenance row for the name owned by **this** `op_id` → the object is **ours**: re-run the
+     remaining idempotent steps with the sealed identities/secret, publish the claim, finish.
+   - **no** provenance row for the name, object **present** in the external store → an **unmanaged
+     collision** (we never reserved it) → `conflict`, surfaced for **operator reconciliation** (rename/
+     remove the external object, or a future explicit adopt verb — never automatic).
+   - no provenance row, object **absent** → we died before reserving → restart the op cleanly with the
+     same sealed identities.
+5. **Delete is provenance-last.** Remove the external object, then its provenance row, so a crash
+   mid-delete leaves `phase=deleting` + object-maybe-gone → replay completes the delete idempotently.
+6. **No weaker substitute.** A SQLite-only reservation does **not** satisfy this (it cannot prove
+   far-side ownership). If a store genuinely cannot hold a provenance marker, that is a **blocker to
+   raise**, not a license to adopt by name or to fail every retry.
+
+Phases instantiate this: Phase 4 with a MariaDB control schema (see `phases/phase-4.md`), Phase 7 with
+the provider's own record keyed by `op_id`. Power-loss/VM acceptance of the window stays deferred (#90);
+the contract itself is verified by the crash-safety replay test (F7) against a simulated mid-op stop.
