@@ -290,6 +290,32 @@ object_key = the resource a job serializes on (see the site rule below)
 
 - A slow verb's handler **enqueues a row and returns** `202`-style `{ ok:true, data:{ job } }`
   immediately. The web tier polls `job.status{id}` or `job.list`.
+- **Enqueue admission & uncertain-reply (head ruling — resolves the enqueue-audit finding, F6/F11).**
+  The enqueue is **one atomic SQLite transaction** — the same shape as the scheduler's
+  `EnqueueScheduledJob` (F18): it commits the `queued` **job row**, the **sealed input** (F12), the
+  **`job_claims`** reservation (when the verb mints a show-once secret), **and** the **`idempotency`**
+  row (`idempotency_key → job_id`, when a key is present) **all-or-nothing**. This commit **is** the
+  admission boundary: the operation is admitted iff the tx commits, so a failure *before* it leaves
+  **nothing queued** and the caller's failure is truthful.
+  - **The job row is the sole execution authority.** The worker and `PrepareOperations` execute **only**
+    a committed `queued`/`running` job row — **never** an audit line. So a mutation runs **iff** its
+    admission tx committed; there is no path by which an un-admitted operation executes.
+  - **Audit ordering is unchanged (F11): job-tx first, then the enqueue event (file append first, then
+    the `events` row), reconciled at startup.** A committed job is admitted and **runs regardless of the
+    enqueue-audit write** — the enqueue event *records* an admitted op, it is **not** a second gate that
+    can un-admit a durable job. No effect is ever unaudited: the **terminal** event (F11, mandatory)
+    records the effect, and a torn enqueue event is backfilled by the F11 file-only reconcile; an audit
+    **sink failure** trips F11's sticky-`unhealthy` gate, stopping the *next* mutation. (This is why the
+    finding's "enqueue-audit `Record` failed, yet `PrepareOperations` runs the job" is **safe**: the job
+    ran because it was durably admitted, and its effect is terminal-audited.)
+  - **Uncertain/lost reply is bounded and recoverable, never prevented** — losing the reply after the job
+    is durably queued is unavoidable for any durable async job. **At-most-once effect:** the single
+    admission tx + the `idempotency` mapping — a retry with the same `idempotency_key` returns the
+    **existing** `job_id` (and re-reads the F19 claim within TTL), never a second operation; without a
+    key the agent cannot dedup, so sending an `Idempotency-Key` for mutations is the web tier's job
+    (F2/B-D5). **Undeliverable show-once secret:** if the reply is lost and the claim's TTL lapses (or no
+    key), the minted secret is recovered by `rotate_password` (fresh F12 seal + F19 claim) — never
+    silently wrong, never a second uncommitted operation.
 - **One worker goroutine** drains `queued` oldest-first. Concurrency is bounded by a **keyed mutex on
   `object_key`** (`internal/jobs/keyedlock.go`): two jobs on the same object never interleave; jobs on
   different objects may run on a small worker pool (default 1; configurable, still per-object serial).
@@ -480,6 +506,11 @@ Record(Event) error                                    -- fail-closed: see sinks
   the record, not just successes — aaPanel/BHPanel log only post-auth actions; we log the refusal too),
   and a **final outcome** event. A slow verb records **enqueue** (`ok`, stage=enqueue) at `Run` and the
   worker's **terminal** event (`ok`/`error`, stage=exec) at the end, correlated by `job_id` in detail.
+  The **enqueue** event records an **already-admitted** operation (admission is the atomic job tx, F6) —
+  it never gates whether a committed `queued` job runs; the **terminal** event is the mandatory
+  "no effect reported complete without a durable record". So an enqueue-audit `Record` failure does not
+  un-admit the job (it trips the sticky-`unhealthy` gate for the *next* mutation and is backfilled by the
+  startup reconcile); the job's effect is still terminal-audited.
 - **Dual-sink ordering (decided): file append **first**, then the `events` row.** The `chattr +a` file
   is the tamper-proof source of truth; if the two ever diverge, the file wins. The two are **not
   atomic** and we do not promise they are: a crash between them can leave a **file-only** event (never
@@ -994,8 +1025,25 @@ ownership is provable on the far side of the transaction boundary.
    - `phase='deleting'`, object **absent** → completed-delete **tombstone** → remove the row.
    - `phase='deleting'`, object **present** → an authorized teardown of *our own* `obj_id` that didn't
      finish → complete the `DROP`, remove the row.
-   - `phase='reserved'`/`'created'`, **no** owning resource row, owning job **terminal or gone** → a
-     create that can never commit its SQLite owner → drive the rule-8 abort (`deleting` → `DROP` → remove).
+   - `phase='created'`, **no** owning resource row, owning job **terminal (`failed`) or gone** → our own
+     object (ownership **proven** by `created` — rule 4: `created` is written only *after* our own create
+     confirmed) whose SQLite owner can never commit → drive the rule-8 abort (`deleting` → `DROP` by
+     `obj_id` → remove). This is safe to `DROP` **because `created` proves ownership**. (It stays within
+     the `obj_id`-provable guard above: if neither the job nor any resource row carries this `obj_id`, the
+     marker is unmatchable → treated as foreign → operator, never dropped.)
+   - `phase='reserved'`, object **absent**, no owning row, owning job **terminal or gone** → a create that
+     died before a confirmed `CREATE` and can never commit its owner → there is **no object to drop** →
+     remove the stranded `reserved` marker (frees the name; the marker is `obj_id`-proven ours and nothing
+     external is touched).
+   - `phase='reserved'`, object **present**, no owning row, owning job **terminal or gone** → **`conflict`
+     → operator; never `DROP`, never adopt.** This is exactly rule 4's unprovable `reserved`+present: our
+     own `CREATE` with an indeterminate exit (`created` never written) *or* a foreign object that landed in
+     the reserve→create window — **indistinguishable** from external state. A terminal/gone job only
+     removes the *replay* that would have owned it; it does **not** make the present object's ownership
+     provable, so reconcile must fail closed to the operator, identically to rule 4 — it may **not** `DROP`
+     on the strength of a `reserved` row. (Rule 4's owed `obj_id`-stamp optimization would let reconcile
+     read the stamp, prove ownership and resolve this automatically; out of scope — the operator path is
+     the contract.)
    - `phase='created'`, owning resource row **present** → live and healthy → leave.
    - `phase='reserved'`, object **present**, no owning row, a job still **live** → leave it to that job's
      replay (rules 3–4); reconcile never races a live job on the same `obj_id`.
