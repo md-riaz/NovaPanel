@@ -109,7 +109,7 @@ func databaseRotateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 	if e != nil {
 		if durable.Step == "rotation_started" {
 			if errors.Is(e, sql.ErrNoRows) {
-				return rotateConflict(ctx, a, j, v.Password, "precondition_failed")
+				return rotateConflict(ctx, a.Jobs, j, v.Password, "precondition_failed")
 			}
 			return jobs.ErrRetry
 		}
@@ -123,7 +123,7 @@ func databaseRotateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 	}
 	if d.Name != v.Name || !found {
 		if durable.Step == "rotation_started" {
-			return rotateConflict(ctx, a, j, v.Password, "precondition_failed")
+			return rotateConflict(ctx, a.Jobs, j, v.Password, "precondition_failed")
 		}
 		return rpc.Errf("precondition_failed", "Database state changed")
 	}
@@ -151,7 +151,7 @@ func databaseRotateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 	if e = database.ManagedRotate(ctx, a.Exec, v.Username, v.UserID, v.Password); e != nil {
 		if errors.Is(e, database.ErrConflict) {
 			if started {
-				return rotateConflict(ctx, a, j, v.Password, "conflict")
+				return rotateConflict(ctx, a.Jobs, j, v.Password, "conflict")
 			}
 			return rpc.Errf("conflict", "Database user provenance conflict")
 		}
@@ -167,8 +167,8 @@ func databaseRotateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 	return nil
 }
 
-func rotateConflict(ctx context.Context, a *agent.Agent, j *jobs.Job, password, code string) error {
-	if err := a.Jobs.PublishRotateConflictClaim(ctx, j, map[string]any{"password": password}, code); err != nil {
+func rotateConflict(ctx context.Context, q *jobs.Queue, j *jobs.Job, password, code string) error {
+	if err := q.PublishRotateConflictClaim(ctx, j, map[string]any{"password": password}, code); err != nil {
 		return jobs.ErrRetry
 	}
 	return rpc.Errf(code, "Database rotation requires operator reconciliation")

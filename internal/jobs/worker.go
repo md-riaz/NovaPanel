@@ -263,12 +263,16 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 	if ctx.Err() != nil {
 		return nil
 	} // leave running for restart's effectful/idempotent recovery
-	var coded *rpcerr.CodedError
-	if errors.As(err, &coded) && coded.Code == "interrupted" {
-		// A journaled operation requires recovery, even if its attempt also expired.
-		return q.finish(ctx, j, rpcerr.Errf("interrupted", "Job requires recovery"))
+	// F6 precedence across the entire error tree: explicit interruption, then
+	// effectful deadline safety / retry, ordinary terminal, and coded deadline.
+	if interrupted := codedError(err, func(code string) bool { return code == "interrupted" }); interrupted != nil {
+		return q.finish(ctx, j, interrupted)
 	}
-	transient := errors.Is(err, context.DeadlineExceeded) || errors.Is(attemptCtx.Err(), context.DeadlineExceeded) || (coded != nil && coded.Code == "deadline_exceeded")
+	terminal := codedError(err, func(code string) bool { return code != "deadline_exceeded" })
+	transient := errors.Is(err, context.DeadlineExceeded) || errors.Is(attemptCtx.Err(), context.DeadlineExceeded) || codedError(err, func(code string) bool { return code == "deadline_exceeded" }) != nil
+	if !j.Effectful && terminal != nil && !errors.Is(err, ErrRetry) {
+		return q.finish(ctx, j, terminal)
+	}
 	if j.Effectful && transient {
 		return q.finish(ctx, j, rpcerr.Errf("interrupted", "Effectful job interrupted"))
 	}
@@ -281,7 +285,30 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 		current.Updated = q.clock.Now()
 		return q.store.UpdateJob(ctx, current)
 	}
+	if terminal != nil {
+		return q.finish(ctx, j, terminal)
+	}
 	return q.finish(ctx, j, err)
+}
+
+// codedError searches wrapped and joined errors, rather than only the first code.
+func codedError(err error, matches func(string) bool) *rpcerr.CodedError {
+	if err == nil {
+		return nil
+	}
+	if coded, ok := err.(*rpcerr.CodedError); ok && matches(coded.Code) {
+		return coded
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, child := range joined.Unwrap() {
+			if coded := codedError(child, matches); coded != nil {
+				return coded
+			}
+		}
+	} else if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return codedError(wrapped.Unwrap(), matches)
+	}
+	return nil
 }
 
 func databaseSiteKey(j Job) string {
