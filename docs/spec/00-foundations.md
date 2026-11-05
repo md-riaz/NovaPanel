@@ -313,7 +313,13 @@ object_key = the resource a job serializes on (see the site rule below)
 - **Attempt `deadline_exceeded` is transient, not terminal.** It aborts the attempt and releases its
   locks; the job returns to the roll-forward set (`running`→`queued`) and is retried on a later pass — it
   is **not** marked `failed`. Idempotent ensure-state (F7) + provenance-phase branching (F20.4) make the
-  retry safe (the next attempt re-reads recorded state and resumes). The **sealed input is
+  retry safe (the next attempt re-reads recorded state and resumes). **This transient re-queue is for an
+  idempotent attempt only.** For an **effectful** verb (external/billed side-effect: ACME issuance,
+  provider DNS, an object-store/`restic` run — the same class F6 recovers as `interrupted`, not blind
+  re-run), an attempt `deadline_exceeded` **mid-effect** takes that **same `interrupted` + reconcile
+  path** — the verb's effect-specific idempotence check / intent journal decides whether the external
+  call landed — and is **not** blindly re-queued, because a naive replay could double-issue, burn a
+  rate-limit, or duplicate a provider record. The **sealed input is
   deadline-invariant**: the write-ahead sealed args/password (F12/F20.1) are reused **unchanged** on every
   replay, including one after a timeout — a timeout never re-mints, re-seals, or invalidates them, and the
   F19 claim publishes from that same sealed value when an attempt finally commits. (A genuine business
