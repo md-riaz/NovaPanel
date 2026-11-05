@@ -3,6 +3,7 @@ package verbs_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"novapanel/internal/agent"
 	"novapanel/internal/audit"
@@ -198,15 +199,39 @@ func TestDatabaseCreateJobAndClaim(t *testing.T) {
 	if e = json.Unmarshal(j.Result, &created); e != nil {
 		t.Fatal(e)
 	}
+	runCredential := func(password string, args ...string) (int, error) {
+		t.Helper()
+		if os.Geteuid() != 0 || strings.ContainsRune(password, '\x00') {
+			t.Fatal("credential fixture requires root and a NUL-free password")
+		}
+		f, err := os.CreateTemp("", "novapanel-mariadb-*.cnf")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := os.Remove(f.Name()); err != nil {
+				t.Errorf("remove client option file: %v", err)
+			}
+		}()
+		escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "\t", `\t`, "\b", `\b`).Replace(password)
+		_, writeErr := fmt.Fprintf(f, "[client]\npassword=\"%s\"\n", escaped)
+		closeErr := f.Close()
+		if writeErr != nil || closeErr != nil {
+			t.Fatalf("write client option file: %v; close: %v", writeErr, closeErr)
+		}
+		args = append([]string{"--defaults-file=" + f.Name(), "--protocol=tcp", "--host=127.0.0.1", "--user=" + created["db_user"]}, args...)
+		_, _, code, err := (exec.Real{}).Run(ctx, "/usr/bin/mariadb", args, exec.RunOpts{})
+		return code, err
+	}
 	connect := func(password string) bool {
-		_, _, code, err := (exec.Real{}).Run(ctx, "/usr/bin/mariadb", []string{"--no-defaults", "--protocol=tcp", "--host=127.0.0.1", "--user=" + created["db_user"], "--database=" + created["db_name"], "--execute=SELECT 1"}, exec.RunOpts{Env: []string{"MYSQL_PWD=" + password}})
+		code, err := runCredential(password, "--database="+created["db_name"], "--execute=SELECT 1")
 		return err == nil && code == 0
 	}
 	if os.Getenv("NOVAPANEL_MARIADB_TEST") == "1" {
 		if !connect(fields["password"].(string)) {
 			t.Fatal("initial credential cannot connect over TCP")
 		}
-		_, _, code, err := (exec.Real{}).Run(ctx, "/usr/bin/mariadb", []string{"--no-defaults", "--protocol=tcp", "--host=127.0.0.1", "--user=" + created["db_user"], "--execute=SELECT * FROM mysql.user"}, exec.RunOpts{Env: []string{"MYSQL_PWD=" + fields["password"].(string)}})
+		code, err := runCredential(fields["password"].(string), "--execute=SELECT * FROM mysql.user")
 		if err == nil && code == 0 {
 			t.Fatal("user can read another database")
 		}

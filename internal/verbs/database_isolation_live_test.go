@@ -28,11 +28,31 @@ func TestMariaDBClaimedCredentialIsolation(t *testing.T) {
 	}
 	ctx := context.Background()
 	run := func(args []string, sql, password string) (string, int, error) {
-		env := []string{}
 		if password != "" {
-			env = append(env, "MYSQL_PWD="+password)
+			if os.Geteuid() != 0 {
+				t.Fatal("credential fixture must run as root")
+			}
+			if strings.ContainsRune(password, '\x00') {
+				t.Fatal("password contains NUL")
+			}
+			f, err := os.CreateTemp("", "novapanel-mariadb-*.cnf")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := os.Remove(f.Name()); err != nil {
+					t.Errorf("remove client option file: %v", err)
+				}
+			}()
+			escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "\t", `\t`, "\b", `\b`).Replace(password)
+			_, writeErr := fmt.Fprintf(f, "[client]\npassword=\"%s\"\n", escaped)
+			closeErr := f.Close()
+			if writeErr != nil || closeErr != nil {
+				t.Fatalf("write client option file: %v; close: %v", writeErr, closeErr)
+			}
+			args = append([]string{"--defaults-file=" + f.Name()}, args[1:]...)
 		}
-		out, stderr, code, err := (exec.Real{}).Run(ctx, "/usr/bin/mariadb", args, exec.RunOpts{Stdin: strings.NewReader(sql), Env: env})
+		out, stderr, code, err := (exec.Real{}).Run(ctx, "/usr/bin/mariadb", args, exec.RunOpts{Stdin: strings.NewReader(sql)})
 		return string(out) + string(stderr), code, err
 	}
 	rootArgs := []string{"--no-defaults", "--protocol=socket", "--user=root", "--batch"}

@@ -68,6 +68,40 @@ func TestBootstrapWaitHonorsDeadline(t *testing.T) {
 	}
 }
 
+type bootstrapDeadlineRunner struct {
+	deadline time.Time
+	bootstrapRunner
+}
+
+func (r *bootstrapDeadlineRunner) Run(ctx context.Context, program string, args []string, opts exec.RunOpts) ([]byte, []byte, int, error) {
+	r.deadline, _ = ctx.Deadline()
+	return r.bootstrapRunner.Run(ctx, program, args, opts)
+}
+
+func TestBootstrapUsesCallerDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	want, _ := ctx.Deadline()
+	r := &bootstrapDeadlineRunner{bootstrapRunner: bootstrapRunner{shape: "1:5:5:2:2:0:0:0", grants: "0"}}
+	if err := Bootstrap(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if !r.deadline.Equal(want) {
+		t.Fatalf("SQL deadline = %v, want caller deadline %v", r.deadline, want)
+	}
+}
+
+func TestBootstrapBoundsUnboundedCaller(t *testing.T) {
+	r := &bootstrapDeadlineRunner{bootstrapRunner: bootstrapRunner{shape: "1:5:5:2:2:0:0:0", grants: "0"}}
+	before := time.Now()
+	if err := Bootstrap(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	if r.deadline.IsZero() || r.deadline.After(before.Add(6*time.Second)) {
+		t.Fatalf("unbounded caller SQL deadline = %v", r.deadline)
+	}
+}
+
 func TestBootstrapGrantQueryUsesExactPrincipal(t *testing.T) {
 	r := &bootstrapRunner{shape: "1:5:5:2:2:0:0:0", grants: "0"}
 	if err := Bootstrap(context.Background(), r); err != nil {

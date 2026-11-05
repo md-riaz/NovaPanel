@@ -31,8 +31,13 @@ var ErrUnsafe = errors.New("MariaDB control schema is unsafe")
 
 // Bootstrap verifies the trust root on every use, without repairing foreign state.
 func Bootstrap(ctx context.Context, runner exec.Runner) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
+	// Worker and synchronous RPC contexts already carry their respective deadlines.
+	// Only add a fallback for callers that did not supply one.
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
 	select {
 	case bootstrapMu <- struct{}{}:
 		defer func() { <-bootstrapMu }()
