@@ -980,6 +980,40 @@ ownership is provable on the far side of the transaction boundary.
    tombstones. This removes **only** objects whose ownership is **proven** by this resource's `obj_id` —
    it is roll-forward of the create's *own* effect, and is distinct from (never a license to weaken) rules
    3–4's "never auto-delete an object of uncertain ownership."
+9. **Startup/periodic provenance reconcile (the catch-all backstop).** Job roll-forward (F6) re-drives a
+   non-`done` job, but it cannot clean up after a job that reached a **terminal** state (`done`/`failed`)
+   or whose row is gone — e.g. the rule-8 tombstone, or an object owned by a create whose SQLite resource
+   row never committed. A **reconcile pass** over the provenance store closes that remainder. It runs on
+   agent start (**after** F6 job roll-forward) and periodically (F18), is itself idempotent and
+   crash-safe, and is **generic over every F20 resource** (the F20 counterpart of F6's "reset `running`→
+   `queued` at boot" — **not** per-feature machinery, and it uses only canonical state: `managed_objects`,
+   `jobs`, and the owning SQLite resource rows). It acts **only on markers whose `obj_id` it can match to
+   our own SQLite** (a marker whose `obj_id` is unknown/foreign is **never** touched → operator). For each
+   of our markers it converges by the rule-4 table, keyed on (`phase`, object present?, owning resource
+   row present?, owning job terminal?):
+   - `phase='deleting'`, object **absent** → completed-delete **tombstone** → remove the row.
+   - `phase='deleting'`, object **present** → an authorized teardown of *our own* `obj_id` that didn't
+     finish → complete the `DROP`, remove the row.
+   - `phase='reserved'`/`'created'`, **no** owning resource row, owning job **terminal or gone** → a
+     create that can never commit its SQLite owner → drive the rule-8 abort (`deleting` → `DROP` → remove).
+   - `phase='created'`, owning resource row **present** → live and healthy → leave.
+   - `phase='reserved'`, object **present**, no owning row, a job still **live** → leave it to that job's
+     replay (rules 3–4); reconcile never races a live job on the same `obj_id`.
+   Because reconcile acts only on `obj_id`-proven-own markers and only ever `DROP`s an object under a
+   `deleting` marker it owns (never a `reserved`-present or foreign one), it preserves rules 3–4 (never
+   adopt, never delete an object of uncertain ownership) while guaranteeing **convergence**: whatever
+   inter-store crash state a stop leaves, the next boot (plus the periodic pass) drives it to a correct
+   terminal state with no orphan and no stranded marker.
+
+**Completeness & freeze.** Rules 1–9 are the *closed* contract for a two-store create/rotate/delete: the
+provenance `phase` is the external authority, the SQLite terminal state is ordered against it (rule 8),
+and the reconcile (rule 9) converges every residue. Every inter-store crash point is therefore covered by
+roll-forward (F6) **or** reconcile (rule 9); there is no window left that needs a *new* per-feature rule.
+Implementations prove this by the **F7 crash-safety replay test across the enumerated inter-store points**
+(before/after each of: reserve, CREATE, phase→created, SQLite commit; and for teardown: →deleting, DROP,
+terminal commit, row removal), plus one reconcile pass from each stopped state. A genuinely new *contract*
+gap is still raised; a sub-statement timing window that rules 1–9 + reconcile already converge is **not** a
+fresh ruling — it is covered here, with power-loss/VM acceptance of the residue deferred to #90.
 
 Phases instantiate this: Phase 4 with a MariaDB control schema (see `phases/phase-4.md`), Phase 7 with
 the provider's own record keyed by the resource `obj_id`. Power-loss/VM acceptance of the window stays deferred (#90);

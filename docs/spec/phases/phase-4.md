@@ -179,6 +179,27 @@ trusted**:
 Only after structure + grant verification passes does the executor trust `managed_objects` markers to
 authorize a `DROP`.
 
+**Startup/periodic provenance reconcile (F20.9 — the catch-all).** After F6 job roll-forward at agent
+start, and periodically via the F18 scheduler, a reconcile pass sweeps `novapanel.managed_objects` against
+`jobs` + `databases`/`db_users`, acting **only** on markers whose `obj_id` matches our own SQLite (a
+foreign/unknown `obj_id` is never touched → operator). Per the F20.9 table: `deleting` + object absent →
+remove the tombstone row; `deleting` + object present → complete the `DROP`, remove the row;
+`reserved`/`created` with **no** owning `databases`/`db_users` row and the owning job terminal/gone → drive
+the F20.8 abort (`deleting` → `DROP` → remove); `created` + owning row present → healthy, leave;
+`reserved` + present with a **live** job → leave to that job's replay. This converges any inter-store crash
+residue (tombstones, a create whose SQLite row never committed) that a terminal job cannot itself clean,
+without adopting or deleting an object of uncertain ownership. It is the F20 counterpart of F6's startup
+roll-forward — generic, idempotent, using only canonical state; **not** per-feature machinery.
+
+**Crash-safety is complete (freeze).** F20 rules 1–9 close the two-store `database.*` lifecycle: every
+inter-store crash point is covered by F6 roll-forward **or** the F20.9 reconcile. Prove it with the F7
+crash-safety replay test at each enumerated stop — before/after **reserve, `CREATE`, phase→`created`,
+SQLite commit**, and for teardown **→`deleting`, `DROP`, terminal commit, row removal** — each followed by
+a reconcile pass, asserting convergence (no orphan object, no stranded marker, the job terminal and
+correct). A sub-statement timing window already converged by rules 1–9 + reconcile is **not** a fresh
+contract gap; power-loss/VM acceptance of the residue stays deferred (#90). Raise a new ruling only for a
+genuine *contract* gap the table does not cover.
+
 **Bounded contention.** Acquiring the `db:`/`dbuser:` lock and any MariaDB-side wait are **bounded with
 cancellation** under the **per-attempt worker deadline** (F6: `Verb.MaxDeadlineMs`, `0` →
 `deadline_default_ms`) — **not** the caller's request deadline, which ends at enqueue — never an unbounded
