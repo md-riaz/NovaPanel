@@ -1,4 +1,31 @@
+// Keep a key and payload in memory for the lifetime of an uncertain submission.
+const databaseSubmissions = new WeakMap();
+function databaseForm(form) {
+  return form && form.matches && form.matches('form[hx-post^="/databases/"]');
+}
 document.addEventListener('htmx:configRequest', function (event) {
+  const form = event.detail.elt;
+  if (databaseForm(form)) {
+    const parameters = new URLSearchParams(event.detail.parameters);
+    parameters.delete('csrf_token');
+    const payload = parameters.toString();
+    let submission = databaseSubmissions.get(form);
+    if (submission && Date.now() - submission.created >= 23 * 60 * 60 * 1000) {
+      event.preventDefault();
+      window.alert('The retry window has expired. Contact an administrator to check agent RPC job.list and database inventory before resubmitting. If the operation completed but its password claim expired, rotate the password.');
+      return;
+    }
+    if (submission && submission.payload !== payload) {
+      event.preventDefault();
+      window.alert('The previous submission may have been accepted. If the session has not changed, restore the original values to retry. Otherwise, contact an administrator to check agent RPC job.list and database inventory before resubmitting. Signing in or reauthenticating changes the session.');
+      return;
+    }
+    if (!submission) {
+      submission = {key: crypto.randomUUID(), payload: payload, created: Date.now()};
+      databaseSubmissions.set(form, submission);
+    }
+    event.detail.headers['Idempotency-Key'] = submission.key;
+  }
   const main = document.getElementById('main');
   if (main && main.dataset.csrf) event.detail.headers['X-CSRF-Token'] = main.dataset.csrf;
 });
@@ -29,6 +56,23 @@ document.addEventListener('htmx:afterSwap', renderEnrollmentQR);
 document.addEventListener('htmx:beforeSwap', function (event) {
   const status = event.detail.xhr.status;
   const source = event.detail.requestConfig && event.detail.requestConfig.elt;
+  if (status >= 400 && databaseForm(source)) {
+    const submission = databaseSubmissions.get(source);
+    if (status === 408 || status >= 500 || (submission && submission.uncertain)) {
+      if (submission) submission.uncertain = true;
+      event.detail.shouldSwap = false;
+      if ((status === 401 || status === 403) && !source.querySelector('[data-recovery-link]')) {
+        const link = document.createElement('a');
+        link.href = status === 401 ? '/login' : '/reauth';
+        link.dataset.recoveryLink = '';
+        link.textContent = status === 401 ? 'Sign in' : 'Reauthenticate';
+        source.append(link);
+      }
+      window.alert('The submission may have been accepted. If the session has not changed, retry the same values. Otherwise, contact an administrator to check agent RPC job.list and database inventory before resubmitting. Signing in or reauthenticating changes the session.');
+      return;
+    }
+    databaseSubmissions.delete(source);
+  }
   if ((status === 429 || status === 503) && source && source.matches('[data-job-poll]')) {
     const job = source.closest('[data-job-id]');
     if (job && source.isConnected) {
@@ -46,6 +90,16 @@ document.addEventListener('htmx:beforeSwap', function (event) {
     event.detail.isError = false;
   }
 });
+function uncertainDatabaseReply(event) {
+  const form = event.detail.elt;
+  if (databaseForm(form)) {
+    const submission = databaseSubmissions.get(form);
+    if (submission) submission.uncertain = true;
+    window.alert('The submission reply was lost. The operation may or may not have been admitted. If the session has not changed, retrying the same values may recover an existing job and its claim if still valid; the claim may have expired or been consumed. Contact an administrator to check agent RPC job.list and database inventory before any other resubmission. Signing in or reauthenticating changes the session; do not retry blindly after that.');
+  }
+}
+document.addEventListener('htmx:sendError', uncertainDatabaseReply);
+document.addEventListener('htmx:timeout', uncertainDatabaseReply);
 document.addEventListener('htmx:beforeSend', function (event) {
   const form = event.detail.elt;
   if (form && form.matches('[data-secret-form]')) {

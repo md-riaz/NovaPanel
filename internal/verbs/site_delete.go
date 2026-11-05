@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"novapanel/internal/agent"
+	"novapanel/internal/id"
 	"novapanel/internal/jobs"
 	"novapanel/internal/platform"
 	"novapanel/internal/rpc"
@@ -66,10 +67,19 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	var attached []string
 	for _, db := range dbs {
 		if db.SiteID != nil && *db.SiteID == s.ID {
+			if !id.Valid(db.ID) {
+				return rpc.Errf("agent_error", "Invalid database identifier")
+			}
 			attached = append(attached, db.ID)
 		}
 	}
 	if len(attached) != 0 {
+		j.Result, e = json.Marshal(struct {
+			IDs []string `json:"attached_database_ids"`
+		}{attached})
+		if e != nil {
+			return e
+		}
 		return rpc.Errf("precondition_failed", "Attached databases: %s", strings.Join(attached, ", "))
 	}
 	if s.Status != "deleting" {

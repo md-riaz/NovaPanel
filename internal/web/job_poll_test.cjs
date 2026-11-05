@@ -8,7 +8,7 @@ const retry = {hidden:true, matches:s=>s==='[data-poll-retry]', closest:()=>job}
 const job = {dataset:{jobId:'JOB', jobState:'queued'}, querySelector:s=>s==='[data-poll-feedback]'?feedback:retry};
 const target = {dataset:{jobPoll:'/jobs/JOB'}, isConnected:true, matches:s=>s==='[data-job-poll]', closest:()=>job};
 let currentJob = job, timer, requests = [], claimCalls = 0;
-const document = {addEventListener:(n,f)=>(handlers[n] ||= []).push(f), querySelector:s=>s==='[data-job-id]'?currentJob:s==='[data-job-poll]'&&currentJob===job?target:null, getElementById:()=>({dataset:{csrf:'csrf'}})};
+const document = {querySelectorAll:()=>[], addEventListener:(n,f)=>(handlers[n] ||= []).push(f), querySelector:s=>s==='[data-job-id]'?currentJob:s==='[data-job-poll]'&&currentJob===job?target:null, getElementById:()=>({dataset:{csrf:'csrf'}})};
 const window = {addEventListener(){}, clearTimeout(){timer=undefined;}, setTimeout(fn,ms){timer={fn,ms};}};
 const htmx = {ajax:(method,url,opts)=>requests.push({method,url,opts})};
 const fetch = async()=>{claimCalls++; return {ok:true,json:async()=>({password:'secret'})};};

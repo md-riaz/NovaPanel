@@ -200,6 +200,20 @@ func (q *Queue) finish(ctx context.Context, j Job, err error) error {
 			j.Code = coded.Code
 		}
 	}
+	if err != nil && j.Verb == "site.delete" {
+		// Only the explicitly permitted, validated database IDs may survive a refusal.
+		var result struct {
+			IDs []string `json:"attached_database_ids"`
+		}
+		safe := j.Code == "precondition_failed" && json.Unmarshal(j.Result, &result) == nil && len(result.IDs) > 0
+		for _, value := range result.IDs {
+			safe = safe && id.Valid(value)
+		}
+		j.Result = nil
+		if safe {
+			j.Result, _ = json.Marshal(result)
+		}
+	}
 	// Do not persist external error text or panic payloads, which can contain secrets.
 	if e := q.record(j, outcome, j.Code, "exec"); e != nil {
 		return e

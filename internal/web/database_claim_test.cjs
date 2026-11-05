@@ -10,6 +10,7 @@ async function run(navigate) {
   const body = {children:[], prepend(element) { this.children.unshift(element); element.isConnected = true; }};
   const document = {
     body,
+    querySelectorAll:()=>[],
     addEventListener:(n,f)=>(handlers[n] ||= []).push(f),
     querySelector:s=>s==='[data-job-id]'?job:null,
     getElementById:()=>({dataset:{csrf:'csrf'}}),

@@ -29,6 +29,10 @@ func Dial(socket string) (*Client, error) {
 }
 func (c *Client) Close() error { return c.conn.Close() }
 func (c *Client) Call(ctx context.Context, verb string, args any, session string) (Reply, error) {
+	return c.CallWithIdempotency(ctx, verb, args, session, "")
+}
+
+func (c *Client) CallWithIdempotency(ctx context.Context, verb string, args any, session, key string) (Reply, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var reply Reply
@@ -46,7 +50,7 @@ func (c *Client) Call(ctx context.Context, verb string, args any, session string
 	if err != nil {
 		return reply, err
 	}
-	req := Request{ID: requestID, Verb: verb, Args: raw, Session: session}
+	req := Request{ID: requestID, Verb: verb, Args: raw, Session: session, IdempotencyKey: key}
 	if deadline, ok := ctx.Deadline(); ok {
 		ms := time.Until(deadline).Milliseconds()
 		if ms < 1 {

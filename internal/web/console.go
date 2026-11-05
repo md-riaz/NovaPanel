@@ -1,13 +1,37 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/go-chi/chi/v5"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 )
+
+type submissionKey struct{}
+
+var databaseIDPattern = regexp.MustCompile(`^[0-7][0-9A-HJKMNP-TV-Z]{25}$`)
+
+func validBrowserKey(key string) bool {
+	if len(key) != 36 {
+		return false
+	}
+	for i, c := range key {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if c != '-' {
+				return false
+			}
+			continue
+		}
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
 
 var consoleRoutes = []route{
 	{"GET", "/databases", "user", "database.list"},
@@ -75,6 +99,14 @@ func (s *server) console(w http.ResponseWriter, r *http.Request, c RPCClient, rt
 			return
 		}
 	}
+	if rt.verb == "database.create" || rt.verb == "database.rotate_password" || (rt.verb == "database.delete" && r.Header.Get("HX-Request") == "true") {
+		values := r.Header.Values("Idempotency-Key")
+		if r.Header.Get("HX-Request") != "true" || len(values) != 1 || !validBrowserKey(values[0]) {
+			http.Error(w, "A valid browser submission key is required", http.StatusBadRequest)
+			return
+		}
+		r = r.WithContext(context.WithValue(r.Context(), submissionKey{}, values[0]))
+	}
 	data, ok := call(w, r, c, rt.verb, args, token)
 	if !ok {
 		return
@@ -83,6 +115,19 @@ func (s *server) console(w http.ResponseWriter, r *http.Request, c RPCClient, rt
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(data)
 		return
+	}
+	if rt.verb == "job.status" && data["verb"] == "site.delete" && data["state"] == "failed" && data["code"] == "precondition_failed" {
+		if result, ok := data["result"].(map[string]any); ok {
+			if ids, ok := result["attached_database_ids"].([]any); ok {
+				valid := make([]string, 0, len(ids))
+				for _, value := range ids {
+					if id, ok := value.(string); ok && databaseIDPattern.MatchString(id) {
+						valid = append(valid, id)
+					}
+				}
+				result["attached_database_ids"] = valid
+			}
+		}
 	}
 	cv.Data = data
 	status := 200

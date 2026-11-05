@@ -32,6 +32,7 @@ func TestDatabaseLifecycleBrowserRoutes(t *testing.T) {
 	} {
 		r := request("POST", tc.path, tc.body)
 		r.Header.Set("HX-Request", "true")
+		r.Header.Set("Idempotency-Key", "01234567-89ab-4def-8123-456789abcdef")
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		if w.Code >= 300 || f.rpcCalls[len(f.rpcCalls)-1].verb != tc.verb || !reflect.DeepEqual(f.rpcCalls[len(f.rpcCalls)-1].args, tc.args) {
