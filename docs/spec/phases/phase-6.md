@@ -12,7 +12,14 @@ Phases 1–4 (jobs, sites, DB). Reads: `00-foundations.md` F6, F7, F10, F11, F12
 1. **Repo management + restic backups.** `repo.create/list/delete` register a restic repo (local/SFTP/
    S3; **B2 via its S3-compatible endpoint**) — the repo password + object-store/SFTP creds are
    **sealed** (`secrets` name `repo:<id>:*`), the password shown once via the F19 claim; `restic init`
-   runs on create. `backup.create/list/restore/verify` then reference a `repo_id`: per-site path backup
+   runs on create. **Seal-before-init + delete semantics (F20/F12, head ruling):** the repo password is
+   **sealed write-ahead (F20.1) *before* `restic init`**, so a crash after init never leaves an encrypted
+   external repo whose only key was lost; replay re-inits/uses the same sealed password (`restic init` is
+   idempotent / already-init is a no-op). **`repo.delete` removes the NovaPanel `repos` row + sealed
+   creds only — it does NOT destroy the external repository data or its snapshots** (deleting remote
+   backups is catastrophic and needs a separate explicit purge verb with typed confirmation), and it
+   surfaces that the sealed password is being discarded. `backup.create/list/restore/verify` then
+   reference a `repo_id`: per-site path backup
    + per-DB **failure-aware stream** backup; all restic secrets go via env/`*_FILE` written to a
    root-`0600` tmp and removed after, never argv. Recurring backups/verify/retention are driven by the
    **F18 scheduler** (a `schedule` row per repo), not an inline loop.

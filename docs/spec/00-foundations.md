@@ -350,6 +350,14 @@ Every mutating verb is written as *"make reality match this row,"* not *"do this
   `CREATE … IF NOT EXISTS` is **forbidden** (it would adopt an unmanaged collision — F20.3). This does
   **not** apply to the agent's own control schema: the F20 provenance store itself is self-owned, so
   bootstrapping it with `CREATE … IF NOT EXISTS` is correct. `DROP … IF EXISTS` stays correct for delete.
+  The **OS user / home / docroot** are two-store too (`/etc/passwd` + disk vs SQLite), but take a
+  **lighter** ownership proof: the single-VPS agent is root and owns the box, and `sites.name` is a
+  validated-unique 1:1 of the Unix username, so the **SQLite `sites` row is the provenance** (no on-disk
+  marker). The never-adopt rule still binds: on **first** create (a fresh `sites` row, not a replay) a
+  pre-existing user/home or non-empty docroot of that name is an **unmanaged collision → `conflict`**,
+  never a silent `useradd`-if-absent adopt; a **replay** (the `sites` row already `creating`, job
+  re-running) owns and resumes its own. `site.delete` removes the user/home as **its own `sites`-row
+  resource** (ensure-absent), never a name-only `userdel` of state it cannot show is ours.
 - **Writes are temp + atomic rename** under a known, non-symlinked parent, `O_NOFOLLOW` under site
   homes. Never `chown -R` a site-influenced path.
 - **The crash-safety test (mandatory per slow verb):** run the verb twice against the same desired

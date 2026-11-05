@@ -47,7 +47,10 @@ F6, F7, F9, F10, F11.
   `daemon-reload` + enable/start via `internal/exec`.
 - **`internal/verbs/sshkey.go`** — parse/validate the public key (`ssh-ed25519`/`ssh-rsa` with a
   sane length), append to the site user's `~/.ssh/authorized_keys` (`0600`, owned by site user,
-  `O_NOFOLLOW` parent), idempotent (no duplicate keys).
+  `O_NOFOLLOW` parent), idempotent (no duplicate keys). **`sshkey.add`/`remove` do a read-modify-write of
+  one `authorized_keys`; even though they are sync verbs, they MUST serialize on the site's keyed lock
+  (`site:<name>`) so two concurrent edits cannot lose an update** (atomic temp+rename of the file, not an
+  in-place append race).
 - **`internal/verbs/log.go`** — allowlist map `{name → (path | journalctl unit)}`; tail with a line
   cap; never accept a raw path.
 
