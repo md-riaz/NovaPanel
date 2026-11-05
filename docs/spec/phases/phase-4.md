@@ -183,20 +183,29 @@ authorize a `DROP`.
 start, and periodically via the F18 scheduler, a reconcile pass sweeps `novapanel.managed_objects` against
 `jobs` + `databases`/`db_users`, acting **only** on markers whose `obj_id` matches our own SQLite (a
 foreign/unknown `obj_id` is never touched → operator). Per the F20.9 table: `deleting` + object absent →
-remove the tombstone row; `deleting` + object present → complete the `DROP`, remove the row;
-`reserved`/`created` with **no** owning `databases`/`db_users` row and the owning job terminal/gone → drive
-the F20.8 abort (`deleting` → `DROP` → remove); `created` + owning row present → healthy, leave;
-`reserved` + present with a **live** job → leave to that job's replay. This converges any inter-store crash
-residue (tombstones, a create whose SQLite row never committed) that a terminal job cannot itself clean,
-without adopting or deleting an object of uncertain ownership. It is the F20 counterpart of F6's startup
+remove the tombstone row; `deleting` + object present → complete the `DROP`, remove the row; `created`
+with **no** owning `databases`/`db_users` row and the owning job terminal/gone → drive the F20.8 abort
+(`deleting` → `DROP` by `obj_id` → remove), **safe because `created` proves ownership**; `reserved` +
+object **absent** + no owning row + terminal/gone job → remove the stranded marker (no object to drop);
+`reserved` + object **present** + no owning row + terminal/gone job → **`conflict` → operator; never
+`DROP`, never adopt** (ownership unprovable — an indeterminate-exit `CREATE` is indistinguishable from a
+foreign object; the terminal job removes the replay, not the ambiguity, so both object and marker are
+preserved — F20.9 / #105); `created` + owning row present → healthy, leave; `reserved` + present with a
+**live** job → leave to that job's replay. This converges any inter-store crash residue (tombstones, a
+create whose SQLite row never committed) that a terminal job cannot itself clean, without adopting or
+deleting an object of uncertain ownership. It is the F20 counterpart of F6's startup
 roll-forward — generic, idempotent, using only canonical state; **not** per-feature machinery.
 
 **Crash-safety is complete (freeze).** F20 rules 1–9 close the two-store `database.*` lifecycle: every
 inter-store crash point is covered by F6 roll-forward **or** the F20.9 reconcile. Prove it with the F7
 crash-safety replay test at each enumerated stop — before/after **reserve, `CREATE`, phase→`created`,
 SQLite commit**, and for teardown **→`deleting`, `DROP`, terminal commit, row removal** — each followed by
-a reconcile pass, asserting convergence (no orphan object, no stranded marker, the job terminal and
-correct). A sub-statement timing window already converged by rules 1–9 + reconcile is **not** a fresh
+a reconcile pass, asserting convergence (the job terminal and correct, and the store in its correct
+terminal shape). For the provable stops that means **no orphan object and no stranded marker**. The **one
+exception** is the stop **after `CREATE` but before `phase→created`, with the owning job then terminally
+failed**: there the F7 assertion is the **#105 operator-conflict outcome** — the object **and** its
+`reserved` marker are **both preserved** and surfaced to the operator, **not** automatically removed
+(ownership unprovable; never-delete-uncertain). Do **not** assert universal removal for that stop. A sub-statement timing window already converged by rules 1–9 + reconcile is **not** a fresh
 contract gap; power-loss/VM acceptance of the residue stays deferred (#90). Raise a new ruling only for a
 genuine *contract* gap the table does not cover.
 
