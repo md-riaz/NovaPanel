@@ -227,6 +227,30 @@ wp core install --url=https://{{domain}} --title=... --admin_user=... \
 WP-CLI runs as the **site user** (it refuses `--allow-root` by design); file ownership must match the
 FPM pool user so auto-updates work.
 
+#### WordPress install crash-safety & the rotate↔wp-config two-store boundary (Step 3 — head ruling)
+The docroot is a **two-store** resource (files vs SQLite); these two windows are F20's filesystem analog.
+
+- **Interrupted install vs the non-empty-docroot refusal.** The refusal (`precondition_failed` on a
+  non-empty docroot) protects against clobbering *someone else's* files, but a crash mid-`wp core
+  download` leaves **our own** docroot non-empty, and a blind replay would hit the refusal and wedge.
+  Resolve it with an **install-intent journal** (SQLite, keyed to the site/job — the F6 "idempotent verb
+  may roll forward *provided an intent journal prevents a half-applied state*" pattern, as `ssl.upload`
+  already uses — **not** new machinery): the non-empty-docroot check runs **only on first entry** (no
+  journal row); `Run` writes the intent row **before** the first filesystem write, so on replay the
+  docroot is proven **ours** and the job **resumes** — re-running the idempotent WP-CLI steps
+  (`core download`/`verify-checksums`/`config create`/`core install` are each re-runnable against a
+  partial tree) and **skipping** the non-empty refusal for its own in-progress install. Clear the intent
+  row on terminal success. A docroot that is non-empty with **no** intent row is still a hard
+  `precondition_failed` (never adopt unknown content).
+- **rotate↔wp-config (the second-store leg).** A password rotation touches two stores — MariaDB
+  (`ALTER`) and the `wp-config.php` file. The DB leg is already crash-safe (seal-before-`ALTER` +
+  re-publish, above). Bind the **file leg into the same job**: the wp-config rewrite reads the password
+  **from the sealed value** (F12/F20.1), is an **atomic** write (temp+rename as the site user), and is
+  **re-driven idempotently on replay**. The job is **not `done`** until *both* the DB `ALTER`/claim and
+  the wp-config write have succeeded, so a crash in between leaves the job not-`done` → roll-forward
+  re-applies the same sealed password to both stores; wp-config can never be left permanently stale, and
+  no second/unseen secret is produced.
+
 ### Privilege drop, secrets, sockets (resolves B-D11, B29, B39)
 - **PHP version pinned: 8.3** (F0a). Pool dir `/etc/php/8.3/fpm/pool.d/`, reload `php8.3-fpm`.
 - **Run as the site user** via `exec.Run` with `RunOpts{Uid, Gid, Groups}` (F15) — the agent forks a

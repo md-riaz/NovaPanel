@@ -49,11 +49,11 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 | `php.set` | | A | | sites:write | ✓ | | | `site:<name>` |
 | `php.list` | | RO | ✓ | sites:read | | | | |
 | `redirect.add` / `redirect.remove` | | A | | sites:write | ✓ | | | `site:<site_id>` |
-| `database.create` | | A | | databases:write | ✓ | | | `db:<name>` (show-once pw via claim) |
-| `database.rotate_password` | | A | | databases:write | ✓ | | ✓ | `db:<name>` |
-| `database.delete` | | A | | databases:write | ✓ | | ✓ | `db:<name>` |
+| `database.create` | | A | | databases:write | ✓ | | | `db:<db_id>`+`dbuser:<username>` (F20.7; show-once pw via claim) |
+| `database.rotate_password` | | A | | databases:write | ✓ | | ✓ | `db:<db_id>`+`dbuser:<username>` (owner acct; F20.7) |
+| `database.delete` | | A | | databases:write | ✓ | | ✓ | `db:<db_id>` (cascades users; F20.5 obj_id-matched) |
 | `database.list` | | RO | ✓ | databases:read | | | | |
-| `dbuser.create` / `dbuser.delete` | | A | | databases:write | ✓ | | | `db:<name>` |
+| `dbuser.create` / `dbuser.delete` | | A | | databases:write | ✓ | | | `db:<db_id>`+`dbuser:<username>` (F20.7) |
 | `files.list` / `files.read` | | A | | sites:read | | | | rooted at docroot, not home (B-D10) |
 | `files.write`/`mkdir`/`move`/`delete`/`chmod` | | A | | sites:write | | | | runs as site user |
 | `files.upload`/`archive`/`extract` | | A | | sites:write | ✓ | | | `site:<name>` (chunked/large) |
