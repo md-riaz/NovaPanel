@@ -39,6 +39,23 @@ func TestScheduleSetUsesBoundaryAuthorityAndNoOwnerOnlyGate(t *testing.T) {
 		t.Fatal("dangerous verb accepted")
 	}
 }
+func TestReservedSchedulesCannotBeToggled(t *testing.T) {
+	q, db, _, ctx := fixture(t)
+	sch := NewScheduler(q, &fakeClock{60000}, map[string]SchedulePolicy{"reconcile": {}})
+	for _, id := range []string{"reconcile:auto", "acme:auto:site"} {
+		if err := db.PutSchedule(ctx, store.Schedule{ID: id, Verb: "reconcile", Cron: "daily", Args: json.RawMessage(`{}`), Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+		for _, enabled := range []bool{false, true} {
+			var ce *rpcerr.CodedError
+			err := sch.Enable(ctx, id, enabled)
+			if !errors.As(err, &ce) || ce.Code != "forbidden" {
+				t.Fatalf("%s enabled=%v: %v", id, enabled, err)
+			}
+		}
+	}
+}
+
 func TestSchedulerMFARequiresStoredAutomation(t *testing.T) {
 	q, _, _, ctx := fixture(t)
 	sch := NewScheduler(q, &fakeClock{60000}, map[string]SchedulePolicy{"backup.create": {RequiresMFA: true}})

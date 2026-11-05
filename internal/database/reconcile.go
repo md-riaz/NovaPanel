@@ -32,10 +32,7 @@ func reconcileDecision(phase string, present, known, resource, live bool) string
 			}
 			return "conflict"
 		}
-		if present {
-			return "drop"
-		}
-		return "conflict"
+		return "drop"
 	case "reserved":
 		if present {
 			return "conflict"

@@ -9,7 +9,9 @@ func TestProvenanceReconcileMatrix(t *testing.T) {
 		want                           string
 	}{
 		{"deleting", false, true, false, false, "remove"}, {"deleting", true, true, false, false, "drop"},
-		{"created", true, true, false, false, "drop"}, {"created", true, true, true, false, "leave"},
+		{"created", true, true, false, false, "drop"}, {"created", false, true, false, false, "drop"},
+		{"created", false, true, true, false, "conflict"}, {"created", false, false, false, false, "conflict"},
+		{"created", false, true, false, true, "leave"}, {"created", true, true, true, false, "leave"},
 		{"created", true, true, false, true, "leave"}, {"reserved", false, true, false, false, "remove"},
 		{"reserved", true, true, false, false, "conflict"}, {"reserved", true, true, false, true, "leave"},
 		{"deleting", true, false, false, false, "conflict"}, {"created", true, false, false, false, "conflict"},

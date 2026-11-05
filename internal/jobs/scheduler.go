@@ -64,11 +64,15 @@ func scheduleOwner(ctx context.Context) (Metadata, error) {
 	}
 	return m, nil
 }
+func reservedSchedule(id string) bool {
+	return strings.HasPrefix(id, "acme:auto:") || id == "reconcile:auto"
+}
+
 func (s *Scheduler) Set(ctx context.Context, r ScheduleRequest) (store.Schedule, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m, e := scheduleOwner(ctx)
-	if strings.HasPrefix(r.ID, "acme:auto:") || r.ID == "reconcile:auto" {
+	if reservedSchedule(r.ID) {
 		return store.Schedule{}, rpcerr.Errf("forbidden", "Automatic schedule is agent owned")
 	}
 	if e != nil {
@@ -129,6 +133,9 @@ func (s *Scheduler) Enable(ctx context.Context, jid string, enabled bool) error 
 	_, e := scheduleOwner(ctx)
 	if e != nil {
 		return e
+	}
+	if reservedSchedule(jid) {
+		return rpcerr.Errf("forbidden", "Automatic schedule is agent owned")
 	}
 	row, e := s.q.store.GetSchedule(ctx, jid)
 	if e != nil {
