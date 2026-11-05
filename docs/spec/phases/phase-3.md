@@ -194,8 +194,16 @@ post-reload request probe is the real safety net.
   serving), (2) remove certs (files + `domains` cert state), (3) if `purge_files` remove the docroot/home
   **and** the site Unix user, else **keep** the files and the user dormant, (4) delete `redirects`/
   `domains`/`sites` rows last. Certs are always removed (regenerable). **Phase-4 DB rows are out of
-  Phase-3 scope** — when Phase 4 lands it extends `site.delete` to handle associated databases (refuse
-  or cascade per a flag); a Phase-3 `site.delete` does not touch DB rows (none exist yet).
+  Phase-3 scope** — a Phase-3 `site.delete` does not touch DB rows (none exist yet). **Phase-4 decision
+  (head ruling): `site.delete` REFUSES, it does not cascade.** When Phase 4 lands, `site.delete` on a
+  site with any attached managed database (a `databases` row whose `site_id` is this site) returns
+  **`precondition_failed`** listing the attached `db_id`s; the operator deletes those databases
+  explicitly via `database.delete` (which drops the MariaDB objects by `obj_id`) first. This is the
+  data-loss-safe default — `site.delete` never silently drops a database. The `databases.site_id
+  ON DELETE SET NULL` FK (02) stays only as a **defensive backstop** (an out-of-band orphan becomes a
+  valid detached DB), not the primary policy. A convenience **cascade-with-typed-confirmation**
+  (`site.delete{cascade_databases:true}`, a 03 flag + typed confirm, à la the Phase-6 destructive verbs)
+  is **owed, not built in Step 1** — 03 has no such flag today and none is added now. See phase-4.
 
 ## External refs (gathered — verified values to honor)
 - **The 502 cause:** FPM socket default owner is the FPM run-user (site user), mode 0660 → nginx
