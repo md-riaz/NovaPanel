@@ -81,11 +81,11 @@ type databaseIntent struct {
 
 // Secondary locks are acquired after the parent database job lock.
 func (q *Queue) LockDatabaseName(ctx context.Context, name string) (func(), error) {
-	return q.locks.lock(ctx, "dbname:"+name)
+	return q.lockSecondary(ctx, "dbname:"+name)
 }
 
 func (q *Queue) LockDatabaseUser(ctx context.Context, username string) (func(), error) {
-	return q.locks.lock(ctx, "dbuser:"+username)
+	return q.lockSecondary(ctx, "dbuser:"+username)
 }
 
 func (q *Queue) EnqueueDatabase(ctx context.Context, verb string, args any, objectKey, password string, database *store.Database, user *store.DatabaseUser) (EnqueueResult, error) {

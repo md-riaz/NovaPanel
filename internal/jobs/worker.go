@@ -8,6 +8,7 @@ import (
 	"novapanel/internal/id"
 	"novapanel/internal/rpcerr"
 	"novapanel/internal/store"
+	"sort"
 	"time"
 )
 
@@ -78,30 +79,141 @@ func (q *Queue) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		j, e := q.store.NextQueuedJob(ctx)
-		if errors.Is(e, sql.ErrNoRows) {
+		highWater, err := q.store.QueuedJobsHighWater(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		var cursor int64
+		didWork := false
+		for {
+			page, err := q.store.ListQueuedJobs(ctx, cursor, highWater)
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				return err
+			}
+			if len(page) == 0 {
+				break
+			}
+			for _, entry := range page {
+				cursor = entry.RowID
+				if ctx.Err() != nil {
+					return nil
+				}
+				worked, err := q.executeEligible(ctx, entry.Job)
+				if err != nil {
+					if ctx.Err() != nil {
+						return nil
+					}
+					return err
+				}
+				didWork = didWork || worked
+			}
+			if len(page) < store.QueuedJobsPageSize {
+				break
+			}
+		}
+		// A pass that ran only retrying jobs must not spin, but new admissions
+		// still wake the worker promptly.
+		if !didWork {
 			select {
 			case <-ctx.Done():
 				return nil
 			case <-q.wake:
 			case <-tick.C:
 			}
-			continue
-		}
-		if e != nil {
-			if ctx.Err() != nil {
+		} else {
+			select {
+			case <-ctx.Done():
 				return nil
+			case <-tick.C:
 			}
-			return e
-		}
-		if e = q.execute(ctx, j); e != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return e
 		}
 	}
 }
+
+type heldLocksKey struct{}
+
+func (q *Queue) lockSecondary(ctx context.Context, key string) (func(), error) {
+	if held, ok := ctx.Value(heldLocksKey{}).(map[string]bool); ok && held[key] {
+		return func() {}, nil
+	}
+	return q.locks.lock(ctx, key)
+}
+
+// executeEligible holds every execution lock through the invocation. In particular,
+// cascade users are read only after holding the parent, so the list cannot stale.
+func (q *Queue) executeEligible(ctx context.Context, j Job) (bool, error) {
+	held := map[string]bool{}
+	var releases []func()
+	defer func() {
+		for i := len(releases) - 1; i >= 0; i-- {
+			releases[i]()
+		}
+	}()
+	acquire := func(key string) bool {
+		if key == "" || held[key] {
+			return true
+		}
+		release, ok := q.locks.tryLock(key)
+		if ok {
+			held[key] = true
+			releases = append(releases, release)
+		}
+		return ok
+	}
+	if !acquire(databaseSiteKey(j)) || !acquire(j.ObjectKey) {
+		return false, nil
+	}
+	var args struct {
+		Name     string `json:"name"`
+		Username string `json:"username"`
+		DBID     string `json:"db_id"`
+	}
+	if json.Unmarshal(j.Args, &args) == nil {
+		switch j.Verb {
+		case "database.create":
+			if args.Name != "" && !acquire("dbname:"+args.Name) {
+				return false, nil
+			}
+			if args.Username != "" && !acquire("dbuser:"+args.Username) {
+				return false, nil
+			}
+		case "database.delete":
+			p, ok := q.store.(interface {
+				DatabaseWithUsers(context.Context, string) (store.Database, []store.DatabaseUser, error)
+			})
+			if !ok {
+				return false, errors.New("jobs: database enumeration unavailable")
+			}
+			d, users, err := p.DatabaseWithUsers(ctx, args.DBID)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return false, err
+			}
+			if err == nil {
+				if !acquire("dbname:" + d.Name) {
+					return false, nil
+				}
+				sort.Slice(users, func(i, j int) bool { return users[i].Username < users[j].Username })
+				for _, u := range users {
+					if !acquire("dbuser:" + u.Username) {
+						return false, nil
+					}
+				}
+			}
+		case "database.rotate_password", "dbuser.create", "dbuser.delete":
+			if args.Username != "" && !acquire("dbuser:"+args.Username) {
+				return false, nil
+			}
+		}
+	}
+	return true, q.execute(context.WithValue(ctx, heldLocksKey{}, held), j)
+}
+
 func (q *Queue) execute(ctx context.Context, j Job) error {
 	q.mu.Lock()
 	deadline := q.attemptDeadline
@@ -115,7 +227,7 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 		}
 	}
 	if key := databaseSiteKey(j); key != "" {
-		unlockSite, err := q.locks.lock(attemptCtx, key)
+		unlockSite, err := q.lockSecondary(attemptCtx, key)
 		if err != nil {
 			if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
 				return nil
@@ -124,7 +236,7 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 		}
 		defer unlockSite()
 	}
-	unlock, err := q.locks.lock(attemptCtx, j.ObjectKey)
+	unlock, err := q.lockSecondary(attemptCtx, j.ObjectKey)
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
 			return nil
@@ -151,10 +263,16 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 	if ctx.Err() != nil {
 		return nil
 	} // leave running for restart's effectful/idempotent recovery
-	if j.Effectful && errors.Is(attemptCtx.Err(), context.DeadlineExceeded) {
+	var coded *rpcerr.CodedError
+	if errors.As(err, &coded) && coded.Code == "interrupted" {
+		// A journaled operation requires recovery, even if its attempt also expired.
+		return q.finish(ctx, j, rpcerr.Errf("interrupted", "Job requires recovery"))
+	}
+	transient := errors.Is(err, context.DeadlineExceeded) || errors.Is(attemptCtx.Err(), context.DeadlineExceeded) || (coded != nil && coded.Code == "deadline_exceeded")
+	if j.Effectful && transient {
 		return q.finish(ctx, j, rpcerr.Errf("interrupted", "Effectful job interrupted"))
 	}
-	if errors.Is(err, ErrRetry) || errors.Is(attemptCtx.Err(), context.DeadlineExceeded) {
+	if errors.Is(err, ErrRetry) || transient {
 		current, getErr := q.store.GetJob(ctx, j.ID)
 		if getErr != nil {
 			return getErr

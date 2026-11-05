@@ -46,7 +46,8 @@ type Persistence interface {
 	GetJob(context.Context, string) (store.Job, error)
 	ListJobs(context.Context, store.JobFilter) ([]store.Job, error)
 	StartJob(context.Context, string, int64) (store.Job, error)
-	NextQueuedJob(context.Context) (store.Job, error)
+	QueuedJobsHighWater(context.Context) (int64, error)
+	ListQueuedJobs(context.Context, int64, int64) ([]store.QueuedJob, error)
 	UpdateJob(context.Context, store.Job) error
 	RecoverJobs(context.Context, int64) error
 	AppendJobEvent(context.Context, store.JobEvent) error

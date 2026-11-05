@@ -37,17 +37,30 @@ func (s *failRotatePublish) CommitDatabaseClaim(ctx context.Context, job, verb, 
 	return s.Store.CommitDatabaseClaim(ctx, job, verb, key, result, nonce, ciphertext)
 }
 
+type loseRotateConflictReply struct{ *store.Store }
+
+func (s *loseRotateConflictReply) CommitRotateConflictClaim(ctx context.Context, job, verb, key string, result json.RawMessage, nonce, ciphertext []byte, code string) error {
+	if err := s.Store.CommitRotateConflictClaim(ctx, job, verb, key, result, nonce, ciphertext, code); err != nil {
+		return err
+	}
+	return errors.New("injected lost publication reply")
+}
+
 type indeterminateRotateRunner struct {
 	*recordingDatabaseRunner
 	failed          bool
 	preflightFailed bool
 	applied         string
+	conflict        bool
 }
 
 func (r *indeterminateRotateRunner) Run(ctx context.Context, program string, args []string, opts exec.RunOpts) ([]byte, []byte, int, error) {
 	b, err := io.ReadAll(opts.Stdin)
 	if err != nil {
 		return nil, nil, -1, err
+	}
+	if r.failed && r.conflict && strings.Contains(string(b), "SELECT COALESCE((SELECT phase") {
+		return []byte("created\t1\tforeign\n"), nil, 0, nil
 	}
 	if r.failed && !r.preflightFailed && strings.Contains(string(b), "SELECT COALESCE((SELECT phase") {
 		r.preflightFailed = true
@@ -73,7 +86,15 @@ func TestRotateIndeterminateAlterWorkerReplaysSealedPassword(t *testing.T) {
 	testRotateWorkerReplay(t, true)
 }
 
+func TestRotateConflictAfterIndeterminateAlterPreservesClaim(t *testing.T) {
+	testRotateWorker(t, true, true)
+}
+
 func testRotateWorkerReplay(t *testing.T, failAlter bool) {
+	testRotateWorker(t, failAlter, false)
+}
+
+func testRotateWorker(t *testing.T, failAlter, conflict bool) {
 	ctx := context.Background()
 	s, err := store.Open(":memory:")
 	if err != nil {
@@ -119,9 +140,13 @@ func testRotateWorkerReplay(t *testing.T, failAlter bool) {
 	}
 	var indeterminate *indeterminateRotateRunner
 	if failAlter {
-		indeterminate = &indeterminateRotateRunner{recordingDatabaseRunner: runner}
+		indeterminate = &indeterminateRotateRunner{recordingDatabaseRunner: runner, conflict: conflict}
 		a.Exec = indeterminate
-		a.Jobs = jobs.NewQueue(s, seal, log)
+		if conflict {
+			a.Jobs = jobs.NewQueue(&loseRotateConflictReply{Store: s}, seal, log)
+		} else {
+			a.Jobs = jobs.NewQueue(s, seal, log)
+		}
 	} else {
 		a.Jobs = jobs.NewQueue(&failRotatePublish{Store: s}, seal, log)
 	}
@@ -155,6 +180,9 @@ func testRotateWorkerReplay(t *testing.T, failAlter bool) {
 			t.Fatal(e)
 		}
 		if current.State == "failed" {
+			if conflict && current.Code == "conflict" {
+				break
+			}
 			t.Fatalf("rotation terminalized after publication failure: %s", current.Code)
 		}
 		if current.State == "done" {
@@ -185,7 +213,11 @@ func testRotateWorkerReplay(t *testing.T, failAlter bool) {
 			}
 		}
 	}
-	if alters != 2 {
-		t.Fatalf("expected two rotations, got %d", alters)
+	want := 2
+	if conflict {
+		want = 1
+	}
+	if alters != want {
+		t.Fatalf("expected %d rotations, got %d", want, alters)
 	}
 }

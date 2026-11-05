@@ -3,9 +3,30 @@ package jobs
 import (
 	"bytes"
 	"context"
+	"novapanel/internal/rpcerr"
 	"testing"
 	"time"
 )
+
+func TestCodedInterruptedOverridesExpiredAttempt(t *testing.T) {
+	q, s, _, ctx := fixture(t)
+	r, err := q.Enqueue(ctx, "test.slow", nil, "object")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.SetAttemptDeadline(func(string) time.Duration { return 10 * time.Millisecond })
+	q.SetRunner(func(ctx context.Context, _ *Job) error {
+		<-ctx.Done()
+		return rpcerr.Errf("interrupted", "recovery required")
+	})
+	if err := q.execute(ctx, r.Job); err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.GetJob(ctx, r.Job.ID)
+	if err != nil || j.State != "failed" || j.Code != "interrupted" || j.Attempts != 1 {
+		t.Fatalf("interrupted attempt: %+v %v", j, err)
+	}
+}
 
 func TestEffectfulAttemptDeadlineIsInterrupted(t *testing.T) {
 	q, s, _, ctx := fixture(t)

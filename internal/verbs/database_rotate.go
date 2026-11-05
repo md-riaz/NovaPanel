@@ -74,7 +74,7 @@ func databaseRotate(ctx context.Context, a *agent.Agent, args any) (any, error) 
 func databaseRotateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	durable, e := a.Store.GetJob(ctx, j.ID)
 	if e != nil {
-		return e
+		return jobs.ErrRetry
 	}
 	if durable.Verb != j.Verb || durable.ObjectKey != j.ObjectKey {
 		return rpc.Errf("forbidden", "Job binding mismatch")
@@ -82,10 +82,16 @@ func databaseRotateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 	if durable.Step == "database_committed" {
 		j.Step = durable.Step
 		j.Result = durable.Result
+		if durable.Code == "conflict" || durable.Code == "precondition_failed" {
+			return rpc.Errf(durable.Code, "Database rotation requires operator reconciliation")
+		}
 		return nil
 	}
 	raw, e := a.Jobs.OpenInput(j)
 	if e != nil {
+		if durable.Step == "rotation_started" {
+			return jobs.ErrRetry
+		}
 		return rpc.Errf("bad_request", "Invalid sealed input")
 	}
 	defer clear(raw)
@@ -101,7 +107,10 @@ func databaseRotateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 	}
 	d, users, e := a.Store.DatabaseWithUsers(ctx, v.DBID)
 	if e != nil {
-		if durable.Step == "rotation_started" && !errors.Is(e, sql.ErrNoRows) {
+		if durable.Step == "rotation_started" {
+			if errors.Is(e, sql.ErrNoRows) {
+				return rotateConflict(ctx, a, j, v.Password, "precondition_failed")
+			}
 			return jobs.ErrRetry
 		}
 		return e
@@ -113,6 +122,9 @@ func databaseRotateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 		}
 	}
 	if d.Name != v.Name || !found {
+		if durable.Step == "rotation_started" {
+			return rotateConflict(ctx, a, j, v.Password, "precondition_failed")
+		}
 		return rpc.Errf("precondition_failed", "Database state changed")
 	}
 	unlock, e := a.Jobs.LockDatabaseUser(ctx, v.Username)
@@ -126,6 +138,7 @@ func databaseRotateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 		}
 		return e
 	}
+	started := durable.Step == "rotation_started"
 	// Write ahead of any possible ALTER; a crash or lost reply must retain the
 	// same sealed password until the claim is published.
 	if durable.Step != "rotation_started" {
@@ -137,6 +150,9 @@ func databaseRotateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 	j.Step = durable.Step
 	if e = database.ManagedRotate(ctx, a.Exec, v.Username, v.UserID, v.Password); e != nil {
 		if errors.Is(e, database.ErrConflict) {
+			if started {
+				return rotateConflict(ctx, a, j, v.Password, "conflict")
+			}
 			return rpc.Errf("conflict", "Database user provenance conflict")
 		}
 		// An unavailable ownership read is not a negative ownership proof.
@@ -149,4 +165,11 @@ func databaseRotateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 		return jobs.ErrRetry
 	}
 	return nil
+}
+
+func rotateConflict(ctx context.Context, a *agent.Agent, j *jobs.Job, password, code string) error {
+	if err := a.Jobs.PublishRotateConflictClaim(ctx, j, map[string]any{"password": password}, code); err != nil {
+		return jobs.ErrRetry
+	}
+	return rpc.Errf(code, "Database rotation requires operator reconciliation")
 }

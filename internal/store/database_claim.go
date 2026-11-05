@@ -10,6 +10,18 @@ import (
 // CommitDatabaseClaim publishes a sealed credential and records the completed
 // external effect together, so replay cannot recreate an already-consumed claim.
 func (s *Store) CommitDatabaseClaim(ctx context.Context, jobID, verb, objectKey string, result json.RawMessage, nonce, ciphertext []byte) error {
+	return s.commitDatabaseClaim(ctx, jobID, verb, objectKey, result, nonce, ciphertext, "")
+}
+
+// CommitRotateConflictClaim records the operator outcome atomically with publication.
+func (s *Store) CommitRotateConflictClaim(ctx context.Context, jobID, verb, objectKey string, result json.RawMessage, nonce, ciphertext []byte, code string) error {
+	if verb != "database.rotate_password" || (code != "conflict" && code != "precondition_failed") {
+		return errors.New("invalid rotation outcome")
+	}
+	return s.commitDatabaseClaim(ctx, jobID, verb, objectKey, result, nonce, ciphertext, code)
+}
+
+func (s *Store) commitDatabaseClaim(ctx context.Context, jobID, verb, objectKey string, result json.RawMessage, nonce, ciphertext []byte, code string) error {
 	if len(nonce) == 0 || len(ciphertext) == 0 || !json.Valid(result) {
 		return errors.New("invalid database claim")
 	}
@@ -41,7 +53,7 @@ func (s *Store) CommitDatabaseClaim(ctx context.Context, jobID, verb, objectKey 
 				return siteWriteError(err)
 			}
 		}
-		r, err := tx.ExecContext(ctx, `UPDATE jobs SET step='database_committed',result_json=? WHERE id=? AND verb=? AND object_key=? AND state='running' AND step!='database_committed'`, string(result), jobID, verb, objectKey)
+		r, err := tx.ExecContext(ctx, `UPDATE jobs SET step='database_committed',result_json=?,code=? WHERE id=? AND verb=? AND object_key=? AND state='running' AND step!='database_committed'`, string(result), code, jobID, verb, objectKey)
 		if err = affected(r, err); err != nil {
 			return err
 		}

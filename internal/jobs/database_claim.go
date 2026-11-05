@@ -8,6 +8,18 @@ import (
 
 // PublishDatabaseClaim seals the secret before atomically publishing it with the job checkpoint.
 func (q *Queue) PublishDatabaseClaim(ctx context.Context, j *Job, result json.RawMessage, fields map[string]any) error {
+	return q.publishDatabaseClaim(ctx, j, result, fields, "")
+}
+
+// PublishRotateConflictClaim binds a recoverable claim to its operator failure.
+func (q *Queue) PublishRotateConflictClaim(ctx context.Context, j *Job, fields map[string]any, code string) error {
+	if code != "conflict" && code != "precondition_failed" {
+		return errors.New("jobs: invalid rotation outcome")
+	}
+	return q.publishDatabaseClaim(ctx, j, json.RawMessage(`{}`), fields, code)
+}
+
+func (q *Queue) publishDatabaseClaim(ctx context.Context, j *Job, result json.RawMessage, fields map[string]any, code string) error {
 	if err := q.healthy(); err != nil {
 		return err
 	}
@@ -29,9 +41,21 @@ func (q *Queue) PublishDatabaseClaim(ctx context.Context, j *Job, result json.Ra
 	if err != nil {
 		return errors.New("jobs: claim sealing failed")
 	}
-	if err := s.CommitDatabaseClaim(ctx, j.ID, j.Verb, j.ObjectKey, result, sealed.Nonce, sealed.Ciphertext); err != nil {
+	if code != "" {
+		c, ok := q.store.(interface {
+			CommitRotateConflictClaim(context.Context, string, string, string, json.RawMessage, []byte, []byte, string) error
+		})
+		if !ok {
+			return errors.New("jobs: rotation outcome store unavailable")
+		}
+		err = c.CommitRotateConflictClaim(ctx, j.ID, j.Verb, j.ObjectKey, result, sealed.Nonce, sealed.Ciphertext, code)
+	} else {
+		err = s.CommitDatabaseClaim(ctx, j.ID, j.Verb, j.ObjectKey, result, sealed.Nonce, sealed.Ciphertext)
+	}
+	if err != nil {
 		return err
 	}
+	j.Code = code
 	j.Step = "database_committed"
 	j.Result = append(json.RawMessage(nil), result...)
 	return nil

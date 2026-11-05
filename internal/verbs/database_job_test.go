@@ -386,11 +386,21 @@ func TestDatabaseCreateJobAndClaim(t *testing.T) {
 		original := runner.objects[key]
 		for _, state := range []string{"created\t1\t01ARZ3NDEKTSV4RRFFQ69G5FAV", "none\t1\t", "reserved\t1\t" + strings.Split(original, "\t")[2], "created\t0\t" + strings.Split(original, "\t")[2]} {
 			runner.objects[key] = state
+			// Each refusal represents a separate first attempt, not a replay of a
+			// prior checkpoint whose ALTER outcome may be ambiguous.
+			rj.Step = ""
+			if err := s.UpdateJob(ctx, rj); err != nil {
+				t.Fatal(err)
+			}
 			if err := server.ExecuteJob(ctx, &rj); err == nil {
 				t.Fatalf("rotation accepted unproven user %q", state)
 			}
 		}
 		runner.objects[key] = original
+		rj.Step = ""
+		if err := s.UpdateJob(ctx, rj); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if e = server.ExecuteJob(ctx, &rj); e != nil {
 		t.Fatal(e)

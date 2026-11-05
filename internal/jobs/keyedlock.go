@@ -14,6 +14,28 @@ type keyedLock struct {
 	keys map[string]*lockRef
 }
 
+func (k *keyedLock) tryLock(key string) (func(), bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.keys == nil {
+		k.keys = make(map[string]*lockRef)
+	}
+	if _, exists := k.keys[key]; exists {
+		return nil, false
+	}
+	r := &lockRef{token: make(chan struct{}, 1), refs: 1}
+	k.keys[key] = r
+	return func() {
+		k.mu.Lock()
+		r.token <- struct{}{}
+		r.refs--
+		if r.refs == 0 {
+			delete(k.keys, key)
+		}
+		k.mu.Unlock()
+	}, true
+}
+
 func (k *keyedLock) lock(ctx context.Context, key string) (func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
