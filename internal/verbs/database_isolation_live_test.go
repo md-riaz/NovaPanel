@@ -125,10 +125,11 @@ func TestMariaDBClaimedCredentialIsolation(t *testing.T) {
 	}
 	create := dispatch("database.create", map[string]string{"name": name})
 	created := execute(create)
-	claim, err := a.Jobs.Claim(jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: "owner"}), create.Job.ID, create.ClaimToken)
-	if err != nil {
-		t.Fatal(err)
+	claimReply := server.Dispatch(rpc.WithCaller(ctx, caller), rpc.Request{Verb: "job.claim", Args: []byte(fmt.Sprintf(`{"job_id":%q,"claim":%q}`, create.Job.ID, create.ClaimToken))})
+	if !claimReply.OK {
+		t.Fatalf("claim RPC: %+v", claimReply)
 	}
+	claim := claimReply.Data.(map[string]any)
 	password, ok := claim["password"].(string)
 	if !ok || password == "" {
 		t.Fatal("missing claimed password")

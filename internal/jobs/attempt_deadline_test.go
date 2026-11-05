@@ -28,6 +28,69 @@ func TestAttemptDeadlineBoundsLockWait(t *testing.T) {
 	}
 }
 
+func TestWorkerDeadlineRequeuesDatabaseIntentUnchanged(t *testing.T) {
+	q, s, _, ctx := fixture(t)
+	r, err := q.EnqueueDatabase(ctx, "database.create", map[string]string{"name": "example"}, "db:example", "preserve", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce, ciphertext, err := s.DatabaseIntentSecret(ctx, r.Job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.SetAttemptDeadline(func(string) time.Duration { return 25 * time.Millisecond })
+	second := make(chan Job, 1)
+	release := make(chan struct{})
+	q.SetRunner(func(ctx context.Context, j *Job) error {
+		if j.Attempts == 1 {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		second <- *j
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	workerCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- q.Run(workerCtx) }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}()
+	select {
+	case j := <-second:
+		n, c, e := s.DatabaseIntentSecret(ctx, j.ID)
+		if e != nil || !bytes.Equal(nonce, n) || !bytes.Equal(ciphertext, c) || !bytes.Equal(j.Args, r.Job.Args) {
+			t.Fatalf("database intent changed on retry: %v", e)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not retry")
+	}
+	close(release)
+	deadline := time.After(5 * time.Second)
+	for {
+		j, err := s.GetJob(ctx, r.Job.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if j.State == "done" && j.Attempts == 2 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("retry did not finish: %+v", j)
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
 func TestAttemptDeadlineRequeuesSealedInput(t *testing.T) {
 	q, s, _, ctx := fixture(t)
 	r, err := q.EnqueueSealed(ctx, "test.slow", map[string]string{"secret": "preserve"}, "object")
