@@ -95,6 +95,79 @@ func (r *databaseRunner) Run(_ context.Context, _ string, _ []string, o exec.Run
 	}
 	return nil, nil, 0, nil
 }
+
+type recordingDatabaseRunner struct {
+	*databaseRunner
+	statements []string
+}
+
+func (r *recordingDatabaseRunner) Run(ctx context.Context, program string, args []string, o exec.RunOpts) ([]byte, []byte, int, error) {
+	b, err := io.ReadAll(o.Stdin)
+	if err != nil {
+		return nil, nil, -1, err
+	}
+	r.statements = append(r.statements, string(b))
+	o.Stdin = strings.NewReader(string(b))
+	return r.databaseRunner.Run(ctx, program, args, o)
+}
+
+func TestDatabaseCreateReservedPresentDoesNotAdoptOrDrop(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	log, err := audit.Open(s, filepath.Join(t.TempDir(), "audit"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	seal, err := secret.New(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := agent.New()
+	a.Store, a.Audit, a.Jobs = s, log, jobs.NewQueue(s, seal, log)
+	runner := &recordingDatabaseRunner{databaseRunner: &databaseRunner{objects: make(map[string]string)}}
+	a.Exec = runner
+	server := rpc.NewServer(a)
+	reply := server.Dispatch(rpc.WithCaller(ctx, rpc.Caller{Role: "admin", Session: "owner"}), rpc.Request{Verb: "database.create", Args: json.RawMessage(`{"name":"d_foreign"}`)})
+	if !reply.OK {
+		t.Fatalf("admission: %+v", reply)
+	}
+	job, err := s.StartJob(ctx, reply.Data.(jobs.EnqueueResult).Job.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var input struct {
+		DBID string `json:"db_id"`
+	}
+	if err := json.Unmarshal(job.Args, &input); err != nil || input.DBID == "" {
+		t.Fatalf("job args: %s: %v", job.Args, err)
+	}
+	key := "schema:d_foreign"
+	state := "reserved\t1\t" + input.DBID
+	runner.objects[key] = state
+	err = server.ExecuteJob(ctx, &job)
+	var coded *rpc.CodedError
+	if !errors.As(err, &coded) || coded.Code != "conflict" {
+		t.Fatalf("expected conflict, got %v", err)
+	}
+	if runner.objects[key] != state {
+		t.Fatalf("reservation changed: %q", runner.objects[key])
+	}
+	for _, statement := range runner.statements {
+		if strings.HasPrefix(statement, "DROP ") || strings.HasPrefix(statement, "CREATE DATABASE `d_foreign`") || strings.Contains(statement, "SET phase='created'") || strings.Contains(statement, "SET phase='deleting'") {
+			t.Fatalf("unproven object mutated: %s", statement)
+		}
+	}
+	dbs, err := s.ListDatabases(ctx)
+	if err != nil || len(dbs) != 0 {
+		t.Fatalf("published database: %+v %v", dbs, err)
+	}
+}
+
 func TestDatabaseCreateUnknownSiteHasNoExternalEffects(t *testing.T) {
 	ctx := context.Background()
 	s, err := store.Open(":memory:")
