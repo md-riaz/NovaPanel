@@ -78,6 +78,53 @@ func TestDeleteDatabaseForJobPersistsCascadeIdentity(t *testing.T) {
 	}
 }
 
+// A failure at the cascade statement must roll back the preceding identity snapshot.
+func TestDeleteDatabaseForJobCascadeRollback(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const db = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+	const user = "01ARZ3NDEKTSV4RRFFQ69G5FAW"
+	const job = "01ARZ3NDEKTSV4RRFFQ69G5FAX"
+	if _, err = s.db.ExecContext(ctx, `INSERT INTO databases(id,name,created) VALUES(?,?,1)`, db, "sample_db"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.ExecContext(ctx, `INSERT INTO db_users(id,db_id,username,created) VALUES(?,?,?,1)`, user, db, "sample_user"); err != nil {
+		t.Fatal(err)
+	}
+	original := `{"db_id":"` + db + `","name":"sample_db"}`
+	if err = s.CreateJob(ctx, Job{ID: job, Verb: "database.delete", ObjectKey: "db:" + db, State: "running", Args: json.RawMessage(original)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.ExecContext(ctx, `CREATE TRIGGER fail_cascade BEFORE DELETE ON databases BEGIN SELECT RAISE(ABORT, 'injected cascade failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.DeleteDatabaseForJob(ctx, db, "sample_db", job); err == nil {
+		t.Fatal("cascade injection not reached")
+	}
+	j, err := s.GetJob(ctx, job)
+	if err != nil || string(j.Args) != original {
+		t.Fatalf("snapshot not rolled back: %s %v", j.Args, err)
+	}
+	_, users, err := s.DatabaseWithUsers(ctx, db)
+	if err != nil || len(users) != 1 || users[0].ID != user {
+		t.Fatalf("cascade not rolled back: %+v %v", users, err)
+	}
+	if _, err = s.db.ExecContext(ctx, `DROP TRIGGER fail_cascade`); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.DeleteDatabaseForJob(ctx, db, "sample_db", job); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ProvenanceIdentity(ctx, "user", "sample_user", user)
+	if err != nil || !got.Known || got.Resource || !got.Live || got.DatabaseID != db {
+		t.Fatalf("replay lost identity: %+v %v", got, err)
+	}
+}
+
 func TestProvenanceIdentityMatchesDurableCreate(t *testing.T) {
 	ctx := context.Background()
 	s, err := Open(":memory:")

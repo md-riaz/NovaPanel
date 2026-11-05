@@ -73,7 +73,7 @@ func TestLiveWorkerSQLiteCrashBoundaries(t *testing.T) {
 	if os.Getenv("NOVAPANEL_MARIADB_DISPOSABLE") != "network-none" || err != nil || strings.TrimSpace(string(marker)) != "disposable-network-none" {
 		t.Fatal("disposable fixture required")
 	}
-	for _, boundary := range []string{"publish", "terminal", "delete-terminal", "delete-user-mark", "delete-user-drop", "delete-schema-mark", "delete-schema-drop", "abort-user-mark", "abort-schema-mark", "abort-user-drop", "abort-schema-drop", "abort-terminal"} {
+	for _, boundary := range []string{"publish", "terminal", "delete-sqlite", "delete-terminal", "delete-user-mark", "delete-user-drop", "delete-schema-mark", "delete-schema-drop", "abort-user-mark", "abort-schema-mark", "abort-user-drop", "abort-schema-drop", "abort-terminal"} {
 		for _, after := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s_after_%t", boundary, after), func(t *testing.T) {
 				ctx := context.Background()
@@ -191,10 +191,22 @@ func TestLiveWorkerSQLiteCrashBoundaries(t *testing.T) {
 				}
 				wrapped := &boundaryStore{Store: s, target: target, boundary: point, after: after, cancel: cancel}
 				wrapped.failPublish = strings.HasPrefix(boundary, "abort-")
+				if boundary == "delete-sqlite" {
+					a.DeleteDatabaseForJob = func(ctx context.Context, db, name, job string) error {
+						if wrapped.stop("delete-sqlite", job, false) {
+							return context.Canceled
+						}
+						err := s.DeleteDatabaseForJob(ctx, db, name, job)
+						if err == nil {
+							wrapped.stop("delete-sqlite", job, true)
+						}
+						return err
+					}
+				}
 				a.Jobs = jobs.NewQueue(wrapped, seal, log)
 				a.Jobs.SetRunner(server.ExecuteJob)
 				var stop *crashWorkerSQL
-				if (strings.HasPrefix(boundary, "delete-") || strings.HasPrefix(boundary, "abort-")) && point != "terminal" {
+				if (strings.HasPrefix(boundary, "delete-") || strings.HasPrefix(boundary, "abort-")) && point != "terminal" && point != "delete-sqlite" {
 					prefix, contains := "UPDATE novapanel.managed_objects SET phase='deleting'", "kind='user'"
 					if strings.Contains(boundary, "schema") {
 						contains = "kind='schema'"
@@ -229,6 +241,21 @@ func TestLiveWorkerSQLiteCrashBoundaries(t *testing.T) {
 					}
 				} else if j.State != "running" {
 					t.Fatalf("not interrupted: %+v", j)
+				}
+				if boundary == "delete-sqlite" {
+					_, users, lookupErr := s.DatabaseWithUsers(ctx, intent.DBID)
+					if after && lookupErr != sql.ErrNoRows {
+						t.Fatalf("committed cascade retained database: %v", lookupErr)
+					}
+					if !after && (lookupErr != nil || len(users) != 3) {
+						t.Fatalf("pre-commit cascade state: %+v %v", users, lookupErr)
+					}
+					for _, u := range secondary {
+						identity, err := s.ProvenanceIdentity(ctx, "user", u.Username, u.ID)
+						if err != nil || !identity.Known || identity.DatabaseID != intent.DBID || identity.Resource == after {
+							t.Fatalf("cascade identity: %+v %v", identity, err)
+						}
+					}
 				}
 				if !(boundary == "delete-terminal" && after) {
 					if _, e = database.Reconcile(ctx, a.Exec, s, a.Jobs.LockReconcileDatabase); e != nil {

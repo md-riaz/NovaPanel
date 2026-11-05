@@ -82,7 +82,11 @@ func databaseDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 		}
 		return e
 	}
-	if e = a.Store.DeleteDatabaseForJob(ctx, d.ID, d.Name, j.ID); e != nil {
+	deleteForJob := a.Store.DeleteDatabaseForJob
+	if a.DeleteDatabaseForJob != nil {
+		deleteForJob = a.DeleteDatabaseForJob
+	}
+	if e = deleteForJob(ctx, d.ID, d.Name, j.ID); e != nil {
 		return e
 	}
 	j.Result = json.RawMessage(`{}`)
