@@ -102,9 +102,10 @@ GRANT SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,ALTER,INDEX,CREATE TEMPORARY TABLE
   = `127.0.0.1`. The three **must** match or installs fail "Access denied". The **agent's own admin**
   connection uses the **`unix_socket`** plugin (root over the socket — no password).
 - **`bind-address = 127.0.0.1`** in server config (no network exposure). Rotation:
-  `ALTER USER '{{dbuser}}'@'127.0.0.1' IDENTIFIED BY '{{new}}'` then update the site's `wp-config.php`
-  in the same job step. `mysql_secure_installation` equivalents at install (drop anon users, test DB,
-  remote root; root via unix_socket).
+  `ALTER USER '{{dbuser}}'@'127.0.0.1' IDENTIFIED BY '{{new}}'`; when the database backs a WordPress
+  site the **Step-3** WordPress path then rewrites that site's `wp-config.php` (a DB with no WP site has
+  none to update — see the rotate ruling below). `mysql_secure_installation` equivalents at install
+  (drop anon users, test DB, remote root; root via unix_socket).
 - **No admin DB password is ever stored** (the single most important control): the agent authenticates
   by OS identity via `unix_socket`. If a file credential is ever unavoidable, root-owned `0600`
   outside the DB and web root; **never `MYSQL_PWD`** (deprecated, leaks via `/proc`), never `-p<pw>`
@@ -129,8 +130,11 @@ CREATE TABLE IF NOT EXISTS `novapanel`.`managed_objects` (
 );
 ```
 `database.create` / `dbuser.create`, under the `db:<name>` lock, root via `unix_socket`:
-1. **SQLite write-ahead** (F20.1): operation `prepared` with the generated `db`/`dbuser` names and the
-   minted password **sealed (F12)**. Replay reuses these exact values.
+1. **SQLite write-ahead** (F20.1): the verb's **job** (02 `jobs`; `op_id = jobs.id`) carries the
+   generated `db`/`dbuser` names in `args_json` and the minted password **sealed** in `secrets` (F12),
+   written by `Verb.Run` before enqueue — **no new table or `prepared` state is added to 02**;
+   "prepared, no success" = the job not yet `done` (the F6 `running`→`queued` roll-forward set). Replay
+   reuses these exact values.
 2. **Pre-flight** (F20.3): object absent from `information_schema.SCHEMATA` / `mysql.user`? If present
    and no `managed_objects` row owns it for this `op_id` → **`conflict`** (unmanaged collision — never
    adopt, never `CREATE … IF NOT EXISTS`, never `DROP`).
@@ -141,15 +145,41 @@ CREATE TABLE IF NOT EXISTS `novapanel`.`managed_objects` (
 5. **Commit**: `UPDATE … phase='created'`; SQLite success row; publish the **F19 claim** from the sealed
    password.
 
-**Replay** (op `prepared`, no success) per F20.4: provenance row owns this `op_id` → ours, re-run the
-idempotent `GRANT`/`ALTER` with the sealed password and publish the claim; no row but object present →
-unmanaged collision → `conflict` surfaced for **operator reconciliation** (never auto-adopt or
-auto-delete); no row and object absent → restart the op with the same sealed identities.
+**Replay** (job not yet `done`) per F20.4, **branching on `managed_objects.phase`** — the reserve row
+is written one DDL statement *before* the object, so an owned row does not by itself prove the object
+exists:
+- owned row `phase='created'` → object proven **ours** → re-run idempotent `GRANT`/`ALTER` with the
+  sealed password, publish the claim (object unexpectedly absent → `conflict`, operator reconcile).
+- owned row `phase='reserved'` → creation **unconfirmed**; pre-flight the object: **absent** → resume at
+  `CREATE` (we hold the reservation + the `db:<name>` lock — a clean resume, not adoption) →
+  `GRANT`/`ALTER` → advance to `created` → publish the claim; **present** → ownership cannot be proven
+  across the reserve→create window → `conflict`, operator reconcile (never adopt on a `reserved` row
+  alone).
+- owned row `phase='deleting'` → complete the `DROP` idempotently, then delete the row.
+- no owned row, object **present** → unmanaged collision → `conflict`, operator reconcile; object
+  **absent** → restart the op with the same sealed identities.
 
-**`database.rotate_password`**: seal the new password write-ahead (F12/F20.1) **before**
-`ALTER USER …@'127.0.0.1' IDENTIFIED BY <sealed>`; the claim publishes from the sealed value, so a crash
-between `ALTER` and claim re-applies the same password (idempotent) and re-publishes — the new secret is
-never lost and the old is never silently retained.
+**`database.rotate_password{db_id}` — which account.** A database has exactly one **owner** db_user
+(the single `db_user` `database.create` returns; `db_users.owner=1`, one per database — enforced by a
+partial unique index in 02) plus any secondary `dbuser.create` accounts (`owner=0`).
+`rotate_password{db_id}` rotates the **owner** account. `db_id` unknown → `not_found`; the database
+exists but has no owner row (inconsistent managed state) → `precondition_failed`. Rotating a secondary
+account is **out of Step-1 scope** (a future `dbuser.rotate_password{dbuser_id}` would own it — not added
+now). `dbuser.delete` **refuses the owner** account with `precondition_failed` (delete the database to
+remove its owner), so a live database always has exactly one owner to rotate.
+
+Mechanics: seal the new password write-ahead (F12/F20.1) **before** `ALTER USER …@'127.0.0.1' IDENTIFIED
+BY <sealed>`; the claim publishes from the sealed value, so a crash between `ALTER` and claim re-applies
+the same password (idempotent) and re-publishes — the new secret is never lost and the old is never
+silently retained.
+
+**wp-config is a WordPress (Step 3) concern, not Step 1.** Step-1 `rotate_password` rotates the MariaDB
+credential and publishes the F19 claim; it does **not** write `wp-config.php`. A database with no
+associated WordPress site (`databases.site_id` NULL, or a non-WordPress site) has no `wp-config.php` to
+update — that step is **not applicable** and the Verification row passes without it. When a WordPress
+site backs the database (built in Step 3), that step's rotation path additionally rewrites
+`wp-config.php` atomically as the site user. Step 1 therefore proves rotate end-to-end **without**
+WordPress; the wp-config coupling is deferred to Step 3 and is **not** silently waived.
 
 **`database.delete` / `dbuser.delete`** is **provenance-last** (F20.5): `DROP … ` (ensure-absent, F7),
 then delete the `managed_objects` row; a crash leaves `phase='deleting'` with the object maybe gone →
@@ -215,9 +245,11 @@ FPM pool user so auto-updates work.
       nginx serves PHP (no 502). A second site's worker cannot read the first site's `0750` files.
       The default compatibility profile leaves child-process functions available; a hardened profile is
       opt-in and its warning is tested.
-3.  DB lifecycle: database.create makes a loopback-bound user with ONLY that db's privileges (a test
-      asserts the user cannot read another db and has no *.* grant); rotate updates wp-config in the
-      same job; the agent used unix_socket (no admin password exists anywhere in config/DB).
+3.  DB lifecycle: database.create makes a loopback-bound OWNER user with ONLY that db's privileges (a
+      test asserts the user cannot read another db and has no *.* grant); rotate_password{db_id} rotates
+      that owner account and publishes a new show-once claim; the agent used unix_socket (no admin
+      password exists anywhere in config/DB). (wp-config rewrite on rotate is a Step-3/WordPress check,
+      not required for a DB with no WP site.)
 4.  Transport consistency: user host, Go/WP DSN, and wp-config --dbhost all 127.0.0.1; a mismatch
       test reproduces "Access denied" and the spec's single-transport rule prevents it.
 5.  WP install: verify-checksums runs and a tampered file FAILS the install; wp-config.php is 440/400

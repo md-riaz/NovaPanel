@@ -339,8 +339,14 @@ job left `running` → `queued` (re-run); an effectful one → `failed`,`code="i
 
 Every mutating verb is written as *"make reality match this row,"* not *"do this action."*
 
-- **Check-before-create:** `useradd` only if absent; `CREATE DATABASE IF NOT EXISTS`; write a vhost
-  only if the rendered bytes differ from disk.
+- **Check-before-create:** `useradd` only if absent; write a vhost only if the rendered bytes differ
+  from disk. **Exception — F20-governed two-store resources:** for a site resource whose ownership
+  cannot be proven by existence (a site MariaDB database/user, a DNS record), idempotency comes from the
+  **F20 provenance marker**, not from `IF NOT EXISTS`. There a plain `CREATE` gated by a pre-flight
+  absent-check **plus** the provenance row gives the same "run-twice = no change" property, while
+  `CREATE … IF NOT EXISTS` is **forbidden** (it would adopt an unmanaged collision — F20.3). This does
+  **not** apply to the agent's own control schema: the F20 provenance store itself is self-owned, so
+  bootstrapping it with `CREATE … IF NOT EXISTS` is correct. `DROP … IF EXISTS` stays correct for delete.
 - **Writes are temp + atomic rename** under a known, non-symlinked parent, `O_NOFOLLOW` under site
   homes. Never `chown -R` a site-influenced path.
 - **The crash-safety test (mandatory per slow verb):** run the verb twice against the same desired
@@ -804,6 +810,11 @@ ownership is provable on the far side of the transaction boundary.
    the operation row with its generated **identities** (names) and any minted **secret sealed** per
    F12. Replay reuses these exact values (so a re-applied step is idempotent and an F19 claim
    re-publishes the *same* secret — never a second, unseen one). TTL/claim semantics are unchanged (F19).
+   **This "operation" is the verb's existing Phase-1 job — 02 `jobs` — not a new table or state:**
+   `op_id` = `jobs.id` (ULID); the generated identities live in `args_json` and the sealed secret in
+   `secrets` (F12), both written by `Verb.Run` before enqueue (F6). "An op in `prepared` with no success
+   record" means **a job not yet `done`** — exactly the F6 roll-forward set (`running`→`queued`, re-run
+   from the top). No `prepared` state and no operation table are added to 02.
 2. **Provenance-before-object, under the per-name lock.** Record a durable provenance row **in the
    external store** — `(name, kind, op_id, phase)` — **before** creating the object, and create the
    object only after a pre-flight check shows it absent. The object is therefore never created without a
@@ -811,9 +822,22 @@ ownership is provable on the far side of the transaction boundary.
 3. **Never adopt.** A pre-flight collision (object present, no provenance row owned by this op) **fails
    closed** with `conflict` — never `IF NOT EXISTS`-adopt, never auto-delete someone else's object. A
    provenance row owned by a *different* op is likewise `conflict`.
-4. **Replay decision (roll-forward).** For an op in `prepared` with no success record:
-   - provenance row for the name owned by **this** `op_id` → the object is **ours**: re-run the
-     remaining idempotent steps with the sealed identities/secret, publish the claim, finish.
+4. **Replay decision (roll-forward), branching on the provenance `phase`.** For a job not yet `done`
+   (the object may or may not exist, because the provenance row is written one DDL statement *before*
+   the object — the reserve→create window):
+   - provenance row for the name owned by **this** `op_id`:
+     - `phase='created'` → the object is proven **ours** (it is only ever created *after* its row is
+       advanced past `reserved`) → re-run the remaining idempotent steps with the sealed
+       identities/secret (`GRANT`/`ALTER`), publish the claim, finish. If the object is unexpectedly
+       **absent** here (dropped out-of-band) → `conflict` for **operator reconciliation** — never
+       silently re-create.
+     - `phase='reserved'` → creation was **not** confirmed; pre-flight the object:
+       - **absent** → resume at `CREATE` (we hold the reservation and the per-name lock — a clean
+         resume, not adoption), then the remaining idempotent steps, advance to `created`, publish.
+       - **present** → we **cannot** prove we created it (vs an out-of-band create landing in the
+         reserve→create window, which the per-name lock bounds but does not forbid) → `conflict` for
+         operator reconciliation. **Never adopt** on the strength of a `reserved` row alone.
+     - `phase='deleting'` → complete the delete idempotently (F20.5), then remove the row.
    - **no** provenance row for the name, object **present** in the external store → an **unmanaged
      collision** (we never reserved it) → `conflict`, surfaced for **operator reconciliation** (rename/
      remove the external object, or a future explicit adopt verb — never automatic).
