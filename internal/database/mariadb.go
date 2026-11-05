@@ -44,6 +44,9 @@ func Delete(ctx context.Context, runner exec.Runner, db string, users []string) 
 	return nil
 }
 
+// ErrRotateIndeterminate means ALTER USER was sent and may have taken effect.
+var ErrRotateIndeterminate = errors.New("mariadb rotation outcome indeterminate")
+
 func Rotate(ctx context.Context, runner exec.Runner, user, password string) error {
 	if runner == nil || (&validate.V{}).DBName(user) != nil || len(user) > 32 || len(password) == 0 {
 		return errors.New("invalid database input")
@@ -56,7 +59,7 @@ func Rotate(ctx context.Context, runner exec.Runner, user, password string) erro
 	statement := fmt.Sprintf("ALTER USER '%s'@'127.0.0.1' IDENTIFIED BY '%s';\n", user, password)
 	_, _, code, err := runner.Run(ctx, "/usr/bin/mariadb", []string{"--no-defaults", "--protocol=socket", "--user=root", "--batch"}, exec.RunOpts{Stdin: strings.NewReader(statement)})
 	if err != nil || code != 0 {
-		return errors.New("mariadb operation failed")
+		return ErrRotateIndeterminate
 	}
 	return nil
 }

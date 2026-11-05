@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"novapanel/internal/agent"
 	"novapanel/internal/audit"
+	"novapanel/internal/exec"
 	"novapanel/internal/jobs"
 	"novapanel/internal/rpc"
 	"novapanel/internal/secret"
@@ -35,7 +37,43 @@ func (s *failRotatePublish) CommitDatabaseClaim(ctx context.Context, job, verb, 
 	return s.Store.CommitDatabaseClaim(ctx, job, verb, key, result, nonce, ciphertext)
 }
 
+type indeterminateRotateRunner struct {
+	*recordingDatabaseRunner
+	failed          bool
+	preflightFailed bool
+	applied         string
+}
+
+func (r *indeterminateRotateRunner) Run(ctx context.Context, program string, args []string, opts exec.RunOpts) ([]byte, []byte, int, error) {
+	b, err := io.ReadAll(opts.Stdin)
+	if err != nil {
+		return nil, nil, -1, err
+	}
+	if r.failed && !r.preflightFailed && strings.Contains(string(b), "SELECT COALESCE((SELECT phase") {
+		r.preflightFailed = true
+		return nil, nil, -1, errors.New("injected ownership read failure")
+	}
+	opts.Stdin = strings.NewReader(string(b))
+	out, stderr, code, err := r.recordingDatabaseRunner.Run(ctx, program, args, opts)
+	if strings.HasPrefix(string(b), "ALTER USER") {
+		r.applied = string(b) // Model the server committing the password.
+		if !r.failed {
+			r.failed = true
+			return nil, nil, -1, errors.New("injected client failure")
+		}
+	}
+	return out, stderr, code, err
+}
+
 func TestRotatePublishFailureWorkerReplaysSealedPassword(t *testing.T) {
+	testRotateWorkerReplay(t, false)
+}
+
+func TestRotateIndeterminateAlterWorkerReplaysSealedPassword(t *testing.T) {
+	testRotateWorkerReplay(t, true)
+}
+
+func testRotateWorkerReplay(t *testing.T, failAlter bool) {
 	ctx := context.Background()
 	s, err := store.Open(":memory:")
 	if err != nil {
@@ -79,8 +117,14 @@ func TestRotatePublishFailureWorkerReplaysSealedPassword(t *testing.T) {
 	if err = json.Unmarshal(j.Result, &result); err != nil {
 		t.Fatal(err)
 	}
-	wrapped := &failRotatePublish{Store: s}
-	a.Jobs = jobs.NewQueue(wrapped, seal, log)
+	var indeterminate *indeterminateRotateRunner
+	if failAlter {
+		indeterminate = &indeterminateRotateRunner{recordingDatabaseRunner: runner}
+		a.Exec = indeterminate
+		a.Jobs = jobs.NewQueue(s, seal, log)
+	} else {
+		a.Jobs = jobs.NewQueue(&failRotatePublish{Store: s}, seal, log)
+	}
 	a.Jobs.SetRunner(server.ExecuteJob)
 	args, _ := json.Marshal(map[string]string{"db_id": result["db_id"]})
 	reply = server.Dispatch(rpc.WithCaller(ctx, caller), rpc.Request{Verb: "database.rotate_password", Args: args})
@@ -122,9 +166,15 @@ func TestRotatePublishFailureWorkerReplaysSealedPassword(t *testing.T) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+	if failAlter && (!indeterminate.failed || !strings.Contains(indeterminate.applied, input.Password)) {
+		t.Fatal("server did not apply sealed password")
+	}
 	claim, err := a.Jobs.Claim(jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: "owner"}), rotation.Job.ID, rotation.ClaimToken)
 	if err != nil || claim["password"] != input.Password {
 		t.Fatalf("claim did not preserve sealed password: %v", err)
+	}
+	if _, err = a.Jobs.Claim(jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: "owner"}), rotation.Job.ID, rotation.ClaimToken); err == nil {
+		t.Fatal("claim succeeded twice")
 	}
 	alters := 0
 	for _, statement := range runner.statements {

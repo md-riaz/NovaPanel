@@ -101,6 +101,9 @@ func databaseRotateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 	}
 	d, users, e := a.Store.DatabaseWithUsers(ctx, v.DBID)
 	if e != nil {
+		if durable.Step == "rotation_started" && !errors.Is(e, sql.ErrNoRows) {
+			return jobs.ErrRetry
+		}
 		return e
 	}
 	found := false
@@ -118,13 +121,27 @@ func databaseRotateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 	}
 	defer unlock()
 	if e = databaseReady(ctx, a.Exec); e != nil {
+		if durable.Step == "rotation_started" {
+			return jobs.ErrRetry
+		}
 		return e
 	}
+	// Write ahead of any possible ALTER; a crash or lost reply must retain the
+	// same sealed password until the claim is published.
+	if durable.Step != "rotation_started" {
+		durable.Step = "rotation_started"
+		if e = a.Store.UpdateJob(ctx, durable); e != nil {
+			return e
+		}
+	}
+	j.Step = durable.Step
 	if e = database.ManagedRotate(ctx, a.Exec, v.Username, v.UserID, v.Password); e != nil {
 		if errors.Is(e, database.ErrConflict) {
 			return rpc.Errf("conflict", "Database user provenance conflict")
 		}
-		return e
+		// An unavailable ownership read is not a negative ownership proof.
+		// Retry without issuing ALTER until provenance can be checked again.
+		return jobs.ErrRetry
 	}
 	if e = a.Jobs.PublishDatabaseClaim(ctx, j, json.RawMessage(`{}`), map[string]any{"password": v.Password}); e != nil {
 		// The external password has changed. Keep the sealed input for roll-forward;
