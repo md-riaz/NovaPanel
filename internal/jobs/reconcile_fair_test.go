@@ -117,6 +117,7 @@ func testReconcileContendedLock(t *testing.T, key string) {
 		t.Fatal("worker did not cancel")
 	}
 	worker, cancel = context.WithCancel(ctx)
+	defer cancel()
 	done = make(chan error, 1)
 	go func() { done <- q.Run(worker) }()
 	release()
