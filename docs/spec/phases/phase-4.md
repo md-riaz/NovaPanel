@@ -129,6 +129,39 @@ CREATE TABLE IF NOT EXISTS `novapanel`.`managed_objects` (
   PRIMARY KEY (kind, name)                                  -- name unique; OWNERSHIP is obj_id (F20.2), matched on create replay AND delete
 );
 ```
+
+**Bootstrap, availability & trust (head ruling — 2026-11-05).**
+
+*MariaDB is **not** a global startup prerequisite.* The panel-agent **always** brings up its RPC
+listener, workers, scheduler and every non-DB capability regardless of MariaDB — a missing
+client/socket/server or a control-schema bootstrap error **must not** abort the agent (that would make
+the panel unusable for fixing the very box). The systemd unit uses `Wants=`/`After=mariadb` (an ordering
+**hint**), **never `Requires=`** (which couples failure); Phase-1's unit is unchanged and depends on no
+DB. Control-schema bootstrap is **lazy**: attempted on first use of a `database.*`/`dbuser.*` verb (under
+the `db:` lock), or as a non-blocking best-effort at startup that never gates readiness — a MariaDB that
+comes up later is picked up without an agent restart. When MariaDB is unreachable/not installed, **only
+the DB-lifecycle verbs fail closed** (`precondition_failed`, detail naming the cause; retry-safe once it
+is up); unrelated panel operations stay available.
+
+*The control schema is a **trust root** — verify it, never adopt it on sight.* The executor trusts
+`managed_objects` markers to authorize a `DROP`, so a blind `CREATE … IF NOT EXISTS` over a **pre-
+existing** `novapanel` schema is unsafe (it could be a foreign or planted schema, or one a site account
+can write). `CREATE … IF NOT EXISTS` is correct **only for a fresh box** (schema absent → create it
+clean, grants root/agent-only). A **pre-existing** `novapanel` is **verified before any marker in it is
+trusted**:
+- **Structure:** `managed_objects` has exactly the expected columns/types/PK. Malformed/unexpected →
+  **fail closed** (`agent_error`, audited; DB verbs refuse), surface to the operator; never `ALTER` or
+  adopt a foreign structure.
+- **Grants:** **no non-root/site account holds any grant** on `novapanel.*`. Any site-reachable grant →
+  the trust root is compromised → **fail closed**, refuse DB lifecycle, surface for operator
+  reconciliation. The agent **never** trusts a marker from a schema a site user can write.
+- **Never take over foreign state:** a pre-existing `novapanel` that fails verification is **not**
+  dropped/altered/adopted — fail closed and let the operator reconcile (rename/remove it). The trust
+  root is never auto-repaired.
+
+Only after structure + grant verification passes does the executor trust `managed_objects` markers to
+authorize a `DROP`.
+
 **Locks (F20.7):** `database.create` touches both a schema and its owner user, so it holds **both**
 `db:<db_id>` and `dbuser:<username>` (fixed order: `db:` then `dbuser:`); `dbuser.create` holds
 `db:<db_id>` (parent) + `dbuser:<username>`. The username is a MariaDB-global namespace, so its own lock

@@ -348,8 +348,13 @@ Every mutating verb is written as *"make reality match this row,"* not *"do this
   **F20 provenance marker**, not from `IF NOT EXISTS`. There a plain `CREATE` gated by a pre-flight
   absent-check **plus** the provenance row gives the same "run-twice = no change" property, while
   `CREATE … IF NOT EXISTS` is **forbidden** (it would adopt an unmanaged collision — F20.3). This does
-  **not** apply to the agent's own control schema: the F20 provenance store itself is self-owned, so
-  bootstrapping it with `CREATE … IF NOT EXISTS` is correct. `DROP … IF EXISTS` stays correct for delete.
+  **not** apply to the agent's own control schema the way it applies to managed objects: the provenance
+  store is self-owned, so `CREATE … IF NOT EXISTS` is correct **when it is absent** (a fresh box →
+  create it clean, grants root/agent-only). But the store is a **trust root** (the executor trusts its
+  markers to authorize a `DROP`), so a **pre-existing** control schema is **verified — structure + no
+  site-reachable grant — before any marker in it is trusted, never adopted on sight** (see the Phase-4
+  bootstrap ruling); a verification failure fails closed and the operator reconciles, never auto-repair.
+  `DROP … IF EXISTS` stays correct for delete.
   The **OS user / home / docroot** are two-store too (`/etc/passwd` + disk vs SQLite), but take a
   **lighter** ownership proof: the single-VPS agent is root and owns the box, and `sites.name` is a
   validated-unique 1:1 of the Unix username, so the **SQLite `sites` row is the provenance** (no on-disk
