@@ -319,6 +319,24 @@ object_key = the resource a job serializes on (see the site rule below)
 - **One worker goroutine** drains `queued` oldest-first. Concurrency is bounded by a **keyed mutex on
   `object_key`** (`internal/jobs/keyedlock.go`): two jobs on the same object never interleave; jobs on
   different objects may run on a small worker pool (default 1; configurable, still per-object serial).
+- **Oldest-first is a tie-break among the *eligible* set — never a licence to hot-spin one job (head
+  ruling, 2026-11-05).** "Oldest-first" orders **admission fairness**; it does **not** mean re-select the
+  same job the instant it asks to retry. A job is **eligible this pass** only if it is `queued`, its
+  `object_key` lock (and every key it needs, in the F20.7 fixed order) is acquirable now, and it did **not**
+  just yield on this pass. A job that returns `ErrRetry` or a transient `deadline_exceeded`/`interrupted`
+  **yields to a later pass** (F6 "retried on a later pass"): the worker advances to the next eligible
+  `queued` job rather than re-running the yielder, so one persistently-indeterminate create, claim
+  publication, or lock-contended job **can never starve** later jobs — **including the periodic
+  `reconcile`/F18 jobs, which must always stay schedulable** (the F20.9 convergence guarantee depends on
+  reconcile running even while another job is wedged). A **bounded in-memory inter-pass delay** (a small
+  liveness ceiling so a pass holding only yielded jobs does not busy-loop the CPU) is **permitted** and is
+  a liveness clamp of the same family as the per-attempt `MaxDeadlineMs` — it is **not** the "backoff
+  machinery" F6 excludes. What F6 excludes is **persisted** retry-policy state: no `attempts` column, no
+  durable next-retry timestamp, no dead-letter queue, no max-attempts cap. All eligibility/yield/delay
+  state is **in-memory only**: a restart (roll-forward resets `running`→`queued`) rebuilds it from scratch,
+  and the **sealed input is untouched** by any yield or delay (F20.1 — a delayed retry reuses the same
+  sealed args/password unchanged). This closes the oldest-first starvation window without adding durable
+  backoff state or reopening the #90 freeze.
 - **Crash recovery = roll-forward.** On agent start, every job left `running` is reset to `queued` and
   **re-run from the top**. This is safe because every step is idempotent (F7). **No compensation for
   local resources.** Compensation is written **only** for external/billed side effects (ACME issuance,
@@ -848,8 +866,33 @@ A slow verb that mints a secret (DB/admin password) writes it **sealed** into `j
 the one-time `claim` token (`EnqueueResult.ClaimToken`, F15). The caller later calls
 `job.claim{job_id, claim}`; the agent checks the claim hash, opens the secret, **deletes the row**, and
 returns it exactly once. The secret is never in `jobs.result_json`, `job_events`, audit, or any log.
-For the public API, the `202` body includes the `claim` so a token caller can retrieve its secret; an
-idempotent replay returns the same (still-unclaimed) `claim` or `410`-style `not_found` once claimed.
+For the public API, the `202` body includes the `claim` so a token caller can retrieve its secret.
+
+**Two different surfaces return two different "gone"s — do not conflate them (head ruling, 2026-11-05).**
+- **`job.claim{job_id, claim}` is the secret-retrieval verb.** It returns the sealed secret exactly once;
+  once the `job_claims` row is **consumed or expired** it returns `410`-style **`not_found`** — the
+  *secret* is not retrievable again. Unchanged (F19 single-use).
+- **The idempotent enqueue-replay is a *different* operation** (a retry carrying the same
+  `idempotency_key`, F6). It returns the **existing job**, and must **not** return `not_found` merely
+  because the claim row is gone — the `idempotency_key→job_id` mapping is still live and the job reached a
+  real outcome. Its response shape:
+  - **job still `queued`/`running`** → existing `job_id` + that status, and the **live `claim`** re-read
+    if still within TTL and unconsumed.
+  - **job `done`, claim live** → existing `job_id` + `done` + the same still-unclaimed `claim`.
+  - **job `done`, claim consumed or expired or otherwise removed** → existing `job_id` + `done`, **no
+    `claim`**, plus a **determinate reason** (`claim_consumed` / `claim_expired`) so the caller knows the
+    one-shot secret was already (or can no longer be) delivered and must **`rotate_password`** to recover
+    it. **Never `not_found`** — the operation succeeded; only the secret is unrecoverable, and rotate is
+    the recovery (fresh F12 seal + fresh F19 claim).
+  - **job terminal `failed`** → existing `job_id` + `failed` + its F3 `code`, **no `claim`**. Not
+    `not_found` (a real terminal outcome, reported at-most-once — the caller sees the failure, never a
+    phantom success).
+  - **no such `idempotency_key` at all** → **`not_found`** (the *only* `not_found` from this surface).
+
+  This keeps F19 **single-use / no secret re-disclosure / at-most-once** intact: a consumed claim is never
+  re-handed, recovery is always a *new* `rotate_password` (never a re-read), and the replay performs **no
+  second effect**. `03`'s `EnqueueResult`/`job.status` shape carries `claim` as **optional** with a
+  `claim_state` reason enum (`live` | `consumed` | `expired` | `none`); updated in the same change.
 
 **Lifecycle (decided).**
 - **TTL is anchored at secret publication** — the moment `Exec` commits the `job_claims` row — not at
@@ -869,6 +912,38 @@ idempotent replay returns the same (still-unclaimed) `claim` or `410`-style `not
   reports the job done. If the page is lost before claiming, the secret is recovered only by re-running
   the verb (rotate/recreate) — never re-read. This is the single browser-side claim path for **every**
   `+ claim(…)` verb.
+- **An applied secret is never lost before its claim is published (head ruling, 2026-11-05).** A rotate
+  (`database.rotate_password`, and any `ALTER`-then-publish verb) is **effectful**: the `ALTER USER` can
+  land and then lose its reply. The bug to forbid is **terminalizing-and-erasing the sealed input on a
+  retry error while the ALTER may have landed** — that strands the applied password (the user now has the
+  new credential, but it was never published as a claim and the sealed value is gone, so no one can
+  recover it). The contract, using only existing machinery (no new per-feature cleanup intent):
+  1. **Effectful recovery, not terminalize-erase.** An indeterminate `ALTER` exit is `agent_error`/
+     `interrupted`; the job is **not** `done` and takes the F6 `interrupted` + reconcile path (not blind
+     re-run, not terminal-erase). A transient retry error (GetJob/readiness/lock) likewise **rolls
+     forward**, it does not finalize.
+  2. **Retention invariant.** The write-ahead **sealed new password (F12/F20.1) is retained until the F19
+     claim is published from it** (the applied password is now recoverable by the owner) **or** until the
+     job reaches a terminal in which the secret **provably never landed and no target user holds it**.
+     The sealed input is **never** erased on an ambiguous/transient retry while the target user may still
+     hold the applied password. Claim-publication is the linearization point: seal → **`jobs.step`
+     pre-ALTER checkpoint** → `ALTER` → **publish claim from the sealed value** → commit `done` → only
+     then is the sealed input consumable.
+  3. **The pre-ALTER `jobs.step` checkpoint is permitted** — it is the canonical "last completed step"
+     (`jobs.step`), **not** new durability. On replay a checkpoint of "ALTER attempted / may have landed"
+     means: **re-apply the *same* sealed password idempotently** (`ALTER USER` to the identical value —
+     F20.1 same-secret replay) and **publish the claim**. Re-applying the identical password is a no-op if
+     it already landed, so the credential is **recovered, never lost or changed**.
+  4. **Owner/provenance change on retry (the reported failure).** `never ALTER an uncertain/foreign owner`
+     stands — do not rotate a user whose ownership (`obj_id` provenance, F20) you cannot prove. But when
+     ownership can't be confirmed on retry **and the ALTER may already have landed**, the job does **not**
+     silently terminalize-erase. It reaches a terminal that **preserves claim-recoverability**: publish
+     the claim from the sealed value (so the once-appliable password is retrievable exactly once) and
+     record the `conflict`/`precondition_failed` for the **operator** — retain, never erase-before-claim.
+     If the target user is provably **gone** (dropped), there is no stranded credential and the sealed
+     input may be released. Codes (`agent_error`, `conflict`, `precondition_failed`) F3-catalog; machinery
+     is `jobs.step` + F12 seal + F19 claim + F20.1 invariance — all existing, no reopening of the #90
+     freeze.
 
 ---
 
