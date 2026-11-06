@@ -218,6 +218,45 @@ ALTER TABLE users ADD COLUMN totp_pending_at INTEGER;  -- enrollment start (ms);
 - `mfa_used` rows are pruned beyond the accepted skew window. Both `totp_secret` and `totp_pending` are
   agent-sealed (F12).
 
+### Migration `0006_session_expiry_indexes.sql` (session hardening, forward-only)
+
+Phase 3 PR81 retains reserved, unshipped `0005_sites.sql`. PR85 adds only 0006 and its hash;
+0001–0004 remain immutable. **Do not merge or release PR85's GC before Phase 3's 0005 releases.**
+No placeholder 0005 or duplicated site DDL belongs in PR85. After Phase 3 merges, merge main normally
+into PR85, reconcile hashes under parent ownership, and rerun all gates. Scratch combined-head tests
+may exercise 0005+0006 before that release gate; they do not authorize out-of-order release.
+
+```sql
+CREATE INDEX idx_sessions_idle_deadline_id ON sessions(idle_deadline, id);
+CREATE INDEX idx_sessions_abs_deadline_id ON sessions(abs_deadline, id);
+```
+
+F4 pins one sweep per fresh anonymous mint, never reuse. Acquire the connection and SQLite write
+lock before sampling the injected clock. Bind the same `now` to all four parameters of this DELETE,
+then insert in the same short transaction, failing the mint if either operation fails:
+
+```sql
+WITH idle AS (
+  SELECT id FROM sessions INDEXED BY idx_sessions_idle_deadline_id
+  WHERE idle_deadline < ? ORDER BY idle_deadline, id LIMIT 256
+), absolute AS (
+  SELECT id FROM sessions INDEXED BY idx_sessions_abs_deadline_id
+  WHERE abs_deadline < ? ORDER BY abs_deadline, id LIMIT 256
+), doomed AS (
+  SELECT id FROM (SELECT id FROM idle UNION SELECT id FROM absolute)
+  ORDER BY id LIMIT 256
+)
+DELETE FROM sessions WHERE id IN (SELECT id FROM doomed)
+AND (idle_deadline < ? OR abs_deadline < ?);
+```
+
+Each branch reads at most 256 covering-index candidates; the union deduplicates overlaps and the
+id-ordered final limit caps deletion at 256. Retain live and exact-boundary rows of every kind.
+GC's strict `< now` differs from authentication's `<= now` rejection. Verify this actual DELETE with
+modernc SQLite `EXPLAIN QUERY PLAN`: both deadline covering indexes and the session primary-key
+lookup must appear, without a full sessions scan. No loop, scheduler, config key, verb or credential
+logging is added.
+
 ## Phase 3 — sites, domains, certs
 
 ```sql
