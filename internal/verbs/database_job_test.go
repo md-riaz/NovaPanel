@@ -111,6 +111,46 @@ func (r *recordingDatabaseRunner) Run(ctx context.Context, program string, args 
 	return r.databaseRunner.Run(ctx, program, args, o)
 }
 
+type foreignUserRunner struct {
+	exec.Runner
+	statements                     []string
+	username, userID, owner, phase string
+	present                        bool
+}
+
+func (r *foreignUserRunner) Run(ctx context.Context, program string, args []string, opts exec.RunOpts) ([]byte, []byte, int, error) {
+	b, err := io.ReadAll(opts.Stdin)
+	if err != nil {
+		return nil, nil, -1, err
+	}
+	r.statements = append(r.statements, string(b))
+	s := string(b)
+	if strings.HasPrefix(s, "SELECT COALESCE((SELECT phase FROM novapanel.managed_objects") {
+		expected := fmt.Sprintf("SELECT COALESCE((SELECT phase FROM novapanel.managed_objects WHERE kind='user' AND name='%s@127.0.0.1' AND obj_id='%s'),'none');", r.username, r.userID)
+		if s != expected {
+			return nil, nil, 1, fmt.Errorf("unexpected lookup: %s", s)
+		}
+		if r.owner == r.userID {
+			return []byte(r.phase + "\n"), nil, 0, nil
+		}
+		return []byte("none\n"), nil, 0, nil
+	}
+	if strings.HasPrefix(s, "SELECT COUNT(*) FROM mysql.user") {
+		if s != fmt.Sprintf("SELECT COUNT(*) FROM mysql.user WHERE User='%s' AND Host='127.0.0.1';", r.username) {
+			return nil, nil, 1, errors.New("unexpected user lookup")
+		}
+		if r.present {
+			return []byte("1\n"), nil, 0, nil
+		}
+		return []byte("0\n"), nil, 0, nil
+	}
+	if strings.HasPrefix(s, "DELETE ") || strings.HasPrefix(s, "DROP ") || strings.HasPrefix(s, "CREATE USER") || strings.HasPrefix(s, "ALTER USER") || strings.HasPrefix(s, "GRANT ") {
+		return nil, nil, 1, errors.New("unexpected mutation: " + s)
+	}
+	opts.Stdin = strings.NewReader(string(b))
+	return r.Runner.Run(ctx, program, args, opts)
+}
+
 func TestDatabaseCreateReservedPresentDoesNotAdoptOrDrop(t *testing.T) {
 	ctx := context.Background()
 	s, err := store.Open(":memory:")
@@ -509,7 +549,34 @@ func TestDatabaseCreateJobAndClaim(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = server.ExecuteJob(ctx, &child); e == nil || !strings.Contains(e.Error(), "Database no longer exists") {
-		t.Fatalf("stale child not rejected: %v", e)
+	// The same-name marker belongs to another resource, as does the account.
+	var childInput struct {
+		Username string `json:"username"`
+		UserID   string `json:"user_id"`
+	}
+	if err := json.Unmarshal(child.Args, &childInput); err != nil || childInput.Username == "" || childInput.UserID == "" {
+		t.Fatalf("child args: %s: %v", child.Args, err)
+	}
+	foreign := &foreignUserRunner{Runner: a.Exec, username: childInput.Username, userID: childInput.UserID, owner: "01ARZ3NDEKTSV4RRFFQ69G5FAW", phase: "reserved", present: true}
+	a.Exec = foreign
+	e = server.ExecuteJob(ctx, &child)
+	var coded *rpc.CodedError
+	if !errors.As(e, &coded) || coded.Code != "precondition_failed" {
+		t.Fatalf("stale child not rejected with precondition_failed: %v", e)
+	}
+	if !foreign.present || foreign.owner != "01ARZ3NDEKTSV4RRFFQ69G5FAW" || foreign.phase != "reserved" {
+		t.Fatalf("foreign state changed: %+v", foreign)
+	}
+	lookups := 0
+	for _, statement := range foreign.statements {
+		if strings.HasPrefix(statement, "SELECT COALESCE((SELECT phase FROM novapanel.managed_objects") {
+			lookups++
+		}
+		if strings.HasPrefix(statement, "DROP ") || strings.HasPrefix(statement, "DELETE FROM novapanel.managed_objects") || strings.HasPrefix(statement, "CREATE USER") || strings.HasPrefix(statement, "ALTER USER") || strings.HasPrefix(statement, "GRANT ") {
+			t.Fatalf("stale child modified foreign state: %s", statement)
+		}
+	}
+	if lookups != 1 {
+		t.Fatalf("expected one identity-scoped lookup, got %d", lookups)
 	}
 }

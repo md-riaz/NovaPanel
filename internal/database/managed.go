@@ -91,6 +91,16 @@ func ClearUserReservation(ctx context.Context, runner exec.Runner, user, userID 
 	if runner == nil || !id.Valid(userID) || (&validate.V{}).DBName(user) != nil || len(user) > 32 {
 		return errors.New("invalid database input")
 	}
+	phase, err := runSQL(ctx, runner, fmt.Sprintf("SELECT COALESCE((SELECT phase FROM novapanel.managed_objects WHERE kind='user' AND name='%s@127.0.0.1' AND obj_id='%s'),'none');", user, userID))
+	if err != nil {
+		return err
+	}
+	if phase == "none" {
+		return nil
+	}
+	if phase != "reserved" {
+		return ErrConflict
+	}
 	state, err := runSQL(ctx, runner, fmt.Sprintf("SELECT COUNT(*) FROM mysql.user WHERE User='%s' AND Host='127.0.0.1';", user))
 	if err != nil {
 		return err

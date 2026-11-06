@@ -121,8 +121,42 @@ func TestProvenanceConflictMatrix(t *testing.T) {
 	}
 }
 
+type reservationRunner struct {
+	owner, phase string
+	present      bool
+	statements   []string
+}
+
+func (r *reservationRunner) Run(_ context.Context, _ string, _ []string, opts exec.RunOpts) ([]byte, []byte, int, error) {
+	b, _ := io.ReadAll(opts.Stdin)
+	s := string(b)
+	r.statements = append(r.statements, s)
+	const lookup = "SELECT COALESCE((SELECT phase FROM novapanel.managed_objects WHERE kind='user' AND name='u_test@127.0.0.1' AND obj_id='01ARZ3NDEKTSV4RRFFQ69G5FAV'),'none');"
+	const count = "SELECT COUNT(*) FROM mysql.user WHERE User='u_test' AND Host='127.0.0.1';"
+	const remove = "DELETE FROM novapanel.managed_objects WHERE kind='user' AND name='u_test@127.0.0.1' AND obj_id='01ARZ3NDEKTSV4RRFFQ69G5FAV' AND phase='reserved';"
+	switch s {
+	case lookup:
+		if r.owner == "01ARZ3NDEKTSV4RRFFQ69G5FAV" {
+			return []byte(r.phase + "\n"), nil, 0, nil
+		}
+		return []byte("none\n"), nil, 0, nil
+	case count:
+		if r.present {
+			return []byte("1\n"), nil, 0, nil
+		}
+		return []byte("0\n"), nil, 0, nil
+	case remove:
+		if r.owner == "01ARZ3NDEKTSV4RRFFQ69G5FAV" && r.phase == "reserved" {
+			r.owner, r.phase = "", ""
+		}
+		return nil, nil, 0, nil
+	default:
+		return nil, nil, 1, errors.New("unexpected SQL: " + s)
+	}
+}
+
 func TestClearReservationRefusesPresentUser(t *testing.T) {
-	r := &deleteReplayRunner{present: "1"}
+	r := &reservationRunner{present: true, phase: "reserved", owner: "01ARZ3NDEKTSV4RRFFQ69G5FAV"}
 	err := ClearUserReservation(context.Background(), r, "u_test", "01ARZ3NDEKTSV4RRFFQ69G5FAV")
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("expected conflict, got %v", err)
@@ -130,6 +164,31 @@ func TestClearReservationRefusesPresentUser(t *testing.T) {
 	for _, s := range r.statements {
 		if strings.Contains(s, "DELETE ") {
 			t.Fatalf("removed ambiguous reservation: %s", s)
+		}
+	}
+}
+
+func TestClearReservationRemovesOwnedAbsentReservation(t *testing.T) {
+	r := &reservationRunner{phase: "reserved", owner: "01ARZ3NDEKTSV4RRFFQ69G5FAV"}
+	if err := ClearUserReservation(context.Background(), r, "u_test", "01ARZ3NDEKTSV4RRFFQ69G5FAV"); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.statements) != 3 || !strings.Contains(r.statements[2], "obj_id='01ARZ3NDEKTSV4RRFFQ69G5FAV' AND phase='reserved'") {
+		t.Fatalf("expected identity-scoped reservation deletion: %v", r.statements)
+	}
+}
+
+func TestClearReservationIgnoresForeignUserWithoutOwnedMarker(t *testing.T) {
+	r := &reservationRunner{present: true, phase: "reserved", owner: "01ARZ3NDEKTSV4RRFFQ69G5FAW"}
+	if err := ClearUserReservation(context.Background(), r, "u_test", "01ARZ3NDEKTSV4RRFFQ69G5FAV"); err != nil {
+		t.Fatalf("foreign user blocked missing-parent refusal: %v", err)
+	}
+	if !r.present || r.owner != "01ARZ3NDEKTSV4RRFFQ69G5FAW" || r.phase != "reserved" || len(r.statements) != 1 {
+		t.Fatalf("foreign state changed or unexpected queries: %+v", r)
+	}
+	for _, s := range r.statements {
+		if strings.HasPrefix(s, "DELETE ") || strings.HasPrefix(s, "DROP ") {
+			t.Fatalf("changed foreign state: %s", s)
 		}
 	}
 }
