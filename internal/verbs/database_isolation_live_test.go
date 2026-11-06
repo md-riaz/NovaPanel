@@ -207,10 +207,11 @@ func TestMariaDBClaimedCredentialIsolation(t *testing.T) {
 	}
 	deleted := dispatch("database.delete", map[string]string{"db_id": created["db_id"]})
 	execute(deleted)
-	tombstones := fmt.Sprintf("SELECT (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='%s'),(SELECT COUNT(*) FROM mysql.user WHERE User='%s' AND Host='127.0.0.1'),(SELECT COUNT(*) FROM novapanel.managed_objects WHERE (kind='schema' AND name='%s') OR (kind='user' AND name='%s@127.0.0.1')),(SELECT COUNT(*) FROM novapanel.managed_objects WHERE phase='deleting' AND ((kind='schema' AND name='%s' AND obj_id='%s') OR (kind='user' AND name='%s@127.0.0.1' AND obj_id='%s')));", name, created["db_user"], name, created["db_user"], name, created["db_id"], created["db_user"], users[0].ID)
-	out, code, err := run(rootArgs, tombstones, "")
-	if err != nil || code != 0 || !strings.Contains(out, "\n0\t0\t2\t2\n") {
-		t.Fatalf("delete terminal objects or tombstones incorrect (%d): %v: %s", code, err, out)
+	// F20.5 removes provenance after DROP and before the delete job becomes done.
+	terminal := fmt.Sprintf("SELECT (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='%s'),(SELECT COUNT(*) FROM mysql.user WHERE User='%s' AND Host='127.0.0.1'),(SELECT COUNT(*) FROM novapanel.managed_objects WHERE (kind='schema' AND name='%s') OR (kind='user' AND name='%s@127.0.0.1')),(SELECT COUNT(*) FROM novapanel.managed_objects WHERE phase='deleting' AND ((kind='schema' AND name='%s' AND obj_id='%s') OR (kind='user' AND name='%s@127.0.0.1' AND obj_id='%s')));", name, created["db_user"], name, created["db_user"], name, created["db_id"], created["db_user"], users[0].ID)
+	out, code, err := run(rootArgs, terminal, "")
+	if err != nil || code != 0 || !strings.Contains(out, "\n0\t0\t0\t0\n") {
+		t.Fatalf("delete terminal objects or provenance incorrect (%d): %v: %s", code, err, out)
 	}
 	if _, err := database.Reconcile(ctx, a.Exec, s, a.Jobs.LockReconcileDatabase); err != nil {
 		t.Fatalf("reconcile: %v", err)
