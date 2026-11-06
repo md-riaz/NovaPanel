@@ -35,7 +35,19 @@ func databaseDelete(ctx context.Context, a *agent.Agent, args any) (any, error) 
 	}
 	return a.Jobs.Enqueue(ctx, "database.delete", databaseDeleteJob{DBID: d.ID, Name: d.Name, SiteID: d.SiteID}, "db:"+d.ID)
 }
-func databaseDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
+func databaseDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error) {
+	durable, err := a.Store.GetJob(ctx, j.ID)
+	if err != nil {
+		return jobs.ErrRetry
+	}
+	// Once teardown may have started, no error may terminalize the job while
+	// its SQLite owner survives. F20.9 leaves live jobs to roll forward.
+	started := durable.Step == "delete_started"
+	defer func() {
+		if started && err != nil {
+			err = errors.Join(err, jobs.ErrRetry)
+		}
+	}()
 	var v databaseDeleteJob
 	if e := json.Unmarshal(j.Args, &v); e != nil {
 		return rpc.Errf("bad_request", "Invalid database input")
@@ -65,6 +77,14 @@ func databaseDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 	if e = databaseReady(ctx, a.Exec); e != nil {
 		return e
 	}
+	if !started {
+		durable.Step = "delete_started"
+		if e = a.Store.UpdateJob(ctx, durable); e != nil {
+			return jobs.ErrRetry
+		}
+		started = true
+	}
+	j.Step = durable.Step
 	for _, u := range users {
 		unlock, err := a.Jobs.LockDatabaseUser(ctx, u.Username)
 		if err != nil {

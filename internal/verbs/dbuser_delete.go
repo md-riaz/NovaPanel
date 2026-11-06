@@ -57,7 +57,19 @@ func dbuserDelete(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	}
 	return a.Jobs.Enqueue(ctx, "dbuser.delete", dbuserDeleteJob{UserID: u.ID, DBID: d.ID, SiteID: d.SiteID, DBName: d.Name, Username: u.Username}, "db:"+d.ID)
 }
-func dbuserDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
+func dbuserDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error) {
+	durable, err := a.Store.GetJob(ctx, j.ID)
+	if err != nil {
+		return jobs.ErrRetry
+	}
+	// Retain the live job until both the external teardown and SQLite delete
+	// have completed, including across an indeterminate SQL result.
+	started := durable.Step == "delete_started"
+	defer func() {
+		if started && err != nil {
+			err = errors.Join(err, jobs.ErrRetry)
+		}
+	}()
 	var v dbuserDeleteJob
 	if e := json.Unmarshal(j.Args, &v); e != nil {
 		return rpc.Errf("bad_request", "Invalid job input")
@@ -94,6 +106,14 @@ func dbuserDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if e = databaseReady(ctx, a.Exec); e != nil {
 		return e
 	}
+	if !started {
+		durable.Step = "delete_started"
+		if e = a.Store.UpdateJob(ctx, durable); e != nil {
+			return jobs.ErrRetry
+		}
+		started = true
+	}
+	j.Step = durable.Step
 	if e = database.ManagedDeleteUser(ctx, a.Exec, u.Username, u.ID); e != nil {
 		if errors.Is(e, database.ErrConflict) {
 			return rpc.Errf("conflict", "Database provenance conflict")
