@@ -72,14 +72,21 @@ func testReconcileContendedLock(t *testing.T, key string) {
 		}
 	}()
 	runner := &reconcileSQL{}
-	laterRan := make(chan struct{}, 1)
+	type checkpoint struct {
+		job store.Job
+		err error
+	}
+	laterRan := make(chan checkpoint, 1)
 	q.SetRunner(func(c context.Context, j *Job) error {
 		if j.ID == rec.Job.ID {
 			_, err := database.Reconcile(c, runner, s, q.LockReconcileDatabase)
 			return err
 		}
 		if j.ID == later.Job.ID {
-			laterRan <- struct{}{}
+			// The single worker cannot start another reconcile attempt while this
+			// runner is active, so this observes the preceding yield safely.
+			job, err := s.GetJob(c, rec.Job.ID)
+			laterRan <- checkpoint{job, err}
 		}
 		return nil
 	})
@@ -93,17 +100,16 @@ func testReconcileContendedLock(t *testing.T, key string) {
 		}
 	}()
 	select {
-	case <-laterRan:
+	case observed := <-laterRan:
+		if observed.err != nil || observed.job.State != "queued" || observed.job.Code != "" || observed.job.Finished != nil || observed.job.Attempts < 1 || runner.listings.Load() < 1 {
+			t.Fatalf("yielded job: %+v %v", observed.job, observed.err)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("reconcile blocked unrelated job")
 	}
 	time.Sleep(250 * time.Millisecond)
 	if n := runner.listings.Load(); n > 5 {
 		t.Fatalf("retry spun: %d", n)
-	}
-	j, err := s.GetJob(ctx, rec.Job.ID)
-	if err != nil || j.State != "queued" || j.Code != "" || j.Finished != nil {
-		t.Fatalf("yielded job: %+v %v", j, err)
 	}
 	// The worker must stop promptly even while the lock remains held. A restart
 	// then retries the durable queued attempt with the same provenance checks.
@@ -124,7 +130,7 @@ func testReconcileContendedLock(t *testing.T, key string) {
 	held = false
 	deadline := time.After(2 * time.Second)
 	for {
-		j, err = s.GetJob(ctx, rec.Job.ID)
+		j, err := s.GetJob(ctx, rec.Job.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
