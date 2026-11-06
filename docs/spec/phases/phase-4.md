@@ -45,8 +45,8 @@ mergeable — not one 285-file mega-draft. Drive each with `docs/spec/PHASE-DRIV
 (`{{TARGET}}` = the step), with **one independent verifier pass per step, not per commit.**
 
 ## Deliverables
-1. **Per-site Unix user + FPM pool** (§6): one non-login user per site (`/usr/sbin/nologin`, `0750`
-   home); one PHP-FPM pool over a Unix socket where the **worker runs as the site user** but the
+1. **Per-site Unix user + FPM pool** (§6): one non-login user per site (`/usr/sbin/nologin`, `0751`
+   home, `2750 site:www-data` docroot); one PHP-FPM pool over a Unix socket where the **worker runs as the site user** but the
    **socket is owned by the nginx user** (the 502 fix); `pm=ondemand`; per-pool hardening.
 2. **PHP version management** (`php.set`, `php.list`): one supported version first; per-site version +
    limits.
@@ -84,8 +84,8 @@ php_admin_flag[log_errors]         = on
 ```
 - **Compatibility profile is the default.** Do not set `open_basedir` or disable `exec`, `passthru`,
   `shell_exec`, `system`, `proc_open` or `popen` by default. A VPS owner may need Composer, framework
-  workers, image/PDF processors and deployment hooks. The per-site Unix uid, `0750` ownership and
-  least-privilege DB user provide the actual boundary; `dl` stays disabled system-wide.
+  workers, image/PDF processors and deployment hooks. The per-site Unix uid, `0751` home + `2750
+  site:www-data` docroot ownership and least-privilege DB user provide the actual boundary; `dl` stays disabled system-wide.
 - **Optional hardened PHP profile:** an owner may enable `open_basedir` and a command-function denylist
   for one site. The panel must state that this can break child-process workloads, Composer, queue
   workers, deployment hooks and image/PDF processing. It is never enabled silently.
@@ -389,6 +389,16 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
 
 ### Privilege drop, secrets, sockets (resolves B-D11, B29, B39)
 - **PHP version pinned: 8.3** (F0a). Pool dir `/etc/php/8.3/fpm/pool.d/`, reload `php8.3-fpm`.
+- **`php.list` / `php.set` semantics** (canonical `03`: `php.list{} → {versions:[string], default}` is
+  sync RO `sites:read`; `php.set{site_id, version, limits?}` is slow `sites:write` and **`version` is
+  required** — the registry/shape precedence the implementer asked about: follow `01`/`03`, not the
+  issue prose). v1 supports exactly the pinned set `["8.3"]`. `php.list.versions` = the supported
+  versions whose **CLI and FPM both probe OK** (`php8.3 -v` succeeds **and** the `php8.3-fpm` unit is
+  present); `default` = the pinned `"8.3"` constant (there is no mutable global default yet, so it is not
+  read from any stored setting). If the pinned runtime is missing or a probe fails, `php.list` still
+  returns successfully with `versions: []` and `default: "8.3"` — report availability honestly, never
+  fabricate it. `php.set` with a version **outside** the supported set → `unsupported` (F3); a supported
+  version that is not installed/probing → `precondition_failed`.
 - **Run as the site user** via `exec.Run` with `RunOpts{Uid, Gid, Groups}` (F15) — the agent forks a
   child dropped to the site uid/gid (`setgroups`+`setgid`+`setuid`); no `sudo`/`su`/`runuser`, no
   shell. `wp`/`git`/`mysql` all go through this.
@@ -402,9 +412,25 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
 - **FPM socket dir:** `/run/php/novapanel/` created by a **tmpfiles** line
   (`d /run/php/novapanel 0755 root root -`) so it survives an fpm restart (same rationale as
   `/run/novapanel`). Socket `listen.owner/group = www-data` (F0a nginx user).
-- **Docroot/home ownership** follows Phase 3's model (docroot `site:www-data 2750`, home `0751`) so
-  nginx can serve; Phase 4 creates the user and dirs to match. `useradd -r -s /usr/sbin/nologin -m`,
-  home `/srv/sites/<site>`, group = the site name; reserved-name list in `internal/validate`.
+- **Docroot/home ownership** follows Phase 3's model (docroot `site:www-data 2750`, home
+  `/srv/sites/<site>` **`0751`**) so nginx can traverse and serve. Home `0751` gives `other`
+  traverse-only (`--x`), **not** read/list, and the `2750 site:www-data` docroot denies `other`
+  entirely, so cross-site isolation still holds: a second site's uid can neither list another home nor
+  read its docroot/files. Phase 4 creates the user and dirs to match:
+  `useradd -r -s /usr/sbin/nologin -m -c "novapanel:site=<site_ULID>"`, group = the site name;
+  reserved-name list in `internal/validate`.
+- **OS-user ownership = the GECOS marker, not the name** (`00` §Panel-owned OS-user provenance; F20
+  instantiation). The site slug is reusable, so ownership is proven by the account's GECOS
+  `novapanel:site=<ULID>` matching the op's `sites.id`, **never by the name alone** (this closes the
+  earlier "reserved-name = orphan vs. foreign collision" ambiguity — the GECOS marker is the obj_id):
+  - **create** (ensure-state): a name collision whose GECOS marks **this** site's ULID is our own prior
+    attempt → idempotent roll-forward (F6/F7); a collision with **no** panel marker, or a **different**
+    site's ULID, → `conflict`, never adopt/`usermod`.
+  - **delete / reconcile**: `userdel` only an account whose GECOS carries the `novapanel` sentinel **and**
+    a site ULID with **no** live `sites` row and **no** live job (ordered teardown: pool file → reload →
+    home guard → `userdel`). A reserved-scheme account lacking the sentinel is foreign → never touched,
+    surfaced to the operator. A crash leaves at most a marked orphan, which reconcile converges by its
+    own ULID.
 
 ## External refs (gathered — verified, with flags to resolve before coding)
 - **502 cause (verified):** FPM socket default owner = FPM run-user (site user) mode 0660 → nginx
@@ -423,9 +449,10 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
 
 ## Verification (the gate)
 ```
-1.  Per-site user: non-login, 0750 home; a second site's user cannot read the first site's files.
+1.  Per-site user: non-login, `0751` home + `2750 site:www-data` docroot; a second site's user can
+      neither list another home nor read its docroot/files (home `0751` is traverse-only for `other`).
 2.  FPM pool: worker runs as the SITE user (asserted), socket owned by the NGINX user mode 0660 →
-      nginx serves PHP (no 502). A second site's worker cannot read the first site's `0750` files.
+      nginx serves PHP (no 502). A second site's worker cannot read the first site's files.
       The default compatibility profile leaves child-process functions available; a hardened profile is
       opt-in and its warning is tested.
 3.  DB lifecycle: database.create makes a loopback-bound OWNER user with ONLY that db's privileges (a
@@ -455,7 +482,7 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
 - **The FPM socket is owned by the Nginx user, never the site user.** The worker runs as the site user;
   these settings must remain separate to avoid the 502 permission-denied failure.
 - **Do not treat PHP configuration as the isolation boundary.** The default profile keeps process-execution
-  functions available and does not set `open_basedir`; per-site Unix uid, `0750` filesystem ownership,
+  functions available and does not set `open_basedir`; per-site Unix uid, `0751` home + `2750 site:www-data` docroot ownership,
   per-site socket and least-privilege DB grants contain a compromised project. Hardened PHP restrictions
   are optional and must carry a compatibility warning.
 - **Never grant `*.*` or `GRANT OPTION`/`FILE`/`SUPER`;** per-site DB + loopback user only.
