@@ -89,7 +89,7 @@ func databaseRotateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 	}
 	raw, e := a.Jobs.OpenInput(j)
 	if e != nil {
-		if durable.Step == "rotation_started" {
+		if durable.Step == "rotation_started" || errors.Is(e, jobs.ErrRetry) {
 			return jobs.ErrRetry
 		}
 		return rpc.Errf("bad_request", "Invalid sealed input")

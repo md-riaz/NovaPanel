@@ -2,6 +2,7 @@ package verbs_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -35,6 +36,59 @@ func (s *failRotatePublish) CommitDatabaseClaim(ctx context.Context, job, verb, 
 	}
 	s.mu.Unlock()
 	return s.Store.CommitDatabaseClaim(ctx, job, verb, key, result, nonce, ciphertext)
+}
+
+type failRotateInputRead struct {
+	*store.Store
+	runner *indeterminateRotateRunner
+	failed bool
+}
+
+func (s *failRotateInputRead) DatabaseIntentSecret(ctx context.Context, jobID string) ([]byte, []byte, error) {
+	if s.runner.failed && !s.failed {
+		s.failed = true
+		return nil, nil, errors.New("injected SQLite read failure")
+	}
+	return s.Store.DatabaseIntentSecret(ctx, jobID)
+}
+
+type unavailableRotateInput struct {
+	*store.Store
+	mode                            string
+	foreignNonce, foreignCiphertext []byte
+	reads                           chan struct{}
+}
+
+func (s *unavailableRotateInput) DatabaseIntentSecret(ctx context.Context, jobID string) ([]byte, []byte, error) {
+	if s.reads != nil {
+		select {
+		case s.reads <- struct{}{}:
+		default:
+		}
+	}
+	switch s.mode {
+	case "missing":
+		return nil, nil, sql.ErrNoRows
+	case "corrupt":
+		return []byte("corrupt"), []byte("corrupt"), nil
+	case "foreign":
+		return s.foreignNonce, s.foreignCiphertext, nil
+	default:
+		return nil, nil, errors.New("injected transient read failure")
+	}
+}
+
+type secondRotateReadFails struct {
+	*store.Store
+	reads int
+}
+
+func (s *secondRotateReadFails) DatabaseIntentSecret(ctx context.Context, jobID string) ([]byte, []byte, error) {
+	s.reads++
+	if s.reads == 2 {
+		return nil, nil, errors.New("transient second read")
+	}
+	return s.Store.DatabaseIntentSecret(ctx, jobID)
 }
 
 type loseRotateConflictReply struct{ *store.Store }
@@ -78,6 +132,131 @@ func (r *indeterminateRotateRunner) Run(ctx context.Context, program string, arg
 	return out, stderr, code, err
 }
 
+func TestRotateUnreadableInputRetainsStartedJob(t *testing.T) {
+	for _, mode := range []string{"missing", "corrupt", "foreign", "transient"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			s, err := store.Open(":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			log, err := audit.Open(s, filepath.Join(t.TempDir(), "audit"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer log.Close()
+			seal, err := secret.New(make([]byte, 32))
+			if err != nil {
+				t.Fatal(err)
+			}
+			runner := &recordingDatabaseRunner{databaseRunner: &databaseRunner{}}
+			a := agent.New()
+			a.Store = s
+			a.Audit = log
+			a.Exec = runner
+			q := jobs.NewQueue(s, seal, log)
+			meta := jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: "owner", Role: "admin", Automation: true})
+			args := map[string]string{"db_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV"}
+			rotation, err := q.EnqueueDatabase(meta, "database.rotate_password", args, "db:01ARZ3NDEKTSV4RRFFQ69G5FAV", "secret", nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			other, err := q.EnqueueDatabase(meta, "database.rotate_password", args, "db:01ARZ3NDEKTSV4RRFFQ69G5FAV", "foreign", nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			nonce, ciphertext, err := s.DatabaseIntentSecret(ctx, rotation.Job.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fn, fc, err := s.DatabaseIntentSecret(ctx, other.Job.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fault := &unavailableRotateInput{Store: s, mode: mode, foreignNonce: fn, foreignCiphertext: fc, reads: make(chan struct{}, 1)}
+			a.Jobs = jobs.NewQueue(fault, seal, log)
+			server := rpc.NewServer(a)
+			e := server.ExecuteJob(ctx, &rotation.Job)
+			if mode == "transient" {
+				if !errors.Is(e, jobs.ErrRetry) {
+					t.Fatalf("precheckpoint transient error: %v", e)
+				}
+			} else if e == nil || e.Error() != "Invalid sealed arguments" {
+				t.Fatalf("precheckpoint error: %v", e)
+			}
+			j, err := s.GetJob(ctx, rotation.Job.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			j.Step = "rotation_started"
+			if err = s.UpdateJob(ctx, j); err != nil {
+				t.Fatal(err)
+			}
+			if e := server.ExecuteJob(ctx, &j); !errors.Is(e, jobs.ErrRetry) {
+				t.Fatalf("started error: %v", e)
+			}
+			if mode == "transient" {
+				j.Step = ""
+				if err = s.UpdateJob(ctx, j); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Remove the unrelated queued job from eligibility without touching the input under test.
+			otherJob, err := s.GetJob(ctx, other.Job.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			otherJob.State = "done"
+			if err = s.UpdateJob(ctx, otherJob); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-fault.reads:
+			default:
+			}
+			a.Jobs.SetRunner(server.ExecuteJob)
+			workerCtx, cancel := context.WithCancel(ctx)
+			done := make(chan error, 1)
+			go func() { done <- a.Jobs.Run(workerCtx) }()
+			select {
+			case <-fault.reads:
+			case <-time.After(5 * time.Second):
+				cancel()
+				<-done
+				t.Fatal("worker did not attempt input")
+			}
+			deadline := time.After(5 * time.Second)
+			for {
+				j, err = s.GetJob(ctx, j.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if j.State == "queued" {
+					break
+				}
+				if j.State == "failed" {
+					t.Fatalf("terminalized: %s", j.Code)
+				}
+				select {
+				case <-deadline:
+					t.Fatal("worker did not requeue")
+				case <-time.After(time.Millisecond):
+				}
+			}
+			cancel()
+			<-done
+			n2, c2, err := s.DatabaseIntentSecret(ctx, j.ID)
+			if err != nil || string(n2) != string(nonce) || string(c2) != string(ciphertext) {
+				t.Fatal("sealed input changed")
+			}
+			if len(runner.statements) != 0 {
+				t.Fatal("external mutation attempted")
+			}
+		})
+	}
+}
+
 func TestRotatePublishFailureWorkerReplaysSealedPassword(t *testing.T) {
 	testRotateWorkerReplay(t, false)
 }
@@ -86,15 +265,19 @@ func TestRotateIndeterminateAlterWorkerReplaysSealedPassword(t *testing.T) {
 	testRotateWorkerReplay(t, true)
 }
 
+func TestRotateInputReadFailureAfterIndeterminateAlter(t *testing.T) {
+	testRotateWorker(t, true, false, true)
+}
+
 func TestRotateConflictAfterIndeterminateAlterPreservesClaim(t *testing.T) {
-	testRotateWorker(t, true, true)
+	testRotateWorker(t, true, true, false)
 }
 
 func testRotateWorkerReplay(t *testing.T, failAlter bool) {
-	testRotateWorker(t, failAlter, false)
+	testRotateWorker(t, failAlter, false, false)
 }
 
-func testRotateWorker(t *testing.T, failAlter, conflict bool) {
+func testRotateWorker(t *testing.T, failAlter, conflict, failInput bool) {
 	ctx := context.Background()
 	s, err := store.Open(":memory:")
 	if err != nil {
@@ -139,11 +322,15 @@ func testRotateWorker(t *testing.T, failAlter, conflict bool) {
 		t.Fatal(err)
 	}
 	var indeterminate *indeterminateRotateRunner
+	var failingInput *failRotateInputRead
 	if failAlter {
 		indeterminate = &indeterminateRotateRunner{recordingDatabaseRunner: runner, conflict: conflict}
 		a.Exec = indeterminate
 		if conflict {
 			a.Jobs = jobs.NewQueue(&loseRotateConflictReply{Store: s}, seal, log)
+		} else if failInput {
+			failingInput = &failRotateInputRead{Store: s, runner: indeterminate}
+			a.Jobs = jobs.NewQueue(failingInput, seal, log)
 		} else {
 			a.Jobs = jobs.NewQueue(s, seal, log)
 		}
@@ -194,6 +381,9 @@ func testRotateWorker(t *testing.T, failAlter, conflict bool) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+	if failInput && !failingInput.failed {
+		t.Fatal("SQLite read failure was not exercised")
+	}
 	if failAlter && (!indeterminate.failed || !strings.Contains(indeterminate.applied, input.Password)) {
 		t.Fatal("server did not apply sealed password")
 	}
@@ -219,5 +409,160 @@ func testRotateWorker(t *testing.T, failAlter, conflict bool) {
 	}
 	if alters != want {
 		t.Fatalf("expected %d rotations, got %d", want, alters)
+	}
+}
+
+func TestRotateCommittedWorkerWithoutInput(t *testing.T) {
+	for _, code := range []string{"", "conflict"} {
+		for _, mode := range []string{"missing", "corrupt"} {
+			t.Run(code+"/"+mode, func(t *testing.T) {
+				ctx := context.Background()
+				s, err := store.Open(":memory:")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer s.Close()
+				log, err := audit.Open(s, filepath.Join(t.TempDir(), "audit"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer log.Close()
+				seal, err := secret.New(make([]byte, 32))
+				if err != nil {
+					t.Fatal(err)
+				}
+				a := agent.New()
+				a.Store = s
+				a.Audit = log
+				runner := &recordingDatabaseRunner{databaseRunner: &databaseRunner{}}
+				a.Exec = runner
+				q := jobs.NewQueue(s, seal, log)
+				a.Jobs = q
+				meta := jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: "owner", Role: "admin", Automation: true})
+				id := "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+				result, err := q.EnqueueDatabase(meta, "database.rotate_password", map[string]string{"db_id": id}, "db:"+id, "secret", nil, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				j, err := s.StartJob(ctx, result.Job.ID, 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if code == "" {
+					err = q.PublishDatabaseClaim(ctx, &j, json.RawMessage(`{}`), map[string]any{"password": "secret"})
+				} else {
+					err = q.PublishRotateConflictClaim(ctx, &j, map[string]any{"password": "secret"}, code)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				j.State = "queued"
+				if err = s.UpdateJob(ctx, j); err != nil {
+					t.Fatal(err)
+				}
+				fault := &unavailableRotateInput{Store: s, mode: mode, reads: make(chan struct{}, 1)}
+				a.Jobs = jobs.NewQueue(fault, seal, log)
+				server := rpc.NewServer(a)
+				a.Jobs.SetRunner(server.ExecuteJob)
+				forged := j
+				forged.CreatedBy = "attacker"
+				if err = server.ExecuteJob(ctx, &forged); err == nil {
+					t.Fatal("forged owner accepted")
+				}
+				forged = j
+				forged.ObjectKey = "db:other"
+				if err = server.ExecuteJob(ctx, &forged); err == nil {
+					t.Fatal("forged object accepted")
+				}
+				worker, cancel := context.WithCancel(ctx)
+				done := make(chan error, 1)
+				go func() { done <- a.Jobs.Run(worker) }()
+				deadline := time.After(5 * time.Second)
+				for {
+					current, e := s.GetJob(ctx, j.ID)
+					if e != nil {
+						t.Fatal(e)
+					}
+					if current.State == "done" || current.State == "failed" {
+						if code == "" && current.State != "done" || code != "" && (current.State != "failed" || current.Code != code) {
+							t.Fatalf("unexpected outcome %+v", current)
+						}
+						break
+					}
+					select {
+					case <-deadline:
+						cancel()
+						<-done
+						t.Fatal("worker timeout")
+					case <-time.After(time.Millisecond):
+					}
+				}
+				cancel()
+				<-done
+				select {
+				case <-fault.reads:
+					t.Fatal("committed replay opened input")
+				default:
+				}
+				if len(runner.statements) != 0 {
+					t.Fatal("external execution")
+				}
+			})
+		}
+	}
+}
+
+func TestRotateSecondInputReadTransient(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	log, err := audit.Open(s, filepath.Join(t.TempDir(), "audit"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	seal, err := secret.New(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := agent.New()
+	a.Store = s
+	a.Audit = log
+	fault := &secondRotateReadFails{Store: s}
+	a.Jobs = jobs.NewQueue(fault, seal, log)
+	id := "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+	meta := jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: "owner", Role: "admin", Automation: true})
+	result, err := a.Jobs.EnqueueDatabase(meta, "database.rotate_password", map[string]string{"db_id": id, "user_id": id, "name": "db", "username": "user"}, "db:"+id, "secret", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := rpc.NewServer(a)
+	worker, cancel := context.WithCancel(ctx)
+	attempt := make(chan error, 1)
+	a.Jobs.SetRunner(func(ctx context.Context, j *jobs.Job) error {
+		err := server.ExecuteJob(ctx, j)
+		attempt <- err
+		cancel()
+		return err
+	})
+	done := make(chan error, 1)
+	go func() { done <- a.Jobs.Run(worker) }()
+	select {
+	case err = <-attempt:
+	case <-time.After(5 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("worker timeout")
+	}
+	<-done
+	if !errors.Is(err, jobs.ErrRetry) || fault.reads != 2 {
+		t.Fatalf("second read: %v reads=%d", err, fault.reads)
+	}
+	current, err := s.GetJob(ctx, result.Job.ID)
+	if err != nil || current.State == "failed" || current.State == "done" {
+		t.Fatalf("transient read terminalized: %+v %v", current, err)
 	}
 }

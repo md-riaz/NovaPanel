@@ -3,6 +3,7 @@ package jobs
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 
@@ -59,6 +60,9 @@ func (q *Queue) OpenInput(j *Job) ([]byte, error) {
 		}
 		nonce, ciphertext, err := p.DatabaseIntentSecret(context.Background(), j.ID)
 		if err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return nil, ErrRetry
+			}
 			return nil, refuse
 		}
 		raw, err := q.sealer.Open(secret.Sealed{Nonce: nonce, Ciphertext: ciphertext})

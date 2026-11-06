@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"novapanel/internal/jobs"
 	"slices"
@@ -39,6 +40,31 @@ func (s *Server) executeJob(ctx context.Context, j *jobs.Job, recovery bool) err
 	if v.MFA && !j.Automation {
 		return Errf("forbidden", "Stored MFA admission required")
 	}
+	if j.Verb == "database.rotate_password" {
+		durable, err := s.Agent.Store.GetJob(ctx, j.ID)
+		if err != nil {
+			return jobs.ErrRetry
+		}
+		if durable.Verb != j.Verb || durable.ObjectKey != j.ObjectKey || durable.CreatedBy != j.CreatedBy || durable.Role != j.Role || durable.Automation != j.Automation || durable.Effectful != j.Effectful || !slices.Equal(durable.Scopes, j.Scopes) || !bytes.Equal(durable.Args, j.Args) || j.Effectful != v.Effectful {
+			return Errf("forbidden", "Stored job binding mismatch")
+		}
+		if durable.Step == "database_committed" {
+			var binding struct {
+				DBID string `json:"db_id"`
+			}
+			if json.Unmarshal(durable.Args, &binding) != nil || binding.DBID == "" || durable.ObjectKey != "db:"+binding.DBID || recovery {
+				return Errf("forbidden", "Stored job binding mismatch")
+			}
+			j.Step, j.Result, j.Code = durable.Step, durable.Result, durable.Code
+			if durable.Code == "conflict" || durable.Code == "precondition_failed" {
+				return Errf(durable.Code, "Database rotation requires operator reconciliation")
+			}
+			if durable.Code != "" {
+				return Errf("forbidden", "Invalid stored rotation outcome")
+			}
+			return nil
+		}
+	}
 	raw := j.Args
 	if j.Verb == "ssl.upload" {
 		// A committed publication replays its durable result without reopening input.
@@ -67,6 +93,18 @@ func (s *Server) executeJob(ctx context.Context, j *jobs.Job, recovery bool) err
 		var err error
 		raw, err = s.Agent.Jobs.OpenInput(j)
 		if err != nil {
+			if j.Verb == "database.rotate_password" {
+				durable, lookupErr := s.Agent.Store.GetJob(ctx, j.ID)
+				if lookupErr != nil {
+					return jobs.ErrRetry
+				}
+				if durable.Verb != j.Verb || durable.ObjectKey != j.ObjectKey {
+					return Errf("forbidden", "Stored job binding mismatch")
+				}
+				if durable.Step == "rotation_started" || errors.Is(err, jobs.ErrRetry) {
+					return jobs.ErrRetry
+				}
+			}
 			return Errf("bad_request", "Invalid sealed arguments")
 		}
 		defer clear(raw)
