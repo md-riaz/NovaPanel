@@ -481,6 +481,16 @@ revert           → on probe failure restore <target>.lkg + reload; return code
 - **Hostname/domain:** RFC-1123 labels, total ≤ 253, no leading/trailing dot, IDN pre-encoded to
   punycode, reject `..`, whitespace, and `_` in hostnames; a wildcard only where the verb allows it.
 - **Site/unix-user name:** `^[a-z][a-z0-9-]{1,30}$`; never a reserved name; maps 1:1 to a system user.
+- **Panel-owned OS-user provenance (F20 instantiation, no control table):** an OS user lives in a store
+  not transactional with SQLite but has no `managed_objects`-style table, so its ownership token is the
+  account's **GECOS comment**, written atomically at `useradd -c "novapanel:site=<site_ULID>"`. The name
+  proves nothing (a slug is reusable across a delete+recreate); the GECOS `site=<ULID>` is the
+  **obj_id-analogue**. **Never `userdel`/`usermod`-adopt on a name match:** the panel destroys or
+  re-drives an account only when its GECOS carries the `novapanel` sentinel **and** the op's site ULID.
+  A reserved-scheme name whose account lacks the sentinel, or carries a **different** site's ULID than
+  the op, is **not proven this op's** → fail closed (`conflict`, operator/reconcile), never adopt, never
+  delete a foreign account. This is the generic rule for any two-store resource without a native control
+  table (reuse F20/F6/F7; the in-band marker replaces the control row).
 - **DB / DB-user name:** `^[a-z][a-z0-9_]{1,46}$`; generated, never raw from the user.
 - **Filesystem path:** must resolve (after `filepath.Clean` + symlink eval) **inside** the declared
   project root; reject absolute escapes, `..`, and symlinks that cross the boundary.
