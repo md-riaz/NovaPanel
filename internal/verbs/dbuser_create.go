@@ -86,7 +86,7 @@ func dbuserCreate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 func dbuserCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	durable, e := a.Store.GetJob(ctx, j.ID)
 	if e != nil {
-		return e
+		return jobs.ErrRetry
 	}
 	if durable.Verb != j.Verb || durable.ObjectKey != j.ObjectKey {
 		return rpc.Errf("forbidden", "Job binding mismatch")
@@ -98,6 +98,9 @@ func dbuserCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	}
 	raw, e := a.Jobs.OpenInput(j)
 	if e != nil {
+		if durable.Step == "create_started" || errors.Is(e, jobs.ErrRetry) {
+			return jobs.ErrRetry
+		}
 		return rpc.Errf("bad_request", "Invalid sealed input")
 	}
 	defer clear(raw)
@@ -112,6 +115,10 @@ func dbuserCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 		return rpc.Errf("forbidden", "Job binding mismatch")
 	}
 	if e = databaseReady(ctx, a.Exec); e != nil {
+		var coded *rpc.CodedError
+		if durable.Step == "create_started" && (!errors.As(e, &coded) || coded.Code == "precondition_failed") {
+			return jobs.ErrRetry
+		}
 		return e
 	}
 	d, _, e := a.Store.DatabaseWithUsers(ctx, v.DBID)
@@ -123,11 +130,20 @@ func dbuserCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 		e = database.ClearUserReservation(ctx, a.Exec, v.Username, v.UserID)
 		unlock()
 		if e != nil {
+			if errors.Is(e, database.ErrConflict) {
+				return rpc.Errf("conflict", "Database user state changed")
+			}
+			if durable.Step == "create_started" {
+				return jobs.ErrRetry
+			}
 			return e
 		}
 		return rpc.Errf("precondition_failed", "Database no longer exists")
 	}
 	if e != nil {
+		if durable.Step == "create_started" {
+			return jobs.ErrRetry
+		}
 		return e
 	}
 	if d.Name != v.DBName {
@@ -138,6 +154,13 @@ func dbuserCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 		return e
 	}
 	defer unlock()
+	if durable.Step != "create_started" {
+		durable.Step = "create_started"
+		if e = a.Store.UpdateJob(ctx, durable); e != nil {
+			return jobs.ErrRetry
+		}
+	}
+	j.Step = durable.Step
 	if e = database.ManagedCreateUser(ctx, a.Exec, v.UserID, v.DBName, v.Username, v.Password); e != nil {
 		if errors.Is(e, database.ErrIndeterminate) {
 			return jobs.ErrRetry
@@ -159,10 +182,14 @@ func dbuserCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err := database.AbortCreate(ctx, a.Exec, []database.AbortObject{{Kind: "user", Name: v.Username, ID: v.UserID}}); err != nil {
-			return jobs.ErrRetry
+		// The INSERT sentinel is returned before Commit; other errors may be ambiguous.
+		if errors.Is(e, store.ErrSiteConflict) {
+			if err := database.AbortCreate(ctx, a.Exec, []database.AbortObject{{Kind: "user", Name: v.Username, ID: v.UserID}}); err != nil {
+				return jobs.ErrRetry
+			}
+			return rpc.Errf("conflict", "Database user create failed; reconciliation required")
 		}
-		return rpc.Errf("agent_error", "Database user create failed; reconciliation required")
+		return jobs.ErrRetry
 	}
 	return nil
 }

@@ -84,7 +84,7 @@ func databaseCreate(ctx context.Context, a *agent.Agent, args any) (any, error) 
 func databaseCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	durable, e := a.Store.GetJob(ctx, j.ID)
 	if e != nil {
-		return e
+		return jobs.ErrRetry
 	}
 	if durable.Verb != j.Verb || durable.ObjectKey != j.ObjectKey {
 		return rpc.Errf("forbidden", "Job binding mismatch")
@@ -96,6 +96,9 @@ func databaseCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 	}
 	raw, e := a.Jobs.OpenInput(j)
 	if e != nil {
+		if durable.Step == "create_started" || errors.Is(e, jobs.ErrRetry) {
+			return jobs.ErrRetry
+		}
 		return rpc.Errf("bad_request", "Invalid sealed input")
 	}
 	defer clear(raw)
@@ -129,6 +132,9 @@ func databaseCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 			return rpc.Errf("not_found", "Site not found")
 		}
 		if err != nil {
+			if durable.Step == "create_started" {
+				return jobs.ErrRetry
+			}
 			return err
 		}
 		if site.Status == "deleting" || site.Status == "failed" {
@@ -136,8 +142,19 @@ func databaseCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 		}
 	}
 	if e = databaseReady(ctx, a.Exec); e != nil {
+		var coded *rpc.CodedError
+		if durable.Step == "create_started" && (!errors.As(e, &coded) || coded.Code == "precondition_failed") {
+			return jobs.ErrRetry
+		}
 		return e
 	}
+	if durable.Step != "create_started" {
+		durable.Step = "create_started"
+		if e = a.Store.UpdateJob(ctx, durable); e != nil {
+			return jobs.ErrRetry
+		}
+	}
+	j.Step = durable.Step
 	if e = database.ManagedCreate(ctx, a.Exec, v.DBID, v.UserID, v.Name, v.Username, v.Password); e != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -159,7 +176,11 @@ func databaseCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return cleanupDatabaseCreate(ctx, a.Exec, v, "agent_error")
+		// The INSERT sentinel is returned before Commit; other errors may be ambiguous.
+		if errors.Is(e, store.ErrSiteConflict) {
+			return cleanupDatabaseCreate(ctx, a.Exec, v, "conflict")
+		}
+		return jobs.ErrRetry
 	}
 	return nil
 }

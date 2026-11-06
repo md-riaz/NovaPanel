@@ -40,7 +40,7 @@ func (s *Server) executeJob(ctx context.Context, j *jobs.Job, recovery bool) err
 	if v.MFA && !j.Automation {
 		return Errf("forbidden", "Stored MFA admission required")
 	}
-	if j.Verb == "database.rotate_password" {
+	if j.Verb == "database.rotate_password" || j.Verb == "database.create" || j.Verb == "dbuser.create" {
 		durable, err := s.Agent.Store.GetJob(ctx, j.ID)
 		if err != nil {
 			return jobs.ErrRetry
@@ -56,7 +56,7 @@ func (s *Server) executeJob(ctx context.Context, j *jobs.Job, recovery bool) err
 				return Errf("forbidden", "Stored job binding mismatch")
 			}
 			j.Step, j.Result, j.Code = durable.Step, durable.Result, durable.Code
-			if durable.Code == "conflict" || durable.Code == "precondition_failed" {
+			if j.Verb == "database.rotate_password" && (durable.Code == "conflict" || durable.Code == "precondition_failed") {
 				return Errf(durable.Code, "Database rotation requires operator reconciliation")
 			}
 			if durable.Code != "" {
@@ -93,7 +93,7 @@ func (s *Server) executeJob(ctx context.Context, j *jobs.Job, recovery bool) err
 		var err error
 		raw, err = s.Agent.Jobs.OpenInput(j)
 		if err != nil {
-			if j.Verb == "database.rotate_password" {
+			if j.Verb == "database.rotate_password" || j.Verb == "database.create" || j.Verb == "dbuser.create" {
 				durable, lookupErr := s.Agent.Store.GetJob(ctx, j.ID)
 				if lookupErr != nil {
 					return jobs.ErrRetry
@@ -101,7 +101,7 @@ func (s *Server) executeJob(ctx context.Context, j *jobs.Job, recovery bool) err
 				if durable.Verb != j.Verb || durable.ObjectKey != j.ObjectKey {
 					return Errf("forbidden", "Stored job binding mismatch")
 				}
-				if durable.Step == "rotation_started" || errors.Is(err, jobs.ErrRetry) {
+				if durable.Step == "rotation_started" || durable.Step == "create_started" || errors.Is(err, jobs.ErrRetry) {
 					return jobs.ErrRetry
 				}
 			}
