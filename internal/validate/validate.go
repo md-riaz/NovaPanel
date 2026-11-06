@@ -21,6 +21,21 @@ var site = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}$`)
 var db = regexp.MustCompile(`^[a-z][a-z0-9_]{1,46}$`)
 var unit = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.@-]{0,239}\.(service|socket|timer|target|mount|path)$`)
 
+var dnsLabel = regexp.MustCompile(`^[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?$`)
+
+// DNSOwner is for DNS records only, never web server names or host targets.
+func (*V) DNSOwner(s string) error {
+	if len(s) == 0 || len(s) > 253 {
+		return invalid("DNS owner")
+	}
+	for _, l := range strings.Split(s, ".") {
+		if !dnsLabel.MatchString(l) {
+			return invalid("DNS owner")
+		}
+	}
+	return nil
+}
+
 func (*V) Hostname(s string) error {
 	if len(s) == 0 || len(s) > 253 {
 		return invalid("hostname")

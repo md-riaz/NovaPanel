@@ -25,9 +25,7 @@ Phases 1–3 (jobs, auth, sites/TLS). Reads: `00-foundations.md` F6, F9, F10, F1
    agent at point of use, scoped to the zone.
 
 ## Blueprint
-- **`internal/dns/provider.go`** — `type Provider interface { List(zone) ([]Record, error);
-  Create/Update/Delete(zone, Record) error; Verify(domain) (bool, error); Purge(zone, []string)
-  error; PresentTXT/CleanupTXT(fqdn, value) error }` (the last two back ACME DNS-01).
+- **`internal/dns/provider.go`** uses context-aware `List(ctx, zone) ([]Record,error)`, `Create(ctx, zone, Record) (Record,error)`, `Update(ctx, zone, Record) error`, `Delete(ctx, zone, recordID) error`, `Verify(ctx, domain, Resolver, expectedIPs) (Verification,error)` and `Purge(ctx, zone, urls) error`. `Verification` has only `points_here` and `method`, per canonical 03. Create's normalized record includes the provider ID and is projected to `{record_id}` by the future worker. Resolver and expected public IPs are trusted injected agent dependencies, not RPC fields; until F16 pins their production configuration, no live detection is assumed. DNS-01 PresentTXT/CleanupTXT remain the separate canonical lego solver integration, not additional methods on the record adapter.
 - **`internal/dns/cloudflare/`** — implement `Provider` against the Cloudflare API (token auth; zone
   lookup; record CRUD; proxied flag only for web record types). Reuse lego's Cloudflare DNS provider
   for the DNS-01 solver, or drive `PresentTXT`/`CleanupTXT` directly — head to pick; keep the token

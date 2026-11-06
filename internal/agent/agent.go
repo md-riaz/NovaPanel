@@ -6,6 +6,7 @@ import (
 	"novapanel/internal/audit"
 	"novapanel/internal/auth"
 	"novapanel/internal/config"
+	"novapanel/internal/dns"
 	"novapanel/internal/exec"
 	"novapanel/internal/jobs"
 	"novapanel/internal/platform"
@@ -23,6 +24,7 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Agent struct {
+	IntegrationProbe dns.IntegrationProbe
 	ProvisionSite    func(context.Context, string) error
 	Nginx            *nginx.Applier
 	PasswordFailures auth.FailureBudgets
