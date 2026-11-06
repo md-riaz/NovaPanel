@@ -13,6 +13,7 @@ import (
 	"novapanel/internal/store"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -79,6 +80,19 @@ func TestSiteMutations(t *testing.T) {
 			t.Fatalf("%s retry reloaded", verb)
 		}
 		return store.Job(j)
+	}
+	dbID, _ := id.New()
+	userID, _ := id.New()
+	if err := st.ReserveDatabase(ctx, store.Database{ID: dbID, SiteID: &sid, Name: "attached_db", Engine: "mariadb"}, store.DatabaseUser{ID: userID, DatabaseID: dbID, Username: "attached_user"}); err != nil {
+		t.Fatal(err)
+	}
+	deleteReply := call("site.delete", map[string]any{"site_id": sid})
+	deleteJob := deleteReply.Data.(jobs.EnqueueResult).Job
+	if err := rpc.Registry["site.delete"].Exec(ctx, a, &deleteJob); err == nil || !strings.Contains(err.Error(), dbID) {
+		t.Fatalf("site.delete must identify attached database: %v", err)
+	}
+	if err := st.DeleteDatabase(ctx, dbID, "attached_db"); err != nil {
+		t.Fatal(err)
 	}
 	exec("site.update", map[string]any{"site_id": sid, "maintenance": true})
 	got, _ := st.SiteByID(ctx, sid)

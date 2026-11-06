@@ -1,6 +1,7 @@
 [Unit]
 Description=NovaPanel privileged agent
-After=network.target
+Wants=mariadb.service
+After=network.target mariadb.service
 Before=novapanel-web.service
 StartLimitIntervalSec=300
 StartLimitBurst=20

@@ -20,6 +20,9 @@ import (
 type safeRunner struct{ ready chan struct{} }
 
 func (r safeRunner) Run(_ context.Context, p string, args []string, _ exec.RunOpts) ([]byte, []byte, int, error) {
+	if p == "/usr/bin/mariadb" {
+		return nil, nil, 0, nil
+	}
 	if p == "/usr/bin/chattr" && len(args) == 2 && args[0] == "+a" {
 		return nil, nil, 0, nil
 	}

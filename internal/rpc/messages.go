@@ -3,6 +3,8 @@ package rpc
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log"
@@ -34,6 +36,7 @@ type Verb struct {
 	ReadOnly             bool
 	Scope                string
 	Slow, Effectful, MFA bool
+	SealedInput          bool
 	Module               string
 	Internal             bool
 	MaxDeadlineMs        int
@@ -56,7 +59,7 @@ func Register(v Verb) {
 	if v.Name == "" || v.NewArgs == nil || v.Run == nil {
 		panic("incomplete verb registration")
 	}
-	if v.Slow != (v.Exec != nil) || (v.Effectful && !v.Slow) {
+	if v.Slow != (v.Exec != nil) || (v.Effectful && !v.Slow) || (v.SealedInput && !v.Slow) {
 		panic("inconsistent slow/effectful handler registration")
 	}
 	if _, ok := Registry[v.Name]; ok {
@@ -247,6 +250,41 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 		authorized = caller.Automation
 	}
 	ctx = jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: callerIdentity(caller), Actor: caller.Actor, Role: role, Scopes: scopes, Automation: authorized, Effectful: v.Effectful})
+	if v.Slow && req.IdempotencyKey != "" {
+		if len(req.IdempotencyKey) > 256 {
+			return Err("bad_request", "Invalid idempotency key")
+		}
+		h := sha256.Sum256(append(append([]byte(req.Verb), 0), req.Args...))
+		ctx = jobs.WithIdempotency(ctx, req.IdempotencyKey, hex.EncodeToString(h[:]))
+	}
+	max := v.MaxDeadlineMs
+	if max <= 0 {
+		max = s.DefaultDeadlineMs
+	}
+	if max <= 0 {
+		max = 120000
+	}
+	ms := req.DeadlineMs
+	if ms <= 0 || ms > max {
+		ms = max
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(ms)*time.Millisecond)
+	defer cancel()
+	if v.Slow && req.IdempotencyKey != "" {
+		unlock, err := s.Agent.Jobs.LockIdempotency(ctx)
+		if err != nil {
+			return errorReply(err)
+		}
+		defer unlock()
+		result, found, err := s.Agent.Jobs.Replay(ctx)
+		if err != nil {
+			return errorReply(err)
+		}
+		if found {
+			event.Detail["stage"] = "enqueue"
+			return OK(result)
+		}
+	}
 	args := v.NewArgs()
 	d := json.NewDecoder(bytes.NewReader(req.Args))
 	d.DisallowUnknownFields()
@@ -263,19 +301,6 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 			event.ObjectKey = key
 		}
 	}
-	max := v.MaxDeadlineMs
-	if max <= 0 {
-		max = s.DefaultDeadlineMs
-	}
-	if max <= 0 {
-		max = 120000
-	}
-	ms := req.DeadlineMs
-	if ms <= 0 || ms > max {
-		ms = max
-	}
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(ms)*time.Millisecond)
-	defer cancel()
 	if v.ResolveObjectKey != nil {
 		event.Detail["stage"] = "resolve"
 		key, err := v.ResolveObjectKey(ctx, s.Agent, args)

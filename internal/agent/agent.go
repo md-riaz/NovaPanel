@@ -23,21 +23,22 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Agent struct {
-	ProvisionSite    func(context.Context, string) error
-	Nginx            *nginx.Applier
-	PasswordFailures auth.FailureBudgets
-	UnknownFailures  auth.FailureBudgets
-	MFAFailures      auth.FailureBudgets
-	Jobs             *jobs.Queue
-	Scheduler        *jobs.Scheduler
-	Store            *store.Store
-	Secret           *secret.Sealer
-	Audit            *audit.Log
-	Cfg              config.Config
-	Exec             exec.Runner
-	Validate         *validate.V
-	Clock            Clock
-	Started          int64
+	ProvisionSite        func(context.Context, string) error
+	DeleteDatabaseForJob func(context.Context, string, string, string) error
+	Nginx                *nginx.Applier
+	PasswordFailures     auth.FailureBudgets
+	UnknownFailures      auth.FailureBudgets
+	MFAFailures          auth.FailureBudgets
+	Jobs                 *jobs.Queue
+	Scheduler            *jobs.Scheduler
+	Store                *store.Store
+	Secret               *secret.Sealer
+	Audit                *audit.Log
+	Cfg                  config.Config
+	Exec                 exec.Runner
+	Validate             *validate.V
+	Clock                Clock
+	Started              int64
 }
 
 func New() *Agent { return NewWithDependencies(config.Defaults(), exec.Real{}, &validate.V{}) }

@@ -3,16 +3,35 @@ package verbs_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"novapanel/internal/agent"
 	"novapanel/internal/audit"
+	"novapanel/internal/exec"
 	"novapanel/internal/jobs"
 	"novapanel/internal/rpc"
 	"novapanel/internal/secret"
 	"novapanel/internal/store"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+type emptyMariaDB struct{}
+
+func (emptyMariaDB) Run(_ context.Context, _ string, _ []string, opts exec.RunOpts) ([]byte, []byte, int, error) {
+	b, _ := io.ReadAll(opts.Stdin)
+	switch {
+	case strings.HasPrefix(string(b), "SELECT COUNT(*) FROM information_schema.SCHEMATA"):
+		return []byte("1\n"), nil, 0, nil
+	case strings.HasPrefix(string(b), "SELECT CONCAT("):
+		return []byte("1:5:5:2:2:0:0:0\n"), nil, 0, nil
+	case strings.HasPrefix(string(b), "SELECT (\n"):
+		return []byte("0\n"), nil, 0, nil
+	default:
+		return nil, nil, 0, nil
+	}
+}
 
 func TestPhaseOneQueueVerbs(t *testing.T) {
 	st, e := store.Open(filepath.Join(t.TempDir(), "panel.db"))
@@ -30,6 +49,7 @@ func TestPhaseOneQueueVerbs(t *testing.T) {
 		t.Fatal(e)
 	}
 	a := agent.New()
+	a.Exec = emptyMariaDB{}
 	a.Store = st
 	a.Audit = log
 	a.Secret = seal
