@@ -127,3 +127,32 @@ stops. **Do not re-litigate individual crash windows of this class** — a sub-s
 table + reconcile already converge is covered, with power-loss/VM acceptance deferred (#90). A new
 two-store resource *instantiates* this closed contract (fill the table + add its reconcile); raise a
 ruling only for a genuine contract gap the table does not cover, not for each crash point.
+
+---
+
+## Build & review cadence (2026-11-06) — one upfront ruling per step, review at completion
+
+Step 1 of Phase 4 cost ~18 reactive ruling rounds because the contract was patched *during* the build,
+one crash window per round, and every WIP checkpoint was reviewed. That is the failure mode this file
+was written about. From here:
+
+- **One issue per step, with its whole contract + an implementation guide up front.** Before a step is
+  built, the head writes **one** upfront lifecycle ruling on that step's issue: run the 6-dimension
+  checklist over every stateful/two-store resource the step touches, fill the table (or justify N/A),
+  and add a **concrete implementation guide** (the build sequence, files, verbs, and the verification
+  rows it closes). The contract is complete **before** the first commit, not patched after. The MariaDB
+  reference above is the model; a new resource *instantiates* the frozen F6/F7/F12/F19/F20 contracts.
+- **Review at completion, not per-checkpoint.** The implementer builds the **whole step** to its
+  Verification gate, self-checks against the upfront ruling + the pre-review checklist, and then requests
+  **one** review on the finished step. Do **not** post WIP checkpoints for per-step review, and do **not**
+  review them window-by-window — that is what manufactured the reactive rounds. A green Verification gate
+  on the finished step is the review trigger.
+- **Raise a ruling only for a genuine contract gap.** While building, an implementer raises the head only
+  when the upfront contract is actually silent or self-contradictory on something that blocks the build
+  (a real `01`/`02`/`03`-vs-prose conflict, a new resource's ownership proof) — **not** for each crash
+  window the frozen contracts already converge, and **not** for an adversarial sub-statement timing case
+  (that is the deferred #90 acceptance). When in doubt, build to the ensure-state/roll-forward default and
+  note the assumption in the PR, rather than stopping for a round.
+- **Ship bar.** A step is **done** when its verbs work and its Verification gate (incl. the F7
+  crash-replay at the enumerated stops) is green — that is *ship*, not a prompt to hunt the next
+  sub-window. Power-loss/VM acceptance stays deferred (#90).
