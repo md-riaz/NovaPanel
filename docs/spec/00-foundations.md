@@ -1043,6 +1043,21 @@ ownership is provable on the far side of the transaction boundary.
    the SQLite row present → the object was never created under us → remove the SQLite row, no `DROP`.
    Already-deleted replay (no owned row, object absent) is a no-op. Name reuse is safe: a new resource
    reserves the freed name under *its own* `obj_id`, which a stale delete can never match.
+   **Delete ordering & roll-forward (head ruling, 2026-11-06).** The full order is: mark `phase=deleting`
+   → `DROP` by `obj_id` → remove the provenance row → **remove the SQLite owning row** → commit the job
+   `done`. A **transient** SQL/lock failure at any step is **not** terminal — the delete **rolls forward**
+   (it is idempotent ensure-absent, F7), and a canonical `jobs.step` (`delete_started`/`deleting`) keeps
+   it in the roll-forward set until **both** the external teardown **and** the SQLite owning-row removal
+   have completed. So a delete is **never terminalized with teardown incomplete**, and the "terminalized
+   `failed` job + surviving SQLite owner" state the WIP hit does **not** arise under this order. The
+   `jobs.step` checkpoint is the canonical last-completed-step, **not** new durability (same shape as the
+   create-side F20.8 ordering). A **persistent** conflict — the provenance `obj_id` no longer matches, or
+   ownership cannot be proven — is **not** retried forever: it surfaces `conflict`/`precondition_failed`
+   to the **operator**, never a blind `DROP` of an uncertain object (frozen F20). A **historical** residue
+   (a job wrongly terminalized before this ordering, leaving `deleting`-but-object-gone + a surviving
+   SQLite owner row) is converged by the F20.9 reconcile: the external side is finished under the
+   proven-own `deleting` marker, and the now-marker-less SQLite owning row with its object **absent** is
+   the rule-5 "no provenance row + SQLite row present → remove the SQLite row, **no** `DROP`" case.
 6. **No weaker substitute.** A SQLite-only reservation does **not** satisfy this (it cannot prove
    far-side ownership). If a store genuinely cannot hold a provenance marker, that is a **blocker to
    raise**, not a license to adopt by name or to fail every retry.
@@ -1137,6 +1152,12 @@ ownership is provable on the far side of the transaction boundary.
    - `phase='created'`, owning resource row **present** → live and healthy → leave.
    - `phase='reserved'`, object **present**, no owning row, a job still **live** → leave it to that job's
      replay (rules 3–4); reconcile never races a live job on the same `obj_id`.
+   - **SQLite owning row present, its provenance marker gone, external object absent** (the historical
+     failed-delete residue: a delete that tore down the external object + marker but was terminalized
+     before removing its own SQLite row) → **remove the orphaned SQLite owning row** (rule 5 "no provenance
+     row + SQLite row present → remove the row, **no** `DROP`"). This is the one case reconcile reaches by
+     the **SQLite side**, not a marker; it touches nothing external (the object is already gone), so it
+     cannot harm a foreign object.
    Because reconcile acts only on `obj_id`-proven-own markers and only ever `DROP`s an object under a
    `deleting` marker it owns (never a `reserved`-present or foreign one), it preserves rules 3–4 (never
    adopt, never delete an object of uncertain ownership) while guaranteeing **convergence**: whatever

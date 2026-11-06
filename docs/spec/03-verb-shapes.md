@@ -117,7 +117,8 @@ database.create{site_id?, name?}                        → job → {db_id, db_n
 database.rotate_password{db_id}                         → job → {}                          + claim(password)
 database.delete{db_id}                                  → job → {}      # MFA
 database.list{}                                         → {databases:[{id,name,site_id,engine}]}
-dbuser.create{db_id, username?}                         → job → {dbuser_id}                 + claim(password)
+dbuser.create{db_id, username?}                         → job → {dbuser_id, db_user}        + claim(password)   # db_user = the final username (non-secret); only the password rides the claim
+dbuser.list{db_id}                                      → {users:[{id, username}]}           # retrieval path for secondary usernames (non-secret identity)
 dbuser.delete{dbuser_id}                                → job → {}
 ```
 
