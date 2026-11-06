@@ -117,15 +117,18 @@ document.addEventListener('submit', function (event) {
 let pendingClaim;
 document.addEventListener('htmx:beforeSwap', function (event) {
   const token = event.detail.xhr.getResponseHeader && event.detail.xhr.getResponseHeader('X-Job-Claim');
-  if (token) pendingClaim = { token: token };
+  if (token) {
+    const source = event.detail.requestConfig && event.detail.requestConfig.elt;
+    pendingClaim = { token: token, rotation: !!(source && source.matches('form[hx-post$="/rotate"]')) };
+  }
 });
 async function claimCompletedJob() {
   const job = document.querySelector('[data-job-id]');
   if (!pendingClaim || !job) return;
   if (!pendingClaim.id) pendingClaim.id = job.dataset.jobId;
   if (pendingClaim.id !== job.dataset.jobId) { pendingClaim = undefined; return; }
-  if (job.dataset.jobState === 'failed') { pendingClaim = undefined; return; }
-  if (job.dataset.jobState !== 'done' || pendingClaim.started) return;
+  if (job.dataset.jobState === 'failed' && !pendingClaim.rotation) { pendingClaim = undefined; return; }
+  if ((job.dataset.jobState !== 'done' && job.dataset.jobState !== 'failed') || pendingClaim.started) return;
   const claim = pendingClaim;
   claim.started = true;
   let result = job.querySelector('[data-claim-result]');
@@ -151,7 +154,7 @@ async function claimCompletedJob() {
     if (!response.ok) throw new Error('claim failed');
     const data = await response.json();
     if (typeof data.password !== 'string' || !data.password) throw new Error('invalid claim');
-    showResult('Password (shown once; save it now): ' + data.password);
+    showResult((job.dataset.jobState === 'failed' ? 'Rotation failed; this password may have been applied. ' : '') + 'Password (shown once; save it now): ' + data.password);
   } catch (_) {
     if (result) result.setAttribute('role', 'alert');
     showResult('Could not retrieve the one-time password. Rotate the password to try again.');

@@ -141,7 +141,7 @@ func (q *Queue) Replay(ctx context.Context) (EnqueueResult, bool, error) {
 
 func (q *Queue) replayResult(j Job, saved []byte) (EnqueueResult, error) {
 	if len(saved) == 0 {
-		return EnqueueResult{Job: j}, nil
+		return EnqueueResult{Job: j, ClaimState: "none"}, nil
 	}
 	var sealed secret.Sealed
 	if json.Unmarshal(saved, &sealed) != nil || q.sealer == nil {
@@ -156,7 +156,7 @@ func (q *Queue) replayResult(j Job, saved []byte) (EnqueueResult, error) {
 	if json.Unmarshal(plain, &binding) != nil || binding.JobID != j.ID || binding.Owner != j.CreatedBy || binding.Token == "" {
 		return EnqueueResult{}, errors.New("jobs: saved claim binding mismatch")
 	}
-	return EnqueueResult{Job: j, ClaimToken: binding.Token}, nil
+	return EnqueueResult{Job: j, ClaimToken: binding.Token, ClaimState: "live"}, nil
 }
 
 func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey string, sealed bool, intent *databaseIntent) (EnqueueResult, error) {
@@ -270,7 +270,7 @@ func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey st
 	if e = q.record(j, "ok", "", "enqueue"); e != nil {
 		return result, e
 	}
-	return EnqueueResult{Job: j, ClaimToken: text}, nil
+	return EnqueueResult{Job: j, ClaimToken: text, ClaimState: "live"}, nil
 }
 func claimHash(s string) string                                      { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
 func (q *Queue) Status(ctx context.Context, jid string) (Job, error) { return q.store.GetJob(ctx, jid) }

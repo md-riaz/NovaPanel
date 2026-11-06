@@ -8,6 +8,28 @@ import (
 	"testing"
 )
 
+func TestDatabaseReplayWithoutClaim(t *testing.T) {
+	for _, state := range []string{"done", "failed"} {
+		t.Run(state, func(t *testing.T) {
+			f := identityRPC()
+			f.reply = func(v string) (rpc.Reply, error) {
+				if v == "session.whoami" {
+					return rpc.Reply{OK: true, Data: map[string]any{"role": "admin", "csrf_token": "expected"}}, nil
+				}
+				return rpc.Reply{OK: true, Data: map[string]any{"job": map[string]any{"id": "JOB", "state": state, "verb": v, "code": "conflict"}, "claim_state": "none"}}, nil
+			}
+			r := request("POST", "/databases/create", "name=demo")
+			r.Header.Set("HX-Request", "true")
+			r.Header.Set("Idempotency-Key", "01234567-89ab-4def-8123-456789abcdef")
+			w := httptest.NewRecorder()
+			setup(t, f).ServeHTTP(w, r)
+			if w.Code != 202 || w.Header().Get("X-Job-Claim") != "" || (state == "done" && !strings.Contains(w.Body.String(), "Rotate")) {
+				t.Fatalf("response: %d %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestDatabaseLifecycleBrowserRoutes(t *testing.T) {
 	f := identityRPC()
 	f.reply = func(v string) (rpc.Reply, error) {

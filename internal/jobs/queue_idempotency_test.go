@@ -18,7 +18,7 @@ func TestEnqueueIdempotentReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Job.ID != b.Job.ID || a.ClaimToken != b.ClaimToken {
+	if a.Job.ID != b.Job.ID || a.ClaimToken != b.ClaimToken || b.ClaimState != "live" {
 		t.Fatal("retry created a different job or claim")
 	}
 	if _, err = q.Enqueue(WithIdempotency(ctx, "retry-key", "different"), "reconcile", nil, "system"); err == nil {
@@ -56,7 +56,7 @@ func TestFailedJobReplayOmitsClaim(t *testing.T) {
 		t.Fatal(err)
 	}
 	replay, found, err := q.Replay(ctx)
-	if err != nil || !found || replay.Job.ID != first.Job.ID || replay.Job.State != "failed" || replay.ClaimToken != "" {
+	if err != nil || !found || replay.Job.ID != first.Job.ID || replay.Job.State != "failed" || replay.ClaimToken != "" || replay.ClaimState != "none" {
 		t.Fatalf("failed replay: %+v found=%v err=%v", replay, found, err)
 	}
 	list, err := s.ListJobs(ctx, store.JobFilter{})

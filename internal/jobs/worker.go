@@ -15,6 +15,9 @@ import (
 // ErrRetry retains a running job for roll-forward when cleanup could not finish.
 var ErrRetry = errors.New("jobs: retry required")
 
+// ErrRecoveryRequired marks a journaled publication requiring dedicated recovery.
+var ErrRecoveryRequired = errors.New("jobs: recovery required")
+
 // Run owns one worker. SQL transactions never span the external runner.
 func (q *Queue) Run(ctx context.Context) error {
 	q.mu.Lock()
@@ -266,7 +269,10 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 	// F6 precedence across the entire error tree: explicit interruption, then
 	// effectful deadline safety / retry, ordinary terminal, and coded deadline.
 	if interrupted := codedError(err, func(code string) bool { return code == "interrupted" }); interrupted != nil {
-		return q.finish(ctx, j, interrupted)
+		if j.Effectful || errors.Is(err, ErrRecoveryRequired) {
+			return q.finish(ctx, j, interrupted)
+		}
+		err = errors.Join(err, ErrRetry)
 	}
 	terminal := codedError(err, func(code string) bool { return code != "deadline_exceeded" })
 	transient := errors.Is(err, context.DeadlineExceeded) || errors.Is(attemptCtx.Err(), context.DeadlineExceeded) || codedError(err, func(code string) bool { return code == "deadline_exceeded" }) != nil

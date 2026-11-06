@@ -34,6 +34,7 @@ func metadata(j Job) Metadata {
 type EnqueueResult struct {
 	Job        Job    `json:"job"`
 	ClaimToken string `json:"claim,omitempty"`
+	ClaimState string `json:"claim_state"`
 }
 
 // Clock returns UTC Unix milliseconds. Set it before starting queue/scheduler.

@@ -112,7 +112,7 @@ func TestDispatchReplayBeforeResolution(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	if x.Job.ID != y.Job.ID || x.ClaimToken != y.ClaimToken {
+	if x.Job.ID != y.Job.ID || x.ClaimToken != y.ClaimToken || x.ClaimState != "live" || y.ClaimState != "live" {
 		t.Fatal("different admission")
 	}
 	other := req
@@ -132,7 +132,7 @@ func TestDispatchReplayBeforeResolution(t *testing.T) {
 	} else {
 		b, _ := json.Marshal(r.Data)
 		var replay jobs.EnqueueResult
-		if err := json.Unmarshal(b, &replay); err != nil || replay.Job.ID != x.Job.ID || replay.ClaimToken != "" {
+		if err := json.Unmarshal(b, &replay); err != nil || replay.Job.ID != x.Job.ID || replay.ClaimToken != "" || replay.ClaimState != "none" {
 			t.Fatalf("consumed replay: %s, %v", b, err)
 		}
 	}

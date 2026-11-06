@@ -77,7 +77,7 @@ func TestFailedPublishedClaimReplay(t *testing.T) {
 				t.Fatal(err)
 			}
 			got, token, found, err := s.ReplayJob(ctx, "owner", "key", "payload")
-			if err != nil || !found || got.ID != j.ID || string(token) != "sealed" {
+			if err != nil || !found || got.ID != j.ID || len(token) != 0 {
 				t.Fatalf("live replay: job=%s token=%q found=%v err=%v", got.ID, token, found, err)
 			}
 			if _, _, _, err = s.ReplayJob(ctx, "other", "key", "payload"); !errors.Is(err, sql.ErrNoRows) {

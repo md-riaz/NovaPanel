@@ -146,12 +146,19 @@ func (s *server) console(w http.ResponseWriter, r *http.Request, c RPCClient, rt
 				return
 			}
 			if rt.verb == "database.create" || rt.verb == "database.rotate_password" {
-				claim, ok := data["claim"].(string)
-				if !ok || claim == "" || r.Header.Get("HX-Request") != "true" {
-					http.Error(w, "Claim requires JavaScript; rerun the operation", http.StatusBadGateway)
+				claim, _ := data["claim"].(string)
+				if claim != "" {
+					if r.Header.Get("HX-Request") != "true" {
+						http.Error(w, "Claim requires JavaScript", http.StatusBadGateway)
+						return
+					}
+					w.Header().Set("X-Job-Claim", claim)
+				} else if data["claim_state"] != "none" {
+					http.Error(w, "Invalid agent claim reply", http.StatusBadGateway)
 					return
+				} else if job["state"] == "done" {
+					v.Message = "The one-time password is no longer available. Rotate the password to recover access."
 				}
-				w.Header().Set("X-Job-Claim", claim)
 			}
 			cv.Section = "job.status"
 			cv.Data = job

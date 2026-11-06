@@ -23,7 +23,7 @@ func TestCodedInterruptedOverridesExpiredAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	j, err := s.GetJob(ctx, r.Job.ID)
-	if err != nil || j.State != "failed" || j.Code != "interrupted" || j.Attempts != 1 {
+	if err != nil || j.State != "queued" || j.Code != "" || j.Attempts != 1 {
 		t.Fatalf("interrupted attempt: %+v %v", j, err)
 	}
 }

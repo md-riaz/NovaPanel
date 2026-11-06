@@ -880,10 +880,14 @@ For the public API, the `202` body includes the `claim` so a token caller can re
     if still within TTL and unconsumed.
   - **job `done`, claim live** → existing `job_id` + `done` + the same still-unclaimed `claim`.
   - **job `done`, claim consumed or expired or otherwise removed** → existing `job_id` + `done`, **no
-    `claim`**, plus a **determinate reason** (`claim_consumed` / `claim_expired`) so the caller knows the
-    one-shot secret was already (or can no longer be) delivered and must **`rotate_password`** to recover
-    it. **Never `not_found`** — the operation succeeded; only the secret is unrecoverable, and rotate is
-    the recovery (fresh F12 seal + fresh F19 claim).
+    `claim`**, `claim_state=none` (secret **not retrievable** → recover with **`rotate_password`**).
+    **Never `not_found`** — the operation succeeded; only the secret is unrecoverable, and rotate is the
+    recovery (fresh F12 seal + fresh F19 claim). **Consumed vs expired is *not* durably distinguished**
+    (head ruling, 2026-11-05, simplifying the earlier wording): once the `job_claims` row is deleted the
+    canonical state is identical and the caller's action is identical (rotate), so **no durable non-secret
+    per-claim history is authorized or needed** to tell a historical consumed claim from an expired one.
+    `none` is the single determinate "secret gone" answer; distinguishing the two would be exactly the
+    kind of per-feature durable state the scope freeze forbids.
   - **job terminal `failed`** → existing `job_id` + `failed` + its F3 `code`, **no `claim`**. Not
     `not_found` (a real terminal outcome, reported at-most-once — the caller sees the failure, never a
     phantom success).
@@ -892,7 +896,8 @@ For the public API, the `202` body includes the `claim` so a token caller can re
   This keeps F19 **single-use / no secret re-disclosure / at-most-once** intact: a consumed claim is never
   re-handed, recovery is always a *new* `rotate_password` (never a re-read), and the replay performs **no
   second effect**. `03`'s `EnqueueResult`/`job.status` shape carries `claim` as **optional** with a
-  `claim_state` reason enum (`live` | `consumed` | `expired` | `none`); updated in the same change.
+  `claim_state` reason enum of just **`live` | `none`** (retrievable, or gone → rotate); updated in the
+  same change.
 
 **Lifecycle (decided).**
 - **TTL is anchored at secret publication** — the moment `Exec` commits the `job_claims` row — not at
@@ -912,37 +917,47 @@ For the public API, the `202` body includes the `claim` so a token caller can re
   reports the job done. If the page is lost before claiming, the secret is recovered only by re-running
   the verb (rotate/recreate) — never re-read. This is the single browser-side claim path for **every**
   `+ claim(…)` verb.
-- **An applied secret is never lost before its claim is published (head ruling, 2026-11-05).** A rotate
-  (`database.rotate_password`, and any `ALTER`-then-publish verb) is **effectful**: the `ALTER USER` can
-  land and then lose its reply. The bug to forbid is **terminalizing-and-erasing the sealed input on a
-  retry error while the ALTER may have landed** — that strands the applied password (the user now has the
-  new credential, but it was never published as a claim and the sealed value is gone, so no one can
-  recover it). The contract, using only existing machinery (no new per-feature cleanup intent):
-  1. **Effectful recovery, not terminalize-erase.** An indeterminate `ALTER` exit is `agent_error`/
-     `interrupted`; the job is **not** `done` and takes the F6 `interrupted` + reconcile path (not blind
-     re-run, not terminal-erase). A transient retry error (GetJob/readiness/lock) likewise **rolls
-     forward**, it does not finalize.
-  2. **Retention invariant.** The write-ahead **sealed new password (F12/F20.1) is retained until the F19
-     claim is published from it** (the applied password is now recoverable by the owner) **or** until the
-     job reaches a terminal in which the secret **provably never landed and no target user holds it**.
-     The sealed input is **never** erased on an ambiguous/transient retry while the target user may still
-     hold the applied password. Claim-publication is the linearization point: seal → **`jobs.step`
-     pre-ALTER checkpoint** → `ALTER` → **publish claim from the sealed value** → commit `done` → only
-     then is the sealed input consumable.
-  3. **The pre-ALTER `jobs.step` checkpoint is permitted** — it is the canonical "last completed step"
-     (`jobs.step`), **not** new durability. On replay a checkpoint of "ALTER attempted / may have landed"
-     means: **re-apply the *same* sealed password idempotently** (`ALTER USER` to the identical value —
-     F20.1 same-secret replay) and **publish the claim**. Re-applying the identical password is a no-op if
-     it already landed, so the credential is **recovered, never lost or changed**.
-  4. **Owner/provenance change on retry (the reported failure).** `never ALTER an uncertain/foreign owner`
-     stands — do not rotate a user whose ownership (`obj_id` provenance, F20) you cannot prove. But when
-     ownership can't be confirmed on retry **and the ALTER may already have landed**, the job does **not**
-     silently terminalize-erase. It reaches a terminal that **preserves claim-recoverability**: publish
-     the claim from the sealed value (so the once-appliable password is retrievable exactly once) and
-     record the `conflict`/`precondition_failed` for the **operator** — retain, never erase-before-claim.
-     If the target user is provably **gone** (dropped), there is no stranded credential and the sealed
-     input may be released. Codes (`agent_error`, `conflict`, `precondition_failed`) F3-catalog; machinery
-     is `jobs.step` + F12 seal + F19 claim + F20.1 invariance — all existing, no reopening of the #90
+- **An applied secret is never lost before its claim is published (head ruling, 2026-11-05; corrected
+  2026-11-06).** A rotate (`database.rotate_password`) mints a new password sealed (F12), applies it with
+  `ALTER USER`, and publishes the F19 claim. The `ALTER` can land and then lose its reply; the bug to
+  forbid is **terminalizing-and-erasing the sealed input on a retry error while the `ALTER` may have
+  landed** — that strands the applied password (the user has the new credential, but it was never
+  published as a claim and the sealed value is gone, so no one can recover it). The fix is **one
+  retention invariant**, not a new recovery mode:
+  1. **Rotation is NOT effectful — do not over-model it.** Canonical `01` marks `rotate_password` **Slow
+     but not `Eff`**, and that is correct: re-applying the **same sealed password** via `ALTER USER` is
+     **idempotent** (the identical value is a safe no-op), **unlike** the genuinely effectful class
+     (`ssl.issue`/ACME, provider DNS, `restic`) where a blind replay double-issues or burns a rate limit.
+     So rotation **auto-replays through ordinary F6 roll-forward** (F7 ensure-state + F20.1 same-secret
+     replay) — it does **not** take the effectful `interrupted`+reconcile path, and **`01` is not
+     changed**. (This supersedes the earlier "rotation is effectful" wording, which over-classified it.)
+  2. **The one real invariant — retention.** The write-ahead **sealed new password (F12/F20.1) is retained
+     until the F19 claim is published from it** (then the applied password is owner-recoverable) **or**
+     until a terminal in which the secret **provably never landed and no target user holds it**. The
+     sealed input is **never** erased on an ambiguous/transient retry while the target user may still hold
+     the applied password. Order: seal → **`jobs.step` pre-`ALTER` checkpoint** → `ALTER` → **publish
+     claim** → commit `done` → only then is the sealed input consumable. The `jobs.step` checkpoint is the
+     canonical "last completed step," **not** new durability; on replay "`ALTER` may have landed" → re-run
+     the same idempotent `ALTER` + publish the claim → the credential is **recovered, never lost**.
+  3. **Which "interrupted" yields vs reconciles — `01`'s `Eff` flag decides (answers the overload).** A
+     **non-effectful** verb (rotation, the MariaDB create/`ALTER` DDL) that hits a transient
+     lock/deadline/`interrupted` **yields and auto-replays** (F6 roll-forward, idempotent). An
+     **effectful** verb (`ssl.issue` and the TLS publication path) returns a **coded `interrupted`** that
+     deliberately routes to **startup/`reconcile`**, never a blind in-pass retry — because its effect
+     can't be blindly replayed. The `Eff` column is the single discriminator; a verb is never both.
+  4. **Owner/provenance conflict on retry (the reported failure), and a lost admission token.** `never
+     `ALTER` an uncertain/foreign owner` stands. When ownership can't be confirmed **and the `ALTER` may
+     have landed**, the job does **not** terminalize-erase: it reaches a terminal that **preserves
+     claim-recoverability** — publish the claim from the sealed value (the applied password is retrievable
+     **exactly once by the owner who still holds the admission token**) + record
+     `conflict`/`precondition_failed` for the operator. If the **admission reply (the claim token) was
+     lost**, that one-shot claim cannot be re-handed (F19 single-use/owner-bound) — recovery is a **fresh
+     `rotate_password`**, exactly as for any lost reply (no new mechanism, no second durable token path);
+     the conflict-published claim is a **best-effort** convenience for a caller who still has the token,
+     not a guarantee the token survives. If the target user is provably **gone**, there is no stranded
+     credential and the sealed input may be released. Codes (`agent_error`, `conflict`,
+     `precondition_failed`) F3-catalog; machinery is `jobs.step` + F12 seal + F19 claim + F20.1
+     invariance — all existing, no `01`/`02`/`03` change, no reopening of the #90
      freeze.
 
 ---
