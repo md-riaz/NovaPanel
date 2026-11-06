@@ -77,6 +77,10 @@ func TestLiveDatabaseDeadlineRequeuesSameClaim(t *testing.T) {
 		return 30 * time.Second
 	})
 	server.Agent.Jobs.SetRunner(func(c context.Context, j *jobs.Job) error {
+		// Startup also queues reconcile; only this job's attempts drive the fixture.
+		if j.ID != en.Job.ID {
+			return server.ExecuteJob(c, j)
+		}
 		if attempts.Add(1) == 1 {
 			<-c.Done()
 			return c.Err()
