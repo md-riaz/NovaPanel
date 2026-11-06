@@ -145,6 +145,9 @@ func TestAttemptDeadlineRequeuesSealedInput(t *testing.T) {
 	if err != nil || j.State != "queued" || !bytes.Equal(j.Args, r.Job.Args) {
 		t.Fatalf("timeout lost retry state: %+v %v", j, err)
 	}
+	// The successful retry needs time for scheduling and storage, not another
+	// short deadline that can expire before the runner returns under CI load.
+	q.SetAttemptDeadline(func(string) time.Duration { return 5 * time.Second })
 	q.SetRunner(func(ctx context.Context, _ *Job) error {
 		if _, ok := ctx.Deadline(); !ok {
 			t.Error("missing fresh deadline")
