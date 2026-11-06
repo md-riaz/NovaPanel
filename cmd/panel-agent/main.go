@@ -11,6 +11,7 @@ import (
 	"novapanel/internal/agent"
 	"novapanel/internal/config"
 	"novapanel/internal/exec"
+	"novapanel/internal/firewall"
 	"novapanel/internal/jobs"
 	"novapanel/internal/rpc"
 	"novapanel/internal/validate"
@@ -43,6 +44,9 @@ func listenSocket(path string, gid uint32) (*net.UnixListener, error) {
 	return l, nil
 }
 func run(args []string) error {
+	if handled, err := dispatchFirewallRevert(context.Background(), args, geteuid(), os.Getegid(), firewall.RecoverInstalledFirewall); handled {
+		return err
+	}
 	if geteuid() != 0 {
 		return fmt.Errorf("panel-agent must run as root")
 	}
@@ -93,6 +97,19 @@ func run(args []string) error {
 
 // serve shares the production lifecycle with scratch tests using an injected runner.
 func serve(ctx context.Context, a *agent.Agent) (err error) {
+	plan, err := a.PrepareFirewallStartup(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, plan.Close()) }()
+	return serveInitialized(ctx, a, func() error { return a.CompleteFirewallStartup(ctx, plan) })
+}
+
+// Production entry always supplies the retained plan finisher.
+func serveInitialized(ctx context.Context, a *agent.Agent, finish func() error) (err error) {
+	if finish == nil {
+		return errors.New("firewall startup finisher missing")
+	}
 	cleanup, err := a.OpenState(ctx)
 	if err != nil {
 		return err
@@ -108,6 +125,12 @@ func serve(ctx context.Context, a *agent.Agent) (err error) {
 			err = errors.Join(err, releaseSocket())
 		}
 	}()
+	if err = finish(); err != nil {
+		return err
+	}
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	releaseSocket, err = reserveSocket(a.Cfg.SocketPath)
 	if err != nil {
 		return err

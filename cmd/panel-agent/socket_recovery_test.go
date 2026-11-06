@@ -56,7 +56,7 @@ func TestRecoveryRefusesUnsafeOrLivePaths(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			if e = serve(ctx, a); e == nil {
+			if e = serveScratch(ctx, a); e == nil {
 				t.Fatal("accepted existing path")
 			}
 			after, e := os.Lstat(a.Cfg.SocketPath)
@@ -93,7 +93,7 @@ func TestRecoveryRequiresLifetimeOwnership(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = serve(context.Background(), a); e == nil {
+	if e = serveScratch(context.Background(), a); e == nil {
 		t.Fatal("started without lifetime ownership")
 	}
 	after, e := os.Lstat(a.Cfg.SocketPath)

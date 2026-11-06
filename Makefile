@@ -3,7 +3,10 @@ GOFMT ?= gofmt
 STATICCHECK ?= staticcheck
 GOVULNCHECK ?= govulncheck
 
-.PHONY: build test lint ci arch integration format-check systemd-verify package-maintenance packaging-test release-stage
+.PHONY: build test lint ci arch integration format-check systemd-verify package-maintenance packaging-test release-stage phase6-test
+phase6-test:
+	$(GO) test -race -count=1 ./internal/update ./internal/firewall ./internal/backup ./internal/audit ./internal/store ./internal/verbs ./internal/rpc ./internal/agent ./cmd/panel-agent ./internal/exec
+	$(GO) test -race -count=1 ./tests/integration -run 'TestPackaging|TestFirewallDispatcherStoreIndependence|TestFirewallStartup|TestFirewallStartupTerminalProcess|TestFirewallJournalRecovery|TestFirewallTerminalCommitProcess|TestFirewallTerminalMigratedProcess'
 build:
 	$(GO) build ./...
 test:

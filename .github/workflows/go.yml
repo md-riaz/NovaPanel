@@ -17,7 +17,31 @@ jobs:
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
           go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+      - name: Provision private unprivileged scratch
+        # Default /tmp has a writable ancestor and is not valid custody.
+        # HOME belongs to runner, with root/runner-owned non-writable ancestry.
+        # Keep volatile fixtures outside the checkout's architecture scan.
+        # Short prefix leaves room for Go test names in Unix socket paths.
+        run: |
+          test "$(id -u)" -ne 0
+          scratch=$(mktemp -d "$HOME/n.XXXXXX")
+          printf 'TMPDIR=%s\n' "$scratch" >> "$GITHUB_ENV"
+      - name: Unprivileged Unix health ping and deadline regression
+        run: |
+          test "$(id -u)" -ne 0
+          go test -count=1 ./internal/update -run '^TestPingRealSocketAndDeadline$' -v
       - run: make ci
+      - name: Combined Phase 6 package and shared-boundary race tests
+        run: make phase6-test
+      - name: Remove private unprivileged scratch
+        if: always()
+        run: |
+          if [ -n "${TMPDIR:-}" ]; then
+            case "$TMPDIR" in
+              "$HOME"/n.*) rm -rf -- "$TMPDIR" ;;
+              *) printf 'Refusing unexpected scratch path: %s\n' "$TMPDIR" >&2; exit 1 ;;
+            esac
+          fi
   integration:
     runs-on: ubuntu-24.04
     steps:
@@ -27,4 +51,11 @@ jobs:
           go-version: '1.27.3'
           cache: true
       - name: Scratch socket, peer credentials and jobs with injected privileged commands
-        run: sudo env "PATH=$PATH" "GOCACHE=$RUNNER_TEMP/root-go-cache" make integration
+        # The checkout and RUNNER_TEMP belong to runner, not root. Firewall
+        # custody deliberately refuses those ancestors, even under sudo.
+        run: |
+          sudo env "PATH=$PATH" "GOCACHE=$RUNNER_TEMP/root-go-cache" bash -eu -c '
+            scratch=$(mktemp -d /root/novapanel-integration.XXXXXX)
+            trap '\''rm -rf -- "$scratch"'\'' EXIT
+            TMPDIR="$scratch" make integration
+          '

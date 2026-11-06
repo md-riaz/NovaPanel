@@ -18,7 +18,7 @@ func TestServeKeepsFatalWorkerErrors(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, a) }()
+	go func() { done <- serveScratch(ctx, a) }()
 	waitAgent(t, a, done)
 	client, e := rpc.Dial(a.Cfg.SocketPath)
 	if e != nil {

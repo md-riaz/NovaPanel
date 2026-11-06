@@ -77,7 +77,7 @@ func TestProductionLifecycleScratch(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
-		go func() { done <- serve(ctx, a) }()
+		go func() { done <- serveScratch(ctx, a) }()
 		waitAgent(t, a, done)
 		c, e := rpc.Dial(a.Cfg.SocketPath)
 		if e != nil {
