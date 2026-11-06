@@ -28,7 +28,8 @@ type boundaryStore struct {
 	*store.Store
 	target, boundary string
 	after, hit       bool
-	failPublish      bool
+	conflictName     string
+	conflictObserved bool
 	cancel           context.CancelFunc
 }
 
@@ -44,10 +45,20 @@ func (s *boundaryStore) CommitDatabaseClaim(ctx context.Context, job, verb, key 
 	if s.stop("publish", job, false) {
 		return context.Canceled
 	}
-	if s.failPublish && s.target == job {
-		return errors.New("injected publication failure")
+	if s.conflictName != "" && s.target == job && !s.conflictObserved {
+		// Insert a real uniqueness collision after admission, just before the
+		// publication transaction. It remains until the interrupted attempt ends.
+		if err := s.Store.Tx(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `INSERT INTO databases(id,name,engine,created) VALUES(?,?,'mariadb',0)`, "fixture-conflict", s.conflictName)
+			return err
+		}); err != nil {
+			return err
+		}
 	}
 	err := s.Store.CommitDatabaseClaim(ctx, job, verb, key, result, nonce, ciphertext)
+	if s.conflictName != "" && s.target == job {
+		s.conflictObserved = errors.Is(err, store.ErrSiteConflict)
+	}
 	if err == nil {
 		s.stop("publish", job, true)
 	}
@@ -190,7 +201,9 @@ func TestLiveWorkerSQLiteCrashBoundaries(t *testing.T) {
 					point = "terminal"
 				}
 				wrapped := &boundaryStore{Store: s, target: target, boundary: point, after: after, cancel: cancel}
-				wrapped.failPublish = strings.HasPrefix(boundary, "abort-")
+				if strings.HasPrefix(boundary, "abort-") {
+					wrapped.conflictName = name
+				}
 				if boundary == "delete-sqlite" {
 					a.DeleteDatabaseForJob = func(ctx context.Context, db, name, job string) error {
 						if wrapped.stop("delete-sqlite", job, false) {
@@ -226,6 +239,22 @@ func TestLiveWorkerSQLiteCrashBoundaries(t *testing.T) {
 				if (stop == nil && !wrapped.hit) || (stop != nil && !stop.hit) {
 					t.Fatal("boundary not reached")
 				}
+				if wrapped.conflictName != "" {
+					if !wrapped.conflictObserved {
+						t.Fatal("SQLite publication did not return a proven conflict")
+					}
+				}
+				assertConflict := func(stage string) {
+					t.Helper()
+					if wrapped.conflictName == "" {
+						return
+					}
+					db, _, err := s.DatabaseWithUsers(ctx, "fixture-conflict")
+					if err != nil || db.ID != "fixture-conflict" || db.Name != name || db.Engine != "mariadb" {
+						t.Fatalf("%s: conflict row changed: %+v %v", stage, db, err)
+					}
+				}
+				assertConflict("interrupted")
 				a.Exec = exec.Real{}
 				j, e := s.GetJob(ctx, target)
 				if e != nil {
@@ -262,7 +291,9 @@ func TestLiveWorkerSQLiteCrashBoundaries(t *testing.T) {
 						t.Fatalf("reconcile interrupted: %v", e)
 					}
 				}
+				assertConflict("interrupted reconcile")
 				j = runUntil(target)
+				assertConflict("replay")
 				wantState := "done"
 				if strings.HasPrefix(boundary, "abort-") {
 					wantState = "failed"
@@ -281,6 +312,10 @@ func TestLiveWorkerSQLiteCrashBoundaries(t *testing.T) {
 				}
 				if _, e = database.Reconcile(ctx, a.Exec, s, a.Jobs.LockReconcileDatabase); e != nil {
 					t.Fatalf("reconcile terminal: %v", e)
+				}
+				assertConflict("terminal reconcile")
+				if strings.HasPrefix(boundary, "abort-") && j.Code != "conflict" {
+					t.Fatalf("abort code: %+v", j)
 				}
 				_, users, e := s.DatabaseWithUsers(ctx, intent.DBID)
 				if strings.HasPrefix(boundary, "delete-") || strings.HasPrefix(boundary, "abort-") {
