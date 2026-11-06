@@ -54,6 +54,7 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 | `database.delete` | | A | | databases:write | ✓ | | ✓ | `site:<site_id>`(if bound)+`db:<db_id>` (cascades users; F20.5 obj_id-matched) |
 | `database.list` | | RO | ✓ | databases:read | | | | |
 | `dbuser.create` / `dbuser.delete` | | A | | databases:write | ✓ | | | `db:<db_id>`+`dbuser:<username>` (F20.7) |
+| `dbuser.list` | | RO | ✓ | databases:read | | | | lists secondary usernames for a `db_id` (non-secret identity; no password) |
 | `files.list` / `files.read` | | A | | sites:read | | | | rooted at docroot, not home (B-D10) |
 | `files.write`/`mkdir`/`move`/`delete`/`chmod` | | A | | sites:write | | | | runs as site user |
 | `files.upload`/`archive`/`extract` | | A | | sites:write | ✓ | | | `site:<name>` (chunked/large) |
