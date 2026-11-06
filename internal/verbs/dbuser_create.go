@@ -174,7 +174,7 @@ func dbuserCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 		}
 		return rpc.Errf(code, "Database user create failed; reconciliation required")
 	}
-	result, e := json.Marshal(map[string]string{"dbuser_id": v.UserID})
+	result, e := json.Marshal(map[string]string{"dbuser_id": v.UserID, "db_user": v.Username})
 	if e != nil {
 		return e
 	}

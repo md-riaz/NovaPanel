@@ -501,6 +501,9 @@ func TestDatabaseCreateJobAndClaim(t *testing.T) {
 	if e = json.Unmarshal(aj.Result, &addedResult); e != nil {
 		t.Fatal(e)
 	}
+	if len(addedResult) != 2 || addedResult["dbuser_id"] == "" || addedResult["db_user"] == "" || addedResult["db_user"] != users[1].Username {
+		t.Fatalf("non-secret user result: %+v", addedResult)
+	}
 	userDeleteArgs, _ := json.Marshal(map[string]string{"dbuser_id": addedResult["dbuser_id"]})
 	removed := server.Dispatch(rpc.WithCaller(ctx, rpc.Caller{Kind: "user", Role: "admin", Session: "owner"}), rpc.Request{Verb: "dbuser.delete", Args: userDeleteArgs})
 	if !removed.OK {

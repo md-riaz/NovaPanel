@@ -66,7 +66,8 @@ func dbuserDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err err
 	// have completed, including across an indeterminate SQL result.
 	started := durable.Step == "delete_started"
 	defer func() {
-		if started && err != nil {
+		var coded *rpc.CodedError
+		if started && err != nil && !(errors.As(err, &coded) && (coded.Code == "conflict" || coded.Code == "precondition_failed")) {
 			err = errors.Join(err, jobs.ErrRetry)
 		}
 	}()
@@ -114,7 +115,9 @@ func dbuserDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err err
 		started = true
 	}
 	j.Step = durable.Step
-	if e = database.ManagedDeleteUser(ctx, a.Exec, u.Username, u.ID); e != nil {
+	e = database.ManagedDeleteUser(ctx, a.Exec, u.Username, u.ID)
+	mismatch := errors.Is(e, database.ErrOwnerMismatch)
+	if e != nil && !mismatch {
 		if errors.Is(e, database.ErrConflict) {
 			return rpc.Errf("conflict", "Database provenance conflict")
 		}
@@ -122,6 +125,9 @@ func dbuserDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err err
 	}
 	if e = a.Store.DeleteDatabaseUser(ctx, u); e != nil {
 		return e
+	}
+	if mismatch {
+		return rpc.Errf("conflict", "Database provenance owner mismatch")
 	}
 	j.Result = json.RawMessage(`{}`)
 	return nil

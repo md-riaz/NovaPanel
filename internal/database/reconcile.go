@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -63,11 +64,12 @@ func Reconcile(ctx context.Context, runner exec.Runner, s *store.Store, lock Rec
 	if err != nil {
 		return changed, err
 	}
-	if raw == "" {
-		return changed, nil
-	}
 	var conflicts bool
-	for _, line := range strings.Split(raw, "\n") {
+	lines := []string{}
+	if raw != "" {
+		lines = strings.Split(raw, "\n")
+	}
+	for _, line := range lines {
 		parts := strings.Split(line, "\t")
 		if len(parts) != 3 {
 			return nil, errors.New("invalid provenance listing")
@@ -110,10 +112,117 @@ func Reconcile(ctx context.Context, runner exec.Runner, s *store.Store, lock Rec
 			return changed, err
 		}
 	}
+	databases, err := s.ListDatabases(ctx)
+	if err != nil {
+		return changed, err
+	}
+	for _, d := range databases {
+		_, users, err := s.DatabaseWithUsers(ctx, d.ID)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue // A concurrent delete removed this database after the listing.
+		}
+		if err != nil {
+			return changed, err
+		}
+		for _, u := range users {
+			removed, err := reconcileOwner(ctx, runner, s, lock, "user", u.Username, u.ID, d.ID)
+			if removed {
+				changed = append(changed, "user:"+u.Username+"@127.0.0.1")
+			}
+			if errors.Is(err, ErrConflict) {
+				conflicts = true
+				continue
+			}
+			if err != nil {
+				return changed, err
+			}
+		}
+		removed, err := reconcileOwner(ctx, runner, s, lock, "schema", d.Name, d.ID, d.ID)
+		if removed {
+			changed = append(changed, "schema:"+d.Name)
+		}
+		if errors.Is(err, ErrConflict) {
+			conflicts = true
+			continue
+		}
+		if err != nil {
+			return changed, err
+		}
+	}
 	if conflicts {
 		return changed, ErrConflict
 	}
 	return changed, nil
+}
+
+// reconcileOwner removes stale owners only when the external object is absent
+// without a marker, or a different identity owns the marker. Live jobs retain responsibility.
+func reconcileOwner(ctx context.Context, runner exec.Runner, s *store.Store, lock ReconcileLock, kind, name, objectID, dbID string) (bool, error) {
+	if !id.Valid(objectID) || !id.Valid(dbID) || (&validate.V{}).DBName(name) != nil || (kind == "user" && len(name) > 32) {
+		return false, ErrConflict
+	}
+	unlock, err := lock(ctx, dbID, kind, name)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	evidence, err := s.ProvenanceIdentity(ctx, kind, name, objectID)
+	if err != nil || !evidence.Resource || evidence.Live {
+		return false, err
+	}
+	marker := name
+	exists := fmt.Sprintf("SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='%s'", name)
+	if kind == "user" {
+		marker += "@127.0.0.1"
+		exists = fmt.Sprintf("SELECT COUNT(*) FROM mysql.user WHERE User='%s' AND Host='127.0.0.1'", name)
+	}
+	state, err := runSQL(ctx, runner, fmt.Sprintf("SELECT (SELECT COUNT(*) FROM novapanel.managed_objects WHERE kind='%s' AND name='%s'),(%s),(SELECT COUNT(*) FROM novapanel.managed_objects WHERE kind='%s' AND name='%s' AND obj_id='%s');", kind, marker, exists, kind, marker, objectID))
+	if err != nil {
+		return false, err
+	}
+	mismatch := false
+	switch state {
+	case "1\t1\t0", "1\t0\t0":
+		mismatch = true
+	case "0\t0\t0":
+	case "1\t1\t1", "1\t0\t1":
+		return false, nil // Marker pass handles ownership and phase.
+	case "0\t1\t0":
+		return false, ErrConflict // Present without proof: never adopt or drop.
+	default:
+		return false, errors.New("invalid owner state")
+	}
+	if kind == "user" {
+		u, err := s.DatabaseUserByID(ctx, objectID)
+		if err != nil {
+			return false, err
+		}
+		if u.DatabaseID != dbID || u.Username != name {
+			return false, ErrConflict
+		}
+		if err := s.DeleteDatabaseUser(ctx, u); err != nil {
+			return false, err
+		}
+		if mismatch {
+			return true, ErrConflict
+		}
+		return true, nil
+	}
+	// Do not cascade away children whose external state was not proven absent.
+	_, users, err := s.DatabaseWithUsers(ctx, objectID)
+	if err != nil {
+		return false, err
+	}
+	if len(users) != 0 {
+		return false, ErrConflict
+	}
+	if err := s.DeleteDatabase(ctx, objectID, name); err != nil {
+		return false, err
+	}
+	if mismatch {
+		return true, ErrConflict
+	}
+	return true, nil
 }
 
 func reconcileOne(ctx context.Context, runner exec.Runner, s *store.Store, kind, name, marker, objectID, dbID string) (bool, error) {

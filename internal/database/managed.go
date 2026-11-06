@@ -42,8 +42,17 @@ func ManagedRotate(ctx context.Context, runner exec.Runner, user, userID, passwo
 	return Rotate(ctx, runner, user, password)
 }
 
-// ManagedDelete retains deleting markers for reconciliation after the job terminalizes.
+// ErrOwnerMismatch identifies a foreign marker: the stale SQLite owner may be removed,
+// but the foreign external object must never be touched.
+var ErrOwnerMismatch = fmt.Errorf("foreign provenance owner: %w", ErrConflict)
+
+// ManagedDelete removes external objects and their markers before SQLite finalization.
 func ManagedDelete(ctx context.Context, runner exec.Runner, db, dbID string, users map[string]string) error {
+	if len(users) > 0 {
+		if err := CheckSchemaDelete(ctx, runner, db, dbID); err != nil {
+			return err
+		}
+	}
 	for user, userID := range users {
 		if err := managedDrop(ctx, runner, "user", user, userID); err != nil {
 			return err
@@ -67,15 +76,9 @@ func managedDrop(ctx context.Context, runner exec.Runner, kind, name, objID stri
 		marker += "@127.0.0.1"
 		statement = fmt.Sprintf("DROP USER IF EXISTS '%s'@'127.0.0.1'", name)
 	}
-	state, err := runSQL(ctx, runner, fmt.Sprintf("SELECT COALESCE((SELECT phase FROM novapanel.managed_objects WHERE kind='%s' AND name='%s' AND obj_id='%s'),'none');", kind, marker, objID))
-	if err != nil {
+	state, err := deletePhase(ctx, runner, kind, marker, objID)
+	if err != nil || state == "none" {
 		return err
-	}
-	if state == "none" {
-		return nil
-	}
-	if state != "created" && state != "deleting" {
-		return ErrConflict
 	}
 	if _, err = runSQL(ctx, runner, fmt.Sprintf("UPDATE novapanel.managed_objects SET phase='deleting' WHERE kind='%s' AND name='%s' AND obj_id='%s';", kind, marker, objID)); err != nil {
 		return err
@@ -83,7 +86,39 @@ func managedDrop(ctx context.Context, runner exec.Runner, kind, name, objID stri
 	if _, err = runSQL(ctx, runner, statement+";"); err != nil {
 		return err
 	}
-	return nil
+	_, err = runSQL(ctx, runner, fmt.Sprintf("DELETE FROM novapanel.managed_objects WHERE kind='%s' AND name='%s' AND obj_id='%s' AND phase='deleting';", kind, marker, objID))
+	return err
+}
+
+// CheckSchemaDelete checks the parent before any child teardown. The caller holds
+// the database and schema-name locks until the entire cascade completes.
+func CheckSchemaDelete(ctx context.Context, runner exec.Runner, name, objID string) error {
+	if runner == nil || !id.Valid(objID) || (&validate.V{}).DBName(name) != nil {
+		return errors.New("invalid database input")
+	}
+	_, err := deletePhase(ctx, runner, "schema", name, objID)
+	return err
+}
+
+func deletePhase(ctx context.Context, runner exec.Runner, kind, marker, objID string) (string, error) {
+	state, err := runSQL(ctx, runner, fmt.Sprintf("SELECT COALESCE((SELECT phase FROM novapanel.managed_objects WHERE kind='%s' AND name='%s' AND obj_id='%s'),'none');", kind, marker, objID))
+	if err != nil {
+		return "", err
+	}
+	if state == "none" {
+		owner, err := runSQL(ctx, runner, fmt.Sprintf("SELECT COALESCE((SELECT obj_id FROM novapanel.managed_objects WHERE kind='%s' AND name='%s'),'none');", kind, marker))
+		if err != nil {
+			return "", err
+		}
+		if owner != "none" {
+			return "", ErrOwnerMismatch
+		}
+		return state, nil
+	}
+	if state != "created" && state != "deleting" {
+		return "", ErrConflict
+	}
+	return state, nil
 }
 
 // ClearUserReservation discards only this job's uncreated reservation, never an object.

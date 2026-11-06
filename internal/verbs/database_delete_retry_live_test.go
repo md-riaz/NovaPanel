@@ -239,8 +239,8 @@ func TestLiveQueueDeleteTransientAfterMarker(t *testing.T) {
 			if j := wait(deleted.Job.ID); j.State != "done" {
 				t.Fatalf("delete: %+v", j)
 			}
-			if got := runSQL(fmt.Sprintf("SELECT phase FROM novapanel.managed_objects WHERE kind='%s' AND name='%s' AND obj_id='%s';", kind, targetName, targetID)); got != "deleting" {
-				t.Fatalf("expected retained deleting marker before reconcile: %q", got)
+			if got := runSQL(fmt.Sprintf("SELECT COUNT(*) FROM novapanel.managed_objects WHERE kind='%s' AND name='%s' AND obj_id='%s';", kind, targetName, targetID)); got != "0" {
+				t.Fatalf("delete retained provenance marker: %q", got)
 			}
 			if verb == "database.delete" {
 				if got := runSQL(fmt.Sprintf("SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='%s';", name)); got != "0" {

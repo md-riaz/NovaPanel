@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,28 @@ import (
 
 	"novapanel/internal/store"
 )
+
+func TestLiveReconcileHistoricalOwner(t *testing.T) {
+	ctx, runner, name, ident := liveFixture(t)
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Tx(ctx, func(tx *sql.Tx) error {
+		_, e := tx.Exec(`INSERT INTO databases(id,name,engine,created) VALUES(?,?,'mariadb',0)`, ident, name)
+		return e
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lock := func(context.Context, string, string, string) (func(), error) { return func() {}, nil }
+	if _, err := Reconcile(ctx, runner, s, lock); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.DatabaseWithUsers(ctx, ident); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("orphan owner remains: %v", err)
+	}
+}
 
 func TestLiveReconcileCreatedAbsentIdentity(t *testing.T) {
 	for _, tc := range []struct {

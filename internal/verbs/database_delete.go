@@ -44,7 +44,8 @@ func databaseDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err e
 	// its SQLite owner survives. F20.9 leaves live jobs to roll forward.
 	started := durable.Step == "delete_started"
 	defer func() {
-		if started && err != nil {
+		var coded *rpc.CodedError
+		if started && err != nil && !(errors.As(err, &coded) && (coded.Code == "conflict" || coded.Code == "precondition_failed")) {
 			err = errors.Join(err, jobs.ErrRetry)
 		}
 	}()
@@ -77,6 +78,19 @@ func databaseDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err e
 	if e = databaseReady(ctx, a.Exec); e != nil {
 		return e
 	}
+	// A foreign or uncertain parent cannot authorize tearing down its children,
+	// nor can its SQLite row be removed while live children would cascade.
+	if e = database.CheckSchemaDelete(ctx, a.Exec, d.Name, d.ID); e != nil {
+		if errors.Is(e, database.ErrOwnerMismatch) && len(users) == 0 {
+			if err := a.Store.DeleteDatabaseForJob(ctx, d.ID, d.Name, j.ID); err != nil {
+				return err
+			}
+		}
+		if errors.Is(e, database.ErrConflict) {
+			return rpc.Errf("conflict", "Database provenance conflict")
+		}
+		return e
+	}
 	if !started {
 		durable.Step = "delete_started"
 		if e = a.Store.UpdateJob(ctx, durable); e != nil {
@@ -91,12 +105,25 @@ func databaseDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err e
 			return err
 		}
 		e = database.ManagedDeleteUser(ctx, a.Exec, u.Username, u.ID)
+		if errors.Is(e, database.ErrOwnerMismatch) {
+			err := a.Store.DeleteDatabaseUser(ctx, u)
+			unlock()
+			if err != nil {
+				return err
+			}
+			return rpc.Errf("conflict", "Database user provenance owner mismatch")
+		}
 		unlock()
+		if errors.Is(e, database.ErrConflict) {
+			return rpc.Errf("conflict", "Database user provenance conflict")
+		}
 		if e != nil {
 			return e
 		}
 	}
-	if e = database.ManagedDelete(ctx, a.Exec, d.Name, d.ID, nil); e != nil {
+	e = database.ManagedDelete(ctx, a.Exec, d.Name, d.ID, nil)
+	mismatch := errors.Is(e, database.ErrOwnerMismatch)
+	if e != nil && !mismatch {
 		if errors.Is(e, database.ErrConflict) {
 			return rpc.Errf("conflict", "Database provenance conflict")
 		}
@@ -108,6 +135,9 @@ func databaseDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err e
 	}
 	if e = deleteForJob(ctx, d.ID, d.Name, j.ID); e != nil {
 		return e
+	}
+	if mismatch {
+		return rpc.Errf("conflict", "Database provenance owner mismatch")
 	}
 	j.Result = json.RawMessage(`{}`)
 	return nil
