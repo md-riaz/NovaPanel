@@ -26,11 +26,11 @@ import (
 // The wrapper stops the actual worker immediately around durable SQLite writes.
 type boundaryStore struct {
 	*store.Store
-	target, boundary string
-	after, hit       bool
-	conflictName     string
-	conflictObserved bool
-	cancel           context.CancelFunc
+	target, boundary         string
+	after, hit               bool
+	conflictName, conflictID string
+	conflictObserved         bool
+	cancel                   context.CancelFunc
 }
 
 func (s *boundaryStore) stop(boundary, job string, after bool) bool {
@@ -49,7 +49,7 @@ func (s *boundaryStore) CommitDatabaseClaim(ctx context.Context, job, verb, key 
 		// Insert a real uniqueness collision after admission, just before the
 		// publication transaction. It remains until the interrupted attempt ends.
 		if err := s.Store.Tx(ctx, func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(ctx, `INSERT INTO databases(id,name,engine,created) VALUES(?,?,'mariadb',0)`, "fixture-conflict", s.conflictName)
+			_, err := tx.ExecContext(ctx, `INSERT INTO databases(id,name,engine,created) VALUES(?,?,'mariadb',0)`, s.conflictID, s.conflictName)
 			return err
 		}); err != nil {
 			return err
@@ -84,7 +84,7 @@ func TestLiveWorkerSQLiteCrashBoundaries(t *testing.T) {
 	if os.Getenv("NOVAPANEL_MARIADB_DISPOSABLE") != "network-none" || err != nil || strings.TrimSpace(string(marker)) != "disposable-network-none" {
 		t.Fatal("disposable fixture required")
 	}
-	for _, boundary := range []string{"publish", "terminal", "delete-sqlite", "delete-terminal", "delete-user-mark", "delete-user-drop", "delete-schema-mark", "delete-schema-drop", "abort-user-mark", "abort-schema-mark", "abort-user-drop", "abort-schema-drop", "abort-terminal"} {
+	for _, boundary := range []string{"publish", "terminal", "delete-sqlite", "delete-terminal", "delete-user-mark", "delete-user-drop", "delete-schema-mark", "delete-schema-drop", "abort-reconcile-marker", "abort-user-mark", "abort-schema-mark", "abort-user-drop", "abort-schema-drop", "abort-terminal"} {
 		for _, after := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s_after_%t", boundary, after), func(t *testing.T) {
 				ctx := context.Background()
@@ -197,12 +197,19 @@ func TestLiveWorkerSQLiteCrashBoundaries(t *testing.T) {
 				c, cancel := context.WithTimeout(ctx, 30*time.Second)
 				defer cancel()
 				point := boundary
-				if point == "delete-terminal" || point == "abort-terminal" {
+				if point == "delete-terminal" || point == "abort-terminal" || point == "abort-reconcile-marker" {
 					point = "terminal"
 				}
 				wrapped := &boundaryStore{Store: s, target: target, boundary: point, after: after, cancel: cancel}
+				if boundary == "abort-reconcile-marker" {
+					wrapped.boundary = "reconcile-marker"
+				}
 				if strings.HasPrefix(boundary, "abort-") {
 					wrapped.conflictName = name
+					wrapped.conflictID, err = id.New()
+					if err != nil {
+						t.Fatal(err)
+					}
 				}
 				if boundary == "delete-sqlite" {
 					a.DeleteDatabaseForJob = func(ctx context.Context, db, name, job string) error {
@@ -233,7 +240,37 @@ func TestLiveWorkerSQLiteCrashBoundaries(t *testing.T) {
 					stop = &crashWorkerSQL{delegate: exec.Real{}, prefix: prefix, contains: contains, after: after, cancel: cancel}
 					a.Exec = stop
 				}
-				if e := a.Jobs.Run(c); e != nil {
+				var competitorJob string
+				protectCompetitor := func() {
+					t.Helper()
+					competitorJob, err = id.New()
+					if err != nil {
+						t.Fatal(err)
+					}
+					args, err := json.Marshal(map[string]string{"db_id": wrapped.conflictID, "name": name})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := s.CreateJob(ctx, store.Job{ID: competitorJob, Verb: "database.delete", ObjectKey: "db:" + wrapped.conflictID, Args: args, State: "running", Effectful: true, Actor: "user", Role: "admin"}); err != nil {
+						t.Fatal(err)
+					}
+					evidence, err := s.ProvenanceIdentity(ctx, "schema", name, wrapped.conflictID)
+					if err != nil || !evidence.Resource || !evidence.Live || evidence.DatabaseID != wrapped.conflictID {
+						t.Fatalf("competitor live identity: %+v %v", evidence, err)
+					}
+				}
+				if boundary == "abort-reconcile-marker" {
+					j := runUntil(target)
+					if j.State != "failed" || j.Code != "conflict" || !wrapped.conflictObserved {
+						t.Fatalf("abort did not finish with publication conflict: %+v", j)
+					}
+					protectCompetitor()
+					stop = &crashWorkerSQL{delegate: exec.Real{}, prefix: "DELETE FROM novapanel.managed_objects", contains: "obj_id='" + intent.DBID + "'", after: after, cancel: cancel}
+					_, e := database.Reconcile(c, stop, s, a.Jobs.LockReconcileDatabase)
+					if !errors.Is(e, context.Canceled) {
+						t.Fatalf("interrupted reconcile: %v", e)
+					}
+				} else if e := a.Jobs.Run(c); e != nil {
 					t.Fatal(e)
 				}
 				if (stop == nil && !wrapped.hit) || (stop != nil && !stop.hit) {
@@ -249,8 +286,8 @@ func TestLiveWorkerSQLiteCrashBoundaries(t *testing.T) {
 					if wrapped.conflictName == "" {
 						return
 					}
-					db, _, err := s.DatabaseWithUsers(ctx, "fixture-conflict")
-					if err != nil || db.ID != "fixture-conflict" || db.Name != name || db.Engine != "mariadb" {
+					db, _, err := s.DatabaseWithUsers(ctx, wrapped.conflictID)
+					if err != nil || db.ID != wrapped.conflictID || db.Name != name || db.Engine != "mariadb" {
 						t.Fatalf("%s: conflict row changed: %+v %v", stage, db, err)
 					}
 				}
@@ -260,7 +297,7 @@ func TestLiveWorkerSQLiteCrashBoundaries(t *testing.T) {
 				if e != nil {
 					t.Fatal(e)
 				}
-				if after && point == "terminal" {
+				if boundary == "abort-reconcile-marker" || (after && point == "terminal") {
 					want := "done"
 					if strings.HasPrefix(boundary, "abort-") {
 						want = "failed"
@@ -286,12 +323,25 @@ func TestLiveWorkerSQLiteCrashBoundaries(t *testing.T) {
 						}
 					}
 				}
-				if !(boundary == "delete-terminal" && after) {
-					if _, e = database.Reconcile(ctx, a.Exec, s, a.Jobs.LockReconcileDatabase); e != nil {
-						t.Fatalf("reconcile interrupted: %v", e)
-					}
+				if wrapped.conflictName != "" && competitorJob == "" {
+					protectCompetitor()
+				}
+				_, e = database.Reconcile(ctx, a.Exec, s, a.Jobs.LockReconcileDatabase)
+				if e != nil {
+					t.Fatalf("reconcile interrupted: %v", e)
 				}
 				assertConflict("interrupted reconcile")
+				// Keep the live competitor out of the replay worker; restore it afterward.
+				if competitorJob != "" {
+					competitor, err := s.GetJob(ctx, competitorJob)
+					if err != nil {
+						t.Fatal(err)
+					}
+					competitor.State = "failed"
+					if err := s.UpdateJob(ctx, competitor); err != nil {
+						t.Fatal(err)
+					}
+				}
 				j = runUntil(target)
 				assertConflict("replay")
 				wantState := "done"
@@ -301,21 +351,42 @@ func TestLiveWorkerSQLiteCrashBoundaries(t *testing.T) {
 				if j.State != wantState {
 					t.Fatalf("replay: %+v", j)
 				}
-				if boundary == "delete-terminal" {
-					rc, stopReconcile := context.WithCancel(ctx)
-					stop := &crashWorkerSQL{delegate: exec.Real{}, prefix: "DELETE FROM novapanel.managed_objects", after: after, cancel: stopReconcile}
-					_, _ = database.Reconcile(rc, stop, s, a.Jobs.LockReconcileDatabase)
-					stopReconcile()
-					if !stop.hit {
-						t.Fatal("reconcile marker removal boundary not reached")
+				if wrapped.conflictName != "" {
+					if j.Code != "conflict" {
+						t.Fatalf("abort code: %+v", j)
+					}
+					query := fmt.Sprintf("SELECT (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='%s'),(SELECT COUNT(*) FROM mysql.user WHERE User='%s' AND Host='127.0.0.1'),(SELECT COUNT(*) FROM novapanel.managed_objects WHERE phase='deleting' AND ((kind='schema' AND name='%s' AND obj_id='%s') OR (kind='user' AND name='%s@127.0.0.1' AND obj_id='%s')));", name, intent.Username, name, intent.DBID, intent.Username, intent.UserID)
+					out, stderr, code, err := (exec.Real{}).Run(ctx, "/usr/bin/mariadb", []string{"--no-defaults", "--protocol=socket", "--user=root", "--batch", "--skip-column-names"}, exec.RunOpts{Stdin: strings.NewReader(query)})
+					wantAbort := "0\t0\t2"
+					if boundary == "abort-reconcile-marker" || (boundary == "abort-terminal" && after) {
+						wantAbort = "0\t0\t0"
+					}
+					if err != nil || code != 0 || strings.TrimSpace(string(out)) != wantAbort {
+						t.Fatalf("abort incomplete: %q want %q: %v %s", out, wantAbort, err, stderr)
+					}
+					if err := s.Tx(ctx, func(tx *sql.Tx) error {
+						result, err := tx.ExecContext(ctx, `DELETE FROM databases WHERE id=? AND name=? AND engine='mariadb'`, wrapped.conflictID, name)
+						if err != nil {
+							return err
+						}
+						n, err := result.RowsAffected()
+						if err != nil {
+							return err
+						}
+						if n != 1 {
+							return fmt.Errorf("competing row deletion affected %d rows", n)
+						}
+						return nil
+					}); err != nil {
+						t.Fatal(err)
+					}
+					if _, _, err := s.DatabaseWithUsers(ctx, wrapped.conflictID); err != sql.ErrNoRows {
+						t.Fatalf("competing row retained: %v", err)
 					}
 				}
-				if _, e = database.Reconcile(ctx, a.Exec, s, a.Jobs.LockReconcileDatabase); e != nil {
+				_, e = database.Reconcile(ctx, a.Exec, s, a.Jobs.LockReconcileDatabase)
+				if e != nil {
 					t.Fatalf("reconcile terminal: %v", e)
-				}
-				assertConflict("terminal reconcile")
-				if strings.HasPrefix(boundary, "abort-") && j.Code != "conflict" {
-					t.Fatalf("abort code: %+v", j)
 				}
 				_, users, e := s.DatabaseWithUsers(ctx, intent.DBID)
 				if strings.HasPrefix(boundary, "delete-") || strings.HasPrefix(boundary, "abort-") {
