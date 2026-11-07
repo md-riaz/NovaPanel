@@ -38,9 +38,9 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 | `service.status` | | RO | ✓ | system:read | | | | systemctl is-active |
 | `service.restart` | | A | | system:write | ✓ | ✓ | | `service:<unit>` |
 | `site.list` / `site.get` | | RO | ✓ | sites:read | | | | |
-| `site.create` | | A | | sites:write | ✓ | | | `site:<name>` |
+| `site.create` | | A | | sites:write | ✓ | | | `site:<name>`+`osuser:<username>` (F20.7 order; per-site OS user) |
 | `site.update` | | A | | sites:write | ✓ | | | `site:<name>` |
-| `site.delete` | | A | | sites:write | ✓ | | ✓ | `site:<name>` (ensure-absent) |
+| `site.delete` | | A | | sites:write | ✓ | | ✓ | `site:<name>`+`osuser:<username>` (ensure-absent; F20.7 order) |
 | `domain.add` / `domain.remove` | | A | | sites:write | ✓ | | | `site:<name>` |
 | `ssl.issue` / `ssl.renew` | | A | | sites:write | ✓ | ✓ | | `site:<name>` (ACME, rate-limited) |
 | `ssl.upload` | | A | | sites:write | ✓ | | ✓ | `site:<name>` — install a user-supplied cert+key (manual) |
