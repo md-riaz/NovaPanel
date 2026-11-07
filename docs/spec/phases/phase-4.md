@@ -433,6 +433,22 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
   `useradd -r -s /usr/sbin/nologin -m -c "novapanel-site=<site_ULID>"` (GECOS marker — `:`/`,` are
   forbidden in GECOS, so the sentinel is `novapanel-site=<ULID>`), group = the site name;
   reserved-name list in `internal/validate`.
+- **Directory provenance (home, ACME webroot, log dir) — no separate marker.** All panel-managed
+  directories live **inside the site's owned tree** and derive provenance from the GECOS-marked owning
+  user + the `sites` row; they carry **no** marker of their own and are **ensured idempotently (F7)**, never
+  adopted. `create`: a pre-existing **non-empty** `/srv/sites/<site>` (or log dir) with **no** matching
+  marked user / `sites` row → `conflict` (never adopt unknown content); an empty/own dir → ensure perms and
+  continue. The ACME challenge webroot (`<docroot>/.well-known/acme-challenge/`) is a projection ensured at
+  issue time under the `2750 site:www-data` docroot — Phase-3 still owns cert state; nothing new here.
+- **Log directory & file perms.** Panel creates `/var/log/novapanel/` `0755 root root`, and per site
+  `/var/log/novapanel/<site>/` owned **`<siteuser>:adm` `0750`** (the FPM worker runs as the site user, so
+  it must own/write its `php-error.log`; operators read via group `adm`; `other` none). The log file itself
+  is `0640 <siteuser>:adm`. Created/ensured at site create (F7), removed on purge with the home.
+- **Legacy (Phase-3) accounts & dirs** are handled by the one-time startup migration (`00` §Panel-owned
+  OS-user provenance): it stamps `novapanel-site=<ULID>` onto an unmarked account matching a live `sites`
+  row; the home/log/ACME dirs under that now-marked user need no separate stamping (provenance is
+  transitive through the owning user + `sites` row). An unmarked account with **no** matching row stays
+  foreign.
 - **OS-user ownership = the GECOS marker, not the name** (`00` §Panel-owned OS-user provenance; F20
   instantiation). The site slug is reusable, so ownership is proven by the account's GECOS
   `novapanel-site=<ULID>` matching the op's `sites.id`, **never by the name alone** (this closes the
