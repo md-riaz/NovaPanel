@@ -12,6 +12,7 @@ import (
 type accountRunner struct {
 	home   string
 	exists bool
+	gecos  string
 	calls  []string
 }
 
@@ -25,13 +26,17 @@ func (r *accountRunner) Run(_ context.Context, p string, args []string, _ runner
 		if !r.exists {
 			return nil, nil, 2, nil
 		}
-		return []byte(fmt.Sprintf("demo:x:%d:%d::%s:/usr/sbin/nologin\n", 12345, 12345, r.home)), nil, 0, nil
+		return []byte(fmt.Sprintf("demo:x:%d:%d:%s:%s:/usr/sbin/nologin\n", 12345, 12345, r.gecos, r.home)), nil, 0, nil
 	case "/usr/sbin/useradd":
 		r.exists = true
+		r.gecos = "novapanel-site=" + siteID
 		return nil, nil, 0, nil
 	}
 	return nil, nil, 1, fmt.Errorf("unexpected program %s", p)
 }
+
+const siteID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+
 func TestEnsureSite(t *testing.T) {
 	root := t.TempDir()
 	sites := filepath.Join(root, "sites")
@@ -45,14 +50,14 @@ func TestEnsureSite(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("scratch ownership test requires root")
 	}
-	e := EnsureSite(context.Background(), r, sites, acme, "demo")
+	e := EnsureSite(context.Background(), r, sites, acme, "demo", siteID)
 	if e != nil {
 		t.Fatal(e)
 	}
 	if len(r.calls) == 0 || r.calls[1] != "/usr/sbin/useradd" {
 		t.Fatal(r.calls)
 	}
-	if e := EnsureSite(context.Background(), r, sites, acme, "demo"); e != nil {
+	if e := EnsureSite(context.Background(), r, sites, acme, "demo", siteID); e != nil {
 		t.Fatal(e)
 	}
 	creates := 0
@@ -64,7 +69,7 @@ func TestEnsureSite(t *testing.T) {
 	if creates != 1 {
 		t.Fatal(r.calls)
 	}
-	for _, p := range []string{r.home, filepath.Join(r.home, "public"), filepath.Join(acme, "demo")} {
+	for _, p := range []string{r.home, filepath.Join(r.home, "public"), filepath.Join(acme, "demo", siteID)} {
 		if _, e := os.Stat(p); e != nil {
 			t.Fatal(e)
 		}
@@ -74,17 +79,28 @@ func TestEnsureSiteRejectsHostileSink(t *testing.T) {
 	root := t.TempDir()
 	r := &accountRunner{}
 	for _, name := range []string{"root", "bad;name", "../demo"} {
-		if e := EnsureSite(context.Background(), r, root, root, name); e == nil {
+		if e := EnsureSite(context.Background(), r, root, root, name, siteID); e == nil {
 			t.Fatal(name)
 		}
 	}
 	if e := os.Symlink(t.TempDir(), filepath.Join(root, "demo")); e != nil {
 		t.Fatal(e)
 	}
-	if e := EnsureSite(context.Background(), r, root, root, "demo"); e == nil {
+	if e := EnsureSite(context.Background(), r, root, root, "demo", siteID); e == nil {
 		t.Fatal("accepted symlink")
 	}
 	if len(r.calls) != 0 {
 		t.Fatal(r.calls)
+	}
+}
+
+func TestEnsureSiteRejectsUnmarkedAccount(t *testing.T) {
+	root := t.TempDir()
+	r := &accountRunner{home: filepath.Join(root, "demo"), exists: true}
+	if err := EnsureSite(context.Background(), r, root, root, "demo", siteID); err == nil {
+		t.Fatal("accepted unmarked account")
+	}
+	if _, err := os.Stat(r.home); !os.IsNotExist(err) {
+		t.Fatal("modified home", err)
 	}
 }

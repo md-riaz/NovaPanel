@@ -211,6 +211,9 @@ func (s *Store) DeleteSite(ctx context.Context, id string) error {
 		if status != "deleting" {
 			return ErrSitePrecondition
 		}
+		if e = deleteSitePHPLimits(ctx, tx, id); e != nil {
+			return e
+		}
 		_, e = tx.ExecContext(ctx, "DELETE FROM sites WHERE id=?", id)
 		return e
 	})

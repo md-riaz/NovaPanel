@@ -19,6 +19,25 @@ import (
 	"time"
 )
 
+type accountRunner struct {
+	root, name, id, marker string
+	other                  runner.Runner
+}
+
+func (r *accountRunner) Run(ctx context.Context, prog string, args []string, opts runner.RunOpts) ([]byte, []byte, int, error) {
+	switch prog {
+	case "/usr/bin/getent":
+		return []byte(r.name + ":x:1001:1001:" + r.marker + r.id + ":" + filepath.Join(r.root, r.name) + ":/usr/sbin/nologin\n"), nil, 0, nil
+	case "/usr/sbin/usermod":
+		r.marker = "novapanel-retained="
+	default:
+		if r.other != nil {
+			return r.other.Run(ctx, prog, args, opts)
+		}
+	}
+	return nil, nil, 0, nil
+}
+
 type siteRunner struct{ calls int }
 
 func (r *siteRunner) Run(context.Context, string, []string, runner.RunOpts) ([]byte, []byte, int, error) {
@@ -52,7 +71,10 @@ func TestQueuedSiteCreate(t *testing.T) {
 				}
 			}
 			provisioned := 0
-			a.ProvisionSite = func(context.Context, string) error {
+			a.ProvisionSite = func(_ context.Context, name, siteID string) error {
+				if name != "demo" || siteID == "" {
+					t.Fatalf("missing durable site identity: %q %q", name, siteID)
+				}
 				provisioned++
 				if fail {
 					return errors.New("injected provision failure")
@@ -71,7 +93,7 @@ func TestQueuedSiteCreate(t *testing.T) {
 					t.Fatalf("validation %+v", r)
 				}
 			}
-			if r := call(`{"name":"demo","type":"php","primary_domain":"demo.test"}`); r.Code != "unsupported" {
+			if r := call(`{"name":"demo","type":"php","primary_domain":"demo.test"}`); r.Code != "precondition_failed" {
 				t.Fatal(r)
 			}
 			r := call(`{"name":"demo","type":"static","primary_domain":"demo.test"}`)

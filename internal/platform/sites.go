@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"golang.org/x/sys/unix"
 	runner "novapanel/internal/exec"
+	"novapanel/internal/php"
 	"novapanel/internal/rpcerr"
 	"novapanel/internal/validate"
 	"os"
@@ -37,7 +38,7 @@ func ensureDirectory(root *os.Root, path string) (*os.File, error) {
 }
 
 // EnsureSite only touches validated directories through held, no-follow descriptors.
-func EnsureSite(ctx context.Context, r runner.Runner, sites, acme, name string) error {
+func EnsureSite(ctx context.Context, r runner.Runner, sites, acme, name, siteID string) error {
 	if e := (&validate.V{}).SiteName(name); e != nil {
 		return e
 	}
@@ -76,23 +77,13 @@ func EnsureSite(ctx context.Context, r runner.Runner, sites, acme, name string) 
 		out, _, code, e := r.Run(ctx, prog, args, runner.RunOpts{})
 		return out, code, e
 	}
-	home := filepath.Join(sites, name)
-	out, code, e := run("/usr/bin/getent", "passwd", name)
-	if e != nil && code != 2 {
+	if e := php.EnsureUser(ctx, r, sites, name, siteID); e != nil {
 		return e
 	}
-	if code == 2 {
-		_, code, e = run("/usr/sbin/useradd", "-r", "-U", "-s", "/usr/sbin/nologin", "-m", "-d", home, "-K", "UMASK=0027", "--", name)
-		if e != nil {
-			return e
-		}
-		if code != 0 {
-			return rpcerr.Errf("agent_error", "Cannot create site account")
-		}
-		out, code, e = run("/usr/bin/getent", "passwd", name)
-		if e != nil {
-			return e
-		}
+	home := filepath.Join(sites, name)
+	out, code, e := run("/usr/bin/getent", "passwd", name)
+	if e != nil {
+		return e
 	}
 	if code != 0 {
 		return rpcerr.Errf("agent_error", "Cannot resolve site account")

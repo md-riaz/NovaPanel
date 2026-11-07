@@ -241,7 +241,7 @@ func (s sslPublication) publication(ctx context.Context, siteID string, j *jobs.
 				site.HSTSMaxAge = *move.Patch.HSTSMaxAge
 			}
 		}
-		d := nginx.Desired{Name: site.Name, Domains: names, Docroot: site.Docroot, ACMERoot: filepath.Join(a.Cfg.ACMEWebroot, site.Name), Maintenance: site.Maintenance, ForceHTTPS: site.ForceHTTPS, HSTSMaxAge: site.HSTSMaxAge, TLS: state, ForceReload: true}
+		d := nginx.Desired{Name: site.Name, Domains: names, Docroot: site.Docroot, ACMERoot: filepath.Join(a.Cfg.ACMEWebroot, site.Name), PHPVersion: site.PHPVersion, Maintenance: site.Maintenance, ForceHTTPS: site.ForceHTTPS, HSTSMaxAge: site.HSTSMaxAge, TLS: state, ForceReload: true}
 		for _, r := range rs {
 			d.Redirects = append(d.Redirects, nginx.Redirect{Source: r.Source, Target: r.Target, Code: r.Code})
 		}

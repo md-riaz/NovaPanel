@@ -8,6 +8,7 @@ import (
 	"novapanel/internal/config"
 	"novapanel/internal/exec"
 	"novapanel/internal/jobs"
+	"novapanel/internal/php"
 	"novapanel/internal/platform"
 	"novapanel/internal/render/nginx"
 	"novapanel/internal/rpcerr"
@@ -23,9 +24,10 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Agent struct {
-	ProvisionSite        func(context.Context, string) error
+	ProvisionSite        func(context.Context, string, string) error
 	DeleteDatabaseForJob func(context.Context, string, string, string) error
 	Nginx                *nginx.Applier
+	PHP                  *php.PoolApplier
 	PasswordFailures     auth.FailureBudgets
 	UnknownFailures      auth.FailureBudgets
 	MFAFailures          auth.FailureBudgets
@@ -45,10 +47,20 @@ func New() *Agent { return NewWithDependencies(config.Defaults(), exec.Real{}, &
 func NewWithDependencies(cfg config.Config, runner exec.Runner, v *validate.V) *Agent {
 	c := realClock{}
 	a := &Agent{Cfg: cfg, Exec: runner, Validate: v, Clock: c, Started: c.Now(),
-		ProvisionSite: func(ctx context.Context, name string) error {
-			return platform.EnsureSite(ctx, runner, cfg.SitesRoot, cfg.ACMEWebroot, name)
+		ProvisionSite: func(ctx context.Context, name, siteID string) error {
+			return platform.EnsureSite(ctx, runner, cfg.SitesRoot, cfg.ACMEWebroot, name, siteID)
 		},
 		Nginx: &nginx.Applier{Root: platform.NginxRoot, Runner: runner, Probe: nginx.StateProbe("http://127.0.0.1:80", "https://127.0.0.1:443", nil)},
+		PHP: &php.PoolApplier{Dir: "/etc/php/8.3/fpm/pool.d", Runner: runner, Probe: func(ctx context.Context) error {
+			_, _, code, err := runner.Run(ctx, platform.Systemctl, []string{"is-active", "--quiet", "php8.3-fpm.service"}, exec.RunOpts{})
+			if err != nil {
+				return err
+			}
+			if code != 0 {
+				return rpcerr.Errf("agent_error", "FPM health probe failed")
+			}
+			return nil
+		}},
 	}
 	a.Nginx.Guard = func(ctx context.Context) error {
 		if a.Store == nil {
