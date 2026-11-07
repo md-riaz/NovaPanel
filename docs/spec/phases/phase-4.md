@@ -62,7 +62,7 @@ mergeable — not one 285-file mega-draft. Drive each with `docs/spec/PHASE-DRIV
 ## Blueprint
 
 ### FPM pool (reference — the 502 fix is load-bearing)
-`/etc/php/<ver>/fpm/pool.d/<site>.conf`:
+`/etc/php/<ver>/fpm/pool.d/novapanel-<site>.conf` (reserved `novapanel-` prefix; never the distro `www.conf`):
 ```ini
 [{{site}}]
 user  = {{siteuser}}
@@ -84,7 +84,7 @@ php_admin_flag[log_errors]         = on
 ```
 - **Pool-file update & recovery (F6 Rule-B / F7 / F8 — no `.lkg`, no durable rollback marker).** The
   committed SQLite row (the site's php version + limits) is the **single source of truth**; the
-  `pool.d/<site>.conf` file is a disposable **projection** of it, so "last-known-good" is the committed
+  `pool.d/novapanel-<site>.conf` file is a disposable **projection** of it, so "last-known-good" is the committed
   SQLite state, not a saved previous copy. `php.set` order: render the **new** config to a temp file →
   `php8.3-fpm -t` validate → atomic `rename` into place → reload → probe, **all before** the SQLite
   checkpoint. On any validate/reload/probe failure, **re-render from the (still-committed, old) SQLite
@@ -95,6 +95,17 @@ php_admin_flag[log_errors]         = on
   to SQLite in every pre/post-rename case — before the checkpoint it rolls back to the old version, after
   it rolls forward to the new — so no previous-marker record or durable rollback intent is needed (and
   none may be added: per-feature durability machinery is out of scope).
+- **Managed pool filename & collision (never clobber distro `www.conf`).** The managed pool file is
+  **`pool.d/novapanel-<site>.conf`** (reserved `novapanel-` prefix — it can never collide with the distro
+  `www.conf`, even for a site literally named `www`) and carries a header line `; novapanel-managed
+  site=<ULID>`. The renderer **only** writes/overwrites/deletes a file that is the managed path **and**
+  carries that header; any pool file lacking it (distro `www.conf`, an operator's file) is **never touched**.
+  A managed-path collision whose header names a **different** ULID → `conflict`, never overwrite.
+- **FPM service lifecycle (zero-pool).** `php8.3-fpm -t` rejects an empty pool set (exit 78) and F0a does
+  **not** require a permanent `www.conf`. So the service is ensure-state on pool count: **≥1 managed pool →
+  ensure `php8.3-fpm` active**; **removing the last managed pool → stop/disable `php8.3-fpm`** (valid —
+  nothing to serve) rather than validate an empty config or keep a dummy pool; the next `site.create`
+  re-ensures it active. Never report success on an invalid (zero-pool, un-`-t`-able) running config.
 - **Compatibility profile is the default.** Do not set `open_basedir` or disable `exec`, `passthru`,
   `shell_exec`, `system`, `proc_open` or `popen` by default. A VPS owner may need Composer, framework
   workers, image/PDF processors and deployment hooks. The per-site Unix uid, `0751` home + `2750
@@ -433,22 +444,31 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
   `useradd -r -s /usr/sbin/nologin -m -c "novapanel-site=<site_ULID>"` (GECOS marker — `:`/`,` are
   forbidden in GECOS, so the sentinel is `novapanel-site=<ULID>`), group = the site name;
   reserved-name list in `internal/validate`.
-- **Directory provenance (home, ACME webroot, log dir) — no separate marker.** All panel-managed
-  directories live **inside the site's owned tree** and derive provenance from the GECOS-marked owning
-  user + the `sites` row; they carry **no** marker of their own and are **ensured idempotently (F7)**, never
-  adopted. `create`: a pre-existing **non-empty** `/srv/sites/<site>` (or log dir) with **no** matching
-  marked user / `sites` row → `conflict` (never adopt unknown content); an empty/own dir → ensure perms and
-  continue. The ACME challenge webroot (`<docroot>/.well-known/acme-challenge/`) is a projection ensured at
-  issue time under the `2750 site:www-data` docroot — Phase-3 still owns cert state; nothing new here.
+- **Directory provenance — home & log dir (transitive, no separate marker).** The per-site **home**
+  (`/srv/sites/<site>`) and **log dir** (`/var/log/novapanel/<site>`) derive provenance **transitively**
+  through the GECOS-marked owning user + `sites` row; no own marker, **ensured idempotently (F7)**, never
+  adopted. `create`: a pre-existing **non-empty** such dir with **no** matching marked user/`sites` row →
+  `conflict`; empty/own → ensure perms, continue.
+- **ACME webroot is a SEPARATE root-owned tree (F16, Phase-3), not under docroot** (correcting #120). The
+  challenge webroot is `/var/www/acme/<site>` (per-site subdir under `acme_webroot=/var/www/acme`,
+  world-traversable B-D8), **root-owned** (`root:root`; provider/nginx read; no group/other write) — **not**
+  `<docroot>/.well-known/…`. It is owned/ensured by **Phase-3/`ssl.*`**, not Phase-4; Phase 4 never moves or
+  rewrites it. Provenance for this separate tree is the **`sites` row + the deterministic
+  `/var/www/acme/<site>` path** (single-VPS root-owned, validated-unique path — the lighter proof, as the
+  site user does not own it): never adopt a pre-existing **non-empty** `/var/www/acme/<site>` with no
+  matching `sites` row (`conflict`); purge removes it, retain keeps it, replay re-ensures it idempotently.
 - **Log directory & file perms.** Panel creates `/var/log/novapanel/` `0755 root root`, and per site
   `/var/log/novapanel/<site>/` owned **`<siteuser>:adm` `0750`** (the FPM worker runs as the site user, so
   it must own/write its `php-error.log`; operators read via group `adm`; `other` none). The log file itself
   is `0640 <siteuser>:adm`. Created/ensured at site create (F7), removed on purge with the home.
 - **Legacy (Phase-3) accounts & dirs** are handled by the one-time startup migration (`00` §Panel-owned
-  OS-user provenance): it stamps `novapanel-site=<ULID>` onto an unmarked account matching a live `sites`
-  row; the home/log/ACME dirs under that now-marked user need no separate stamping (provenance is
-  transitive through the owning user + `sites` row). An unmarked account with **no** matching row stays
-  foreign.
+  OS-user provenance): it stamps `novapanel-site=<ULID>` onto an unmarked account matching a **settled**
+  `sites` row (active/created) **only** — **never** a `creating` row (ownership not yet proven) or a
+  `deleting` row. An interrupted `creating`/`deleting` row is resolved by the owning job's **roll-forward**
+  (which stamps its own account as it proceeds, or fails closed `conflict` on a foreign collision), **not**
+  by the migration — so the migration never stamps a foreign collision. Home/log dirs under a now-marked
+  user need no separate stamping (transitive); the separate ACME tree is proven by its `sites` row + path.
+  An unmarked account with **no** matching row stays foreign.
 - **OS-user ownership = the GECOS marker, not the name** (`00` §Panel-owned OS-user provenance; F20
   instantiation). The site slug is reusable, so ownership is proven by the account's GECOS
   `novapanel-site=<ULID>` matching the op's `sites.id`, **never by the name alone** (this closes the
