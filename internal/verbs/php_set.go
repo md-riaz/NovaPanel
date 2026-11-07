@@ -3,12 +3,14 @@ package verbs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"novapanel/internal/agent"
 	"novapanel/internal/exec"
 	"novapanel/internal/jobs"
 	"novapanel/internal/php"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
+	"time"
 )
 
 type phpSetArgs struct {
@@ -102,6 +104,12 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if err != nil {
 		return err
 	}
+	committed := php.PoolState{Exists: true, MaxChildren: 5, Limits: limits}
+	if j.Attempts > 1 {
+		if err = a.PHP.Recover(ctx, s.Name, committed); err != nil {
+			return err
+		}
+	}
 	if v.Limits.MemoryMB != nil {
 		limits.MemoryMB = v.Limits.MemoryMB
 	}
@@ -111,11 +119,18 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if v.Limits.MaxExecSec != nil {
 		limits.MaxExecSec = v.Limits.MaxExecSec
 	}
-	if err = a.PHP.ApplyLimits(ctx, s.Name, 5, limits); err != nil {
+	if err = a.PHP.ApplyCommitted(ctx, s.Name, php.PoolState{Exists: true, MaxChildren: 5, Limits: limits}, committed); err != nil {
 		return err
 	}
 	if err = a.Store.SetSitePHP(ctx, s.ID, v.Version, limits); err != nil {
-		return jobs.ErrRetry
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		current, readErr := a.Store.SitePHPLimits(cleanup, s.ID)
+		if readErr != nil {
+			return errors.Join(err, readErr, jobs.ErrRetry)
+		}
+		committed.Limits = current
+		return errors.Join(err, a.PHP.Recover(cleanup, s.Name, committed), jobs.ErrRetry)
 	}
 	j.Result = json.RawMessage(`{}`)
 	return nil

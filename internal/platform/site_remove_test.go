@@ -52,7 +52,7 @@ func TestRemoveSiteConfinedAndRetrySafe(t *testing.T) {
 	}
 	r := &removalRunner{home: home}
 	for range 2 {
-		if e := platform.RemoveSite(context.Background(), r, root, "demo", "01ARZ3NDEKTSV4RRFFQ69G5FAV"); e != nil {
+		if e := platform.RemoveSite(context.Background(), r, root, t.TempDir(), "demo", "01ARZ3NDEKTSV4RRFFQ69G5FAV"); e != nil {
 			t.Fatal(e)
 		}
 	}
@@ -66,7 +66,7 @@ func TestRemoveSiteConfinedAndRetrySafe(t *testing.T) {
 		t.Fatal(e)
 	}
 	first := r.calls
-	if e := platform.RemoveSite(context.Background(), r, root, "demo", "01ARZ3NDEKTSV4RRFFQ69G5FAV"); e == nil {
+	if e := platform.RemoveSite(context.Background(), r, root, t.TempDir(), "demo", "01ARZ3NDEKTSV4RRFFQ69G5FAV"); e == nil {
 		t.Fatal("accepted symlink home")
 	}
 	if r.calls != first {
@@ -81,7 +81,7 @@ func TestRemoveSiteMissingAccountPreservesHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := &removalRunner{home: home, deleted: true}
-	if err := platform.RemoveSite(context.Background(), r, root, "demo", "01ARZ3NDEKTSV4RRFFQ69G5FAV"); err == nil {
+	if err := platform.RemoveSite(context.Background(), r, root, t.TempDir(), "demo", "01ARZ3NDEKTSV4RRFFQ69G5FAV"); err == nil {
 		t.Fatal("accepted unowned home")
 	}
 	if _, err := os.Stat(home); err != nil {
@@ -96,7 +96,7 @@ func TestRemoveSiteRejectsUnmarkedBeforeRemovingHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := &removalRunner{home: home, foreign: true}
-	if err := platform.RemoveSite(context.Background(), r, root, "demo", "01ARZ3NDEKTSV4RRFFQ69G5FAV"); err == nil {
+	if err := platform.RemoveSite(context.Background(), r, root, t.TempDir(), "demo", "01ARZ3NDEKTSV4RRFFQ69G5FAV"); err == nil {
 		t.Fatal("accepted unmarked account")
 	}
 	if _, err := os.Stat(home); err != nil {

@@ -17,13 +17,16 @@ import (
 // OpenState initializes root-held state before the transport accepts requests.
 // The runner is injected so tests never need immutable-file capabilities.
 func (a *Agent) OpenState(ctx context.Context) (func() error, error) {
+	if filepath.Clean(a.Cfg.LogDir) == filepath.Clean(filepath.Dir(a.Cfg.DBPath)) || filepath.Clean(a.Cfg.LogDir) == filepath.Clean(filepath.Dir(a.Cfg.SealKeyPath)) {
+		return nil, errors.New("log directory cannot be a private state directory")
+	}
 	if err := prepareTLSRoot(a.Cfg.TLSDir); err != nil {
 		return nil, err
 	}
 	for _, d := range []struct {
 		p string
 		m os.FileMode
-	}{{filepath.Dir(a.Cfg.DBPath), 0700}, {filepath.Dir(a.Cfg.SealKeyPath), 0700}, {a.Cfg.LogDir, 0750}, {filepath.Dir(a.Cfg.SocketPath), 0755}, {a.Cfg.ACMEWebroot, 0755}, {a.Cfg.SitesRoot, 0755}} {
+	}{{filepath.Dir(a.Cfg.DBPath), 0700}, {filepath.Dir(a.Cfg.SealKeyPath), 0700}, {a.Cfg.LogDir, 0755}, {filepath.Dir(a.Cfg.SocketPath), 0755}, {a.Cfg.ACMEWebroot, 0755}, {a.Cfg.SitesRoot, 0755}} {
 		// Reject writable or foreign-owned ancestors too, not only the final directory.
 		for p := d.p; ; p = filepath.Dir(p) {
 			var st unix.Stat_t
@@ -45,6 +48,17 @@ func (a *Agent) OpenState(ctx context.Context) (func() error, error) {
 		}
 		if err := os.MkdirAll(d.p, d.m); err != nil {
 			return nil, err
+		}
+		if d.p == a.Cfg.LogDir {
+			// The log root must be traversable by site users; audit.log stays 0600.
+			if os.Geteuid() == 0 {
+				if err := os.Chown(d.p, 0, 0); err != nil {
+					return nil, err
+				}
+			}
+			if err := os.Chmod(d.p, 0755); err != nil {
+				return nil, err
+			}
 		}
 		if d.m == 0700 {
 			st, err := os.Stat(d.p)

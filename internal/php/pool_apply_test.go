@@ -5,200 +5,183 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	runner "novapanel/internal/exec"
 	"novapanel/internal/jobs"
-	"novapanel/internal/store"
 )
 
 type poolRunner struct {
 	calls int
-	fail  int
-	hook  func(context.Context, int) error
+	hook  func(context.Context, int, []string) error
 }
 
-func (r *poolRunner) Run(ctx context.Context, _ string, _ []string, _ runner.RunOpts) ([]byte, []byte, int, error) {
+func (r *poolRunner) Run(ctx context.Context, _ string, args []string, _ runner.RunOpts) ([]byte, []byte, int, error) {
 	r.calls++
 	if r.hook != nil {
-		if err := r.hook(ctx, r.calls); err != nil {
+		if err := r.hook(ctx, r.calls, args); err != nil {
 			return nil, nil, 0, err
 		}
 	}
-	if r.calls == r.fail {
-		return nil, nil, 1, nil
-	}
 	return nil, nil, 0, nil
 }
-func TestPoolApplyRollbackAndNoop(t *testing.T) {
-	dir := t.TempDir()
+func TestCandidatePreservesMaster(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "pool.d")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	master := "[global]\nerror_log = /custom/log\ninclude=" + dir + "/*.conf\n"
+	if err := os.WriteFile(filepath.Join(filepath.Dir(dir), "php-fpm.conf"), []byte(master), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r := &poolRunner{hook: func(_ context.Context, n int, args []string) error {
+		if n != 1 {
+			return nil
+		}
+		b, err := os.ReadFile(args[len(args)-1])
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(string(b), "error_log = /custom/log") {
+			t.Errorf("lost master config: %s", b)
+		}
+		return nil
+	}}
+	a := PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
+	if err := a.ApplyCommitted(context.Background(), "demo", PoolState{Exists: true, MaxChildren: 3}, PoolState{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRealFPMCandidate(t *testing.T) {
+	bin := "/usr/sbin/php-fpm8.3"
+	if _, err := os.Stat(bin); os.IsNotExist(err) {
+		t.Skip("php-fpm8.3 unavailable")
+	}
+	dir := filepath.Join(t.TempDir(), "pool.d")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	master := "[global]\nerror_log = /dev/null\ninclude=" + dir + "/*.conf\n"
+	if err := os.WriteFile(filepath.Join(filepath.Dir(dir), "php-fpm.conf"), []byte(master), 0600); err != nil {
+		t.Fatal(err)
+	}
+	pool := "[www]\nuser = www-data\ngroup = www-data\nlisten = /tmp/novapanel-test-unused.sock\npm = ondemand\npm.max_children = 2\n"
+	if err := os.WriteFile(filepath.Join(dir, "www.conf"), []byte(pool), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r := &poolRunner{hook: func(_ context.Context, n int, args []string) error {
+		if n == 1 {
+			out, stderr, code, err := (runner.Real{}).Run(context.Background(), bin, args, runner.RunOpts{})
+			if err != nil || code != 0 {
+				t.Errorf("FPM: %s %s (exit %d)", out, stderr, code)
+				return errors.New("FPM validation failed")
+			}
+		}
+		return nil
+	}}
+	a := PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
+	if err := a.ApplyCommitted(context.Background(), "demo", PoolState{}, PoolState{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testPoolDir(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "pool.d")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(dir), "php-fpm.conf"), []byte("[global]\ninclude="+dir+"/*.conf\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestPoolCommittedRecovery(t *testing.T) {
+	ctx := context.Background()
+	dir := testPoolDir(t)
 	r := &poolRunner{}
 	a := PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
-	if err := a.Apply(context.Background(), "demo", 3); err != nil {
+	old := PoolState{Exists: true, MaxChildren: 3}
+	next := PoolState{Exists: true, MaxChildren: 4}
+	absent := PoolState{}
+	if err := a.Recover(ctx, "demo", old); err != nil {
 		t.Fatal(err)
 	}
-	old, err := os.ReadFile(filepath.Join(dir, "demo.conf"))
-	if err != nil {
-		t.Fatal(err)
+	path := filepath.Join(dir, "demo.conf")
+	original, _ := os.ReadFile(path)
+	r.hook = func(_ context.Context, n int, args []string) error {
+		if n == 3 {
+			got, _ := os.ReadFile(path)
+			if string(got) != string(original) {
+				t.Fatal("candidate published before test")
+			}
+			return errors.New("validation failed")
+		}
+		return nil
 	}
-	if err = a.Apply(context.Background(), "demo", 3); err != nil || r.calls != 2 {
-		t.Fatalf("noop: calls=%d err=%v", r.calls, err)
-	}
-	r.fail = 3
-	if err = a.Apply(context.Background(), "demo", 4); err == nil {
+	if err := a.ApplyCommitted(ctx, "demo", next, old); err == nil {
 		t.Fatal("expected validation failure")
 	}
-	got, _ := os.ReadFile(filepath.Join(dir, "demo.conf"))
-	if string(got) != string(old) {
-		t.Fatal("failed validation did not restore")
+	got, _ := os.ReadFile(path)
+	if string(got) != string(original) {
+		t.Fatal("committed state not restored")
 	}
-	r.fail = 0
-	a.Probe = func(context.Context) error { return errors.New("unhealthy") }
-	if err = a.Remove(context.Background(), "demo"); err == nil {
-		t.Fatal("expected probe failure")
+	r.hook = nil
+	if err := a.ApplyCommitted(ctx, "demo", next, old); err != nil {
+		t.Fatal(err)
 	}
-	got, _ = os.ReadFile(filepath.Join(dir, "demo.conf"))
-	if string(got) != string(old) {
-		t.Fatal("failed removal did not restore")
+	// Simulate crash after publish, before SQLite checkpoint.
+	if err := a.Recover(ctx, "demo", old); err != nil {
+		t.Fatal(err)
 	}
-}
-func TestPoolRollbackFailuresRetry(t *testing.T) {
-	for _, stage := range []string{"test-restore", "reload-restore", "probe-restore", "reload-recovery", "probe-recovery", "cancel-recovery"} {
-		t.Run(stage, func(t *testing.T) {
-			dir := t.TempDir()
-			r := &poolRunner{}
-			a := PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
-			if err := a.Apply(context.Background(), "demo", 3); err != nil {
-				t.Fatal(err)
-			}
-			old, err := os.ReadFile(filepath.Join(dir, "demo.conf.lkg"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			block := filepath.Join(dir, "demo.conf.tmp")
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			inject := func() error {
-				if err := os.Mkdir(block, 0700); err != nil {
-					return err
-				}
-				return errors.New("injected failure")
-			}
-			r.hook = func(c context.Context, n int) error {
-				switch {
-				case stage == "test-restore" && n == 3, stage == "reload-restore" && n == 4:
-					return inject()
-				case stage == "reload-recovery" && (n == 4 || n == 5), stage == "probe-recovery" && n == 5:
-					return errors.New("injected command failure")
-				case stage == "cancel-recovery" && n == 4:
-					cancel()
-					return context.Canceled
-				case stage == "cancel-recovery" && n == 5:
-					if c.Err() != nil {
-						t.Fatal("recovery context canceled")
-					}
-					return errors.New("recovery failure")
-				}
-				return nil
-			}
-			if stage == "probe-restore" {
-				a.Probe = func(context.Context) error { return inject() }
-			}
-			if stage == "probe-recovery" {
-				a.Probe = func(context.Context) error { return errors.New("probe failure") }
-			}
-			err = a.Apply(ctx, "demo", 4)
-			if !errors.Is(err, jobs.ErrRetry) {
-				t.Fatalf("expected retry, got %v", err)
-			}
-			if stage == "reload-recovery" || stage == "probe-recovery" || stage == "cancel-recovery" {
-				got, e := os.ReadFile(filepath.Join(dir, "demo.conf"))
-				if e != nil || string(got) != string(old) {
-					t.Fatalf("restore: %v", e)
-				}
-			}
-			if stage == "test-restore" || stage == "reload-restore" || stage == "probe-restore" {
-				if err := os.Remove(block); err != nil {
-					t.Fatal(err)
-				}
-			}
-			r.hook = nil
-			a.Probe = func(context.Context) error { return nil }
-			if err := a.Apply(context.Background(), "demo", 4); err != nil {
-				t.Fatal(err)
-			}
-			got, e := os.ReadFile(filepath.Join(dir, "demo.conf"))
-			if e != nil {
-				t.Fatal(e)
-			}
-			good, e := os.ReadFile(filepath.Join(dir, "demo.conf.lkg"))
-			if e != nil || string(good) != string(got) || string(got) == string(old) {
-				t.Fatalf("retry did not converge: %v", e)
-			}
-		})
+	got, _ = os.ReadFile(path)
+	if string(got) != string(original) {
+		t.Fatal("replay did not restore committed state")
+	}
+	// Crash after checkpoint: recovery projects the new state, regardless of disk.
+	if err := a.Recover(ctx, "demo", next); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = os.ReadFile(path)
+	if string(got) == string(original) {
+		t.Fatal("post-checkpoint recovery stale")
+	}
+	if err := a.Recover(ctx, "demo", absent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected absent pool: %v", err)
+	}
+	if _, err := os.Stat(path + ".lkg"); !os.IsNotExist(err) {
+		t.Fatal("unexpected marker")
 	}
 }
-
-func TestPoolRemoveMarkerCleanupRetry(t *testing.T) {
-	for _, stage := range []string{"remove", "sync"} {
-		t.Run(stage, func(t *testing.T) {
-			dir := t.TempDir()
-			r := &poolRunner{}
-			a := PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
-			ctx := context.Background()
-			if err := a.Apply(ctx, "demo", 3); err != nil {
-				t.Fatal(err)
-			}
-			injected := errors.New("cleanup failure")
-			if stage == "remove" {
-				a.removeMarker = func(*os.Root, string) error { return injected }
-			} else {
-				a.syncDir = func(*os.Root) error { return injected }
-			}
-			err := a.Remove(ctx, "demo")
-			if !errors.Is(err, injected) || !errors.Is(err, jobs.ErrRetry) {
-				t.Fatalf("expected retry: %v", err)
-			}
-			if _, err := os.Stat(filepath.Join(dir, "demo.conf")); !os.IsNotExist(err) {
-				t.Fatalf("pool still exists: %v", err)
-			}
-			a.removeMarker, a.syncDir = nil, nil
-			if err := a.Remove(ctx, "demo"); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := os.Stat(filepath.Join(dir, "demo.conf.lkg")); !os.IsNotExist(err) {
-				t.Fatalf("marker still exists: %v", err)
-			}
-		})
-	}
-}
-
-func TestPoolApplyLimits(t *testing.T) {
-	dir := t.TempDir()
+func TestPoolRecoveryFailureRetries(t *testing.T) {
+	ctx := context.Background()
 	r := &poolRunner{}
-	a := PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
-	n := 128
-	limits := store.PHPLimits{MemoryMB: &n}
-	if err := a.ApplyLimits(context.Background(), "demo", 3, limits); err != nil {
+	a := PoolApplier{Dir: testPoolDir(t), Runner: r, Probe: func(context.Context) error { return nil }}
+	old := PoolState{Exists: true, MaxChildren: 3}
+	next := PoolState{Exists: true, MaxChildren: 4}
+	if err := a.Recover(ctx, "demo", old); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.ApplyLimits(context.Background(), "demo", 3, limits); err != nil || r.calls != 2 {
-		t.Fatalf("noop: calls=%d err=%v", r.calls, err)
+	r.hook = func(ctx context.Context, n int, _ []string) error {
+		if n >= 4 {
+			return errors.New("reload failure")
+		}
+		return nil
 	}
-	old, err := os.ReadFile(filepath.Join(dir, "demo.conf"))
-	if err != nil {
+	if err := a.ApplyCommitted(ctx, "demo", next, old); !errors.Is(err, jobs.ErrRetry) {
+		t.Fatalf("expected retry: %v", err)
+	}
+	r.hook = nil
+	if err := a.Recover(ctx, "demo", old); err != nil {
 		t.Fatal(err)
-	}
-	n = 0
-	if err := a.ApplyLimits(context.Background(), "demo", 3, limits); err == nil || r.calls != 2 {
-		t.Fatal("invalid limit had side effects")
-	}
-	got, err := os.ReadFile(filepath.Join(dir, "demo.conf"))
-	if err != nil || string(got) != string(old) {
-		t.Fatal("invalid limit changed pool")
 	}
 }
-
 func TestPoolRefusesSymlink(t *testing.T) {
 	dir := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside")
@@ -209,70 +192,11 @@ func TestPoolRefusesSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := PoolApplier{Dir: dir, Runner: &poolRunner{}, Probe: func(context.Context) error { return nil }}
-	if err := a.Apply(context.Background(), "demo", 3); err == nil {
+	if err := a.Recover(context.Background(), "demo", PoolState{Exists: true, MaxChildren: 3}); err == nil {
 		t.Fatal("accepted symlink")
 	}
 	b, _ := os.ReadFile(outside)
 	if string(b) != "safe" {
 		t.Fatal("modified outside file")
-	}
-}
-
-func TestPoolLKGRecoveryFailureRequestsRetry(t *testing.T) {
-	dir := t.TempDir()
-	r := &poolRunner{fail: 5}
-	a := PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
-	if err := a.Apply(context.Background(), "demo", 3); err != nil {
-		t.Fatal(err)
-	}
-	block := filepath.Join(dir, "demo.conf.lkg.tmp")
-	a.Probe = func(context.Context) error { return os.Mkdir(block, 0700) }
-	if err := a.Apply(context.Background(), "demo", 4); !errors.Is(err, jobs.ErrRetry) {
-		t.Fatalf("expected retry on failed recovery: %v", err)
-	}
-}
-
-func TestPoolLKGWriteFailureRestoresAndRetry(t *testing.T) {
-	dir := t.TempDir()
-	r := &poolRunner{}
-	a := PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
-	ctx := context.Background()
-	if err := a.Apply(ctx, "demo", 3); err != nil {
-		t.Fatal(err)
-	}
-	old, err := os.ReadFile(filepath.Join(dir, "demo.conf"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	block := filepath.Join(dir, "demo.conf.lkg.tmp")
-	a.Probe = func(context.Context) error { return os.Mkdir(block, 0700) }
-	if err := a.Apply(ctx, "demo", 4); err == nil {
-		t.Fatal("expected LKG failure")
-	}
-	got, err := os.ReadFile(filepath.Join(dir, "demo.conf"))
-	if err != nil || string(got) != string(old) {
-		t.Fatalf("config not restored: %v", err)
-	}
-	good, err := os.ReadFile(filepath.Join(dir, "demo.conf.lkg"))
-	if err != nil || string(good) != string(old) {
-		t.Fatalf("LKG changed: %v", err)
-	}
-	if r.calls != 5 {
-		t.Fatalf("expected recovery reload, calls=%d", r.calls)
-	}
-	if err := os.Remove(block); err != nil {
-		t.Fatal(err)
-	}
-	a.Probe = func(context.Context) error { return nil }
-	if err := a.Apply(ctx, "demo", 4); err != nil {
-		t.Fatal(err)
-	}
-	got, err = os.ReadFile(filepath.Join(dir, "demo.conf"))
-	if err != nil || string(got) == string(old) {
-		t.Fatalf("retry did not apply: %v", err)
-	}
-	good, err = os.ReadFile(filepath.Join(dir, "demo.conf.lkg"))
-	if err != nil || string(good) != string(got) {
-		t.Fatalf("retry LKG mismatch: %v", err)
 	}
 }

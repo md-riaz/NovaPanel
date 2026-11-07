@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"golang.org/x/sys/unix"
+	"io"
 	runner "novapanel/internal/exec"
 	"novapanel/internal/php"
 	"novapanel/internal/rpcerr"
@@ -38,7 +39,7 @@ func ensureDirectory(root *os.Root, path string) (*os.File, error) {
 }
 
 // EnsureSite only touches validated directories through held, no-follow descriptors.
-func EnsureSite(ctx context.Context, r runner.Runner, sites, acme, name, siteID string) error {
+func EnsureSite(ctx context.Context, r runner.Runner, sites, acme, logs, name, siteID string) error {
 	if e := (&validate.V{}).SiteName(name); e != nil {
 		return e
 	}
@@ -48,7 +49,7 @@ func EnsureSite(ctx context.Context, r runner.Runner, sites, acme, name, siteID 
 			root.Close()
 		}
 	}()
-	for _, p := range []string{sites, acme} {
+	for _, p := range []string{sites, acme, logs} {
 		resolved, e := filepath.EvalSymlinks(p)
 		if e != nil {
 			return e
@@ -76,6 +77,33 @@ func EnsureSite(ctx context.Context, r runner.Runner, sites, acme, name, siteID 
 	run := func(prog string, args ...string) ([]byte, int, error) {
 		out, _, code, e := r.Run(ctx, prog, args, runner.RunOpts{})
 		return out, code, e
+	}
+	// Check before useradd so foreign content cannot acquire provenance.
+	if e := php.VerifyUser(ctx, r, sites, name, siteID); e != nil {
+		var coded *rpcerr.CodedError
+		if !errors.As(e, &coded) || coded.Code != "not_found" {
+			return e
+		}
+		for _, root := range []*os.Root{roots[0], roots[1], roots[2]} {
+			f, err := root.OpenFile(name, os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			_, err = f.Readdirnames(1)
+			closeErr := f.Close()
+			if err == nil {
+				return rpcerr.Errf("conflict", "unowned site directory is not empty")
+			}
+			if !errors.Is(err, io.EOF) {
+				return err
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+		}
 	}
 	if e := php.EnsureUser(ctx, r, sites, name, siteID); e != nil {
 		return e
@@ -112,6 +140,18 @@ func EnsureSite(ctx context.Context, r runner.Runner, sites, acme, name, siteID 
 	if e != nil || webgid <= 0 {
 		return rpcerr.Errf("agent_error", "Invalid nginx group")
 	}
+	out, code, e = run("/usr/bin/getent", "group", "adm")
+	if e != nil {
+		return e
+	}
+	fields = strings.Split(strings.TrimSpace(string(out)), ":")
+	if code != 0 || len(fields) != 4 || fields[0] != "adm" {
+		return rpcerr.Errf("agent_error", "Cannot resolve log group")
+	}
+	admgid, e := strconv.Atoi(fields[2])
+	if e != nil || admgid <= 0 {
+		return rpcerr.Errf("agent_error", "Invalid log group")
+	}
 	for _, dir := range []struct {
 		root     *os.Root
 		path     string
@@ -119,6 +159,7 @@ func EnsureSite(ctx context.Context, r runner.Runner, sites, acme, name, siteID 
 		mode     os.FileMode
 	}{
 		{roots[0], name, uid, gid, 0751}, {roots[0], filepath.Join(name, "public"), uid, webgid, os.ModeSetgid | 0750},
+		{roots[2], name, uid, admgid, 0750},
 		{roots[1], name, 0, 0, 0755}, {roots[1], filepath.Join(name, ".well-known"), 0, 0, 0755}, {roots[1], filepath.Join(name, ".well-known", "acme-challenge"), 0, 0, 0755},
 	} {
 		f, e := ensureDirectory(dir.root, dir.path)
@@ -141,5 +182,32 @@ func EnsureSite(ctx context.Context, r runner.Runner, sites, acme, name, siteID 
 			return fmt.Errorf("site directory: %w", e)
 		}
 	}
-	return nil
+	logDir, e := ensureDirectory(roots[2], name)
+	if e != nil {
+		return e
+	}
+	defer logDir.Close()
+	fd, e := unix.Openat(int(logDir.Fd()), "php-error.log", unix.O_WRONLY|unix.O_CREAT|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0640)
+	if e != nil {
+		return e
+	}
+	file := os.NewFile(uintptr(fd), "php-error.log")
+	info, e := file.Stat()
+	var logStat unix.Stat_t
+	if e == nil {
+		e = unix.Fstat(fd, &logStat)
+	}
+	if e == nil && logStat.Nlink != 1 {
+		e = rpcerr.Errf("conflict", "Invalid site log file")
+	}
+	if e == nil && !info.Mode().IsRegular() {
+		e = rpcerr.Errf("conflict", "Invalid site log file")
+	}
+	if e == nil {
+		e = file.Chown(uid, admgid)
+	}
+	if e == nil {
+		e = file.Chmod(0640)
+	}
+	return errors.Join(e, file.Close())
 }

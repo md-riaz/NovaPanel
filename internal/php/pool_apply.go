@@ -1,13 +1,14 @@
 package php
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -24,31 +25,67 @@ import (
 // must be administrator-owned. Callers serialize site lifecycle operations and
 // verify site ownership before removing or replacing a pool.
 type PoolApplier struct {
-	Dir          string
-	Runner       runner.Runner
-	Probe        func(context.Context) error
-	mu           sync.Mutex
-	removeMarker func(*os.Root, string) error // test seam; nil uses Root.Remove
-	syncDir      func(*os.Root) error         // test seam; nil uses poolSync
+	Dir    string
+	Runner runner.Runner
+	Probe  func(context.Context) error
+	mu     sync.Mutex
 }
 
+// PoolState is a projection of committed SQLite state. Exists false represents
+// the absence of a pool; callers must derive it under the site lifecycle lock.
+type PoolState struct {
+	Exists      bool
+	MaxChildren int
+	Limits      store.PHPLimits
+}
+
+// Legacy entry points cannot safely infer committed state from a derived file.
 func (a *PoolApplier) Apply(ctx context.Context, name string, maxChildren int) error {
-	return a.ApplyLimits(ctx, name, maxChildren, store.PHPLimits{})
+	return rpcerr.Errf("agent_error", "committed PHP state required")
+}
+func (a *PoolApplier) ApplyLimits(ctx context.Context, name string, maxChildren int, limits store.PHPLimits) error {
+	return rpcerr.Errf("agent_error", "committed PHP state required")
+}
+func (a *PoolApplier) Remove(ctx context.Context, name string) error {
+	return rpcerr.Errf("agent_error", "committed PHP state required")
 }
 
-// ApplyLimits validates and applies a pool with the persisted PHP overrides.
-func (a *PoolApplier) ApplyLimits(ctx context.Context, name string, maxChildren int, limits store.PHPLimits) error {
-	b, err := RenderPoolLimits(name, maxChildren, limits)
+func renderState(name string, state PoolState) ([]byte, error) {
+	if err := (&validate.V{}).SiteName(name); err != nil {
+		return nil, err
+	}
+	if !state.Exists {
+		return nil, nil
+	}
+	return RenderPoolLimits(name, state.MaxChildren, state.Limits)
+}
+
+// ApplyCommitted tests the candidate before publishing it. On failure it restores
+// the caller's committed SQLite projection, never the previous disk contents.
+func (a *PoolApplier) ApplyCommitted(ctx context.Context, name string, desired, committed PoolState) error {
+	b, err := renderState(name, desired)
 	if err != nil {
 		return err
 	}
-	return a.change(ctx, name, b, false)
-}
-func (a *PoolApplier) Remove(ctx context.Context, name string) error {
-	if err := (&validate.V{}).SiteName(name); err != nil {
+	old, err := renderState(name, committed)
+	if err != nil {
 		return err
 	}
-	return a.change(ctx, name, nil, true)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.apply(ctx, name, b, old, false)
+}
+
+// Recover unconditionally republishes and reloads the committed projection;
+// use it on startup/replay even when the on-disk bytes already match.
+func (a *PoolApplier) Recover(ctx context.Context, name string, committed PoolState) error {
+	b, err := renderState(name, committed)
+	if err != nil {
+		return err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.apply(ctx, name, b, b, true)
 }
 
 func poolRoot(path string) (*os.Root, error) {
@@ -137,9 +174,84 @@ func (a *PoolApplier) command(ctx context.Context, bin string, args ...string) e
 	}
 	return nil
 }
-func (a *PoolApplier) change(ctx context.Context, name string, b []byte, remove bool) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+
+// testCandidate builds a transient master configuration listing the live pool
+// set with this pool replaced by the candidate. The candidate is not included
+// by the normal *.conf glob and cannot be served before the atomic rename.
+func (a *PoolApplier) testCandidate(ctx context.Context, root *os.Root, file string, b []byte) error {
+	if strings.ContainsAny(a.Dir, " \t\r\n;=\"'") {
+		return rpcerr.Errf("invalid_argument", "invalid pool directory")
+	}
+	entries, err := os.ReadDir(a.Dir)
+	if err != nil {
+		return err
+	}
+	var paths []string
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".conf") || e.Name() == file {
+			continue
+		}
+		if strings.ContainsAny(e.Name(), " \t\r\n;=\"'") {
+			return rpcerr.Errf("invalid_argument", "invalid pool filename")
+		}
+		if _, err := poolRead(root, e.Name()); err != nil {
+			return err
+		}
+		paths = append(paths, filepath.Join(a.Dir, e.Name()))
+	}
+	candidate := file + ".candidate"
+	master := file + ".test"
+	defer root.Remove(master)
+	if b != nil {
+		if err := poolWrite(root, candidate, b); err != nil {
+			return err
+		}
+		paths = append(paths, filepath.Join(a.Dir, candidate))
+	}
+	sort.Strings(paths)
+	// Preserve the installed master verbatim except for its pool glob. Includes are
+	// expanded at their original position: FPM configuration is order-sensitive.
+	main, err := os.ReadFile(filepath.Join(filepath.Dir(a.Dir), "php-fpm.conf"))
+	if err != nil {
+		return err
+	}
+	glob := filepath.Join(a.Dir, "*.conf")
+	include := regexp.MustCompile(`(?i)^\s*include\s*=\s*([^\s;]+)\s*(?:;.*)?$`)
+	lines := strings.Split(string(main), "\n")
+	count := 0
+	for i, line := range lines {
+		m := include.FindStringSubmatch(line)
+		if len(m) != 2 || m[1] != glob {
+			continue
+		}
+		count++
+		var replacement strings.Builder
+		for _, path := range paths {
+			fmt.Fprintf(&replacement, "include = %s\n", path)
+		}
+		lines[i] = strings.TrimSuffix(replacement.String(), "\n")
+	}
+	if count != 1 {
+		return rpcerr.Errf("agent_error", "FPM master must include the pool directory exactly once")
+	}
+	if err := poolWrite(root, master, []byte(strings.Join(lines, "\n"))); err != nil {
+		return err
+	}
+	return a.command(ctx, "/usr/sbin/php-fpm8.3", "-t", "-y", filepath.Join(a.Dir, master))
+}
+
+func poolPublish(root *os.Root, file string, b []byte) error {
+	if b != nil {
+		return poolWrite(root, file, b)
+	}
+	err := root.Remove(file)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return poolSync(root)
+}
+
+func (a *PoolApplier) apply(ctx context.Context, name string, b, committed []byte, recovery bool) error {
 	if a.Runner == nil || a.Probe == nil {
 		return rpcerr.Errf("agent_error", "FPM apply dependencies unavailable")
 	}
@@ -149,129 +261,46 @@ func (a *PoolApplier) change(ctx context.Context, name string, b []byte, remove 
 	}
 	defer root.Close()
 	file := name + ".conf"
-	old, err := poolRead(root, file)
-	exists := err == nil
-	if err != nil && !os.IsNotExist(err) {
+	// Refuse symlinks and special files even when removing or overwriting.
+	if _, err = poolRead(root, file); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	good, gerr := poolRead(root, file+".lkg")
-	if gerr != nil && !os.IsNotExist(gerr) {
-		return gerr
-	}
-	if remove && !exists && os.IsNotExist(gerr) {
-		// A previous cleanup may have unlinked the marker but failed to sync.
-		if err := a.syncPoolDir(root); err != nil {
-			return errors.Join(err, jobs.ErrRetry)
-		}
-		return nil
-	}
-	if !remove && exists && gerr == nil && bytes.Equal(old, b) && bytes.Equal(good, b) {
-		return nil
-	}
-	// Last-known-good is authoritative even after an interrupted previous apply.
 	restore := func() error {
-		if gerr == nil {
-			return poolWrite(root, file, good)
+		c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if err := poolPublish(root, file, committed); err != nil {
+			return err
 		}
-		e := root.Remove(file)
-		if os.IsNotExist(e) {
-			return nil
+		if err := a.command(c, "/usr/bin/systemctl", "reload", "php8.3-fpm.service"); err != nil {
+			return err
 		}
-		if e != nil {
-			return e
-		}
-		return poolSync(root)
+		return a.Probe(c)
 	}
-	if remove {
-		err = nil
-		if exists {
-			err = root.Remove(file)
+	defer root.Remove(file + ".candidate")
+	if err = a.testCandidate(ctx, root, file, b); err == nil {
+		if b == nil {
+			err = poolPublish(root, file, nil)
+		} else {
+			err = root.Rename(file+".candidate", file)
 			if err == nil {
 				err = poolSync(root)
 			}
 		}
-	} else {
-		err = poolWrite(root, file, b)
 	}
-	if err != nil {
-		if rerr := restore(); rerr != nil {
-			return errors.Join(err, rerr, jobs.ErrRetry)
-		}
-		return err
+	if err == nil {
+		err = a.command(ctx, "/usr/bin/systemctl", "reload", "php8.3-fpm.service")
 	}
-	if err = a.command(ctx, "/usr/sbin/php-fpm8.3", "-t"); err != nil {
-		if rerr := restore(); rerr != nil {
-			return errors.Join(err, rerr, jobs.ErrRetry)
-		}
-		return err
-	}
-	err = a.command(ctx, "/usr/bin/systemctl", "reload", "php8.3-fpm.service")
 	if err == nil {
 		err = a.Probe(ctx)
 	}
-	if err != nil {
-		rerr := restore()
-		if rerr != nil {
-			return errors.Join(err, rerr, jobs.ErrRetry)
-		}
-		recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer cancel()
-		if rerr = a.command(recovery, "/usr/bin/systemctl", "reload", "php8.3-fpm.service"); rerr != nil {
-			return errors.Join(err, rerr, jobs.ErrRetry)
-		}
-		return err
+	if err == nil {
+		return nil
 	}
-	if !remove {
-		if err = poolWrite(root, file+".lkg", b); err == nil {
-			return nil
-		}
-		// The rename may have succeeded even if syncing the directory failed.
-		// Restore the marker too, so a later attempt cannot mistake the new
-		// configuration for committed state.
-		current, readErr := poolRead(root, file+".lkg")
-		var markerErr error
-		if gerr == nil {
-			if readErr != nil || !bytes.Equal(current, good) {
-				markerErr = poolWrite(root, file+".lkg", good)
-			}
-		} else if readErr == nil {
-			markerErr = root.Remove(file + ".lkg")
-			if markerErr == nil {
-				markerErr = poolSync(root)
-			}
-		} else if !os.IsNotExist(readErr) {
-			markerErr = readErr
-		}
-		restoreErr := restore()
-		var reloadErr error
-		if restoreErr == nil {
-			recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-			reloadErr = a.command(recovery, "/usr/bin/systemctl", "reload", "php8.3-fpm.service")
-			cancel()
-		}
-		if markerErr != nil || restoreErr != nil || reloadErr != nil {
-			return errors.Join(err, markerErr, restoreErr, reloadErr, jobs.ErrRetry)
-		}
-		return err
+	if recovery {
+		return errors.Join(err, jobs.ErrRetry)
 	}
-	if gerr == nil {
-		removeMarker := a.removeMarker
-		if removeMarker == nil {
-			removeMarker = (*os.Root).Remove
-		}
-		if err = removeMarker(root, file+".lkg"); err != nil && !os.IsNotExist(err) {
-			return errors.Join(err, jobs.ErrRetry)
-		}
-		if err = a.syncPoolDir(root); err != nil {
-			return errors.Join(err, jobs.ErrRetry)
-		}
+	if rerr := restore(); rerr != nil {
+		return errors.Join(err, rerr, jobs.ErrRetry)
 	}
-	return nil
-}
-
-func (a *PoolApplier) syncPoolDir(root *os.Root) error {
-	if a.syncDir != nil {
-		return a.syncDir(root)
-	}
-	return poolSync(root)
+	return err
 }

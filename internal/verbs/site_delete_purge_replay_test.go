@@ -62,7 +62,8 @@ func TestPHPSitePurgeCrashReplay(t *testing.T) {
 			a.Audit = log
 			a.Cfg.SitesRoot = filepath.Join(root, "sites")
 			a.Cfg.TLSDir = filepath.Join(root, "tls")
-			for _, p := range []string{filepath.Join(a.Cfg.SitesRoot, "demo", "public"), filepath.Join(root, "nginx", "sites-available"), filepath.Join(root, "nginx", "sites-enabled"), filepath.Join(root, "pool")} {
+			a.Cfg.LogDir = filepath.Join(root, "logs")
+			for _, p := range []string{a.Cfg.LogDir, filepath.Join(a.Cfg.SitesRoot, "demo", "public"), filepath.Join(root, "nginx", "sites-available"), filepath.Join(root, "nginx", "sites-enabled"), filepath.Join(root, "pool")} {
 				if err = os.MkdirAll(p, 0755); err != nil {
 					t.Fatal(err)
 				}
@@ -72,7 +73,12 @@ func TestPHPSitePurgeCrashReplay(t *testing.T) {
 			r := &purgeRunner{root: a.Cfg.SitesRoot, id: sid}
 			a.Exec = r
 			a.Nginx = &nginx.Applier{Root: filepath.Join(root, "nginx"), Runner: r, Probe: func(context.Context, nginx.Desired) error { return nil }}
-			a.PHP = &php.PoolApplier{Dir: filepath.Join(root, "pool"), Runner: r, Probe: func(context.Context) error { return nil }}
+			poolDir := filepath.Join(root, "pool")
+			master := "[global]\npid = /run/php/php8.3-fpm.pid\nerror_log = /var/log/php8.3-fpm.log\ninclude = " + filepath.Join(poolDir, "*.conf") + "\n"
+			if err = os.WriteFile(filepath.Join(root, "php-fpm.conf"), []byte(master), 0644); err != nil {
+				t.Fatal(err)
+			}
+			a.PHP = &php.PoolApplier{Dir: poolDir, Runner: r, Probe: func(context.Context) error { return nil }}
 			if err = os.WriteFile(filepath.Join(root, "pool", "demo.conf"), []byte("pool"), 0600); err != nil {
 				t.Fatal(err)
 			}

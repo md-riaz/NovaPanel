@@ -119,6 +119,9 @@ func serve(ctx context.Context, a *agent.Agent) (err error) {
 	s.WebUID = a.Cfg.WebUID
 	s.DefaultDeadlineMs = a.Cfg.DeadlineDefaultMs
 	s.ConfigureJobs()
+	if err = migrateLegacyUsers(ctx, a); err != nil {
+		return err
+	}
 	l, err := listenSocket(a.Cfg.SocketPath, a.Cfg.WebGID)
 	if err != nil {
 		return err

@@ -119,7 +119,8 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 		}
 		return rpc.Errf("precondition_failed", "Attached databases: %s", strings.Join(attached, ", "))
 	}
-	if s.Status != "deleting" {
+	wasDeleting := s.Status == "deleting"
+	if !wasDeleting {
 		if e = a.Store.SetSiteStatus(ctx, s.ID, "deleting"); e != nil {
 			return e
 		}
@@ -148,7 +149,12 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 			if e = php.VerifyUserForDelete(ctx, a.Exec, a.Cfg.SitesRoot, s.Name, s.ID); e != nil {
 				return e
 			}
-			if e = a.PHP.Remove(ctx, s.Name); e != nil {
+			// Deleting is already committed, so absence is the authoritative projection.
+			if wasDeleting || j.Attempts > 1 {
+				if e = a.PHP.Recover(ctx, s.Name, php.PoolState{}); e != nil {
+					return e
+				}
+			} else if e = a.PHP.ApplyCommitted(ctx, s.Name, php.PoolState{}, php.PoolState{}); e != nil {
 				return e
 			}
 			if v.PurgeFiles {
@@ -160,6 +166,12 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 			}
 		}
 		if poolRemoved {
+			// The durable step proves this job verified ownership before removal.
+			if wasDeleting && j.Step == "site_pool_removed" {
+				if e = a.PHP.Recover(ctx, s.Name, php.PoolState{}); e != nil {
+					return e
+				}
+			}
 			j.Step = durable.Step
 		}
 	}
@@ -172,7 +184,7 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 		}
 	}
 	if v.PurgeFiles {
-		if e = platform.RemoveSite(ctx, a.Exec, a.Cfg.SitesRoot, s.Name, s.ID); e != nil {
+		if e = platform.RemoveSite(ctx, a.Exec, a.Cfg.SitesRoot, a.Cfg.LogDir, s.Name, s.ID); e != nil {
 			return e
 		}
 	}

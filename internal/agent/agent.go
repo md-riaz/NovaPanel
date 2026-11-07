@@ -48,7 +48,7 @@ func NewWithDependencies(cfg config.Config, runner exec.Runner, v *validate.V) *
 	c := realClock{}
 	a := &Agent{Cfg: cfg, Exec: runner, Validate: v, Clock: c, Started: c.Now(),
 		ProvisionSite: func(ctx context.Context, name, siteID string) error {
-			return platform.EnsureSite(ctx, runner, cfg.SitesRoot, cfg.ACMEWebroot, name, siteID)
+			return platform.EnsureSite(ctx, runner, cfg.SitesRoot, cfg.ACMEWebroot, cfg.LogDir, name, siteID)
 		},
 		Nginx: &nginx.Applier{Root: platform.NginxRoot, Runner: runner, Probe: nginx.StateProbe("http://127.0.0.1:80", "https://127.0.0.1:443", nil)},
 		PHP: &php.PoolApplier{Dir: "/etc/php/8.3/fpm/pool.d", Runner: runner, Probe: func(ctx context.Context) error {

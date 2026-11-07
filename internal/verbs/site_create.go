@@ -111,9 +111,25 @@ func siteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 	}
 	// Active sites already completed creation; later desired state belongs to its own verbs.
 	if site.Status == "active" {
+		if site.Type == "php" && j.Attempts > 1 {
+			if a.PHP == nil || a.Exec == nil {
+				return rpc.Errf("agent_error", "PHP execution unavailable")
+			}
+			if e = php.VerifyUser(ctx, a.Exec, a.Cfg.SitesRoot, site.Name, site.ID); e != nil {
+				return e
+			}
+			limits, err := a.Store.SitePHPLimits(ctx, site.ID)
+			if err != nil {
+				return err
+			}
+			if e = a.PHP.Recover(ctx, site.Name, php.PoolState{Exists: true, MaxChildren: 5, Limits: limits}); e != nil {
+				return e
+			}
+		}
 		j.Result, e = json.Marshal(map[string]string{"site_id": site.ID})
 		return e
 	}
+	poolApplied := false
 	defer func() {
 		if r := recover(); r != nil {
 			err = rpc.Errf("agent_error", "Site creation failed")
@@ -124,8 +140,16 @@ func siteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 		}
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
+		if err != nil && poolApplied {
+			err = errors.Join(err, a.PHP.Recover(cleanup, site.Name, php.PoolState{}))
+		}
 		if site.Status != state {
-			err = errors.Join(err, a.Store.SetSiteStatus(cleanup, site.ID, state))
+			if statusErr := a.Store.SetSiteStatus(cleanup, site.ID, state); statusErr != nil {
+				if poolApplied && state == "active" {
+					statusErr = errors.Join(statusErr, a.PHP.Recover(cleanup, site.Name, php.PoolState{}), jobs.ErrRetry)
+				}
+				err = errors.Join(err, statusErr)
+			}
 		}
 	}()
 	if a.ProvisionSite == nil || a.Nginx == nil {
@@ -148,9 +172,16 @@ func siteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 		if err != nil {
 			return err
 		}
-		if e = a.PHP.ApplyLimits(ctx, site.Name, 5, limits); e != nil {
+		committed := php.PoolState{}
+		if j.Attempts > 1 {
+			if e = a.PHP.Recover(ctx, site.Name, committed); e != nil {
+				return e
+			}
+		}
+		if e = a.PHP.ApplyCommitted(ctx, site.Name, php.PoolState{Exists: true, MaxChildren: 5, Limits: limits}, committed); e != nil {
 			return e
 		}
+		poolApplied = true
 	}
 	domains, e := a.Store.ListDomains(ctx, site.ID)
 	if e != nil {

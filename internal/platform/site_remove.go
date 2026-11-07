@@ -12,7 +12,7 @@ import (
 )
 
 // RemoveSite removes only a validated site's home and matching dormant account.
-func RemoveSite(ctx context.Context, r runner.Runner, sites, name, siteID string) error {
+func RemoveSite(ctx context.Context, r runner.Runner, sites, logs, name, siteID string) error {
 	if e := (&validate.V{}).SiteName(name); e != nil {
 		return e
 	}
@@ -28,6 +28,23 @@ func RemoveSite(ctx context.Context, r runner.Runner, sites, name, siteID string
 		return e
 	}
 	defer root.Close()
+	resolvedLogs, e := filepath.EvalSymlinks(logs)
+	if e != nil {
+		return e
+	}
+	if !filepath.IsAbs(logs) || resolvedLogs != logs {
+		return rpcerr.Errf("invalid_argument", "Invalid log root")
+	}
+	logRoot, e := os.OpenRoot(logs)
+	if e != nil {
+		return e
+	}
+	defer logRoot.Close()
+	if info, err := logRoot.Lstat(name); err == nil && !info.IsDir() {
+		return rpcerr.Errf("invalid_argument", "Invalid site log directory")
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	if info, e := root.Lstat(name); e == nil && !info.IsDir() {
 		return rpcerr.Errf("invalid_argument", "Invalid site home")
 	} else if e != nil && !os.IsNotExist(e) {
@@ -39,7 +56,12 @@ func RemoveSite(ctx context.Context, r runner.Runner, sites, name, siteID string
 		var coded *rpcerr.CodedError
 		if errors.As(e, &coded) && coded.Code == "not_found" {
 			if _, statErr := root.Lstat(name); os.IsNotExist(statErr) {
-				return nil
+				if _, logErr := logRoot.Lstat(name); os.IsNotExist(logErr) {
+					return nil
+				} else if logErr != nil {
+					return logErr
+				}
+				return e
 			} else if statErr != nil {
 				return statErr
 			}
@@ -47,6 +69,9 @@ func RemoveSite(ctx context.Context, r runner.Runner, sites, name, siteID string
 		return e
 	}
 	if e = root.RemoveAll(name); e != nil {
+		return e
+	}
+	if e = logRoot.RemoveAll(name); e != nil {
 		return e
 	}
 	return php.DeleteUser(ctx, r, sites, name, siteID)
