@@ -82,6 +82,19 @@ php_admin_value[cgi.fix_pathinfo]  = 0        ; defense in depth w/ nginx try_fi
 php_admin_value[error_log]         = /var/log/novapanel/{{site}}/php-error.log
 php_admin_flag[log_errors]         = on
 ```
+- **Pool-file update & recovery (F6 Rule-B / F7 / F8 — no `.lkg`, no durable rollback marker).** The
+  committed SQLite row (the site's php version + limits) is the **single source of truth**; the
+  `pool.d/<site>.conf` file is a disposable **projection** of it, so "last-known-good" is the committed
+  SQLite state, not a saved previous copy. `php.set` order: render the **new** config to a temp file →
+  `php8.3-fpm -t` validate → atomic `rename` into place → reload → probe, **all before** the SQLite
+  checkpoint. On any validate/reload/probe failure, **re-render from the (still-committed, old) SQLite
+  state** and reload — that is the F8 revert to last-known-good — then return the error; only a fully-good
+  swap commits the new version to SQLite. **Recovery/reconcile on any crash** (half-written temp,
+  renamed-but-uncommitted, failed dir fsync, failed restore, first creation) is unconditional:
+  **re-render the file from the committed SQLite row and reload** (idempotent). This reconverges the file
+  to SQLite in every pre/post-rename case — before the checkpoint it rolls back to the old version, after
+  it rolls forward to the new — so no previous-marker record or durable rollback intent is needed (and
+  none may be added: per-feature durability machinery is out of scope).
 - **Compatibility profile is the default.** Do not set `open_basedir` or disable `exec`, `passthru`,
   `shell_exec`, `system`, `proc_open` or `popen` by default. A VPS owner may need Composer, framework
   workers, image/PDF processors and deployment hooks. The per-site Unix uid, `0751` home + `2750
