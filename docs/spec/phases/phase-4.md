@@ -417,18 +417,23 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
   traverse-only (`--x`), **not** read/list, and the `2750 site:www-data` docroot denies `other`
   entirely, so cross-site isolation still holds: a second site's uid can neither list another home nor
   read its docroot/files. Phase 4 creates the user and dirs to match:
-  `useradd -r -s /usr/sbin/nologin -m -c "novapanel:site=<site_ULID>"`, group = the site name;
+  `useradd -r -s /usr/sbin/nologin -m -c "novapanel-site=<site_ULID>"` (GECOS marker — `:`/`,` are
+  forbidden in GECOS, so the sentinel is `novapanel-site=<ULID>`), group = the site name;
   reserved-name list in `internal/validate`.
 - **OS-user ownership = the GECOS marker, not the name** (`00` §Panel-owned OS-user provenance; F20
   instantiation). The site slug is reusable, so ownership is proven by the account's GECOS
-  `novapanel:site=<ULID>` matching the op's `sites.id`, **never by the name alone** (this closes the
+  `novapanel-site=<ULID>` matching the op's `sites.id`, **never by the name alone** (this closes the
   earlier "reserved-name = orphan vs. foreign collision" ambiguity — the GECOS marker is the obj_id):
   - **create** (ensure-state): a name collision whose GECOS marks **this** site's ULID is our own prior
     attempt → idempotent roll-forward (F6/F7); a collision with **no** panel marker, or a **different**
     site's ULID, → `conflict`, never adopt/`usermod`.
-  - **delete / reconcile**: `userdel` only an account whose GECOS carries the `novapanel` sentinel **and**
-    a site ULID with **no** live `sites` row and **no** live job (ordered teardown: pool file → reload →
-    home guard → `userdel`). A reserved-scheme account lacking the sentinel is foreign → never touched,
+  - **delete**: the owning `site.delete` job drives teardown by the sentinel + matching site ULID (its row
+    is legitimately `deleting` with a live job — "no live row/job" is **not** required of it); ordered:
+    pool file → reload → home guard → `userdel`.
+  - **reconcile (orphan sweep)**: `userdel` only an account whose GECOS carries the `novapanel-site=`
+    sentinel **and** a site ULID with **no** live `sites` row and **no** live job, so it never races the
+    owning op. Pre-existing unmarked accounts are handled by the one-time migration (`00`), never adopted
+    on sight. A reserved-scheme account lacking the sentinel is foreign → never touched,
     surfaced to the operator. A crash leaves at most a marked orphan, which reconcile converges by its
     own ULID.
 
