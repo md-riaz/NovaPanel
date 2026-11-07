@@ -64,13 +64,14 @@ var httpTemplate = template.Must(template.New("http").Funcs(template.FuncMap{"pa
     }
     {{end}}location ~ /\. { deny all; }
     {{if .PHPVersion}}location ~ \.php$ {
-        {{if .RedirectHTTPS}}return 301 https://$host$request_uri;{{else if .Maintenance}}return 503;{{else}}try_files $uri =404;
+        {{if .RedirectHTTPS}}return 301 https://$host$request_uri;{{else}}{{range .Redirects}}{{if not (pathSource .Source)}}if ($host = "{{.Source}}") { return {{.Code}} "{{.Target}}"; }
+        {{end}}{{end}}{{if .Maintenance}}return 503;{{else}}try_files $uri =404;
         fastcgi_split_path_info ^(.+?\.php)(/.*)$;
         fastcgi_pass unix:/run/php/novapanel/{{.Name}}.sock;
         include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         fastcgi_param PATH_INFO $fastcgi_path_info;
-        fastcgi_hide_header X-Powered-By;{{end}}
+        fastcgi_hide_header X-Powered-By;{{end}}{{end}}
     }
     {{end}}
     add_header X-Content-Type-Options nosniff always;

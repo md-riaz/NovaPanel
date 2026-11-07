@@ -29,6 +29,33 @@ func TestPHPRender(t *testing.T) {
 	}
 }
 
+func TestPHPHostRedirectMatchesRoot(t *testing.T) {
+	version := "8.3"
+	for _, maintenance := range []bool{false, true} {
+		d := Desired{Name: "demo", Domains: []string{"demo.test"}, Docroot: "/srv/sites/demo/public", ACMERoot: "/var/www/acme/demo", PHPVersion: &version, Maintenance: maintenance, TLS: installedTLS(t, false), ForceHTTPS: true, Redirects: []Redirect{{Source: "demo.test", Target: "https://other.test/path", Code: 302}}}
+		b, err := Render(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, block := range strings.Split(string(b), "server {")[1:] {
+			php := strings.SplitN(strings.SplitN(block, `location ~ \.php$ {`, 2)[1], "\n    }", 2)[0]
+			if strings.Contains(block, "listen 80;") {
+				if !strings.Contains(php, "return 301 https://$host$request_uri;") || strings.Contains(php, `if ($host`) {
+					t.Fatalf("HTTPS must precede host redirect: %s", php)
+				}
+				continue
+			}
+			redirect := `if ($host = "demo.test") { return 302 "https://other.test/path"; }`
+			if !strings.Contains(php, redirect) || strings.Index(php, redirect) > strings.Index(php, "try_files $uri =404;") && !maintenance || maintenance && strings.Index(php, redirect) > strings.Index(php, "return 503;") {
+				t.Fatalf("PHP host redirect missing or after handler: %s", php)
+			}
+			if strings.Index(block, `location ~ /\.`) > strings.Index(block, `location ~ \.php$`) {
+				t.Fatal("dotfile denial must precede PHP regex")
+			}
+		}
+	}
+}
+
 func TestPHPRoutingRespectsMaintenanceAndHTTPSRedirect(t *testing.T) {
 	version := "8.3"
 	d := Desired{Name: "demo", Domains: []string{"demo.test"}, Docroot: "/srv/sites/demo/public", ACMERoot: "/var/www/acme/demo", PHPVersion: &version, Maintenance: true}
