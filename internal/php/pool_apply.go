@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 	runner "novapanel/internal/exec"
+	"novapanel/internal/jobs"
 	"novapanel/internal/rpcerr"
 	"novapanel/internal/store"
 	"novapanel/internal/validate"
@@ -205,7 +206,37 @@ func (a *PoolApplier) change(ctx context.Context, name string, b []byte, remove 
 		return errors.Join(err, a.command(recovery, "/usr/bin/systemctl", "reload", "php8.3-fpm.service"))
 	}
 	if !remove {
-		return poolWrite(root, file+".lkg", b)
+		if err = poolWrite(root, file+".lkg", b); err == nil {
+			return nil
+		}
+		// The rename may have succeeded even if syncing the directory failed.
+		// Restore the marker too, so a later attempt cannot mistake the new
+		// configuration for committed state.
+		current, readErr := poolRead(root, file+".lkg")
+		var markerErr error
+		if gerr == nil {
+			if readErr != nil || !bytes.Equal(current, good) {
+				markerErr = poolWrite(root, file+".lkg", good)
+			}
+		} else if readErr == nil {
+			markerErr = root.Remove(file + ".lkg")
+			if markerErr == nil {
+				markerErr = poolSync(root)
+			}
+		} else if !os.IsNotExist(readErr) {
+			markerErr = readErr
+		}
+		restoreErr := restore()
+		var reloadErr error
+		if restoreErr == nil {
+			recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			reloadErr = a.command(recovery, "/usr/bin/systemctl", "reload", "php8.3-fpm.service")
+			cancel()
+		}
+		if markerErr != nil || restoreErr != nil || reloadErr != nil {
+			return errors.Join(err, markerErr, restoreErr, reloadErr, jobs.ErrRetry)
+		}
+		return err
 	}
 	if gerr == nil {
 		if err = root.Remove(file + ".lkg"); err != nil {

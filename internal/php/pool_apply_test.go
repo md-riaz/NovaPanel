@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	runner "novapanel/internal/exec"
+	"novapanel/internal/jobs"
 	"novapanel/internal/store"
 )
 
@@ -97,5 +98,64 @@ func TestPoolRefusesSymlink(t *testing.T) {
 	b, _ := os.ReadFile(outside)
 	if string(b) != "safe" {
 		t.Fatal("modified outside file")
+	}
+}
+
+func TestPoolLKGRecoveryFailureRequestsRetry(t *testing.T) {
+	dir := t.TempDir()
+	r := &poolRunner{fail: 5}
+	a := PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
+	if err := a.Apply(context.Background(), "demo", 3); err != nil {
+		t.Fatal(err)
+	}
+	block := filepath.Join(dir, "demo.conf.lkg.tmp")
+	a.Probe = func(context.Context) error { return os.Mkdir(block, 0700) }
+	if err := a.Apply(context.Background(), "demo", 4); !errors.Is(err, jobs.ErrRetry) {
+		t.Fatalf("expected retry on failed recovery: %v", err)
+	}
+}
+
+func TestPoolLKGWriteFailureRestoresAndRetry(t *testing.T) {
+	dir := t.TempDir()
+	r := &poolRunner{}
+	a := PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
+	ctx := context.Background()
+	if err := a.Apply(ctx, "demo", 3); err != nil {
+		t.Fatal(err)
+	}
+	old, err := os.ReadFile(filepath.Join(dir, "demo.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := filepath.Join(dir, "demo.conf.lkg.tmp")
+	a.Probe = func(context.Context) error { return os.Mkdir(block, 0700) }
+	if err := a.Apply(ctx, "demo", 4); err == nil {
+		t.Fatal("expected LKG failure")
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "demo.conf"))
+	if err != nil || string(got) != string(old) {
+		t.Fatalf("config not restored: %v", err)
+	}
+	good, err := os.ReadFile(filepath.Join(dir, "demo.conf.lkg"))
+	if err != nil || string(good) != string(old) {
+		t.Fatalf("LKG changed: %v", err)
+	}
+	if r.calls != 5 {
+		t.Fatalf("expected recovery reload, calls=%d", r.calls)
+	}
+	if err := os.Remove(block); err != nil {
+		t.Fatal(err)
+	}
+	a.Probe = func(context.Context) error { return nil }
+	if err := a.Apply(ctx, "demo", 4); err != nil {
+		t.Fatal(err)
+	}
+	got, err = os.ReadFile(filepath.Join(dir, "demo.conf"))
+	if err != nil || string(got) == string(old) {
+		t.Fatalf("retry did not apply: %v", err)
+	}
+	good, err = os.ReadFile(filepath.Join(dir, "demo.conf.lkg"))
+	if err != nil || string(good) != string(got) {
+		t.Fatalf("retry LKG mismatch: %v", err)
 	}
 }
