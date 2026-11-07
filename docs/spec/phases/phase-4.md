@@ -429,11 +429,13 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
     site's ULID, → `conflict`, never adopt/`usermod`.
   - **delete**: the owning `site.delete` job drives teardown by the sentinel + matching site ULID (its row
     is legitimately `deleting` with a live job — "no live row/job" is **not** required of it); ordered:
-    pool file → reload → home guard → `userdel`.
-  - **reconcile (orphan sweep)**: `userdel` only an account whose GECOS carries the `novapanel-site=`
-    sentinel **and** a site ULID with **no** live `sites` row and **no** live job, so it never races the
-    owning op. Pre-existing unmarked accounts are handled by the one-time migration (`00`), never adopted
-    on sight. A reserved-scheme account lacking the sentinel is foreign → never touched,
+    pool file → reload. Then **only if `purge_files`** (phase-3): home guard → `userdel`. On **retain**,
+    keep the home + user dormant and rewrite GECOS to `novapanel-retained=<ULID>` so the sweep spares it.
+  - **reconcile (orphan sweep)**: `userdel` only an account whose GECOS carries the **`novapanel-site=`**
+    sentinel (never a `novapanel-retained=` one) **and** a site ULID with **no** live `sites` row and **no**
+    live job, so it never races the owning op nor deletes a retained account. Pre-existing unmarked accounts
+    are handled by the one-time migration (`00`), never adopted on sight. A reserved-scheme account lacking
+    the sentinel is foreign → never touched,
     surfaced to the operator. A crash leaves at most a marked orphan, which reconcile converges by its
     own ULID.
 

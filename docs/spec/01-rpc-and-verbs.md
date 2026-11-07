@@ -83,7 +83,7 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 | `job.status` / `job.list` | | RO | ✓ | system:read | | | | |
 | `job.claim` | | RO | | — | | | | one-shot secret (F6) |
 | `job.cancel` | | A | | system:write | | | | |
-| `reconcile` | | O | | — | ✓ | ✓ | | `system` |
+| `reconcile` | | O | | — | ✓ | ✓ | | `system` (+ per-candidate `site:`/`osuser:`/`db:`/`dbuser:` acquired at execution, fixed order) |
 | `update.check` | | A | ✓ | system:read | | | | |
 | `update.apply` | | O | | — | ✓ | ✓ | ✓ | `system` (D2 signed) |
 | `panel.backup_config` | | O | | — | ✓ | ✓ | | self-backup (B-D11/B20) |
