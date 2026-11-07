@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"novapanel/internal/agent"
 	runner "novapanel/internal/exec"
@@ -40,6 +41,66 @@ func (r *reconcileAccounts) Run(_ context.Context, prog string, args []string, _
 	}
 	return nil, nil, 0, nil
 }
+func TestReconcileOrphanResourceGuard(t *testing.T) {
+	for _, kind := range []string{"home", "log", "pool", "dangling", "unknown", "absent", "locks"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := context.Background()
+			root := t.TempDir()
+			st, err := store.Open(filepath.Join(root, "panel.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+			sites, logs, pools := filepath.Join(root, "sites"), filepath.Join(root, "logs"), filepath.Join(root, "pools")
+			for _, dir := range []string{sites, logs, pools} {
+				if err := os.Mkdir(dir, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sid, _ := id.New()
+			r := &reconcileAccounts{root: sites, accounts: map[string]string{"orphan": "novapanel-site=" + sid}}
+			q := jobs.NewQueue(st, nil, nil)
+			pool := &php.PoolApplier{Dir: pools, Runner: r}
+			switch kind {
+			case "home":
+				err = os.Mkdir(filepath.Join(sites, "orphan"), 0755)
+			case "log":
+				err = os.Mkdir(filepath.Join(logs, "orphan"), 0755)
+			case "pool":
+				err = os.WriteFile(filepath.Join(pools, "orphan.conf"), []byte("pool"), 0644)
+			case "dangling":
+				err = os.Symlink("missing", filepath.Join(sites, "orphan"))
+			case "unknown":
+				logs = filepath.Join(root, "missing")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kind == "locks" {
+				unlock, e := q.LockSiteOSUser(ctx, sid, "orphan")
+				if e != nil {
+					t.Fatal(e)
+				}
+				blocked, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+				_, e = reconcilePHP(blocked, st, q, r, pool, sites, logs)
+				cancel()
+				unlock()
+				if e == nil || len(r.deleted) != 0 {
+					t.Fatalf("lock not respected: %v %v", e, r.deleted)
+				}
+			}
+			changed, err := reconcilePHP(ctx, st, q, r, pool, sites, logs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := kind == "absent" || kind == "locks"
+			if (len(r.deleted) == 1) != want || (len(changed) == 1) != want {
+				t.Fatalf("deleted=%v changed=%v", r.deleted, changed)
+			}
+		})
+	}
+}
+
 func TestSiteJobLiveFailsClosedOnMissingIdentity(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "panel.db"))
@@ -106,7 +167,11 @@ func TestReconcilePHPOrphansAndCommittedPool(t *testing.T) {
 	a.Exec = r
 	a.Cfg.SitesRoot = root
 	a.PHP = &php.PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
-	if _, err = reconcilePHP(ctx, a.Store, a.Jobs, a.Exec, a.PHP, a.Cfg.SitesRoot); err != nil {
+	logs := filepath.Join(root, "logs")
+	if err = os.Mkdir(logs, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = reconcilePHP(ctx, a.Store, a.Jobs, a.Exec, a.PHP, a.Cfg.SitesRoot, logs); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.deleted) != 1 || r.deleted[0] != "orphan" {

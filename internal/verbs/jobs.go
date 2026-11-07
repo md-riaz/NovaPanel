@@ -138,7 +138,7 @@ func reconcileExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	}
 	changed, err := database.Reconcile(ctx, a.Exec, a.Store, a.Jobs.LockReconcileDatabase)
 	if args.Scope == "" {
-		phpChanged, phpErr := reconcilePHP(ctx, a.Store, a.Jobs, a.Exec, a.PHP, a.Cfg.SitesRoot)
+		phpChanged, phpErr := reconcilePHP(ctx, a.Store, a.Jobs, a.Exec, a.PHP, a.Cfg.SitesRoot, a.Cfg.LogDir)
 		changed = append(changed, phpChanged...)
 		err = errors.Join(err, phpErr)
 	}

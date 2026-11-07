@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"novapanel/internal/exec"
@@ -84,7 +86,7 @@ func siteJobLive(ctx context.Context, s *store.Store, sid, name string) (bool, e
 	return false, nil
 }
 
-func reconcilePHP(ctx context.Context, st *store.Store, q *jobs.Queue, runner exec.Runner, pool *php.PoolApplier, sitesRoot string) ([]string, error) {
+func reconcilePHP(ctx context.Context, st *store.Store, q *jobs.Queue, runner exec.Runner, pool *php.PoolApplier, sitesRoot string, logsRoot ...string) ([]string, error) {
 	if st == nil || q == nil || runner == nil || pool == nil {
 		return nil, errors.New("PHP reconcile dependencies unavailable")
 	}
@@ -158,6 +160,28 @@ func reconcilePHP(ctx context.Context, st *store.Store, q *jobs.Queue, runner ex
 			live, err := siteJobLive(ctx, st, account.id, account.name)
 			if err != nil || live {
 				return err
+			}
+			// Missing configuration, inaccessible roots and symlinks are not proof of absence.
+			if len(logsRoot) != 1 {
+				return nil
+			}
+			for _, resource := range []struct{ root, name string }{
+				{sitesRoot, account.name}, {logsRoot[0], account.name}, {pool.Dir, account.name + ".conf"},
+			} {
+				if !filepath.IsAbs(resource.root) || filepath.Clean(resource.root) != resource.root {
+					return nil
+				}
+				resolved, e := filepath.EvalSymlinks(resource.root)
+				if e != nil || resolved != resource.root {
+					return nil
+				}
+				info, e := os.Stat(resource.root)
+				if e != nil || !info.IsDir() {
+					return nil
+				}
+				if _, e = os.Lstat(filepath.Join(resource.root, resource.name)); !errors.Is(e, os.ErrNotExist) {
+					return nil
+				}
 			}
 			if err = php.DeleteOrphan(ctx, runner, sitesRoot, account.name, account.id, false); err != nil {
 				return err
