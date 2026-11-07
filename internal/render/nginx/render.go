@@ -25,6 +25,7 @@ type Desired struct {
 	Name              string
 	Domains           []string
 	Docroot, ACMERoot string
+	PHPVersion        *string
 }
 
 type serverState struct {
@@ -44,7 +45,7 @@ var httpTemplate = template.Must(template.New("http").Funcs(template.FuncMap{"pa
     listen [::]:80;{{end}}
     server_name {{range .Domains}}{{.}} {{end}};
     root "{{.Docroot}}";
-    index index.html;
+    index {{if .PHPVersion}}index.php {{end}}index.html;
     {{if not .HTTPS}}location ^~ /.well-known/acme-challenge/ {
         root "{{.ACMERoot}}";
         default_type "text/plain";
@@ -59,9 +60,19 @@ var httpTemplate = template.Must(template.New("http").Funcs(template.FuncMap{"pa
     {{end}}{{range .Redirects}}{{if pathSource .Source}}location = "{{.Source}}" { return {{.Code}} "{{.Target}}"; }
     {{end}}{{end}}location / {
         {{range .Redirects}}{{if not (pathSource .Source)}}if ($host = "{{.Source}}") { return {{.Code}} "{{.Target}}"; }
-        {{end}}{{end}}{{if .Maintenance}}return 503;{{else}}try_files $uri $uri/ =404;{{end}}
+        {{end}}{{end}}{{if .Maintenance}}return 503;{{else}}try_files $uri $uri/ {{if .PHPVersion}}/index.php?$query_string{{else}}=404{{end}};{{end}}
     }
     {{end}}location ~ /\. { deny all; }
+    {{if .PHPVersion}}location ~ \.php$ {
+        {{if .RedirectHTTPS}}return 301 https://$host$request_uri;{{else if .Maintenance}}return 503;{{else}}try_files $uri =404;
+        fastcgi_split_path_info ^(.+?\.php)(/.*)$;
+        fastcgi_pass unix:/run/php/novapanel/{{.Name}}.sock;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param PATH_INFO $fastcgi_path_info;
+        fastcgi_hide_header X-Powered-By;{{end}}
+    }
+    {{end}}
     add_header X-Content-Type-Options nosniff always;
     add_header X-Frame-Options SAMEORIGIN always;
     add_header Referrer-Policy strict-origin-when-cross-origin always;
@@ -71,6 +82,9 @@ var httpTemplate = template.Must(template.New("http").Funcs(template.FuncMap{"pa
 
 func Render(d Desired) ([]byte, error) {
 	v := &validate.V{}
+	if d.PHPVersion != nil && *d.PHPVersion != "8.3" {
+		return nil, rpcerr.Errf("invalid_argument", "Unsupported PHP version")
+	}
 	if e := v.SiteName(d.Name); e != nil {
 		return nil, e
 	}
