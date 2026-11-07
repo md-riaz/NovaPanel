@@ -501,9 +501,17 @@ revert           → on probe failure restore <target>.lkg + reload; return code
     `sites` row by the frozen 1:1 name mapping — re-asserting provenance the `sites` row already proves
     (Phase 3 created it), not adopting an unknown. Thereafter the marker is authoritative; an unmarked
     account with **no** matching `sites` row stays foreign and is never touched.
-  - **Locking:** every verb that creates/mutates/deletes the per-site OS user, and reconcile, hold
-    `site:<site_id>` then `osuser:<username>` in that fixed order (F20.7), serializing create/delete/
-    reconcile on the global OS-user namespace.
+  - **Retain vs purge (phase-3 `site.delete`):** `userdel` + home removal happen **only** when
+    `purge_files` is set. On **retain**, the files and OS user are kept **dormant** and the account's GECOS
+    is rewritten to the retained sentinel **`novapanel-retained=<ULID>`**; reconcile sweeps only
+    `novapanel-site=` accounts and **never** a `novapanel-retained=` one, so retained files never land on an
+    orphaned, reusable UID.
+  - **Locking:** verbs that create/mutate/delete the per-site OS user hold the site key then
+    `osuser:<username>` in that fixed order (F20.7). The site key is **`site:<name>`** for `site.create`
+    (ensure-absent, the `site_id` not yet existing — F6 §Site-scoped lock key) and **`site:<site_id>`** for
+    every existing-site op. Reconcile takes the same `site:`/`osuser:` (and `db:`/`dbuser:`) keys **per
+    candidate at execution** in that order, so it never races a lifecycle job; its registry ObjectKey stays
+    coarse `system` (admission) while the per-candidate keys are acquired dynamically.
   This is the generic rule for any two-store resource without a native control table (reuse F20/F6/F7;
   the in-band marker replaces the control row). It **supersedes** the older "SQLite row alone is the
   proof" shortcut for OS users (F7 check-before-create), because the slug is reusable.
