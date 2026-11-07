@@ -418,8 +418,9 @@ Every mutating verb is written as *"make reality match this row,"* not *"do this
 
 - **Check-before-create:** `useradd` only if absent; write a vhost only if the rendered bytes differ
   from disk. **Exception — F20-governed two-store resources:** for a site resource whose ownership
-  cannot be proven by existence (a site MariaDB database/user, a DNS record), idempotency comes from the
-  **F20 provenance marker**, not from `IF NOT EXISTS`. There a plain `CREATE` gated by a pre-flight
+  cannot be proven by existence (a site MariaDB database/user, a **per-site OS user** — ownership by its
+  GECOS marker, see §Panel-owned OS-user provenance — a DNS record), idempotency comes from the
+  **F20 provenance marker**, not from `IF NOT EXISTS` or a reusable name. There a plain `CREATE` gated by a pre-flight
   absent-check **plus** the provenance row gives the same "run-twice = no change" property, while
   `CREATE … IF NOT EXISTS` is **forbidden** (it would adopt an unmanaged collision — F20.3). This does
   **not** apply to the agent's own control schema the way it applies to managed objects: the provenance
@@ -483,14 +484,29 @@ revert           → on probe failure restore <target>.lkg + reload; return code
 - **Site/unix-user name:** `^[a-z][a-z0-9-]{1,30}$`; never a reserved name; maps 1:1 to a system user.
 - **Panel-owned OS-user provenance (F20 instantiation, no control table):** an OS user lives in a store
   not transactional with SQLite but has no `managed_objects`-style table, so its ownership token is the
-  account's **GECOS comment**, written atomically at `useradd -c "novapanel:site=<site_ULID>"`. The name
-  proves nothing (a slug is reusable across a delete+recreate); the GECOS `site=<ULID>` is the
-  **obj_id-analogue**. **Never `userdel`/`usermod`-adopt on a name match:** the panel destroys or
-  re-drives an account only when its GECOS carries the `novapanel` sentinel **and** the op's site ULID.
-  A reserved-scheme name whose account lacks the sentinel, or carries a **different** site's ULID than
-  the op, is **not proven this op's** → fail closed (`conflict`, operator/reconcile), never adopt, never
-  delete a foreign account. This is the generic rule for any two-store resource without a native control
-  table (reuse F20/F6/F7; the in-band marker replaces the control row).
+  account's **GECOS comment**, written atomically at `useradd -c "novapanel-site=<site_ULID>"`. GECOS
+  forbids `:` (passwd field sep) and `,` (GECOS subfield sep), so the exact marker is
+  **`novapanel-site=<ULID>`** (ULID is Crockford base32 — no separators); parse by the `novapanel-site=`
+  prefix. The name proves nothing (a slug is reusable across a delete+recreate); the marker is the
+  **obj_id-analogue**. **Never `userdel`/`usermod`-adopt on a name match.**
+  - **Authority to destroy/re-drive** = the `novapanel-site=` sentinel **plus** a matching site ULID. The
+    **owning `site.delete` job** (row legitimately `deleting`, live job) drives teardown by that marker
+    match — "no live row/job" is **not** required of it. The **"no live `sites` row and no live job"**
+    guard applies only to **reconcile adopting an orphan**, so reconcile never races the owning op.
+  - A reserved-scheme name whose account lacks the sentinel, or carries a **different** site's ULID than
+    the op, is **not proven this op's** → fail closed (`conflict`, operator/reconcile), never adopt or
+    delete a foreign account.
+  - **Pre-existing unmarked (Phase-3) accounts:** never silently adopted. A **one-time, bounded startup
+    migration** stamps the marker (`usermod -c`) onto an unmarked account **only** when it matches a live
+    `sites` row by the frozen 1:1 name mapping — re-asserting provenance the `sites` row already proves
+    (Phase 3 created it), not adopting an unknown. Thereafter the marker is authoritative; an unmarked
+    account with **no** matching `sites` row stays foreign and is never touched.
+  - **Locking:** every verb that creates/mutates/deletes the per-site OS user, and reconcile, hold
+    `site:<site_id>` then `osuser:<username>` in that fixed order (F20.7), serializing create/delete/
+    reconcile on the global OS-user namespace.
+  This is the generic rule for any two-store resource without a native control table (reuse F20/F6/F7;
+  the in-band marker replaces the control row). It **supersedes** the older "SQLite row alone is the
+  proof" shortcut for OS users (F7 check-before-create), because the slug is reusable.
 - **DB / DB-user name:** `^[a-z][a-z0-9_]{1,46}$`; generated, never raw from the user.
 - **Filesystem path:** must resolve (after `filepath.Clean` + symlink eval) **inside** the declared
   project root; reject absolute escapes, `..`, and symlinks that cross the boundary.
