@@ -24,10 +24,12 @@ import (
 // must be administrator-owned. Callers serialize site lifecycle operations and
 // verify site ownership before removing or replacing a pool.
 type PoolApplier struct {
-	Dir    string
-	Runner runner.Runner
-	Probe  func(context.Context) error
-	mu     sync.Mutex
+	Dir          string
+	Runner       runner.Runner
+	Probe        func(context.Context) error
+	mu           sync.Mutex
+	removeMarker func(*os.Root, string) error // test seam; nil uses Root.Remove
+	syncDir      func(*os.Root) error         // test seam; nil uses poolSync
 }
 
 func (a *PoolApplier) Apply(ctx context.Context, name string, maxChildren int) error {
@@ -157,6 +159,10 @@ func (a *PoolApplier) change(ctx context.Context, name string, b []byte, remove 
 		return gerr
 	}
 	if remove && !exists && os.IsNotExist(gerr) {
+		// A previous cleanup may have unlinked the marker but failed to sync.
+		if err := a.syncPoolDir(root); err != nil {
+			return errors.Join(err, jobs.ErrRetry)
+		}
 		return nil
 	}
 	if !remove && exists && gerr == nil && bytes.Equal(old, b) && bytes.Equal(good, b) {
@@ -177,6 +183,7 @@ func (a *PoolApplier) change(ctx context.Context, name string, b []byte, remove 
 		return poolSync(root)
 	}
 	if remove {
+		err = nil
 		if exists {
 			err = root.Remove(file)
 			if err == nil {
@@ -187,10 +194,16 @@ func (a *PoolApplier) change(ctx context.Context, name string, b []byte, remove 
 		err = poolWrite(root, file, b)
 	}
 	if err != nil {
-		return errors.Join(err, restore())
+		if rerr := restore(); rerr != nil {
+			return errors.Join(err, rerr, jobs.ErrRetry)
+		}
+		return err
 	}
 	if err = a.command(ctx, "/usr/sbin/php-fpm8.3", "-t"); err != nil {
-		return errors.Join(err, restore())
+		if rerr := restore(); rerr != nil {
+			return errors.Join(err, rerr, jobs.ErrRetry)
+		}
+		return err
 	}
 	err = a.command(ctx, "/usr/bin/systemctl", "reload", "php8.3-fpm.service")
 	if err == nil {
@@ -199,11 +212,14 @@ func (a *PoolApplier) change(ctx context.Context, name string, b []byte, remove 
 	if err != nil {
 		rerr := restore()
 		if rerr != nil {
-			return errors.Join(err, rerr)
+			return errors.Join(err, rerr, jobs.ErrRetry)
 		}
 		recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
-		return errors.Join(err, a.command(recovery, "/usr/bin/systemctl", "reload", "php8.3-fpm.service"))
+		if rerr = a.command(recovery, "/usr/bin/systemctl", "reload", "php8.3-fpm.service"); rerr != nil {
+			return errors.Join(err, rerr, jobs.ErrRetry)
+		}
+		return err
 	}
 	if !remove {
 		if err = poolWrite(root, file+".lkg", b); err == nil {
@@ -239,10 +255,23 @@ func (a *PoolApplier) change(ctx context.Context, name string, b []byte, remove 
 		return err
 	}
 	if gerr == nil {
-		if err = root.Remove(file + ".lkg"); err != nil {
-			return err
+		removeMarker := a.removeMarker
+		if removeMarker == nil {
+			removeMarker = (*os.Root).Remove
 		}
-		return poolSync(root)
+		if err = removeMarker(root, file+".lkg"); err != nil && !os.IsNotExist(err) {
+			return errors.Join(err, jobs.ErrRetry)
+		}
+		if err = a.syncPoolDir(root); err != nil {
+			return errors.Join(err, jobs.ErrRetry)
+		}
 	}
 	return nil
+}
+
+func (a *PoolApplier) syncPoolDir(root *os.Root) error {
+	if a.syncDir != nil {
+		return a.syncDir(root)
+	}
+	return poolSync(root)
 }
