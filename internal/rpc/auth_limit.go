@@ -1,8 +1,11 @@
 package rpc
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"math"
+)
 
-// Only fresh anonymous minting uses a per-peer admission throttle.
+// Fresh anonymous minting has a high per-peer backstop, not a per-visitor budget.
 func (s *Server) allowAuthentication(peer uint32, verb string, _ json.RawMessage) bool {
 	if verb != "session.start" {
 		return true
@@ -10,18 +13,22 @@ func (s *Server) allowAuthentication(peer uint32, verb string, _ json.RawMessage
 	s.authMu.Lock()
 	defer s.authMu.Unlock()
 	if s.authRates == nil {
-		s.authRates = make(map[uint32][3]authRate)
+		s.authRates = make(map[uint32]authRate)
 	}
 	now := s.Agent.Now()
-	rates := s.authRates[peer]
-	r := &rates[0]
-	if r.count == 0 || now < r.start || now-r.start >= 60000 {
-		*r = authRate{start: now}
+	burst := float64(s.Agent.Cfg.AnonMintBurst)
+	r, exists := s.authRates[peer]
+	if !exists {
+		r = authRate{updated: now, tokens: burst}
 	}
-	if r.count >= 10 {
-		return false
+	if now > r.updated {
+		r.tokens = math.Min(burst, r.tokens+(float64(now)-float64(r.updated))/1000*float64(s.Agent.Cfg.AnonMintRPS))
+		r.updated = now
 	}
-	r.count++
-	s.authRates[peer] = rates
-	return true
+	allowed := r.tokens >= 1
+	if allowed {
+		r.tokens--
+	}
+	s.authRates[peer] = r
+	return allowed
 }

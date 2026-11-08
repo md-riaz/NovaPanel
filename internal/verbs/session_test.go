@@ -119,10 +119,10 @@ func TestRealSessionLoginLifecycle(t *testing.T) {
 
 func TestSessionStartPeerRateLimit(t *testing.T) {
 	s, c, call := sessionHarness(t)
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 100; i++ {
 		sessionData(t, call("session.start", "", `{}`))
 	}
-	if r := call("session.start", "", `{}`); r.Code != "forbidden" {
+	if r := call("session.start", "", `{}`); r.Code != "rate_limited" {
 		t.Fatalf("unbounded mint %+v", r)
 	}
 	r := s.Dispatch(rpc.WithCaller(context.Background(), rpc.Caller{Peer: 1002}), rpc.Request{Verb: "session.start", Args: json.RawMessage(`{}`)})

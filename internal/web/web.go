@@ -10,7 +10,9 @@ import (
 	"html/template"
 	"io/fs"
 	"mime"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -170,7 +172,21 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 	if cookie, e := r.Cookie(CookieName); e == nil {
 		token = cookie.Value
 	}
-	if token != "" && !s.limiter.allow(token, s.options.Now()) {
+	key := "session:" + token
+	if token == "" && rt.auth == "bootstrap" {
+		// RemoteAddr is the connection peer; forwarded headers never select a budget.
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			host = r.RemoteAddr
+		}
+		addr, err := netip.ParseAddr(host)
+		if err != nil {
+			http.Error(w, "Invalid client address", http.StatusBadRequest)
+			return
+		}
+		key = "client:" + addr.Unmap().WithZone("").String()
+	}
+	if (token != "" || rt.auth == "bootstrap") && !s.limiter.allow(key, s.options.Now()) {
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 		return
