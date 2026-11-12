@@ -72,7 +72,7 @@ listen.owner = nginx        ; the NGINX user owns the socket  ← without this: 
 listen.group = nginx        ; (www-data on Debian/Ubuntu, nginx on RHEL/Rocky/Alma)
 listen.mode  = 0660
 pm = ondemand
-pm.max_children         = {{cap}}     ; HARD per-pool concurrency cap, sized to RAM
+pm.max_children         = {{cap}}     ; HARD per-pool cap — from committed SQLite limits (see sizing below)
 pm.process_idle_timeout = 10s
 pm.max_requests         = 500         ; respawn worker (leak guard)
 php_admin_value[cgi.fix_pathinfo]  = 0        ; defense in depth w/ nginx try_files (Phase 3)
@@ -106,6 +106,16 @@ php_admin_flag[log_errors]         = on
   ensure `php8.3-fpm` active**; **removing the last managed pool → stop/disable `php8.3-fpm`** (valid —
   nothing to serve) rather than validate an empty config or keep a dummy pool; the next `site.create`
   re-ensures it active. Never report success on an invalid (zero-pool, un-`-t`-able) running config.
+- **`pm.max_children` sizing (deterministic, persisted — a pure SQLite projection per #119).** The cap is
+  **not** read from live RAM at render time (that would make the pool non-deterministic on reconcile). It is
+  computed **once** at `site.create`/`php.set` and **persisted in the site's SQLite `limits`**; the pool
+  file renders `pm.max_children` from that committed value and reconcile re-renders the same value. Default
+  formula: `php_budget_mb = max(256, floor(MemTotalMB * 0.5)) − 256` (reserve for OS/MariaDB/nginx);
+  `cap = clamp(floor(php_budget_mb / 64 / max(1, active_site_count)), 2, 32)` (worker RSS assumed **64 MB**;
+  bounds **[2, 32]**). An explicit per-site override in `limits` wins. If RAM can't be detected at compute
+  time, fall back to the min (`2`) and persist it — never fabricate a RAM-sized value. A later RAM/site-count
+  change does **not** silently mutate already-committed caps; rebalancing is an explicit operator op that
+  recomputes and re-persists. So "sized to RAM" = sized once from RAM at set time, then a committed constant.
 - **Compatibility profile is the default.** Do not set `open_basedir` or disable `exec`, `passthru`,
   `shell_exec`, `system`, `proc_open` or `popen` by default. A VPS owner may need Composer, framework
   workers, image/PDF processors and deployment hooks. The per-site Unix uid, `0751` home + `2750
@@ -487,6 +497,14 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
     the sentinel is foreign → never touched,
     surfaced to the operator. A crash leaves at most a marked orphan, which reconcile converges by its
     own ULID.
+  - **Orphan purge order — no `userdel` while the UID still owns files (UID-reuse guard).** A proven orphan
+    (GECOS `novapanel-site=<ULID>`, no live `sites` row, no live job) is purged **UID-owned files first,
+    then the account**: remove the managed pool file → reload/stop-FPM-if-last → remove the log dir → remove
+    the home tree `/srv/sites/<site>` → **then** `userdel`. The separate `/var/www/acme/<site>` is root-owned
+    (no UID-reuse risk): remove by its deterministic path or leave for the operator. `userdel` runs **only
+    after** every file owned by that UID is gone; if any purge step fails or any ownership is uncertain, **do
+    not `userdel`** — retain the account and surface to the operator (the conservative skip is the correct
+    fallback). This completes convergence while guaranteeing a released UID can never inherit surviving files.
 
 ## External refs (gathered — verified, with flags to resolve before coding)
 - **502 cause (verified):** FPM socket default owner = FPM run-user (site user) mode 0660 → nginx
