@@ -39,7 +39,7 @@ func ensureDirectory(root *os.Root, path string) (*os.File, error) {
 }
 
 // EnsureSite only touches validated directories through held, no-follow descriptors.
-func EnsureSite(ctx context.Context, r runner.Runner, sites, acme, logs, name, siteID string) error {
+func EnsureSite(ctx context.Context, r runner.Runner, sites, _ /* ACME is owned by ssl */, logs, name, siteID string) error {
 	if e := (&validate.V{}).SiteName(name); e != nil {
 		return e
 	}
@@ -49,7 +49,7 @@ func EnsureSite(ctx context.Context, r runner.Runner, sites, acme, logs, name, s
 			root.Close()
 		}
 	}()
-	for _, p := range []string{sites, acme, logs} {
+	for _, p := range []string{sites, logs} {
 		resolved, e := filepath.EvalSymlinks(p)
 		if e != nil {
 			return e
@@ -63,15 +63,13 @@ func EnsureSite(ctx context.Context, r runner.Runner, sites, acme, logs, name, s
 		}
 		roots = append(roots, root)
 	}
-	for i, paths := range [][]string{{name, filepath.Join(name, "public")}, {name, filepath.Join(name, ".well-known"), filepath.Join(name, ".well-known", "acme-challenge")}} {
-		for _, p := range paths {
-			info, e := roots[i].Lstat(p)
-			if e == nil && !info.IsDir() {
-				return rpcerr.Errf("invalid_argument", "Invalid site directory")
-			}
-			if e != nil && !os.IsNotExist(e) {
-				return e
-			}
+	for _, p := range []string{name, filepath.Join(name, "public")} {
+		info, e := roots[0].Lstat(p)
+		if e == nil && !info.IsDir() {
+			return rpcerr.Errf("invalid_argument", "Invalid site directory")
+		}
+		if e != nil && !os.IsNotExist(e) {
+			return e
 		}
 	}
 	run := func(prog string, args ...string) ([]byte, int, error) {
@@ -84,7 +82,7 @@ func EnsureSite(ctx context.Context, r runner.Runner, sites, acme, logs, name, s
 		if !errors.As(e, &coded) || coded.Code != "not_found" {
 			return e
 		}
-		for _, root := range []*os.Root{roots[0], roots[1], roots[2]} {
+		for _, root := range roots {
 			f, err := root.OpenFile(name, os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
 			if errors.Is(err, os.ErrNotExist) {
 				continue
@@ -159,8 +157,7 @@ func EnsureSite(ctx context.Context, r runner.Runner, sites, acme, logs, name, s
 		mode     os.FileMode
 	}{
 		{roots[0], name, uid, gid, 0751}, {roots[0], filepath.Join(name, "public"), uid, webgid, os.ModeSetgid | 0750},
-		{roots[2], name, uid, admgid, 0750},
-		{roots[1], name, 0, 0, 0755}, {roots[1], filepath.Join(name, ".well-known"), 0, 0, 0755}, {roots[1], filepath.Join(name, ".well-known", "acme-challenge"), 0, 0, 0755},
+		{roots[1], name, uid, admgid, 0750},
 	} {
 		f, e := ensureDirectory(dir.root, dir.path)
 		if e != nil {
@@ -182,7 +179,7 @@ func EnsureSite(ctx context.Context, r runner.Runner, sites, acme, logs, name, s
 			return fmt.Errorf("site directory: %w", e)
 		}
 	}
-	logDir, e := ensureDirectory(roots[2], name)
+	logDir, e := ensureDirectory(roots[1], name)
 	if e != nil {
 		return e
 	}

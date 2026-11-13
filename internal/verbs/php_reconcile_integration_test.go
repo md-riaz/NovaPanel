@@ -116,6 +116,14 @@ func TestSiteJobLiveFailsClosedOnMissingIdentity(t *testing.T) {
 }
 
 func TestReconcilePHPOrphansAndCommittedPool(t *testing.T) {
+	testReconcilePHPOrphansAndPool(t, false)
+}
+
+func TestReconcilePHPBackfillsLegacyCap(t *testing.T) {
+	testReconcilePHPOrphansAndPool(t, true)
+}
+
+func testReconcilePHPOrphansAndPool(t *testing.T, legacy bool) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st, err := store.Open(filepath.Join(root, "panel.db"))
@@ -137,7 +145,11 @@ func TestReconcilePHPOrphansAndCommittedPool(t *testing.T) {
 		t.Fatal(err)
 	}
 	memory, cap := 128, 5
-	if err = st.SetSitePHP(ctx, sid, version, store.PHPLimits{MemoryMB: &memory, MaxChildren: &cap}); err != nil {
+	limits := store.PHPLimits{MemoryMB: &memory, MaxChildren: &cap}
+	if legacy {
+		limits.MaxChildren = nil
+	}
+	if err = st.SetSitePHP(ctx, sid, version, limits); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(map[string]string{"site_id": pending, "name": "pending"})
@@ -172,6 +184,10 @@ func TestReconcilePHPOrphansAndCommittedPool(t *testing.T) {
 	}
 	if len(r.deleted) != 0 {
 		t.Fatalf("deleted %v", r.deleted)
+	}
+	persisted, err := st.SitePHPLimits(ctx, sid)
+	if err != nil || persisted.MaxChildren == nil || *persisted.MaxChildren < 2 || persisted.MemoryMB == nil || *persisted.MemoryMB != memory {
+		t.Fatalf("persisted limits %+v: %v", persisted, err)
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "novapanel-demo.conf"))
 	if err != nil || !strings.Contains(string(b), "memory_limit] = 128M") {

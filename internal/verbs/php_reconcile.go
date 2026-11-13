@@ -118,7 +118,7 @@ func reconcilePHP(ctx context.Context, st *store.Store, q *jobs.Queue, runner ex
 			if err = php.VerifyUser(ctx, runner, sitesRoot, s.Name, s.ID); err != nil {
 				return err
 			}
-			limits, err := st.SitePHPLimits(ctx, s.ID)
+			limits, err := activePHPLimits(ctx, st, s.ID)
 			if err != nil {
 				return err
 			}

@@ -133,7 +133,7 @@ func siteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 			if e = php.VerifyUser(ctx, a.Exec, a.Cfg.SitesRoot, site.Name, site.ID); e != nil {
 				return e
 			}
-			limits, err := a.Store.SitePHPLimits(ctx, site.ID)
+			limits, err := activePHPLimits(ctx, a.Store, site.ID)
 			if err != nil {
 				return err
 			}

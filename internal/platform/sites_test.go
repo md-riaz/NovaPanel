@@ -69,14 +69,14 @@ func TestEnsureSite(t *testing.T) {
 	if creates != 1 {
 		t.Fatal(r.calls)
 	}
-	for _, p := range []string{r.home, filepath.Join(r.home, "public"), filepath.Join(acme, "demo", ".well-known", "acme-challenge")} {
+	for _, p := range []string{r.home, filepath.Join(r.home, "public"), filepath.Join(acme, "demo", "php-error.log")} {
 		if _, e := os.Stat(p); e != nil {
 			t.Fatal(e)
 		}
 	}
 }
 func TestEnsureSiteRejectsUnownedNonemptyDirectories(t *testing.T) {
-	for _, tree := range []string{"sites", "acme", "logs"} {
+	for _, tree := range []string{"sites", "logs"} {
 		t.Run(tree, func(t *testing.T) {
 			root := t.TempDir()
 			sites, acme, logs := filepath.Join(root, "sites"), filepath.Join(root, "acme"), filepath.Join(root, "logs")
@@ -101,6 +101,49 @@ func TestEnsureSiteRejectsUnownedNonemptyDirectories(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Join(dir, "foreign")); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestEnsureSiteIgnoresACMETree(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("scratch ownership test requires root")
+	}
+	for _, existing := range []bool{false, true} {
+		t.Run(fmt.Sprint(existing), func(t *testing.T) {
+			root := t.TempDir()
+			sites, logs, acme := filepath.Join(root, "sites"), filepath.Join(root, "logs"), filepath.Join(root, "acme")
+			for _, p := range []string{sites, logs} {
+				if err := os.Mkdir(p, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if existing {
+				if err := os.MkdirAll(filepath.Join(acme, "demo"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(acme, "demo", "foreign"), []byte("keep"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r := &accountRunner{home: filepath.Join(sites, "demo")}
+			for i := 0; i < 2; i++ {
+				if err := EnsureSite(context.Background(), r, sites, acme, logs, "demo", siteID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if existing {
+				b, err := os.ReadFile(filepath.Join(acme, "demo", "foreign"))
+				if err != nil || string(b) != "keep" {
+					t.Fatalf("ACME content changed: %q %v", b, err)
+				}
+				info, err := os.Stat(filepath.Join(acme, "demo"))
+				if err != nil || info.Mode().Perm() != 0700 {
+					t.Fatalf("ACME permissions changed: %v %v", info, err)
+				}
+			} else if _, err := os.Lstat(acme); !os.IsNotExist(err) {
+				t.Fatalf("ACME root touched: %v", err)
 			}
 		})
 	}

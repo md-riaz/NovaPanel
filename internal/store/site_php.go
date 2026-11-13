@@ -35,6 +35,46 @@ func (s *Store) SitePHPLimits(ctx context.Context, id string) (limits PHPLimits,
 	return limits, err
 }
 
+// BackfillSitePHPCap initializes only missing caps on active PHP sites. The
+// read, active-site count and conditional write share one transaction so a
+// committed cap and all existing overrides survive concurrent encounters.
+func (s *Store) BackfillSitePHPCap(ctx context.Context, id string, compute func(int) int) (limits PHPLimits, err error) {
+	err = s.Tx(ctx, func(tx *sql.Tx) error {
+		var typ, status string
+		var raw sql.NullString
+		if err := tx.QueryRowContext(ctx, `SELECT type,status,(SELECT value_json FROM settings WHERE key=?) FROM sites WHERE id=?`, phpLimitsKey(id), id).Scan(&typ, &status, &raw); err != nil {
+			return err
+		}
+		if typ == "static" || status != "active" {
+			return ErrSitePrecondition
+		}
+		if raw.Valid {
+			var saved storedPHPLimits
+			if err := json.Unmarshal([]byte(raw.String), &saved); err != nil {
+				return err
+			}
+			limits = saved.PHPLimits
+			limits.MaxChildren = saved.MaxChildren
+		}
+		if limits.MaxChildren != nil {
+			return nil
+		}
+		var active int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sites WHERE status='active'`).Scan(&active); err != nil {
+			return err
+		}
+		cap := compute(active)
+		limits.MaxChildren = &cap
+		encoded, err := json.Marshal(storedPHPLimits{PHPLimits: limits, MaxChildren: limits.MaxChildren})
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO settings(key,value_json) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json`, phpLimitsKey(id), string(encoded))
+		return err
+	})
+	return limits, err
+}
+
 // SetSitePHP atomically persists the version and complete set of overrides.
 // Callers validate values and merge partial requests with the current overrides.
 func (s *Store) SetSitePHP(ctx context.Context, id, version string, limits PHPLimits) error {

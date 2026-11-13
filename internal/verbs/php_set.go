@@ -53,6 +53,13 @@ func committedPHPCap(limits store.PHPLimits) (int, error) {
 	}
 	return *limits.MaxChildren, nil
 }
+
+// activePHPLimits commits the one-time legacy cap before any pool recovery.
+func activePHPLimits(ctx context.Context, st *store.Store, siteID string) (store.PHPLimits, error) {
+	return st.BackfillSitePHPCap(ctx, siteID, func(active int) int {
+		return php.ChildrenCap(php.TotalMemoryMB(), active)
+	})
+}
 func phpSet(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*phpSetArgs)
 	if err := v.Validate(); err != nil {
@@ -106,7 +113,7 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if err = phpAvailable(ctx, a.Exec); err != nil {
 		return err
 	}
-	limits, err := a.Store.SitePHPLimits(ctx, s.ID)
+	limits, err := activePHPLimits(ctx, a.Store, s.ID)
 	if err != nil {
 		return err
 	}

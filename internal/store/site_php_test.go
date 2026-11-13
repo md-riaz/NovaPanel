@@ -33,6 +33,46 @@ func TestSiteCreatePersistsCapAndRetryKeepsIt(t *testing.T) {
 	}
 }
 
+func TestBackfillSitePHPCapOnce(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	_, err = s.db.ExecContext(ctx, `INSERT INTO sites(id,name,type,status,docroot,created,updated) VALUES('p','php-site','php','active','/p',1,1),('s','static-site','static','active','/s',1,1),('n','new-site','php','creating','/n',1,1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO settings(key,value_json) VALUES(?,?)`, phpLimitsKey("p"), `{"memory_mb":128}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	compute := func(active int) int {
+		calls++
+		if active != 2 {
+			t.Fatalf("active sites = %d", active)
+		}
+		return 7
+	}
+	for i := 0; i < 2; i++ {
+		limits, err := s.BackfillSitePHPCap(ctx, "p", compute)
+		if err != nil || limits.MaxChildren == nil || *limits.MaxChildren != 7 || limits.MemoryMB == nil || *limits.MemoryMB != 128 {
+			t.Fatalf("limits %+v: %v", limits, err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("computed %d times", calls)
+	}
+	if _, err = s.BackfillSitePHPCap(ctx, "s", compute); !errors.Is(err, ErrSitePrecondition) {
+		t.Fatalf("static: %v", err)
+	}
+	if _, err = s.BackfillSitePHPCap(ctx, "n", compute); !errors.Is(err, ErrSitePrecondition) {
+		t.Fatalf("creating: %v", err)
+	}
+}
+
 func TestSitePHPDesiredState(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "panel.db")
