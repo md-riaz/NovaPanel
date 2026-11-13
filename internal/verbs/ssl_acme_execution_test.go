@@ -47,7 +47,7 @@ func TestACMEIssueRenewPublication(t *testing.T) {
 	a.Secret, _ = secret.New(make([]byte, 32))
 	a.Cfg.TLSDir = filepath.Join(root, "tls")
 	a.Cfg.ACMEWebroot = filepath.Join(root, "acme")
-	for _, p := range []string{a.Cfg.TLSDir, filepath.Join(a.Cfg.ACMEWebroot, "demo"), filepath.Join(root, "nginx/sites-available"), filepath.Join(root, "nginx/sites-enabled")} {
+	for _, p := range []string{a.Cfg.TLSDir, a.Cfg.ACMEWebroot, filepath.Join(root, "nginx/sites-available"), filepath.Join(root, "nginx/sites-enabled")} {
 		if err = os.MkdirAll(p, 0755); err != nil {
 			t.Fatal(err)
 		}
@@ -110,6 +110,9 @@ func TestACMEIssueRenewPublication(t *testing.T) {
 		return &j
 	}
 	j := run("ssl.issue")
+	if info, e := os.Stat(filepath.Join(a.Cfg.ACMEWebroot, "demo")); e != nil || info.Mode().Perm() != 0755 {
+		t.Fatalf("issuance did not create webroot: %v %v", info, e)
+	}
 	first, _ := os.Readlink(filepath.Join(a.Cfg.TLSDir, "example.test/current"))
 	site, _ := st.SiteByID(ctx, sid)
 	ds, _ := st.ListDomains(ctx, sid)
@@ -129,7 +132,13 @@ func TestACMEIssueRenewPublication(t *testing.T) {
 	if err = (acmeExecutor{a}).execute(ctx, j, "ssl.issue", f.server.Client()); err == nil {
 		t.Fatal("terminal job accepted")
 	}
+	if err = os.RemoveAll(filepath.Join(a.Cfg.ACMEWebroot, "demo")); err != nil {
+		t.Fatal(err)
+	}
 	run("ssl.renew")
+	if info, e := os.Stat(filepath.Join(a.Cfg.ACMEWebroot, "demo")); e != nil || info.Mode().Perm() != 0755 {
+		t.Fatalf("renewal did not create webroot: %v %v", info, e)
+	}
 	second, _ := os.Readlink(filepath.Join(a.Cfg.TLSDir, "example.test/current"))
 	if first == second || r.reloads != 4 {
 		t.Fatalf("publication first=%s second=%s reloads=%d", first, second, r.reloads)

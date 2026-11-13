@@ -37,6 +37,31 @@ func TestLastPoolStopsAndNextStarts(t *testing.T) {
 	}
 }
 
+func TestRemovingLastManagedPoolKeepsUnmanagedService(t *testing.T) {
+	dir := testPoolDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "www.conf"), []byte("[www]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	r := &poolRunner{hook: func(_ context.Context, _ int, args []string) error {
+		calls = append(calls, strings.Join(args, " "))
+		return nil
+	}}
+	a := PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
+	state := PoolState{SiteID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Exists: true, MaxChildren: 3}
+	if err := a.Recover(context.Background(), "demo", state); err != nil {
+		t.Fatal(err)
+	}
+	calls = nil
+	if err := a.ApplyCommitted(context.Background(), "demo", PoolState{SiteID: state.SiteID}, state); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(calls, "|")
+	if strings.Contains(joined, "stop ") || strings.Contains(joined, "disable ") || !strings.Contains(joined, "reload ") {
+		t.Fatalf("operator pool disrupted: %v", calls)
+	}
+}
+
 func TestManagedPoolOwnership(t *testing.T) {
 	dir := testPoolDir(t)
 	a := PoolApplier{Dir: dir, Runner: &poolRunner{}, Probe: func(context.Context) error { return nil }}

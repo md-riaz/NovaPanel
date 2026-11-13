@@ -38,7 +38,7 @@ func TestPackagingContracts(t *testing.T) {
 		}
 	}
 	tmp := read("tmpfiles/novapanel.conf")
-	for _, s := range []string{"d /run/novapanel 0755 root root -", "d /var/lib/novapanel 0700 root root -", "d /var/log/novapanel 0755 root root -", "d /var/www/acme 0755 root root -"} {
+	for _, s := range []string{"d /run/novapanel 0755 root root -", "d /run/php/novapanel 0755 root root -", "d /var/lib/novapanel 0700 root root -", "d /var/log/novapanel 0755 root root -", "d /var/www/acme 0755 root root -"} {
 		if !strings.Contains(tmp, s) {
 			t.Errorf("missing tmpfile %s", s)
 		}

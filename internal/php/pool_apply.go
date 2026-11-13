@@ -265,21 +265,18 @@ func poolPublish(root *os.Root, file string, b []byte) error {
 	return poolSync(root)
 }
 
-func (a *PoolApplier) managedCount(root *os.Root, file string, present bool) (int, error) {
+func (a *PoolApplier) effectiveCount(root *os.Root, file string, present bool) (int, error) {
 	entries, err := os.ReadDir(a.Dir)
 	if err != nil {
 		return 0, err
 	}
 	n := 0
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "novapanel-") && strings.HasSuffix(e.Name(), ".conf") && e.Name() != file {
-			b, err := poolRead(root, e.Name())
-			if err != nil {
+		if strings.HasSuffix(e.Name(), ".conf") && e.Name() != file {
+			if _, err := poolRead(root, e.Name()); err != nil {
 				return 0, err
 			}
-			if regexp.MustCompile(`^; novapanel-managed site=[0-7][0-9A-HJKMNP-TV-Z]{25}\n`).Match(b) {
-				n++
-			}
+			n++
 		}
 	}
 	if present {
@@ -328,7 +325,7 @@ func (a *PoolApplier) apply(ctx context.Context, name, siteID string, b, committ
 		if err := poolPublish(root, file, committed); err != nil {
 			return err
 		}
-		count, err := a.managedCount(root, file, committed != nil)
+		count, err := a.effectiveCount(root, file, committed != nil)
 		if err != nil {
 			return err
 		}
@@ -347,7 +344,7 @@ func (a *PoolApplier) apply(ctx context.Context, name, siteID string, b, committ
 	}
 	if err == nil {
 		var count int
-		count, err = a.managedCount(root, file, b != nil)
+		count, err = a.effectiveCount(root, file, b != nil)
 		if err == nil {
 			err = a.service(ctx, count)
 		}
