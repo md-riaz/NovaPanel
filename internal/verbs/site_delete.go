@@ -151,10 +151,10 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 			}
 			// Deleting is already committed, so absence is the authoritative projection.
 			if wasDeleting || j.Attempts > 1 {
-				if e = a.PHP.Recover(ctx, s.Name, php.PoolState{}); e != nil {
+				if e = a.PHP.Recover(ctx, s.Name, php.PoolState{SiteID: s.ID}); e != nil {
 					return e
 				}
-			} else if e = a.PHP.ApplyCommitted(ctx, s.Name, php.PoolState{}, php.PoolState{}); e != nil {
+			} else if e = a.PHP.ApplyCommitted(ctx, s.Name, php.PoolState{SiteID: s.ID}, php.PoolState{SiteID: s.ID}); e != nil {
 				return e
 			}
 			if v.PurgeFiles {
@@ -168,7 +168,7 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 		if poolRemoved {
 			// The durable step proves this job verified ownership before removal.
 			if wasDeleting && j.Step == "site_pool_removed" {
-				if e = a.PHP.Recover(ctx, s.Name, php.PoolState{}); e != nil {
+				if e = a.PHP.Recover(ctx, s.Name, php.PoolState{SiteID: s.ID}); e != nil {
 					return e
 				}
 			}

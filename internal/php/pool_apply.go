@@ -34,6 +34,7 @@ type PoolApplier struct {
 // PoolState is a projection of committed SQLite state. Exists false represents
 // the absence of a pool; callers must derive it under the site lifecycle lock.
 type PoolState struct {
+	SiteID      string
 	Exists      bool
 	MaxChildren int
 	Limits      store.PHPLimits
@@ -54,15 +55,25 @@ func renderState(name string, state PoolState) ([]byte, error) {
 	if err := (&validate.V{}).SiteName(name); err != nil {
 		return nil, err
 	}
+	if !regexp.MustCompile(`^[0-7][0-9A-HJKMNP-TV-Z]{25}$`).MatchString(state.SiteID) {
+		return nil, rpcerr.Errf("invalid_argument", "invalid site ID")
+	}
 	if !state.Exists {
 		return nil, nil
 	}
-	return RenderPoolLimits(name, state.MaxChildren, state.Limits)
+	b, err := RenderPoolLimits(name, state.MaxChildren, state.Limits)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte("; novapanel-managed site="+state.SiteID+"\n"), b...), nil
 }
 
 // ApplyCommitted tests the candidate before publishing it. On failure it restores
 // the caller's committed SQLite projection, never the previous disk contents.
 func (a *PoolApplier) ApplyCommitted(ctx context.Context, name string, desired, committed PoolState) error {
+	if desired.SiteID != committed.SiteID {
+		return rpcerr.Errf("invalid_argument", "site IDs differ")
+	}
 	b, err := renderState(name, desired)
 	if err != nil {
 		return err
@@ -73,7 +84,7 @@ func (a *PoolApplier) ApplyCommitted(ctx context.Context, name string, desired, 
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.apply(ctx, name, b, old, false)
+	return a.apply(ctx, name, desired.SiteID, b, old, false)
 }
 
 // Recover unconditionally republishes and reloads the committed projection;
@@ -85,7 +96,7 @@ func (a *PoolApplier) Recover(ctx context.Context, name string, committed PoolSt
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.apply(ctx, name, b, b, true)
+	return a.apply(ctx, name, committed.SiteID, b, b, true)
 }
 
 func poolRoot(path string) (*os.Root, error) {
@@ -234,6 +245,9 @@ func (a *PoolApplier) testCandidate(ctx context.Context, root *os.Root, file str
 	if count != 1 {
 		return rpcerr.Errf("agent_error", "FPM master must include the pool directory exactly once")
 	}
+	if len(paths) == 0 {
+		return nil
+	}
 	if err := poolWrite(root, master, []byte(strings.Join(lines, "\n"))); err != nil {
 		return err
 	}
@@ -251,7 +265,46 @@ func poolPublish(root *os.Root, file string, b []byte) error {
 	return poolSync(root)
 }
 
-func (a *PoolApplier) apply(ctx context.Context, name string, b, committed []byte, recovery bool) error {
+func (a *PoolApplier) managedCount(root *os.Root, file string, present bool) (int, error) {
+	entries, err := os.ReadDir(a.Dir)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "novapanel-") && strings.HasSuffix(e.Name(), ".conf") && e.Name() != file {
+			b, err := poolRead(root, e.Name())
+			if err != nil {
+				return 0, err
+			}
+			if regexp.MustCompile(`^; novapanel-managed site=[0-7][0-9A-HJKMNP-TV-Z]{25}\n`).Match(b) {
+				n++
+			}
+		}
+	}
+	if present {
+		n++
+	}
+	return n, nil
+}
+
+func (a *PoolApplier) service(ctx context.Context, count int) error {
+	if count == 0 {
+		if err := a.command(ctx, "/usr/bin/systemctl", "stop", "php8.3-fpm.service"); err != nil {
+			return err
+		}
+		return a.command(ctx, "/usr/bin/systemctl", "disable", "php8.3-fpm.service")
+	}
+	if err := a.command(ctx, "/usr/bin/systemctl", "enable", "--now", "php8.3-fpm.service"); err != nil {
+		return err
+	}
+	if err := a.command(ctx, "/usr/bin/systemctl", "reload", "php8.3-fpm.service"); err != nil {
+		return err
+	}
+	return a.Probe(ctx)
+}
+
+func (a *PoolApplier) apply(ctx context.Context, name, siteID string, b, committed []byte, recovery bool) error {
 	if a.Runner == nil || a.Probe == nil {
 		return rpcerr.Errf("agent_error", "FPM apply dependencies unavailable")
 	}
@@ -260,10 +313,14 @@ func (a *PoolApplier) apply(ctx context.Context, name string, b, committed []byt
 		return err
 	}
 	defer root.Close()
-	file := name + ".conf"
-	// Refuse symlinks and special files even when removing or overwriting.
-	if _, err = poolRead(root, file); err != nil && !os.IsNotExist(err) {
+	file := "novapanel-" + name + ".conf"
+	// The header is the ownership proof, including during rollback and replay.
+	current, err := poolRead(root, file)
+	if err != nil && !os.IsNotExist(err) {
 		return err
+	}
+	if err == nil && !strings.HasPrefix(string(current), "; novapanel-managed site="+siteID+"\n") {
+		return rpcerr.Errf("conflict", "pool file is not owned by site")
 	}
 	restore := func() error {
 		c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -271,10 +328,11 @@ func (a *PoolApplier) apply(ctx context.Context, name string, b, committed []byt
 		if err := poolPublish(root, file, committed); err != nil {
 			return err
 		}
-		if err := a.command(c, "/usr/bin/systemctl", "reload", "php8.3-fpm.service"); err != nil {
+		count, err := a.managedCount(root, file, committed != nil)
+		if err != nil {
 			return err
 		}
-		return a.Probe(c)
+		return a.service(c, count)
 	}
 	defer root.Remove(file + ".candidate")
 	if err = a.testCandidate(ctx, root, file, b); err == nil {
@@ -288,10 +346,11 @@ func (a *PoolApplier) apply(ctx context.Context, name string, b, committed []byt
 		}
 	}
 	if err == nil {
-		err = a.command(ctx, "/usr/bin/systemctl", "reload", "php8.3-fpm.service")
-	}
-	if err == nil {
-		err = a.Probe(ctx)
+		var count int
+		count, err = a.managedCount(root, file, b != nil)
+		if err == nil {
+			err = a.service(ctx, count)
+		}
 	}
 	if err == nil {
 		return nil

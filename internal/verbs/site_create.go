@@ -79,7 +79,22 @@ func siteCreate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	if e != nil {
 		return nil, e
 	}
-	site, e := a.Store.CreateSite(ctx, store.Site{ID: sid, Name: v.Name, Type: v.Type, PHPVersion: v.PHPVersion, Docroot: filepath.Join(a.Cfg.SitesRoot, v.Name, "public")}, store.Domain{ID: did, FQDN: v.PrimaryDomain})
+	var initial []store.PHPLimits
+	if v.Type == "php" {
+		sites, err := a.Store.ListSites(ctx)
+		if err != nil {
+			return nil, err
+		}
+		active := 0
+		for _, s := range sites {
+			if s.Status == "active" {
+				active++
+			}
+		}
+		cap := php.ChildrenCap(php.TotalMemoryMB(), active)
+		initial = append(initial, store.PHPLimits{MaxChildren: &cap})
+	}
+	site, e := a.Store.CreateSite(ctx, store.Site{ID: sid, Name: v.Name, Type: v.Type, PHPVersion: v.PHPVersion, Docroot: filepath.Join(a.Cfg.SitesRoot, v.Name, "public")}, store.Domain{ID: did, FQDN: v.PrimaryDomain}, initial...)
 	if e != nil {
 		return nil, siteError(e)
 	}
@@ -122,7 +137,11 @@ func siteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 			if err != nil {
 				return err
 			}
-			if e = a.PHP.Recover(ctx, site.Name, php.PoolState{Exists: true, MaxChildren: 5, Limits: limits}); e != nil {
+			cap, err := committedPHPCap(limits)
+			if err != nil {
+				return err
+			}
+			if e = a.PHP.Recover(ctx, site.Name, php.PoolState{SiteID: site.ID, Exists: true, MaxChildren: cap, Limits: limits}); e != nil {
 				return e
 			}
 		}
@@ -141,12 +160,12 @@ func siteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		if err != nil && poolApplied {
-			err = errors.Join(err, a.PHP.Recover(cleanup, site.Name, php.PoolState{}))
+			err = errors.Join(err, a.PHP.Recover(cleanup, site.Name, php.PoolState{SiteID: site.ID}))
 		}
 		if site.Status != state {
 			if statusErr := a.Store.SetSiteStatus(cleanup, site.ID, state); statusErr != nil {
 				if poolApplied && state == "active" {
-					statusErr = errors.Join(statusErr, a.PHP.Recover(cleanup, site.Name, php.PoolState{}), jobs.ErrRetry)
+					statusErr = errors.Join(statusErr, a.PHP.Recover(cleanup, site.Name, php.PoolState{SiteID: site.ID}), jobs.ErrRetry)
 				}
 				err = errors.Join(err, statusErr)
 			}
@@ -172,13 +191,17 @@ func siteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 		if err != nil {
 			return err
 		}
-		committed := php.PoolState{}
+		cap, err := committedPHPCap(limits)
+		if err != nil {
+			return err
+		}
+		committed := php.PoolState{SiteID: site.ID}
 		if j.Attempts > 1 {
 			if e = a.PHP.Recover(ctx, site.Name, committed); e != nil {
 				return e
 			}
 		}
-		if e = a.PHP.ApplyCommitted(ctx, site.Name, php.PoolState{Exists: true, MaxChildren: 5, Limits: limits}, committed); e != nil {
+		if e = a.PHP.ApplyCommitted(ctx, site.Name, php.PoolState{SiteID: site.ID, Exists: true, MaxChildren: cap, Limits: limits}, committed); e != nil {
 			return e
 		}
 		poolApplied = true

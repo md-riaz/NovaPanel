@@ -122,7 +122,11 @@ func reconcilePHP(ctx context.Context, st *store.Store, q *jobs.Queue, runner ex
 			if err != nil {
 				return err
 			}
-			return pool.Recover(ctx, s.Name, php.PoolState{Exists: true, MaxChildren: 5, Limits: limits})
+			cap, err := committedPHPCap(limits)
+			if err != nil {
+				return err
+			}
+			return pool.Recover(ctx, s.Name, php.PoolState{SiteID: s.ID, Exists: true, MaxChildren: cap, Limits: limits})
 		}()
 		unlock()
 		if err != nil {
@@ -163,31 +167,27 @@ func reconcilePHP(ctx context.Context, st *store.Store, q *jobs.Queue, runner ex
 			}
 			// Missing configuration, inaccessible roots and symlinks are not proof of absence.
 			if len(logsRoot) != 1 {
-				return nil
+				return errors.New("orphan account requires manual cleanup: log root unavailable")
 			}
 			for _, resource := range []struct{ root, name string }{
-				{sitesRoot, account.name}, {logsRoot[0], account.name}, {pool.Dir, account.name + ".conf"},
+				{sitesRoot, account.name}, {logsRoot[0], account.name}, {pool.Dir, "novapanel-" + account.name + ".conf"},
 			} {
 				if !filepath.IsAbs(resource.root) || filepath.Clean(resource.root) != resource.root {
-					return nil
+					return errors.New("orphan account requires manual cleanup: invalid resource root")
 				}
 				resolved, e := filepath.EvalSymlinks(resource.root)
 				if e != nil || resolved != resource.root {
-					return nil
+					return errors.New("orphan account requires manual cleanup: unverified resource root")
 				}
 				info, e := os.Stat(resource.root)
 				if e != nil || !info.IsDir() {
-					return nil
+					return errors.New("orphan account requires manual cleanup: inaccessible resource root")
 				}
 				if _, e = os.Lstat(filepath.Join(resource.root, resource.name)); !errors.Is(e, os.ErrNotExist) {
-					return nil
+					return errors.New("orphan account requires manual cleanup: resource exists or is inaccessible")
 				}
 			}
-			if err = php.DeleteOrphan(ctx, runner, sitesRoot, account.name, account.id, false); err != nil {
-				return err
-			}
-			changed = append(changed, "osuser:"+account.name)
-			return nil
+			return php.DeleteOrphan(ctx, runner, sitesRoot, account.name, account.id, false)
 		}()
 		unlock()
 		if err != nil {

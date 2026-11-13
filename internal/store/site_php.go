@@ -8,9 +8,15 @@ import (
 
 // PHPLimits contains per-site overrides; nil fields use runtime defaults.
 type PHPLimits struct {
-	MemoryMB   *int `json:"memory_mb,omitempty"`
-	UploadMB   *int `json:"upload_mb,omitempty"`
-	MaxExecSec *int `json:"max_exec_sec,omitempty"`
+	MemoryMB    *int `json:"memory_mb,omitempty"`
+	UploadMB    *int `json:"upload_mb,omitempty"`
+	MaxExecSec  *int `json:"max_exec_sec,omitempty"`
+	MaxChildren *int `json:"-"` // agent-owned persisted cap, never an RPC override
+}
+
+type storedPHPLimits struct {
+	PHPLimits
+	MaxChildren *int `json:"max_children,omitempty"`
 }
 
 func phpLimitsKey(id string) string { return "site:php_limits:" + id }
@@ -22,7 +28,10 @@ func (s *Store) SitePHPLimits(ctx context.Context, id string) (limits PHPLimits,
 	if err != nil || !raw.Valid {
 		return limits, err
 	}
-	err = json.Unmarshal([]byte(raw.String), &limits)
+	var saved storedPHPLimits
+	err = json.Unmarshal([]byte(raw.String), &saved)
+	limits = saved.PHPLimits
+	limits.MaxChildren = saved.MaxChildren
 	return limits, err
 }
 
@@ -32,7 +41,7 @@ func (s *Store) SetSitePHP(ctx context.Context, id, version string, limits PHPLi
 	if id == "" || version == "" {
 		return ErrSiteInvalid
 	}
-	raw, err := json.Marshal(limits)
+	raw, err := json.Marshal(storedPHPLimits{PHPLimits: limits, MaxChildren: limits.MaxChildren})
 	if err != nil {
 		return err
 	}

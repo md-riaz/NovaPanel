@@ -67,7 +67,7 @@ func TestReconcileOrphanResourceGuard(t *testing.T) {
 			case "log":
 				err = os.Mkdir(filepath.Join(logs, "orphan"), 0755)
 			case "pool":
-				err = os.WriteFile(filepath.Join(pools, "orphan.conf"), []byte("pool"), 0644)
+				err = os.WriteFile(filepath.Join(pools, "novapanel-orphan.conf"), []byte("pool"), 0644)
 			case "dangling":
 				err = os.Symlink("missing", filepath.Join(sites, "orphan"))
 			case "unknown":
@@ -90,12 +90,8 @@ func TestReconcileOrphanResourceGuard(t *testing.T) {
 				}
 			}
 			changed, err := reconcilePHP(ctx, st, q, r, pool, sites, logs)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := kind == "absent" || kind == "locks"
-			if (len(r.deleted) == 1) != want || (len(changed) == 1) != want {
-				t.Fatalf("deleted=%v changed=%v", r.deleted, changed)
+			if err == nil || len(r.deleted) != 0 || len(changed) != 0 {
+				t.Fatalf("orphan must remain for operator: deleted=%v changed=%v err=%v", r.deleted, changed, err)
 			}
 		})
 	}
@@ -140,8 +136,8 @@ func TestReconcilePHPOrphansAndCommittedPool(t *testing.T) {
 	if err = st.SetSiteStatus(ctx, sid, "active"); err != nil {
 		t.Fatal(err)
 	}
-	memory := 128
-	if err = st.SetSitePHP(ctx, sid, version, store.PHPLimits{MemoryMB: &memory}); err != nil {
+	memory, cap := 128, 5
+	if err = st.SetSitePHP(ctx, sid, version, store.PHPLimits{MemoryMB: &memory, MaxChildren: &cap}); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(map[string]string{"site_id": pending, "name": "pending"})
@@ -157,7 +153,7 @@ func TestReconcilePHPOrphansAndCommittedPool(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(root, "php-fpm.conf"), []byte(master), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(filepath.Join(dir, "demo.conf"), []byte("uncommitted"), 0644); err != nil {
+	if err = os.WriteFile(filepath.Join(dir, "novapanel-demo.conf"), []byte("; novapanel-managed site="+sid+"\nuncommitted"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	r := &reconcileAccounts{root: root, accounts: map[string]string{"demo": "novapanel-site=" + sid, "orphan": "novapanel-site=" + orphan, "pending": "novapanel-site=" + pending, "retained": "novapanel-retained=" + retained, "foreign": ""}}
@@ -171,13 +167,13 @@ func TestReconcilePHPOrphansAndCommittedPool(t *testing.T) {
 	if err = os.Mkdir(logs, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = reconcilePHP(ctx, a.Store, a.Jobs, a.Exec, a.PHP, a.Cfg.SitesRoot, logs); err != nil {
-		t.Fatal(err)
+	if _, err = reconcilePHP(ctx, a.Store, a.Jobs, a.Exec, a.PHP, a.Cfg.SitesRoot, logs); err == nil {
+		t.Fatal("expected orphan to require manual cleanup")
 	}
-	if len(r.deleted) != 1 || r.deleted[0] != "orphan" {
+	if len(r.deleted) != 0 {
 		t.Fatalf("deleted %v", r.deleted)
 	}
-	b, err := os.ReadFile(filepath.Join(dir, "demo.conf"))
+	b, err := os.ReadFile(filepath.Join(dir, "novapanel-demo.conf"))
 	if err != nil || !strings.Contains(string(b), "memory_limit] = 128M") {
 		t.Fatalf("pool %q: %v", b, err)
 	}

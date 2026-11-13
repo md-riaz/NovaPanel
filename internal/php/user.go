@@ -171,5 +171,17 @@ func DeleteOrphan(ctx context.Context, r runner.Runner, root, name, id string, h
 	if hasLiveRowOrJob {
 		return rpcerr.Errf("precondition_failed", "site or job still live")
 	}
-	return DeleteUser(ctx, r, root, name, id)
+	if err := inputs(root, name, id); err != nil {
+		return err
+	}
+	a, err := lookup(ctx, r, root, name)
+	if err != nil || a == nil {
+		return err
+	}
+	if a.gecos != marker+id {
+		return rpcerr.Errf("conflict", "site account is not owned")
+	}
+	// Absence of managed paths cannot establish that this UID owns no files
+	// elsewhere. Keep the UID reserved until an operator can verify cleanup.
+	return rpcerr.Errf("precondition_failed", "orphan account requires manual UID-owned file cleanup")
 }

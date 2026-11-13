@@ -56,6 +56,18 @@ func TestOwnership(t *testing.T) {
 		t.Fatal(f.calls, err)
 	}
 }
+func TestOrphanWithoutUIDFileProofIsNotDeleted(t *testing.T) {
+	f := &fake{gecos: marker + testID}
+	if err := DeleteOrphan(context.Background(), f, "/srv/sites", "demo", testID, false); err == nil {
+		t.Fatal("orphan deleted without proof that UID-owned files are gone")
+	}
+	for _, call := range f.calls {
+		if strings.Contains(call, "userdel") {
+			t.Fatalf("unsafe user deletion: %v", f.calls)
+		}
+	}
+}
+
 func TestRetainUserOwnershipAndReplay(t *testing.T) {
 	ctx := context.Background()
 	for _, gc := range []string{"", marker + "01ARZ3NDEKTSV4RRFFQ69G5FAW", retainedMarker + "01ARZ3NDEKTSV4RRFFQ69G5FAW"} {

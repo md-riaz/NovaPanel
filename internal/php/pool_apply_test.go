@@ -49,7 +49,7 @@ func TestCandidatePreservesMaster(t *testing.T) {
 		return nil
 	}}
 	a := PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
-	if err := a.ApplyCommitted(context.Background(), "demo", PoolState{Exists: true, MaxChildren: 3}, PoolState{}); err != nil {
+	if err := a.ApplyCommitted(context.Background(), "demo", PoolState{SiteID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Exists: true, MaxChildren: 3}, PoolState{SiteID: "01ARZ3NDEKTSV4RRFFQ69G5FAV"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -82,7 +82,7 @@ func TestRealFPMCandidate(t *testing.T) {
 		return nil
 	}}
 	a := PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
-	if err := a.ApplyCommitted(context.Background(), "demo", PoolState{}, PoolState{}); err != nil {
+	if err := a.ApplyCommitted(context.Background(), "demo", PoolState{SiteID: "01ARZ3NDEKTSV4RRFFQ69G5FAV"}, PoolState{SiteID: "01ARZ3NDEKTSV4RRFFQ69G5FAV"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -104,16 +104,16 @@ func TestPoolCommittedRecovery(t *testing.T) {
 	dir := testPoolDir(t)
 	r := &poolRunner{}
 	a := PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
-	old := PoolState{Exists: true, MaxChildren: 3}
-	next := PoolState{Exists: true, MaxChildren: 4}
-	absent := PoolState{}
+	old := PoolState{SiteID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Exists: true, MaxChildren: 3}
+	next := PoolState{SiteID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Exists: true, MaxChildren: 4}
+	absent := PoolState{SiteID: "01ARZ3NDEKTSV4RRFFQ69G5FAV"}
 	if err := a.Recover(ctx, "demo", old); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "demo.conf")
+	path := filepath.Join(dir, "novapanel-demo.conf")
 	original, _ := os.ReadFile(path)
 	r.hook = func(_ context.Context, n int, args []string) error {
-		if n == 3 {
+		if n == 4 {
 			got, _ := os.ReadFile(path)
 			if string(got) != string(original) {
 				t.Fatal("candidate published before test")
@@ -163,8 +163,8 @@ func TestPoolRecoveryFailureRetries(t *testing.T) {
 	ctx := context.Background()
 	r := &poolRunner{}
 	a := PoolApplier{Dir: testPoolDir(t), Runner: r, Probe: func(context.Context) error { return nil }}
-	old := PoolState{Exists: true, MaxChildren: 3}
-	next := PoolState{Exists: true, MaxChildren: 4}
+	old := PoolState{SiteID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Exists: true, MaxChildren: 3}
+	next := PoolState{SiteID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Exists: true, MaxChildren: 4}
 	if err := a.Recover(ctx, "demo", old); err != nil {
 		t.Fatal(err)
 	}
@@ -188,11 +188,11 @@ func TestPoolRefusesSymlink(t *testing.T) {
 	if err := os.WriteFile(outside, []byte("safe"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(outside, filepath.Join(dir, "demo.conf")); err != nil {
+	if err := os.Symlink(outside, filepath.Join(dir, "novapanel-demo.conf")); err != nil {
 		t.Fatal(err)
 	}
 	a := PoolApplier{Dir: dir, Runner: &poolRunner{}, Probe: func(context.Context) error { return nil }}
-	if err := a.Recover(context.Background(), "demo", PoolState{Exists: true, MaxChildren: 3}); err == nil {
+	if err := a.Recover(context.Background(), "demo", PoolState{SiteID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Exists: true, MaxChildren: 3}); err == nil {
 		t.Fatal("accepted symlink")
 	}
 	b, _ := os.ReadFile(outside)

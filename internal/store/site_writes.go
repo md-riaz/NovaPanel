@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 )
 
@@ -229,7 +230,7 @@ func siteWriteError(err error) error {
 
 // CreateSite publishes desired state and its primary domain atomically. IDs are
 // assigned by Run before enqueue; matching retries retain the original IDs.
-func (s *Store) CreateSite(ctx context.Context, v Site, d Domain) (out Site, err error) {
+func (s *Store) CreateSite(ctx context.Context, v Site, d Domain, limits ...PHPLimits) (out Site, err error) {
 	if v.ID == "" || v.Name == "" || v.Type == "" || v.Docroot == "" || d.ID == "" || d.FQDN == "" {
 		return out, ErrSiteInvalid
 	}
@@ -255,6 +256,15 @@ func (s *Store) CreateSite(ctx context.Context, v Site, d Domain) (out Site, err
 		now := s.clock.Now()
 		if _, e = tx.ExecContext(ctx, "INSERT INTO sites(id,name,type,docroot,php_version,created,updated) VALUES(?,?,?,?,?,?,?)", v.ID, v.Name, v.Type, v.Docroot, v.PHPVersion, now, now); e != nil {
 			return siteWriteError(e)
+		}
+		if len(limits) == 1 {
+			raw, err := json.Marshal(storedPHPLimits{PHPLimits: limits[0], MaxChildren: limits[0].MaxChildren})
+			if err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, "INSERT INTO settings(key,value_json) VALUES(?,?)", phpLimitsKey(v.ID), string(raw)); err != nil {
+				return err
+			}
 		}
 		if _, e = tx.ExecContext(ctx, "INSERT INTO domains(id,site_id,fqdn,is_primary,created) VALUES(?,?,?,1,?)", d.ID, v.ID, d.FQDN, now); e != nil {
 			return siteWriteError(e)

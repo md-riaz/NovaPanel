@@ -47,6 +47,12 @@ func phpAvailable(ctx context.Context, runner exec.Runner) error {
 	}
 	return nil
 }
+func committedPHPCap(limits store.PHPLimits) (int, error) {
+	if limits.MaxChildren == nil || *limits.MaxChildren < 2 || *limits.MaxChildren > 32 {
+		return 0, rpc.Errf("precondition_failed", "PHP concurrency cap is missing or invalid")
+	}
+	return *limits.MaxChildren, nil
+}
 func phpSet(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*phpSetArgs)
 	if err := v.Validate(); err != nil {
@@ -104,7 +110,11 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if err != nil {
 		return err
 	}
-	committed := php.PoolState{Exists: true, MaxChildren: 5, Limits: limits}
+	cap, err := committedPHPCap(limits)
+	if err != nil {
+		return err
+	}
+	committed := php.PoolState{SiteID: s.ID, Exists: true, MaxChildren: cap, Limits: limits}
 	if j.Attempts > 1 {
 		if err = a.PHP.Recover(ctx, s.Name, committed); err != nil {
 			return err
@@ -119,7 +129,7 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if v.Limits.MaxExecSec != nil {
 		limits.MaxExecSec = v.Limits.MaxExecSec
 	}
-	if err = a.PHP.ApplyCommitted(ctx, s.Name, php.PoolState{Exists: true, MaxChildren: 5, Limits: limits}, committed); err != nil {
+	if err = a.PHP.ApplyCommitted(ctx, s.Name, php.PoolState{SiteID: s.ID, Exists: true, MaxChildren: cap, Limits: limits}, committed); err != nil {
 		return err
 	}
 	if err = a.Store.SetSitePHP(ctx, s.ID, v.Version, limits); err != nil {
@@ -129,7 +139,12 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 		if readErr != nil {
 			return errors.Join(err, readErr, jobs.ErrRetry)
 		}
+		currentCap, capErr := committedPHPCap(current)
+		if capErr != nil {
+			return errors.Join(err, capErr, jobs.ErrRetry)
+		}
 		committed.Limits = current
+		committed.MaxChildren = currentCap
 		return errors.Join(err, a.PHP.Recover(cleanup, s.Name, committed), jobs.ErrRetry)
 	}
 	j.Result = json.RawMessage(`{}`)

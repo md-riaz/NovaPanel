@@ -46,8 +46,8 @@ func TestPHPSetReplayUsesCommittedLimits(t *testing.T) {
 	if err = st.SetSiteStatus(ctx, sid, "active"); err != nil {
 		t.Fatal(err)
 	}
-	memory := 128
-	if err = st.SetSitePHP(ctx, sid, version, store.PHPLimits{MemoryMB: &memory}); err != nil {
+	memory, cap := 128, 5
+	if err = st.SetSitePHP(ctx, sid, version, store.PHPLimits{MemoryMB: &memory, MaxChildren: &cap}); err != nil {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(root, "pool")
@@ -58,7 +58,7 @@ func TestPHPSetReplayUsesCommittedLimits(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(root, "php-fpm.conf"), []byte(master), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(filepath.Join(dir, "demo.conf"), []byte("uncommitted"), 0644); err != nil {
+	if err = os.WriteFile(filepath.Join(dir, "novapanel-demo.conf"), []byte("; novapanel-managed site="+sid+"\nuncommitted"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	r := poolReplayRunner{filepath.Join(root, "sites"), sid}
@@ -77,7 +77,7 @@ func TestPHPSetReplayUsesCommittedLimits(t *testing.T) {
 	if err != nil || limits.MemoryMB == nil || *limits.MemoryMB != 128 || limits.UploadMB == nil || *limits.UploadMB != 32 {
 		t.Fatalf("limits %+v: %v", limits, err)
 	}
-	b, err := os.ReadFile(filepath.Join(dir, "demo.conf"))
+	b, err := os.ReadFile(filepath.Join(dir, "novapanel-demo.conf"))
 	if err != nil || !strings.Contains(string(b), "memory_limit] = 128M") || !strings.Contains(string(b), "upload_max_filesize] = 32M") {
 		t.Fatalf("pool %q: %v", b, err)
 	}
