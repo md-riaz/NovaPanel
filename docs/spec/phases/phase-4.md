@@ -113,18 +113,23 @@ php_admin_flag[log_errors]         = on
   managed create**: reload/leave running if any pool remains, stop only on a truly empty set — never disrupt
   an operator pool. The next `site.create` re-ensures it active. Never report success on an invalid
   (zero-pool, un-`-t`-able) running config.
-- **`-t` validates the WHOLE `pool.d`, so attribute a failure by a baseline taken before our write — never
-  roll back our valid op for a defect we don't own.** `php8.3-fpm -t` is global (it validates managed **and**
-  unmanaged pools), so a **pre-existing broken operator pool** (`www.conf` or any non-`novapanel-` file) must
-  not fail our `php.set`/`site.create`. Rule: take a baseline `-t` **before** rendering our managed file.
-  (i) **Baseline clean → post-write `-t`/reload fails →** the failure is **ours** → revert our file by
-  re-rendering from the committed SQLite state (#119 F8 revert), return the error. (ii) **Baseline already
-  fails** (foreign pool broken before we touched anything) → the failure is the **operator's**: still write
-  our valid managed file (it is correct in isolation) and attempt reload, but **do not revert our file and do
-  not stop the service** on the pre-existing foreign breakage; surface a **distinct `precondition_failed`
-  naming the offending unmanaged pool** so the operator fixes it, and our correct pool takes effect on the
-  next good reload. Our op owns **only** failures it introduces (clean→dirty), never a defect already present
-  at baseline — and never silently reports success over a `-t` we did make fail.
+- **`-t` validates the WHOLE `pool.d` — a `-t`/reload failure (ours OR a foreign pool) always takes the ONE
+  F8/#119 outcome; a baseline only sets the error ATTRIBUTION, never a different state** (correcting #125,
+  which said a foreign-baseline failure should *leave our new file in place* — that diverges on-disk from
+  committed SQLite, which #119 reconcile would revert anyway, so "takes effect on the next reload" was wrong
+  and it contradicted F8/SQLite-authoritative recovery). `php8.3-fpm -t` is global, so a **pre-existing broken
+  operator pool** (`www.conf` or any non-`novapanel-` file) can make our `-t`/reload fail through no fault of
+  our change. **Single outcome on ANY `-t`/reload/probe failure:** re-render our pool file from the
+  **committed SQLite** state (F8 revert — the file is a pure projection, #119), **do not checkpoint the new
+  value** (SQLite only ever holds a *verified-applied* version), **leave the service running** (never stop it
+  for a `-t` failure — stop only on a truly empty effective pool set, above), and **return an error**. On-disk
+  therefore always reconverges to committed SQLite; our change does **not** partially persist and applies only
+  on a later retry once the blocker clears. **Baseline `-t` (taken before rendering) sets only the error's
+  attribution, not the outcome:** baseline-clean → post-write failure is **ours** (bad new render/limits) →
+  error attributed to our input; baseline already failing → the blocker is a **foreign/operator pool** →
+  `precondition_failed` **naming that unmanaged pool** ("fix it and retry"), and we must **not** rollback-loop
+  or blame our own valid change, nor stop the service, for a defect that predates it. Either way: one revert
+  to committed SQLite, never a left-behind divergent file, never silent success over a `-t` we made fail.
 - **`pm.max_children` sizing (deterministic, persisted — a pure SQLite projection per #119).** The cap is
   **not** read from live RAM at render time (that would make the pool non-deterministic on reconcile). It is
   computed **once** at `site.create`/`php.set` and **persisted in the site's SQLite `limits`**; the pool
