@@ -112,10 +112,15 @@ php_admin_flag[log_errors]         = on
   file renders `pm.max_children` from that committed value and reconcile re-renders the same value. Default
   formula: `php_budget_mb = max(256, floor(MemTotalMB * 0.5)) − 256` (reserve for OS/MariaDB/nginx);
   `cap = clamp(floor(php_budget_mb / 64 / max(1, active_site_count)), 2, 32)` (worker RSS assumed **64 MB**;
-  bounds **[2, 32]**). An explicit per-site override in `limits` wins. If RAM can't be detected at compute
-  time, fall back to the min (`2`) and persist it — never fabricate a RAM-sized value. A later RAM/site-count
-  change does **not** silently mutate already-committed caps; rebalancing is an explicit operator op that
-  recomputes and re-persists. So "sized to RAM" = sized once from RAM at set time, then a committed constant.
+  bounds **[2, 32]**). **No user-facing `max_children` override in v1** — correcting #122: canonical `03`
+  `php.set.limits` carries only `memory_mb`/`upload_mb`/`max_exec_sec`, and `03` is **not** amended; the cap
+  is always the computed+persisted value (an operator rebalance is future). If RAM can't be detected at
+  compute time, fall back to the min (`2`) and persist it — never fabricate a RAM-sized value. **Legacy
+  backfill:** an already-active site with **no persisted cap** gets the cap **computed once from the formula
+  and persisted** on first encounter (site-create replay or reconcile) — deterministic, not a guess — then
+  rendered from the persisted value. A later RAM/site-count change does **not** silently mutate already-committed
+  caps; rebalancing is an explicit operator op that recomputes and re-persists. So "sized to RAM" = sized once
+  from RAM at set/backfill time, then a committed constant.
 - **Compatibility profile is the default.** Do not set `open_basedir` or disable `exec`, `passthru`,
   `shell_exec`, `system`, `proc_open` or `popen` by default. A VPS owner may need Composer, framework
   workers, image/PDF processors and deployment hooks. The per-site Unix uid, `0751` home + `2750
@@ -462,11 +467,14 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
 - **ACME webroot is a SEPARATE root-owned tree (F16, Phase-3), not under docroot** (correcting #120). The
   challenge webroot is `/var/www/acme/<site>` (per-site subdir under `acme_webroot=/var/www/acme`,
   world-traversable B-D8), **root-owned** (`root:root`; provider/nginx read; no group/other write) — **not**
-  `<docroot>/.well-known/…`. It is owned/ensured by **Phase-3/`ssl.*`**, not Phase-4; Phase 4 never moves or
-  rewrites it. Provenance for this separate tree is the **`sites` row + the deterministic
-  `/var/www/acme/<site>` path** (single-VPS root-owned, validated-unique path — the lighter proof, as the
-  site user does not own it): never adopt a pre-existing **non-empty** `/var/www/acme/<site>` with no
-  matching `sites` row (`conflict`); purge removes it, retain keeps it, replay re-ensures it idempotently.
+  `<docroot>/.well-known/…`. **Step 2 (PHP runtime) does not create, own, provenance-check, or delete this
+  tree** — it is owned/ensured by **Phase-3/`ssl.*`** (created on first issue, removed with the certs in
+  `site.delete` step 2). The **name/path alone does not prove ownership** (the slug is reusable after the row
+  is removed), so a durable **site-ULID provenance marker for the ACME tree is owed to Phase-3/ssl** (design
+  at build time — e.g. a root-owned `.novapanel-owner` file carrying `<site_ULID>` inside the tree, keyed on
+  the ULID not the name, with the same create/replay/retain/purge/legacy-migration shape as the OS user).
+  Until then Step 2 **never deletes or adopts** `/var/www/acme/<site>` by name; a pre-existing or ambiguous
+  tree is Phase-3's to reconcile, never Step 2's.
 - **Log directory & file perms.** Panel creates `/var/log/novapanel/` `0755 root root`, and per site
   `/var/log/novapanel/<site>/` owned **`<siteuser>:adm` `0750`** (the FPM worker runs as the site user, so
   it must own/write its `php-error.log`; operators read via group `adm`; `other` none). The log file itself
@@ -476,9 +484,11 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
   `sites` row (active/created) **only** — **never** a `creating` row (ownership not yet proven) or a
   `deleting` row. An interrupted `creating`/`deleting` row is resolved by the owning job's **roll-forward**
   (which stamps its own account as it proceeds, or fails closed `conflict` on a foreign collision), **not**
-  by the migration — so the migration never stamps a foreign collision. Home/log dirs under a now-marked
-  user need no separate stamping (transitive); the separate ACME tree is proven by its `sites` row + path.
-  An unmarked account with **no** matching row stays foreign.
+  by the migration — so the migration never stamps a foreign collision. (F9 "live rows" includes
+  `creating`/`deleting`; "stampable" is the narrower **settled/proven** subset — being live is not proof of
+  ownership, so startup never stamps a `creating`/`deleting` account.) Home/log dirs under a now-marked user
+  need no separate stamping (transitive); the separate ACME tree is **not** stamped by this migration — its
+  ULID provenance is owed to Phase-3/ssl (above). An unmarked account with **no** matching row stays foreign.
 - **OS-user ownership = the GECOS marker, not the name** (`00` §Panel-owned OS-user provenance; F20
   instantiation). The site slug is reusable, so ownership is proven by the account's GECOS
   `novapanel-site=<ULID>` matching the op's `sites.id`, **never by the name alone** (this closes the
