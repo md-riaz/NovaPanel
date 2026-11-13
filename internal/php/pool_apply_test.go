@@ -8,9 +8,66 @@ import (
 	"strings"
 	"testing"
 
+	"fmt"
 	runner "novapanel/internal/exec"
 	"novapanel/internal/jobs"
+	"novapanel/internal/rpcerr"
 )
+
+type baselineRunner struct{ dir string }
+
+func (r baselineRunner) Run(_ context.Context, bin string, args []string, _ runner.RunOpts) ([]byte, []byte, int, error) {
+	if bin == "/usr/sbin/php-fpm8.3" {
+		return nil, []byte(fmt.Sprintf("[ERROR] failed to parse configuration file '%s'", filepath.Join(r.dir, "www.conf"))), 78, nil
+	}
+	return nil, nil, 0, nil
+}
+func TestBaselineForeignFailureRestoresCommitted(t *testing.T) {
+	dir := testPoolDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "www.conf"), []byte("broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := PoolState{SiteID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Exists: true, MaxChildren: 3}
+	next := old
+	next.MaxChildren = 4
+	a := PoolApplier{Dir: dir, Runner: baselineRunner{dir}, Probe: func(context.Context) error { return nil }}
+	err := a.ApplyCommitted(context.Background(), "demo", next, old)
+	var coded *rpcerr.CodedError
+	if !errors.As(err, &coded) || coded.Code != "precondition_failed" || !strings.Contains(err.Error(), "www.conf") {
+		t.Fatalf("wrong attribution: %v", err)
+	}
+	want, _ := renderState("demo", old)
+	got, _ := os.ReadFile(filepath.Join(dir, "novapanel-demo.conf"))
+	if string(got) != string(want) {
+		t.Fatal("committed state not restored")
+	}
+}
+
+func TestBaselineExecutionErrorIsNotForeign(t *testing.T) {
+	dir := testPoolDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "www.conf"), []byte("operator"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r := &poolRunner{hook: func(_ context.Context, _ int, args []string) error {
+		if args[0] == "-t" {
+			return errors.New("failed in '" + filepath.Join(dir, "www.conf") + "'")
+		}
+		return nil
+	}}
+	a := PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
+	old := PoolState{SiteID: "01ARZ3NDEKTSV4RRFFQ69G5FAV"}
+	next := old
+	next.Exists = true
+	next.MaxChildren = 3
+	err := a.ApplyCommitted(context.Background(), "demo", next, old)
+	var coded *rpcerr.CodedError
+	if err == nil || (errors.As(err, &coded) && coded.Code == "precondition_failed") {
+		t.Fatalf("misattributed execution failure: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "novapanel-demo.conf")); !os.IsNotExist(err) {
+		t.Fatalf("committed absence not restored: %v", err)
+	}
+}
 
 type poolRunner struct {
 	calls int

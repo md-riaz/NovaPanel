@@ -251,7 +251,45 @@ func (a *PoolApplier) testCandidate(ctx context.Context, root *os.Root, file str
 	if err := poolWrite(root, master, []byte(strings.Join(lines, "\n"))); err != nil {
 		return err
 	}
-	return a.command(ctx, "/usr/sbin/php-fpm8.3", "-t", "-y", filepath.Join(a.Dir, master))
+	_, stderr, code, err := a.Runner.Run(ctx, "/usr/sbin/php-fpm8.3", []string{"-t", "-y", filepath.Join(a.Dir, master)}, runner.RunOpts{})
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return &fpmTestError{stderr: string(stderr)}
+	}
+	return nil
+}
+
+type fpmTestError struct{ stderr string }
+
+func (*fpmTestError) Error() string { return "FPM command failed" }
+
+// Attribute only a named, existing unmanaged file in an FPM diagnostic, never
+// an execution error or an arbitrary error string.
+func (a *PoolApplier) baselineError(root *os.Root, err error) error {
+	var testErr *fpmTestError
+	if !errors.As(err, &testErr) {
+		return err
+	}
+	entries, e := os.ReadDir(a.Dir)
+	if e != nil {
+		return err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".conf") || strings.HasPrefix(name, "novapanel-") {
+			continue
+		}
+		path := filepath.Join(a.Dir, name)
+		diagnostic := regexp.MustCompile(`(?im)^.*\[ERROR\]\s+(?:failed to (?:parse|open) configuration file|failed to process configuration file)\s+['"]` + regexp.QuoteMeta(path) + `['"](?:\s|:|$)`)
+		if diagnostic.MatchString(testErr.stderr) {
+			if _, e := poolRead(root, name); e == nil {
+				return rpcerr.Errf("precondition_failed", "FPM baseline failed; fix unmanaged pool %s and retry", name)
+			}
+		}
+	}
+	return err
 }
 
 func poolPublish(root *os.Root, file string, b []byte) error {
@@ -332,6 +370,16 @@ func (a *PoolApplier) apply(ctx context.Context, name, siteID string, b, committ
 		return a.service(c, count)
 	}
 	defer root.Remove(file + ".candidate")
+	if !recovery {
+		// Test the existing effective set before substituting the desired pool.
+		if err = a.testCandidate(ctx, root, "", nil); err != nil {
+			err = a.baselineError(root, err)
+			if rerr := restore(); rerr != nil {
+				return errors.Join(err, rerr, jobs.ErrRetry)
+			}
+			return err
+		}
+	}
 	if err = a.testCandidate(ctx, root, file, b); err == nil {
 		if b == nil {
 			err = poolPublish(root, file, nil)

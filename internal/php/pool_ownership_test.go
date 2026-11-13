@@ -25,7 +25,7 @@ func TestLastPoolStopsAndNextStarts(t *testing.T) {
 	if err := a.ApplyCommitted(context.Background(), "demo", absent, state); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(calls, "|") != "stop php8.3-fpm.service|disable php8.3-fpm.service" {
+	if joined := strings.Join(calls, "|"); !strings.HasSuffix(joined, "stop php8.3-fpm.service|disable php8.3-fpm.service") || strings.Contains(joined, "reload ") {
 		t.Fatalf("last removal: %v", calls)
 	}
 	calls = nil
