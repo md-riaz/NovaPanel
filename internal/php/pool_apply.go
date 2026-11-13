@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -253,7 +254,10 @@ func (a *PoolApplier) testCandidate(ctx context.Context, root *os.Root, file str
 	}
 	_, stderr, code, err := a.Runner.Run(ctx, "/usr/sbin/php-fpm8.3", []string{"-t", "-y", filepath.Join(a.Dir, master)}, runner.RunOpts{})
 	if err != nil {
-		return err
+		var exitErr *exec.ExitError
+		if ctx.Err() != nil || !errors.As(err, &exitErr) || code <= 0 || exitErr.ExitCode() != code {
+			return err
+		}
 	}
 	if code != 0 {
 		return &fpmTestError{stderr: string(stderr)}
@@ -282,7 +286,7 @@ func (a *PoolApplier) baselineError(root *os.Root, err error) error {
 			continue
 		}
 		path := filepath.Join(a.Dir, name)
-		diagnostic := regexp.MustCompile(`(?im)^.*\[ERROR\]\s+(?:failed to (?:parse|open) configuration file|failed to process configuration file)\s+['"]` + regexp.QuoteMeta(path) + `['"](?:\s|:|$)`)
+		diagnostic := regexp.MustCompile(`(?m)^(?:\[[^\]\r\n]+\] )?(?:ERROR: \[` + regexp.QuoteMeta(path) + `:[0-9]+\] .+|\[ERROR\]\s+(?:failed to (?:parse|open) configuration file|failed to process configuration file)\s+['"]` + regexp.QuoteMeta(path) + `['"](?:\s|:|$).*)$`)
 		if diagnostic.MatchString(testErr.stderr) {
 			if _, e := poolRead(root, name); e == nil {
 				return rpcerr.Errf("precondition_failed", "FPM baseline failed; fix unmanaged pool %s and retry", name)

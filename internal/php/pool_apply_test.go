@@ -69,6 +69,42 @@ func TestBaselineExecutionErrorIsNotForeign(t *testing.T) {
 	}
 }
 
+func TestBaselineRealDiagnosticAttribution(t *testing.T) {
+	dir := testPoolDir(t)
+	name := "www.conf"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := poolRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	a := PoolApplier{Dir: dir}
+	path := filepath.Join(dir, name)
+	for _, tc := range []struct {
+		name, diagnostic string
+		attributed       bool
+	}{
+		{"real syntax", fmt.Sprintf("[14-Nov-2026 05:43:06] ERROR: [%s:2] unknown entry 'invalid_directive'\n[14-Nov-2026 05:43:06] ERROR: FPM initialization failed", path), true},
+		{"unrelated mention", "[14-Nov-2026 05:43:06] ERROR: failed to open error_log (" + path + ")", false},
+		{"similar path", "[14-Nov-2026 05:43:06] ERROR: [" + path + ".other:2] unknown entry", false},
+		{"missing line", "[14-Nov-2026 05:43:06] ERROR: [" + path + "] unknown entry", false},
+		{"forged prefix", "other ERROR: [" + path + ":2] unknown entry", false},
+		{"semantic without source", "[14-Nov-2026 05:43:06] ERROR: [pool www] pm.max_children must be a positive value", false},
+		{"managed file", "[14-Nov-2026 05:43:06] ERROR: [" + filepath.Join(dir, "novapanel-demo.conf") + ":2] unknown entry", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := a.baselineError(root, &fpmTestError{stderr: tc.diagnostic})
+			var coded *rpcerr.CodedError
+			got := errors.As(err, &coded) && coded.Code == "precondition_failed"
+			if got != tc.attributed {
+				t.Fatalf("attributed = %v, error %v", got, err)
+			}
+		})
+	}
+}
+
 type poolRunner struct {
 	calls int
 	hook  func(context.Context, int, []string) error
@@ -108,6 +144,27 @@ func TestCandidatePreservesMaster(t *testing.T) {
 	a := PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
 	if err := a.ApplyCommitted(context.Background(), "demo", PoolState{SiteID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Exists: true, MaxChildren: 3}, PoolState{SiteID: "01ARZ3NDEKTSV4RRFFQ69G5FAV"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRealFPMBaselineAttribution(t *testing.T) {
+	if _, err := os.Stat("/usr/sbin/php-fpm8.3"); os.IsNotExist(err) {
+		t.Skip("php-fpm8.3 unavailable")
+	}
+	dir := testPoolDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "www.conf"), []byte("[www]\ninvalid_directive = foo\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := poolRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	a := PoolApplier{Dir: dir, Runner: runner.Real{}}
+	err = a.baselineError(root, a.testCandidate(context.Background(), root, "", nil))
+	var coded *rpcerr.CodedError
+	if !errors.As(err, &coded) || coded.Code != "precondition_failed" || !strings.Contains(err.Error(), "www.conf") {
+		t.Fatalf("real FPM error not attributed: %v", err)
 	}
 }
 
