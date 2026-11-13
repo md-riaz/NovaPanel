@@ -101,11 +101,18 @@ php_admin_flag[log_errors]         = on
   site=<ULID>`. The renderer **only** writes/overwrites/deletes a file that is the managed path **and**
   carries that header; any pool file lacking it (distro `www.conf`, an operator's file) is **never touched**.
   A managed-path collision whose header names a **different** ULID → `conflict`, never overwrite.
-- **FPM service lifecycle (zero-pool).** `php8.3-fpm -t` rejects an empty pool set (exit 78) and F0a does
-  **not** require a permanent `www.conf`. So the service is ensure-state on pool count: **≥1 managed pool →
-  ensure `php8.3-fpm` active**; **removing the last managed pool → stop/disable `php8.3-fpm`** (valid —
-  nothing to serve) rather than validate an empty config or keep a dummy pool; the next `site.create`
-  re-ensures it active. Never report success on an invalid (zero-pool, un-`-t`-able) running config.
+- **FPM service lifecycle (zero-pool) — gate on the EFFECTIVE pool set, never only the managed count**
+  (resolving the #121 stop-on-zero-managed-vs-unmanaged conflict). `php8.3-fpm -t` rejects an empty pool set
+  (exit 78) and F0a does **not** require a permanent `www.conf`, but an operator may run their own unmanaged
+  pool (`www.conf` or any non-`novapanel-` file in `pool.d/`) that NovaPanel must **never take offline**. So
+  the service is ensure-state on the **effective** pool set = every `.conf` in `pool.d/` (managed **and**
+  unmanaged): **effective set non-empty → ensure `php8.3-fpm` active**; **removing the last *managed* pool
+  when any unmanaged pool remains → `reload` (keep serving the operator's pools), NOT stop**; **stop/disable
+  `php8.3-fpm` only when the effective set is completely empty** (no managed, no unmanaged — valid, nothing to
+  serve), rather than validate an empty config or keep a dummy pool. Same on **rollback of a failed first
+  managed create**: reload/leave running if any pool remains, stop only on a truly empty set — never disrupt
+  an operator pool. The next `site.create` re-ensures it active. Never report success on an invalid
+  (zero-pool, un-`-t`-able) running config.
 - **`pm.max_children` sizing (deterministic, persisted — a pure SQLite projection per #119).** The cap is
   **not** read from live RAM at render time (that would make the pool non-deterministic on reconcile). It is
   computed **once** at `site.create`/`php.set` and **persisted in the site's SQLite `limits`**; the pool
@@ -468,13 +475,26 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
   challenge webroot is `/var/www/acme/<site>` (per-site subdir under `acme_webroot=/var/www/acme`,
   world-traversable B-D8), **root-owned** (`root:root`; provider/nginx read; no group/other write) — **not**
   `<docroot>/.well-known/…`. **Step 2 (PHP runtime) does not create, own, provenance-check, or delete this
-  tree** — it is owned/ensured by **Phase-3/`ssl.*`** (created on first issue, removed with the certs in
-  `site.delete` step 2). The **name/path alone does not prove ownership** (the slug is reusable after the row
-  is removed), so a durable **site-ULID provenance marker for the ACME tree is owed to Phase-3/ssl** (design
-  at build time — e.g. a root-owned `.novapanel-owner` file carrying `<site_ULID>` inside the tree, keyed on
-  the ULID not the name, with the same create/replay/retain/purge/legacy-migration shape as the OS user).
-  Until then Step 2 **never deletes or adopts** `/var/www/acme/<site>` by name; a pre-existing or ambiguous
-  tree is Phase-3's to reconcile, never Step 2's.
+  tree** — it is owned/ensured by **Phase-3/`ssl.*`** (resolving the #123 first-issue regression). Concretely:
+  - **Creation is `ssl.issue`'s, not `site.create`'s.** `ssl.issue` **ensure-creates** the root-owned
+    `/var/www/acme/<site>` (idempotent `mkdir` + F16 perms: `root:root`, world-traversable B-D8, no
+    group/other write) **before** `acme.NewWebroot` consumes it, so its precondition is met without
+    `site.create` providing the dir. Creating/ensuring our **own** root-owned empty dir is always safe
+    (no foreign-adoption question — it is an ensure-state on a root-owned path we are about to write
+    challenge files into). This un-regresses first issuance after `site.create` correctly stopped touching
+    the tree (#123); **Step 2 code stays entirely out of the ACME tree.**
+  - **The full ULID-bound lifecycle is DEFERRED to a tracked Phase-3/`ssl.*` item, not Step-2's gate.** The
+    **name/path alone does not prove ownership** (the slug is reusable after the row is removed), so a durable
+    **site-ULID provenance marker is owed** — a root-owned `.novapanel-owner` file carrying `<site_ULID>`
+    inside the tree, keyed on the ULID not the name, with the same create/replay/retain/purge/legacy-migration
+    shape as the OS user. Implement it in Phase-3/ssl (now or as a bounded follow-up); it is **not** required
+    for the Step-2 PHP-runtime gate.
+  - **Interim deletion safety (until the marker lands):** teardown (`ssl.*`/`site.delete`) removes
+    `/var/www/acme/<site>` **only on proven ownership** — the matching marker, or the tree is empty / holds
+    only our own challenge files; an ambiguous **non-empty** tree with no matching marker is **retained +
+    surfaced to the operator**, never `rm`-by-name, never adopted. So there is no unsafe behavior in the
+    deferral window. Step 2 **never deletes or adopts** `/var/www/acme/<site>`; a pre-existing or ambiguous
+    tree is Phase-3's to reconcile, never Step 2's.
 - **Log directory & file perms.** Panel creates `/var/log/novapanel/` `0755 root root`, and per site
   `/var/log/novapanel/<site>/` owned **`<siteuser>:adm` `0750`** (the FPM worker runs as the site user, so
   it must own/write its `php-error.log`; operators read via group `adm`; `other` none). The log file itself
