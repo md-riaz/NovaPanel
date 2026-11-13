@@ -113,6 +113,18 @@ php_admin_flag[log_errors]         = on
   managed create**: reload/leave running if any pool remains, stop only on a truly empty set — never disrupt
   an operator pool. The next `site.create` re-ensures it active. Never report success on an invalid
   (zero-pool, un-`-t`-able) running config.
+- **`-t` validates the WHOLE `pool.d`, so attribute a failure by a baseline taken before our write — never
+  roll back our valid op for a defect we don't own.** `php8.3-fpm -t` is global (it validates managed **and**
+  unmanaged pools), so a **pre-existing broken operator pool** (`www.conf` or any non-`novapanel-` file) must
+  not fail our `php.set`/`site.create`. Rule: take a baseline `-t` **before** rendering our managed file.
+  (i) **Baseline clean → post-write `-t`/reload fails →** the failure is **ours** → revert our file by
+  re-rendering from the committed SQLite state (#119 F8 revert), return the error. (ii) **Baseline already
+  fails** (foreign pool broken before we touched anything) → the failure is the **operator's**: still write
+  our valid managed file (it is correct in isolation) and attempt reload, but **do not revert our file and do
+  not stop the service** on the pre-existing foreign breakage; surface a **distinct `precondition_failed`
+  naming the offending unmanaged pool** so the operator fixes it, and our correct pool takes effect on the
+  next good reload. Our op owns **only** failures it introduces (clean→dirty), never a defect already present
+  at baseline — and never silently reports success over a `-t` we did make fail.
 - **`pm.max_children` sizing (deterministic, persisted — a pure SQLite projection per #119).** The cap is
   **not** read from live RAM at render time (that would make the pool non-deterministic on reconcile). It is
   computed **once** at `site.create`/`php.set` and **persisted in the site's SQLite `limits`**; the pool
@@ -476,10 +488,13 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
   world-traversable B-D8), **root-owned** (`root:root`; provider/nginx read; no group/other write) — **not**
   `<docroot>/.well-known/…`. **Step 2 (PHP runtime) does not create, own, provenance-check, or delete this
   tree** — it is owned/ensured by **Phase-3/`ssl.*`** (resolving the #123 first-issue regression). Concretely:
-  - **Creation is `ssl.issue`'s, not `site.create`'s.** `ssl.issue` **ensure-creates** the root-owned
-    `/var/www/acme/<site>` (idempotent `mkdir` + F16 perms: `root:root`, world-traversable B-D8, no
-    group/other write) **before** `acme.NewWebroot` consumes it, so its precondition is met without
-    `site.create` providing the dir. Creating/ensuring our **own** root-owned empty dir is always safe
+  - **Creation is the issuance path's, not `site.create`'s.** **Both `ssl.issue` and `ssl.renew`**
+    (`acme.NewWebroot` is called from the shared issue/renew client path, and `NewWebroot` requires the
+    per-site root to **pre-exist** — it only creates the `.well-known/acme-challenge` subdirs, not the root)
+    **ensure-create** the root-owned `/var/www/acme/<site>` (idempotent `mkdir` + F16 perms: `root:root`,
+    `0755`, world-traversable B-D8, no group/other write — satisfying `NewWebroot`'s euid/`perm&0022==0`
+    checks) **before** `NewWebroot` runs, so the precondition is met without `site.create` providing the dir.
+    Creating/ensuring our **own** root-owned empty dir is always safe
     (no foreign-adoption question — it is an ensure-state on a root-owned path we are about to write
     challenge files into). This un-regresses first issuance after `site.create` correctly stopped touching
     the tree (#123); **Step 2 code stays entirely out of the ACME tree.**
