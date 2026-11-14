@@ -133,9 +133,13 @@ func TestSiteJobLiveFailsClosedOnMissingIdentity(t *testing.T) {
 func TestStartupPHPRecoveryPropagatesStoreFailure(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "panel.db"))
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	q := jobs.NewQueue(st, nil, nil)
-	if err := st.Close(); err != nil { t.Fatal(err) }
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
 	r := &reconcileAccounts{accounts: map[string]string{}}
 	if err := RecoverCommittedPHP(ctx, st, q, r, &php.PoolApplier{Runner: r}, t.TempDir()); err == nil {
 		t.Fatal("startup recovery ignored store failure")
@@ -209,14 +213,22 @@ func testReconcilePHPOrphansAndPool(t *testing.T, legacy bool) {
 		t.Fatal(err)
 	}
 	unlock, err := a.Jobs.LockSiteOSUser(ctx, sid, "demo")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	blocked, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
-	if err = RecoverCommittedPHP(blocked, st, a.Jobs, a.Exec, a.PHP, root); err == nil { t.Fatal("startup recovery ignored site lock") }
+	if err = RecoverCommittedPHP(blocked, st, a.Jobs, a.Exec, a.PHP, root); err == nil {
+		t.Fatal("startup recovery ignored site lock")
+	}
 	cancel()
 	unlock()
-	if err = RecoverCommittedPHP(ctx, st, a.Jobs, a.Exec, a.PHP, root); err != nil { t.Fatal(err) }
+	if err = RecoverCommittedPHP(ctx, st, a.Jobs, a.Exec, a.PHP, root); err != nil {
+		t.Fatal(err)
+	}
 	b, err := os.ReadFile(filepath.Join(dir, "novapanel-demo.conf"))
-	if err != nil || !strings.Contains(string(b), "memory_limit] = 128M") { t.Fatalf("startup pool %q: %v", b, err) }
+	if err != nil || !strings.Contains(string(b), "memory_limit] = 128M") {
+		t.Fatalf("startup pool %q: %v", b, err)
+	}
 	logs := filepath.Join(root, "logs")
 	if err = os.Mkdir(logs, 0755); err != nil {
 		t.Fatal(err)
