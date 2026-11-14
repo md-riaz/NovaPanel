@@ -485,9 +485,20 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
   reserved-name list in `internal/validate`.
 - **Directory provenance — home & log dir (transitive, no separate marker).** The per-site **home**
   (`/srv/sites/<site>`) and **log dir** (`/var/log/novapanel/<site>`) derive provenance **transitively**
-  through the GECOS-marked owning user + `sites` row; no own marker, **ensured idempotently (F7)**, never
-  adopted. `create`: a pre-existing **non-empty** such dir with **no** matching marked user/`sites` row →
-  `conflict`; empty/own → ensure perms, continue.
+  through the **GECOS-marked owning account** (the durable obj_id); no own marker, **ensured idempotently
+  (F7)**, never adopted. The `sites` row **corroborates** this for live/active ops but is **NOT** the anchor —
+  it is absent by definition in an orphan sweep, so the marked account alone carries provenance there.
+  - `create`: a pre-existing **non-empty** such dir with **no** matching marked user/`sites` row → `conflict`;
+    empty/own → ensure perms, continue.
+  - **orphan deletion (reconcile, no `sites` row) — exact authorizing evidence** (this is the rule the
+    orphan sweep needs; see `00` §Panel-owned OS-user provenance): delete the home/log dir **only** when all
+    hold — (1) the owning account carries the **`novapanel-site=`** sentinel (never `novapanel-retained=`),
+    with no live `sites` row and no live job; (2) the dir is at the **canonical managed path** for that
+    account's name; (3) the dir **and every file under it** are owned by that account's **UID/GID**. By the
+    create no-adopt invariant above, a marked account's canonical UID-owned tree is panel-created **by
+    construction**, so this is sufficient proof without a `sites` row. A file owned by a **different** UID, a
+    non-canonical path, or an absent/unparseable marker → **retain + operator** (fail closed). Purge
+    contents-first, then `userdel` (UID-reuse guard, below).
 - **ACME webroot is a SEPARATE root-owned tree (F16, Phase-3), not under docroot** (correcting #120). The
   challenge webroot is `/var/www/acme/<site>` (per-site subdir under `acme_webroot=/var/www/acme`,
   world-traversable B-D8), **root-owned** (`root:root`; provider/nginx read; no group/other write) — **not**
@@ -548,7 +559,9 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
     surfaced to the operator. A crash leaves at most a marked orphan, which reconcile converges by its
     own ULID.
   - **Orphan purge order — no `userdel` while the UID still owns files (UID-reuse guard).** A proven orphan
-    (GECOS `novapanel-site=<ULID>`, no live `sites` row, no live job) is purged **UID-owned files first,
+    (GECOS `novapanel-site=<ULID>`, no live `sites` row, no live job — home/log dir deletion authorized by
+    the directory-provenance evidence above: canonical path + UID-ownership by the marked account) is purged
+    **UID-owned files first,
     then the account**: remove the managed pool file → reload/stop-FPM-if-last → remove the log dir → remove
     the home tree `/srv/sites/<site>` → **then** `userdel`. The separate `/var/www/acme/<site>` is root-owned
     (no UID-reuse risk): remove by its deterministic path or leave for the operator. `userdel` runs **only
