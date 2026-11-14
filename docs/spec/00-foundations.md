@@ -493,6 +493,21 @@ revert           → on probe failure restore <target>.lkg + reload; return code
     **owning `site.delete` job** (row legitimately `deleting`, live job) drives teardown by that marker
     match — "no live row/job" is **not** required of it. The **"no live `sites` row and no live job"**
     guard applies only to **reconcile adopting an orphan**, so reconcile never races the owning op.
+  - **Orphan home/log directory deletion — the marked ACCOUNT is the authority; a `sites` row is NOT
+    required** (it is absent by definition in an orphan sweep and corroborates only live/active ops). When no
+    `sites` row exists, an orphan's per-site **home** (`/srv/sites/<name>`) and **log dir**
+    (`/var/log/novapanel/<name>`) are proven panel-created — and so deletable — when **all** hold: (1) the
+    owning account carries the **`novapanel-site=`** sentinel (never `novapanel-retained=`), with no live
+    `sites` row and no live job (the orphan definition); (2) the directory sits at the **canonical managed
+    path** for that account's name; (3) the directory **and every file under it** are owned by that account's
+    **UID/GID**. This composes with the create-time no-adopt invariant (first create fails `conflict` on a
+    foreign non-empty dir, so a marked account never acquires a foreign home), hence a marked account's
+    canonical, UID-owned tree is panel-created **by construction** — the account marker is the durable
+    obj_id the (now-absent) row would merely have corroborated. Purge contents-first, then `userdel`
+    (UID-reuse guard). Any file under the tree owned by a **different** UID, a non-canonical path, an
+    unreadable/absent marker, or an unparseable ULID → **ownership uncertain → retain + operator**, never
+    delete by name or path. The fail-closed skip is correct, not a bug — but with this evidence present,
+    automatic purge proceeds and converges.
   - A reserved-scheme name whose account lacks the sentinel, or carries a **different** site's ULID than
     the op, is **not proven this op's** → fail closed (`conflict`, operator/reconcile), never adopt or
     delete a foreign account.
