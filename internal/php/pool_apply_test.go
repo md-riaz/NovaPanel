@@ -105,6 +105,51 @@ func TestBaselineRealDiagnosticAttribution(t *testing.T) {
 	}
 }
 
+type fixedResultRunner struct {
+	stderr []byte
+	code   int
+	err    error
+}
+
+func (r fixedResultRunner) Run(context.Context, string, []string, runner.RunOpts) ([]byte, []byte, int, error) {
+	return nil, r.stderr, r.code, r.err
+}
+
+func TestCandidateClassifiesRunnerErrors(t *testing.T) {
+	dir := testPoolDir(t)
+	path := filepath.Join(dir, "www.conf")
+	if err := os.WriteFile(path, []byte("broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := poolRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	_, _, exit, exitErr := (runner.Real{}).Run(context.Background(), "/usr/bin/false", nil, runner.RunOpts{})
+	diagnostic := []byte(fmt.Sprintf("[ERROR] failed to parse configuration file '%s'", path))
+	for _, tc := range []struct {
+		name       string
+		code       int
+		err        error
+		attributed bool
+	}{
+		{"normal exit", exit, exitErr, true},
+		{"mismatched exit", exit + 1, exitErr, false},
+		{"execution error", 1, errors.New("execution failed"), false},
+		{"cancellation", 1, context.Canceled, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := PoolApplier{Dir: dir, Runner: fixedResultRunner{diagnostic, tc.code, tc.err}}
+			err := a.baselineError(root, a.testCandidate(context.Background(), root, "", nil))
+			var coded *rpcerr.CodedError
+			if got := errors.As(err, &coded) && coded.Code == "precondition_failed"; got != tc.attributed {
+				t.Fatalf("attributed = %v, err = %v", got, err)
+			}
+		})
+	}
+}
+
 type poolRunner struct {
 	calls int
 	hook  func(context.Context, int, []string) error

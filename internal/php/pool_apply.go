@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -254,8 +253,7 @@ func (a *PoolApplier) testCandidate(ctx context.Context, root *os.Root, file str
 	}
 	_, stderr, code, err := a.Runner.Run(ctx, "/usr/sbin/php-fpm8.3", []string{"-t", "-y", filepath.Join(a.Dir, master)}, runner.RunOpts{})
 	if err != nil {
-		var exitErr *exec.ExitError
-		if ctx.Err() != nil || !errors.As(err, &exitErr) || code <= 0 || exitErr.ExitCode() != code {
+		if ctx.Err() != nil || !runner.NormalExit(err, code) {
 			return err
 		}
 	}

@@ -2,6 +2,7 @@ package exec
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -30,6 +31,22 @@ func TestRunIOAndExit(t *testing.T) {
 	_, _, exit, err = (Real{}).Run(context.Background(), "/usr/bin/false", nil, RunOpts{})
 	if exit != 1 || err == nil {
 		t.Fatalf("%d %v", exit, err)
+	}
+}
+func TestNormalExitClassification(t *testing.T) {
+	_, _, code, err := (Real{}).Run(context.Background(), "/usr/bin/false", nil, RunOpts{})
+	if !NormalExit(fmt.Errorf("wrapped: %w", err), code) || NormalExit(err, code+1) {
+		t.Fatalf("nonzero exit classification: %d %v", code, err)
+	}
+	_, _, code, err = (Real{}).Run(context.Background(), os.Args[0], []string{"-test.run=TestProcessHelper"}, RunOpts{Env: []string{"NOVAPANEL_HELPER=signal"}})
+	if NormalExit(err, code) {
+		t.Fatalf("signal classified as normal exit: %d %v", code, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, code, err = (Real{}).Run(ctx, "/usr/bin/false", nil, RunOpts{})
+	if !errors.Is(err, context.Canceled) || NormalExit(err, code) || NormalExit(errors.New("execution failed"), 1) || NormalExit(nil, 1) {
+		t.Fatalf("execution error classified as exit: %d %v", code, err)
 	}
 }
 func TestRunBoundedOutput(t *testing.T) {
@@ -78,6 +95,8 @@ func TestRunMissingProgram(t *testing.T) {
 // Helper processes exercise real descendant termination without a shell.
 func TestProcessHelper(t *testing.T) {
 	switch os.Getenv("NOVAPANEL_HELPER") {
+	case "signal":
+		syscall.Kill(os.Getpid(), syscall.SIGKILL)
 	case "io":
 		fmt.Fprint(os.Stdout, strings.Repeat("o", 10000))
 		fmt.Fprint(os.Stderr, strings.Repeat("e", 10000))
