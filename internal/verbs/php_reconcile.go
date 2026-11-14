@@ -165,6 +165,14 @@ func reconcilePHP(ctx context.Context, st *store.Store, q *jobs.Queue, runner ex
 			if err != nil || live {
 				return err
 			}
+			// Revalidate the enumerated account under the lifecycle locks. Pool recovery
+			// separately requires the same site's ULID in the pool's ownership header.
+			if err = php.VerifyUser(ctx, runner, sitesRoot, account.name, account.id); err != nil {
+				return err
+			}
+			if err = pool.Recover(ctx, account.name, php.PoolState{SiteID: account.id}); err != nil {
+				return err
+			}
 			// Missing configuration, inaccessible roots and symlinks are not proof of absence.
 			if len(logsRoot) != 1 {
 				return errors.New("orphan account requires manual cleanup: log root unavailable")
