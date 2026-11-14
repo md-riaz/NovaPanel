@@ -39,7 +39,7 @@ func markedAccounts(out []byte) ([]markedAccount, error) {
 		}
 		sid := strings.TrimPrefix(f[4], prefix)
 		if !id.Valid(sid) || (&validate.V{}).SiteName(f[0]) != nil {
-			continue
+			return nil, errors.New("orphan account requires manual cleanup: invalid site marker or account name")
 		}
 		accounts = append(accounts, markedAccount{f[0], sid})
 	}

@@ -97,6 +97,21 @@ func TestReconcileOrphanResourceGuard(t *testing.T) {
 	}
 }
 
+func TestReconcileMalformedMarkerRequiresOperator(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, err := store.Open(filepath.Join(root, "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	r := &reconcileAccounts{root: root, accounts: map[string]string{"orphan": "novapanel-site=invalid"}}
+	_, err = reconcilePHP(ctx, st, jobs.NewQueue(st, nil, nil), r, &php.PoolApplier{Dir: root, Runner: r}, root, root)
+	if err == nil || !strings.Contains(err.Error(), "manual cleanup") || len(r.deleted) != 0 {
+		t.Fatalf("malformed marker must be retained for operator: deleted=%v err=%v", r.deleted, err)
+	}
+}
+
 func TestSiteJobLiveFailsClosedOnMissingIdentity(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "panel.db"))
