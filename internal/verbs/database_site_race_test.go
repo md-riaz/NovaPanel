@@ -55,12 +55,12 @@ func TestSiteDeleteDatabaseCreateOrders(t *testing.T) {
 				}
 			}
 			a.Nginx = &nginx.Applier{Root: filepath.Join(root, "nginx"), Runner: &siteRunner{}, Probe: func(context.Context, nginx.Desired) error { return nil }}
-			if os.Getenv("NOVAPANEL_MARIADB_TEST") == "1" {
-				a.Exec = exec.Real{}
-			} else {
-				a.Exec = &databaseRunner{}
-			}
 			sid, _ := id.New()
+			account := &accountRunner{root: a.Cfg.SitesRoot, name: "race", id: sid, marker: "novapanel-site=", other: &databaseRunner{}}
+			if os.Getenv("NOVAPANEL_MARIADB_TEST") == "1" {
+				account.other = exec.Real{}
+			}
+			a.Exec = account
 			did, _ := id.New()
 			_, err = s.CreateSite(ctx, store.Site{ID: sid, Name: "race", Type: "static", Docroot: filepath.Join(a.Cfg.SitesRoot, "race", "public")}, store.Domain{ID: did, FQDN: "race.test"})
 			if err != nil {

@@ -2,8 +2,10 @@ package platform_test
 
 import (
 	"context"
+	"errors"
 	runner "novapanel/internal/exec"
 	"novapanel/internal/platform"
+	"novapanel/internal/rpcerr"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,6 +14,7 @@ import (
 type removalRunner struct {
 	home    string
 	deleted bool
+	foreign bool
 	calls   int
 }
 
@@ -21,7 +24,11 @@ func (r *removalRunner) Run(_ context.Context, prog string, args []string, _ run
 		if r.deleted {
 			return nil, nil, 2, nil
 		}
-		return []byte("demo:x:1234:1234::" + r.home + ":/usr/sbin/nologin\n"), nil, 0, nil
+		marker := "novapanel-site=01ARZ3NDEKTSV4RRFFQ69G5FAV"
+		if r.foreign {
+			marker = ""
+		}
+		return []byte("demo:x:1234:1234:" + marker + ":" + r.home + ":/usr/sbin/nologin\n"), nil, 0, nil
 	}
 	if prog == "/usr/sbin/userdel" && len(args) == 2 && args[0] == "--" && args[1] == "demo" {
 		if _, e := os.Stat(r.home); !os.IsNotExist(e) {
@@ -47,24 +54,62 @@ func TestRemoveSiteConfinedAndRetrySafe(t *testing.T) {
 	}
 	r := &removalRunner{home: home}
 	for range 2 {
-		if e := platform.RemoveSite(context.Background(), r, root, "demo"); e != nil {
-			t.Fatal(e)
+		e := platform.RemoveSite(context.Background(), r, root, t.TempDir(), "demo", "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+		var coded *rpcerr.CodedError
+		if !errors.As(e, &coded) || coded.Code != "precondition_failed" {
+			t.Fatalf("expected UID cleanup precondition, got %v", e)
 		}
 	}
-	if !r.deleted {
-		t.Fatal("account retained")
+	if r.deleted {
+		t.Fatal("account deleted")
+	}
+	if _, e := os.Stat(home); e != nil {
+		t.Fatal("home removed before UID cleanup", e)
 	}
 	if _, e := os.Stat(filepath.Join(outside, "keep")); e != nil {
 		t.Fatal("followed site symlink", e)
+	}
+	if e := os.RemoveAll(home); e != nil {
+		t.Fatal(e)
 	}
 	if e := os.Symlink(outside, home); e != nil {
 		t.Fatal(e)
 	}
 	first := r.calls
-	if e := platform.RemoveSite(context.Background(), r, root, "demo"); e == nil {
+	if e := platform.RemoveSite(context.Background(), r, root, t.TempDir(), "demo", "01ARZ3NDEKTSV4RRFFQ69G5FAV"); e == nil {
 		t.Fatal("accepted symlink home")
 	}
 	if r.calls != first {
 		t.Fatal("ran command before validation")
+	}
+}
+
+func TestRemoveSiteMissingAccountPreservesHome(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "demo")
+	if err := os.Mkdir(home, 0755); err != nil {
+		t.Fatal(err)
+	}
+	r := &removalRunner{home: home, deleted: true}
+	if err := platform.RemoveSite(context.Background(), r, root, t.TempDir(), "demo", "01ARZ3NDEKTSV4RRFFQ69G5FAV"); err == nil {
+		t.Fatal("accepted unowned home")
+	}
+	if _, err := os.Stat(home); err != nil {
+		t.Fatal("home removed", err)
+	}
+}
+
+func TestRemoveSiteRejectsUnmarkedBeforeRemovingHome(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "demo")
+	if err := os.Mkdir(home, 0755); err != nil {
+		t.Fatal(err)
+	}
+	r := &removalRunner{home: home, foreign: true}
+	if err := platform.RemoveSite(context.Background(), r, root, t.TempDir(), "demo", "01ARZ3NDEKTSV4RRFFQ69G5FAV"); err == nil {
+		t.Fatal("accepted unmarked account")
+	}
+	if _, err := os.Stat(home); err != nil {
+		t.Fatal("home removed", err)
 	}
 }

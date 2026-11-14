@@ -44,6 +44,7 @@ func TestSiteMutations(t *testing.T) {
 	a.Nginx = &nginx.Applier{Root: filepath.Join(root, "nginx"), Runner: commands, Probe: func(context.Context, nginx.Desired) error { return nil }}
 	sid, _ := id.New()
 	did, _ := id.New()
+	a.Exec = &accountRunner{root: a.Cfg.SitesRoot, name: "demo", id: sid, marker: "novapanel-site="}
 	site, err := st.CreateSite(ctx, store.Site{ID: sid, Name: "demo", Type: "static", Docroot: filepath.Join(a.Cfg.SitesRoot, "demo", "public")}, store.Domain{ID: did, FQDN: "demo.test"})
 	if err != nil {
 		t.Fatal(err)

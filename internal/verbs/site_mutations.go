@@ -487,7 +487,7 @@ func (m siteMutationState) applySite(ctx context.Context, sid string, j *jobs.Jo
 	if e != nil {
 		return e
 	}
-	d := nginx.Desired{Name: s.Name, Docroot: s.Docroot, ACMERoot: filepath.Join(a.Cfg.ACMEWebroot, s.Name), Maintenance: s.Maintenance, ForceHTTPS: s.ForceHTTPS, HSTSMaxAge: s.HSTSMaxAge}
+	d := nginx.Desired{Name: s.Name, Docroot: s.Docroot, ACMERoot: filepath.Join(a.Cfg.ACMEWebroot, s.Name), PHPVersion: s.PHPVersion, Maintenance: s.Maintenance, ForceHTTPS: s.ForceHTTPS, HSTSMaxAge: s.HSTSMaxAge}
 	if s.CertSource != "none" {
 		_, primary := sslNames(ds)
 		d.TLS, e = nginx.LoadTLS(a.Cfg.TLSDir, primary, tlsStaging(ds), time.UnixMilli(a.Now()))

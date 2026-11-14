@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"novapanel/internal/acme"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -253,16 +252,19 @@ func (x acmeExecutor) execute(ctx context.Context, j *jobs.Job, verb string, tra
 		env, directory = acme.Production, a.Cfg.ACMEDirectoryProd
 	}
 	return (sslPublication{a}).publishCertificate(ctx, v.SiteID, j, *v.Staging, func(names []string) (*certs.Certificate, error) {
-		client, err := acme.NewPersisted(ctx, a.Store, acme.Config{Environment: env, Directory: directory, Email: a.Cfg.ACMEEmail, Sealer: a.Secret, TermsOfServiceAgreed: true, HTTPClient: transport}, a.Now)
-		if err != nil {
-			return nil, err
-		}
 		site, ds, err := (sslState{a.Store}).active(ctx, v.SiteID)
 		if err != nil {
 			return nil, err
 		}
 		_, primary := sslNames(ds)
-		root := filepath.Join(a.Cfg.ACMEWebroot, site.Name)
+		root, err := acme.EnsureSiteWebroot(a.Cfg.ACMEWebroot, site.Name)
+		if err != nil {
+			return nil, err
+		}
+		client, err := acme.NewPersisted(ctx, a.Store, acme.Config{Environment: env, Directory: directory, Email: a.Cfg.ACMEEmail, Sealer: a.Secret, TermsOfServiceAgreed: true, HTTPClient: transport}, a.Now)
+		if err != nil {
+			return nil, err
+		}
 		if verb == "ssl.issue" {
 			return client.Issue(ctx, names, root)
 		}
