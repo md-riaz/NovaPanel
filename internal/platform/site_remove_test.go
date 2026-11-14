@@ -2,8 +2,10 @@ package platform_test
 
 import (
 	"context"
+	"errors"
 	runner "novapanel/internal/exec"
 	"novapanel/internal/platform"
+	"novapanel/internal/rpcerr"
 	"os"
 	"path/filepath"
 	"testing"
@@ -52,15 +54,23 @@ func TestRemoveSiteConfinedAndRetrySafe(t *testing.T) {
 	}
 	r := &removalRunner{home: home}
 	for range 2 {
-		if e := platform.RemoveSite(context.Background(), r, root, t.TempDir(), "demo", "01ARZ3NDEKTSV4RRFFQ69G5FAV"); e != nil {
-			t.Fatal(e)
+		e := platform.RemoveSite(context.Background(), r, root, t.TempDir(), "demo", "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+		var coded *rpcerr.CodedError
+		if !errors.As(e, &coded) || coded.Code != "precondition_failed" {
+			t.Fatalf("expected UID cleanup precondition, got %v", e)
 		}
 	}
-	if !r.deleted {
-		t.Fatal("account retained")
+	if r.deleted {
+		t.Fatal("account deleted")
+	}
+	if _, e := os.Stat(home); e != nil {
+		t.Fatal("home removed before UID cleanup", e)
 	}
 	if _, e := os.Stat(filepath.Join(outside, "keep")); e != nil {
 		t.Fatal("followed site symlink", e)
+	}
+	if e := os.RemoveAll(home); e != nil {
+		t.Fatal(e)
 	}
 	if e := os.Symlink(outside, home); e != nil {
 		t.Fatal(e)

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,10 +96,15 @@ func reconcilePHP(ctx context.Context, st *store.Store, q *jobs.Queue, runner ex
 		return nil, err
 	}
 	var changed []string
+	var reconcileErr error
 	for _, candidate := range sites {
 		unlock, err := q.LockSiteOSUser(ctx, candidate.ID, candidate.Name)
 		if err != nil {
-			return changed, err
+			reconcileErr = errors.Join(reconcileErr, fmt.Errorf("site %s (%s): %w", candidate.Name, candidate.ID, err))
+			if ctx.Err() != nil {
+				return changed, reconcileErr
+			}
+			continue
 		}
 		err = func() error {
 			s, err := st.SiteByID(ctx, candidate.ID)
@@ -130,25 +136,32 @@ func reconcilePHP(ctx context.Context, st *store.Store, q *jobs.Queue, runner ex
 		}()
 		unlock()
 		if err != nil {
-			return changed, err
+			reconcileErr = errors.Join(reconcileErr, fmt.Errorf("site %s (%s): %w", candidate.Name, candidate.ID, err))
+			if ctx.Err() != nil {
+				return changed, errors.Join(reconcileErr, ctx.Err())
+			}
 		}
 	}
 	const capBytes = 1 << 20
 	out, _, code, err := runner.Run(ctx, "/usr/bin/getent", []string{"passwd"}, exec.RunOpts{MaxOutput: capBytes, Stdin: strings.NewReader("")})
 	if err != nil {
-		return changed, err
+		return changed, errors.Join(reconcileErr, err)
 	}
 	if code != 0 || len(out) >= capBytes {
-		return changed, errors.New("passwd enumeration failed or truncated")
+		return changed, errors.Join(reconcileErr, errors.New("passwd enumeration failed or truncated"))
 	}
 	accounts, err := markedAccounts(out)
 	if err != nil {
-		return changed, err
+		return changed, errors.Join(reconcileErr, err)
 	}
 	for _, account := range accounts {
 		unlock, err := q.LockSiteOSUser(ctx, account.id, account.name)
 		if err != nil {
-			return changed, err
+			reconcileErr = errors.Join(reconcileErr, fmt.Errorf("orphan %s (%s): %w", account.name, account.id, err))
+			if ctx.Err() != nil {
+				return changed, reconcileErr
+			}
+			continue
 		}
 		err = func() error {
 			if _, err := st.SiteByID(ctx, account.id); err == nil {
@@ -199,8 +212,11 @@ func reconcilePHP(ctx context.Context, st *store.Store, q *jobs.Queue, runner ex
 		}()
 		unlock()
 		if err != nil {
-			return changed, err
+			reconcileErr = errors.Join(reconcileErr, fmt.Errorf("orphan %s (%s): %w", account.name, account.id, err))
+			if ctx.Err() != nil {
+				return changed, errors.Join(reconcileErr, ctx.Err())
+			}
 		}
 	}
-	return changed, nil
+	return changed, reconcileErr
 }

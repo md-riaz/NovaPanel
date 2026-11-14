@@ -68,11 +68,7 @@ func RemoveSite(ctx context.Context, r runner.Runner, sites, logs, name, siteID 
 		}
 		return e
 	}
-	if e = root.RemoveAll(name); e != nil {
-		return e
-	}
-	if e = logRoot.RemoveAll(name); e != nil {
-		return e
-	}
-	return php.DeleteUser(ctx, r, sites, name, siteID)
+	// Removing the managed trees cannot prove this UID owns no files elsewhere.
+	// Keep both the account and its files until an operator resolves that uncertainty.
+	return rpcerr.Errf("precondition_failed", "site account requires manual UID-owned file cleanup")
 }

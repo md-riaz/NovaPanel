@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strconv"
+	"strings"
 	"novapanel/internal/agent"
 	"novapanel/internal/exec"
 	"novapanel/internal/jobs"
@@ -122,6 +125,40 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 		return err
 	}
 	committed := php.PoolState{SiteID: s.ID, Exists: true, MaxChildren: cap, Limits: limits}
+	// Record the sizing decision before any pool effect. Replays must not size
+	// again against a different RAM or active-site count.
+	durable, err := a.Store.GetJob(ctx, j.ID)
+	if err != nil {
+		return errors.Join(err, jobs.ErrRetry)
+	}
+	const capStep = "php_cap:"
+	if durable.Step == "" {
+		sites, err := a.Store.ListSites(ctx)
+		if err != nil {
+			return errors.Join(err, jobs.ErrRetry)
+		}
+		active := 0
+		for _, site := range sites {
+			if site.Status == "active" {
+				active++
+			}
+		}
+		cap = php.ChildrenCap(php.TotalMemoryMB(), active)
+		durable.Step = fmt.Sprintf("%s%d", capStep, cap)
+		if err = a.Store.UpdateJob(ctx, durable); err != nil {
+			return errors.Join(err, jobs.ErrRetry)
+		}
+	} else {
+		var parseErr error
+		if !strings.HasPrefix(durable.Step, capStep) {
+			return rpc.Errf("agent_error", "Invalid PHP job checkpoint")
+		}
+		cap, parseErr = strconv.Atoi(strings.TrimPrefix(durable.Step, capStep))
+		if parseErr != nil || cap < 2 || cap > 32 {
+			return rpc.Errf("agent_error", "Invalid PHP job checkpoint")
+		}
+	}
+	j.Step = durable.Step
 	if j.Attempts > 1 {
 		if err = a.PHP.Recover(ctx, s.Name, committed); err != nil {
 			return err
@@ -136,6 +173,7 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if v.Limits.MaxExecSec != nil {
 		limits.MaxExecSec = v.Limits.MaxExecSec
 	}
+	limits.MaxChildren = &cap
 	if err = a.PHP.ApplyCommitted(ctx, s.Name, php.PoolState{SiteID: s.ID, Exists: true, MaxChildren: cap, Limits: limits}, committed); err != nil {
 		return err
 	}

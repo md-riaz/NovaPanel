@@ -82,15 +82,37 @@ func testPHPSetReplay(t *testing.T, legacy bool) {
 	a.Jobs = jobs.NewQueue(st, nil, nil)
 	upload := 32
 	raw, _ := json.Marshal(phpSetArgs{SiteID: sid, Version: version, Limits: store.PHPLimits{UploadMB: &upload}})
-	if err = phpSetExec(ctx, a, &jobs.Job{Args: raw, Attempts: 2}); err != nil {
+	jid, _ := id.New()
+	job := jobs.Job{ID: jid, Verb: "php.set", ObjectKey: "site:" + sid, State: "running", Args: raw, Attempts: 2}
+	if err = st.CreateJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	if err = phpSetExec(ctx, a, &job); err != nil {
 		t.Fatal(err)
 	}
 	limits, err := st.SitePHPLimits(ctx, sid)
-	if err != nil || limits.MaxChildren == nil || *limits.MaxChildren < 2 || limits.MemoryMB == nil || *limits.MemoryMB != 128 || limits.UploadMB == nil || *limits.UploadMB != 32 {
+	wantCap := php.ChildrenCap(php.TotalMemoryMB(), 1)
+	if err != nil || limits.MaxChildren == nil || *limits.MaxChildren != wantCap || limits.MemoryMB == nil || *limits.MemoryMB != 128 || limits.UploadMB == nil || *limits.UploadMB != 32 {
 		t.Fatalf("limits %+v: %v", limits, err)
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "novapanel-demo.conf"))
 	if err != nil || !strings.Contains(string(b), "memory_limit] = 128M") || !strings.Contains(string(b), "upload_max_filesize] = 32M") {
 		t.Fatalf("pool %q: %v", b, err)
+	}
+	// A replay uses the write-ahead decision, even if sizing inputs now differ.
+	durable, err := st.GetJob(ctx, jid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	durable.Step = "php_cap:7"
+	if err = st.UpdateJob(ctx, durable); err != nil {
+		t.Fatal(err)
+	}
+	if err = phpSetExec(ctx, a, &job); err != nil {
+		t.Fatal(err)
+	}
+	limits, err = st.SitePHPLimits(ctx, sid)
+	if err != nil || limits.MaxChildren == nil || *limits.MaxChildren != 7 {
+		t.Fatalf("replayed limits %+v: %v", limits, err)
 	}
 }

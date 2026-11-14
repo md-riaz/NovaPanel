@@ -98,9 +98,14 @@ func TestPHPSitePurgeCrashReplay(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if err = server.ExecuteJob(ctx, &j); !errors.Is(err, jobs.ErrRetry) || !r.missing {
-				t.Fatalf("expected failure after userdel: %v missing=%v", err, r.missing)
+			if err = server.ExecuteJob(ctx, &j); err == nil || errors.Is(err, jobs.ErrRetry) || r.missing {
+				t.Fatalf("expected fail-closed purge with account retained: %v missing=%v", err, r.missing)
 			}
+			// Model an earlier completed removal for crash-replay compatibility.
+			if err = os.RemoveAll(filepath.Join(a.Cfg.SitesRoot, "demo")); err != nil {
+				t.Fatal(err)
+			}
+			r.missing = true
 			if err = st.Tx(ctx, func(tx *sql.Tx) error { _, e := tx.ExecContext(ctx, `DROP TRIGGER fail_delete`); return e }); err != nil {
 				t.Fatal(err)
 			}

@@ -130,6 +130,18 @@ func TestSiteJobLiveFailsClosedOnMissingIdentity(t *testing.T) {
 	}
 }
 
+func TestStartupPHPRecoveryPropagatesStoreFailure(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil { t.Fatal(err) }
+	q := jobs.NewQueue(st, nil, nil)
+	if err := st.Close(); err != nil { t.Fatal(err) }
+	r := &reconcileAccounts{accounts: map[string]string{}}
+	if err := RecoverCommittedPHP(ctx, st, q, r, &php.PoolApplier{Runner: r}, t.TempDir()); err == nil {
+		t.Fatal("startup recovery ignored store failure")
+	}
+}
+
 func TestReconcilePHPOrphansAndCommittedPool(t *testing.T) {
 	testReconcilePHPOrphansAndPool(t, false)
 }
@@ -190,6 +202,21 @@ func testReconcilePHPOrphansAndPool(t *testing.T, legacy bool) {
 	a.Exec = r
 	a.Cfg.SitesRoot = root
 	a.PHP = &php.PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
+	// A queued mutation must not suppress startup projection recovery: no worker
+	// is running yet, and it will replay after recovery.
+	queuedID, _ := id.New()
+	if err = st.CreateJob(ctx, store.Job{ID: queuedID, Verb: "php.set", ObjectKey: "site:" + sid, Args: json.RawMessage(`{"site_id":"` + sid + `"}`), State: "queued"}); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := a.Jobs.LockSiteOSUser(ctx, sid, "demo")
+	if err != nil { t.Fatal(err) }
+	blocked, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	if err = RecoverCommittedPHP(blocked, st, a.Jobs, a.Exec, a.PHP, root); err == nil { t.Fatal("startup recovery ignored site lock") }
+	cancel()
+	unlock()
+	if err = RecoverCommittedPHP(ctx, st, a.Jobs, a.Exec, a.PHP, root); err != nil { t.Fatal(err) }
+	b, err := os.ReadFile(filepath.Join(dir, "novapanel-demo.conf"))
+	if err != nil || !strings.Contains(string(b), "memory_limit] = 128M") { t.Fatalf("startup pool %q: %v", b, err) }
 	logs := filepath.Join(root, "logs")
 	if err = os.Mkdir(logs, 0755); err != nil {
 		t.Fatal(err)
@@ -204,7 +231,7 @@ func testReconcilePHPOrphansAndPool(t *testing.T, legacy bool) {
 	if err != nil || persisted.MaxChildren == nil || *persisted.MaxChildren < 2 || persisted.MemoryMB == nil || *persisted.MemoryMB != memory {
 		t.Fatalf("persisted limits %+v: %v", persisted, err)
 	}
-	b, err := os.ReadFile(filepath.Join(dir, "novapanel-demo.conf"))
+	b, err = os.ReadFile(filepath.Join(dir, "novapanel-demo.conf"))
 	if err != nil || !strings.Contains(string(b), "memory_limit] = 128M") {
 		t.Fatalf("pool %q: %v", b, err)
 	}
