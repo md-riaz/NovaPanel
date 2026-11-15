@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-const shipped0008Hash = "549740ffa8b38ce925b524ad82013b8df75ff97c0346b6f7b3679ef267639698"
+const shipped0008Hash = "12eccc6ffc3026839cdc5a4810aa8e79935de20f46e360fdf19892819b8f64f7"
 
 func shippedV6(t *testing.T) string {
 	t.Helper()
@@ -75,7 +75,7 @@ func TestMigration0009RealOpen(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer s.Close()
-			if phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations") != 7 {
+			if phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations") != 9 {
 				t.Fatal("migration count")
 			}
 			var h string

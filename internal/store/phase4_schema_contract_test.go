@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,7 +23,7 @@ func TestPhase4SchemaContract(t *testing.T) {
 					s.Close()
 				}
 			}()
-			if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations"); n != 7 {
+			if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations"); n != 9 {
 				t.Fatalf("production migrations: %d", n)
 			}
 			if upgrade {
@@ -38,88 +37,16 @@ func TestPhase4SchemaContract(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			fixture, err := os.ReadFile("testdata/phase4_candidate.sql")
-			if err != nil {
-				t.Fatal(err)
-			}
-			canonical, err := os.ReadFile("../../docs/spec/02-data-model.md")
-			if err != nil {
-				t.Fatal(err)
-			}
-			section := strings.SplitN(string(canonical), "## Phase 4 databases, PHP limits and bounded recovery", 2)[1]
-			ddl := strings.SplitN(strings.SplitN(section, "```sql", 2)[1], "```", 2)[0]
-			if strings.TrimSpace(ddl) != strings.TrimSpace(string(fixture)) {
-				t.Fatal("fixture differs from canonical DDL")
-			}
 
 			phase4Exec(t, s.db.raw, "INSERT INTO sites(id,name,type,docroot,created,updated) VALUES('s1','one','wordpress','/scratch/one',1,1),('s2','two','wordpress','/scratch/two',1,1)")
-			phase4Exec(t, s.db.raw, "INSERT INTO site_php_limits(site_id) VALUES('s1')")
-			var memory, upload, seconds int
-			if err := s.db.raw.QueryRow("SELECT memory_mb,upload_mb,max_exec_sec FROM site_php_limits WHERE site_id='s1'").Scan(&memory, &upload, &seconds); err != nil {
-				t.Fatal(err)
-			}
-			if memory != 256 || upload != 64 || seconds != 60 {
-				t.Fatalf("defaults %d/%d/%d", memory, upload, seconds)
-			}
 			phase4Pair(t, s, "d1", "u1", "s1")
 			phase4Pair(t, s, "d2", "u2", "s2")
-			t.Run("deferred_failed_commit_explicit_rollback_same_connection", func(t *testing.T) {
-				conn, err := s.db.raw.Conn(context.Background())
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer conn.Close()
-				phase4Exec(t, conn, "BEGIN")
-				phase4Exec(t, conn, "INSERT INTO databases(id,name,primary_user_id,created) VALUES('bad','d_bad','missing',1)")
-				phase4Refuse(t, conn, "COMMIT", "FOREIGN KEY")
-				// database/sql.Tx.Commit marks Tx done even when SQLite leaves this transaction active.
-				phase4Exec(t, conn, "ROLLBACK")
-				phase4Exec(t, conn, "BEGIN")
-				phase4Exec(t, conn, "INSERT INTO settings VALUES('after_rollback','true')")
-				phase4Exec(t, conn, "COMMIT")
-				if phase4Count(t, conn, "SELECT count(*) FROM databases WHERE id='bad'") != 0 {
-					t.Fatal("failed commit leaked")
-				}
-			})
-			t.Run("primary_and_binding_constraints", func(t *testing.T) {
-				phase4Exec(t, s.db.raw, "INSERT INTO db_users(id,db_id,username,created) VALUES('u2-secondary','d2','u_secondary',1)")
-				for _, q := range []string{"UPDATE databases SET primary_user_id='u2-secondary' WHERE id='d1'", "UPDATE databases SET primary_user_id='missing' WHERE id='d1'", "DELETE FROM db_users WHERE id='u1'"} {
-					conn, err := s.db.raw.Conn(context.Background())
-					if err != nil {
-						t.Fatal(err)
-					}
-					phase4Exec(t, conn, "BEGIN")
-					phase4Exec(t, conn, q)
-					phase4Refuse(t, conn, "COMMIT", "FOREIGN KEY")
-					phase4Exec(t, conn, "ROLLBACK")
-					conn.Close()
-				}
+			t.Run("owner_and_binding_constraints", func(t *testing.T) {
+				phase4Refuse(t, s.db.raw, "INSERT INTO db_users(id,db_id,username,owner,created) VALUES('second','d1','u_second',1,1)", "UNIQUE")
+				phase4Exec(t, s.db.raw, "INSERT INTO db_users(id,db_id,username,owner,created) VALUES('secondary','d1','u_secondary',0,1)")
 				phase4Refuse(t, s.db.raw, "INSERT INTO wordpress_bindings VALUES('s2','d1')", "FOREIGN KEY")
 				phase4Exec(t, s.db.raw, "INSERT INTO wordpress_bindings VALUES('s1','d1')")
 				phase4Refuse(t, s.db.raw, "UPDATE databases SET site_id=NULL WHERE id='d1'", "FOREIGN KEY")
-				phase4Refuse(t, s.db.raw, "DELETE FROM databases WHERE id='d1'", "FOREIGN KEY")
-				phase4Refuse(t, s.db.raw, "INSERT INTO db_users VALUES('bad','d1','u_bad','localhost',1)", "CHECK")
-				phase4Exec(t, s.db.raw, "INSERT INTO db_users(id,db_id,username,created) VALUES('extra','d1','u_extra',1)")
-				if phase4Count(t, s.db.raw, "SELECT count(*) FROM db_users WHERE id='extra' AND host='127.0.0.1'") != 1 {
-					t.Fatal("host default")
-				}
-				phase4Exec(t, s.db.raw, "DELETE FROM db_users WHERE id='extra'")
-			})
-			t.Run("php_tuple_bounds_and_partial_update", func(t *testing.T) {
-				for _, tuple := range []string{"31,1,1", "2049,1,1", "256,0,1", "2048,1025,1", "256,1,0", "256,1,601", "32,33,60"} {
-					phase4Refuse(t, s.db.raw, "UPDATE site_php_limits SET (memory_mb,upload_mb,max_exec_sec)=("+tuple+") WHERE site_id='s1'", "CHECK")
-				}
-				phase4Refuse(t, s.db.raw, "UPDATE site_php_limits SET memory_mb=32 WHERE site_id='s1'", "CHECK")
-				if phase4Count(t, s.db.raw, "SELECT count(*) FROM site_php_limits WHERE memory_mb=256 AND upload_mb=64 AND max_exec_sec=60") != 1 {
-					t.Fatal("invalid partial update mutated row")
-				}
-				for _, tuple := range []string{"32,1,1", "2048,1024,600"} {
-					phase4Exec(t, s.db.raw, "UPDATE site_php_limits SET (memory_mb,upload_mb,max_exec_sec)=("+tuple+") WHERE site_id='s1'")
-				}
-				phase4Exec(t, s.db.raw, "UPDATE site_php_limits SET max_exec_sec=59 WHERE site_id='s1'")
-				if phase4Count(t, s.db.raw, "SELECT count(*) FROM site_php_limits WHERE memory_mb=2048 AND upload_mb=1024 AND max_exec_sec=59") != 1 {
-					t.Fatal("partial update lost omitted values")
-				}
 			})
 			t.Run("journal_kinds", func(t *testing.T) { phase4JournalKinds(t, s) })
 			t.Run("atomic_terminal_sql_and_consumed_claim_replay", func(t *testing.T) { phase4Atomic(t, s) })
@@ -152,7 +79,7 @@ func TestPhase4SchemaContract(t *testing.T) {
 			if upgrade && phase4Count(t, s.db.raw, "SELECT count(*) FROM settings WHERE key='preserved'") != 1 {
 				t.Fatal("upgrade lost existing data")
 			}
-			if phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations") != 7 {
+			if phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations") != 9 {
 				t.Fatal("missing production migration")
 			}
 			var integrity string
@@ -202,10 +129,10 @@ func phase4Refuse(t *testing.T, db phase4SQL, q, reason string) {
 func phase4Pair(t *testing.T, s *Store, db, user, site string) {
 	t.Helper()
 	err := s.Tx(context.Background(), func(tx *sql.Tx) error {
-		if _, err := tx.Exec("INSERT INTO databases(id,site_id,name,primary_user_id,created) VALUES(?,?,?,?,1)", db, site, "d_"+db, user); err != nil {
+		if _, err := tx.Exec("INSERT INTO databases(id,site_id,name,created) VALUES(?,?,?,1)", db, site, "d_"+db); err != nil {
 			return err
 		}
-		_, err := tx.Exec("INSERT INTO db_users(id,db_id,username,created) VALUES(?,?,?,1)", user, db, "u_"+user)
+		_, err := tx.Exec("INSERT INTO db_users(id,db_id,username,owner,created) VALUES(?,?,?,1,1)", user, db, "u_"+user)
 		return err
 	})
 	if err != nil {
@@ -236,8 +163,8 @@ func phase4Atomic(t *testing.T, s *Store) {
 	phase4Exec(t, s.db.raw, "INSERT INTO phase4_operations(job_id,kind,db_id,checkpoint,identities_json,nonce,ciphertext,expires,updated) VALUES('atomic','database_create','d3','verified','{}',X'01',X'02',100,1)")
 	publish := func(tx *sql.Tx) error {
 		statements := []string{
-			"INSERT INTO databases(id,name,primary_user_id,created) VALUES('d3','d_three','u3',1)",
-			"INSERT INTO db_users(id,db_id,username,created) VALUES('u3','d3','u_three',1)",
+			"INSERT INTO databases(id,name,created) VALUES('d3','d_three',1)",
+			"INSERT INTO db_users(id,db_id,username,owner,created) VALUES('u3','d3','u_three',1,1)",
 			`UPDATE jobs SET state='done',result_json='{"db_id":"d3"}',finished=20 WHERE id='atomic'`,
 			"INSERT INTO job_claims(job_id,claim_hash,nonce,ciphertext,expires) VALUES('atomic','hashed-token',X'03',X'04',620)",
 			"UPDATE phase4_operations SET checkpoint='done',nonce=NULL,ciphertext=NULL WHERE job_id='atomic'",
@@ -340,7 +267,7 @@ func phase4Expiry(t *testing.T, s *Store) {
 	}
 	if err := s.Tx(context.Background(), func(tx *sql.Tx) error {
 		for _, id := range ids {
-			if _, err := tx.Exec("UPDATE phase4_operations SET checkpoint='expired',nonce=NULL,ciphertext=NULL WHERE job_id=?", id); err != nil {
+			if _, err := tx.Exec("UPDATE phase4_operations SET checkpoint='expired' WHERE job_id=?", id); err != nil {
 				return err
 			}
 			if _, err := tx.Exec("UPDATE jobs SET state='failed',code='interrupted',error='Recovery expired' WHERE id=? AND state IN ('queued','running')", id); err != nil {

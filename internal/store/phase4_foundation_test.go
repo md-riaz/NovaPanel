@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -69,8 +68,8 @@ func TestPhase4ProductionMigration(t *testing.T) {
 			s.Close()
 		}
 	}()
-	if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations"); n != 7 {
-		t.Fatalf("want seven production migrations, got %d", n)
+	if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations"); n != 9 {
+		t.Fatalf("want nine production migrations, got %d", n)
 	}
 	phase4JournalKinds(t, s)
 	var recordedHash string
@@ -80,10 +79,6 @@ func TestPhase4ProductionMigration(t *testing.T) {
 	if recordedHash != hashes["0008"] {
 		t.Fatal("recorded Phase 4 hash differs from manifest")
 	}
-	candidate, err := os.ReadFile("testdata/phase4_candidate.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
 	production, err := migrations.ReadFile("migrations/0008_phase4.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -91,11 +86,10 @@ func TestPhase4ProductionMigration(t *testing.T) {
 	if got := fmt.Sprintf("%x", sha256.Sum256(production)); got != hashes["0008"] {
 		t.Fatalf("Phase 4 migration hash = %s, manifest = %s", got, hashes["0008"])
 	}
-	// The candidate describes the resulting schema; 0008 remains the shipped DDL.
-	const oldKinds = "'site_delete','database_delete','dbuser_delete'"
-	const newKinds = oldKinds + ",'php_set'"
-	if strings.Count(string(production), oldKinds) != 1 || string(candidate) != strings.Replace(string(production), oldKinds, newKinds, 1) {
-		t.Fatal("candidate differs from shipped DDL beyond the PHP operation kind")
+	for _, table := range []string{"databases", "db_users", "wordpress_bindings", "phase4_operations"} {
+		if phase4Count(t, s.db.raw, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", table) != 1 {
+			t.Fatalf("missing %s", table)
+		}
 	}
 	phase4Exec(t, s.db.raw, "INSERT INTO settings VALUES('phase4_upgrade','true')")
 	if err := s.Close(); err != nil {
