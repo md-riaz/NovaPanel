@@ -18,8 +18,8 @@ import (
 	"novapanel/internal/audit"
 	runner "novapanel/internal/exec"
 	"novapanel/internal/jobs"
+	mainphp "novapanel/internal/php"
 	"novapanel/internal/render/nginx"
-	"novapanel/internal/render/php"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
 )
@@ -30,11 +30,11 @@ import (
 type restoreCrashRunner struct{ kill bool }
 
 func (r restoreCrashRunner) Run(ctx context.Context, name string, args []string, opts runner.RunOpts) ([]byte, []byte, int, error) {
-	if r.kill {
+	if r.kill && name == "/usr/sbin/php-fpm8.3" {
 		_ = unix.Kill(os.Getpid(), unix.SIGKILL)
 		panic("SIGKILL failed")
 	}
-	return nil, nil, 0, nil
+	return (phpScratchRunner{}).Run(ctx, name, args, opts)
 }
 
 func TestPHPQueueDeathDuringRestore(t *testing.T) {
@@ -62,22 +62,13 @@ func TestPHPQueueDeathDuringRestore(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	master := "[global]\npid = /run/php/php8.3-fpm.pid\nerror_log = /var/log/php8.3-fpm.log\ninclude = " + filepath.Join(root, "pool", "*.conf") + "\n"
+	if err := os.WriteFile(filepath.Join(root, "php-fpm.conf"), []byte(master), 0600); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	st, log, a := openRestoreCrashFixture(t, root, false)
-	old := nginx.Desired{Name: "demo", Domains: []string{"demo.example.test"}, Docroot: "/srv/sites/demo/public", ACMERoot: "/var/www/acme/demo", PHP: &php.Desired{Name: "demo", Type: "php", Version: "8.3", UID: 1001, GID: 1001}}
-	if err := a.Nginx.ApplyPHP(ctx, a.DurablePHP.Pools, old, func(context.Context) error { return nil }, func(context.Context) error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	paths := []string{"pool/demo.conf", "pool/demo.conf.lkg", "sites-available/demo.conf", "sites-available/demo.conf.lkg"}
-	originals := make([][]byte, len(paths))
-	for i, p := range paths {
-		var err error
-		originals[i], err = os.ReadFile(filepath.Join(root, p))
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
 	if err := a.PrepareStartup(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +86,23 @@ func TestPHPQueueDeathDuringRestore(t *testing.T) {
 		t.Fatalf("dispatch: %+v", reply)
 	}
 	job := reply.Data.(jobs.EnqueueResult).Job
+	op, err := st.LoadOperation(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := op.Identity.PHP
+	limits := store.PHPLimits{MemoryMB: &p.OriginalLimits.MemoryMB, UploadMB: &p.OriginalLimits.UploadMB, MaxExecSec: &p.OriginalLimits.MaxExecSec, MaxChildren: &p.OriginalCap}
+	if err := a.PHP.Recover(ctx, "demo", mainphp.PoolState{SiteID: sid, Exists: true, MaxChildren: p.OriginalCap, Limits: limits}); err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{"pool/novapanel-demo.conf"}
+	originals := make([][]byte, len(paths))
+	for i, p := range paths {
+		originals[i], err = os.ReadFile(filepath.Join(root, p))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := st.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TRIGGER fail_php_terminal BEFORE INSERT ON settings WHEN NEW.key LIKE 'site:php_limits:%' BEGIN SELECT RAISE(ABORT,'injected'); END`)
 		return err
@@ -104,7 +112,7 @@ func TestPHPQueueDeathDuringRestore(t *testing.T) {
 	if err := a.Jobs.Run(ctx); err == nil {
 		t.Fatal("expected SQL failure")
 	}
-	op, err := st.LoadOperation(ctx, job.ID)
+	op, err = st.LoadOperation(ctx, job.ID)
 	if err != nil || op.Checkpoint != "verified" {
 		t.Fatalf("operation=%+v err=%v", op, err)
 	}
@@ -188,8 +196,9 @@ func openRestoreCrashFixture(t *testing.T, root string, kill bool) (*store.Store
 	a.Store = st
 	a.Audit = log
 	r := restoreCrashRunner{kill: kill}
+	a.Exec = r
 	a.Nginx = &nginx.Applier{Root: root, Runner: r, Probe: func(context.Context, nginx.Desired) error { return nil }}
-	a.DurablePHP = &agent.PHPDependencies{Pools: &php.Applier{Root: filepath.Join(root, "pool"), Runner: r, Probe: func(context.Context, php.Desired) error { return nil }}, RecoveryRoot: filepath.Join(root, "journal"), ResolveIdentity: func(context.Context, store.Site) (uint32, uint32, error) { return 1001, 1001, nil }}
+	a.PHP = &mainphp.PoolApplier{Dir: filepath.Join(root, "pool"), Runner: r, Probe: func(context.Context) error { return nil }}
 	rpc.NewServer(a).ConfigureJobs()
 	return st, log, a
 }
