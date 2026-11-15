@@ -31,11 +31,11 @@ func (r poolReplayRunner) Run(_ context.Context, prog string, args []string, _ r
 	return nil, nil, 0, nil
 }
 
-func TestPHPSetReplayUsesCommittedLimits(t *testing.T) {
+func TestPHPSetUsesCommittedLimits(t *testing.T) {
 	testPHPSetReplay(t, false)
 }
 
-func TestPHPSetReplayBackfillsLegacyCap(t *testing.T) {
+func TestPHPSetBackfillsLegacyCap(t *testing.T) {
 	testPHPSetReplay(t, true)
 }
 
@@ -100,9 +100,6 @@ func testPHPSetReplay(t *testing.T, legacy bool) {
 	}
 	before, err := st.LoadOperation(ctx, result.Job.ID)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = st.StartJob(ctx, result.Job.ID, 0); err != nil {
 		t.Fatal(err)
 	}
 	run, cancel := context.WithCancel(ctx)
