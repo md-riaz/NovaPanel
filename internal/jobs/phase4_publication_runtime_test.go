@@ -50,7 +50,7 @@ func TestQueueRunPublicationRollbackMatrix(t *testing.T) {
 			q := NewQueue(s, seal, a)
 			q.SetClock(clock)
 			ctx := WithMetadata(context.Background(), Metadata{CreatedBy: "local-root", Role: "owner"})
-			if e = q.PrepareOperations(ctx); e != nil {
+			if e = q.PrepareStartup(ctx); e != nil {
 				t.Fatal(e)
 			}
 			r, e := q.EnqueueOperation(ctx, store.OperationRequest{Kind: store.DatabaseCreate}, map[string]any{"password": "original-secret"})
