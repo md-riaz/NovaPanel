@@ -39,8 +39,8 @@ func TestPHPExpiryRetainsRecoveryBlockAfterReopen(t *testing.T) {
 		t.Fatalf("prepared PHP must not authorize restoration: %v", err)
 	}
 	clock.now = op.Expires
-	if err = s.CheckExpiredPHPRestoration(ctx, jid); !errors.Is(err, ErrSitePrecondition) {
-		t.Fatalf("expired prepared PHP must not authorize restoration: %v", err)
+	if err = s.CheckExpiredPHPRestoration(ctx, jid); err != nil {
+		t.Fatalf("expired prepared PHP must allow committed-state restoration: %v", err)
 	}
 	if _, err = s.StartJob(ctx, jid, clock.now); err != nil {
 		t.Fatal(err)

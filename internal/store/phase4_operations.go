@@ -428,7 +428,7 @@ func (s *Store) checkOperation(ctx context.Context, jid string, restoration bool
 			return e
 		}
 		if restoration {
-			if op.Kind != PHPSet || op.Reconciled || (op.Checkpoint != "config_published" && op.Checkpoint != "verified") || s.clock.Now() < op.Expires || op.Identity.Site == nil || op.Identity.PHP == nil {
+			if op.Kind != PHPSet || op.Reconciled || (op.Checkpoint != "prepared" && op.Checkpoint != "config_published" && op.Checkpoint != "verified") || s.clock.Now() < op.Expires || op.Identity.Site == nil || op.Identity.PHP == nil {
 				return ErrSitePrecondition
 			}
 		} else {
