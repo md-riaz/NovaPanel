@@ -18,9 +18,9 @@ type observedWorkerStore struct {
 	fail    atomic.Bool
 }
 
-func (s *observedWorkerStore) NextQueuedJob(ctx context.Context) (Job, error) {
+func (s *observedWorkerStore) QueuedJobsHighWater(ctx context.Context) (int64, error) {
 	s.once.Do(func() { close(s.entered) })
-	return s.Store.NextQueuedJob(ctx)
+	return s.Store.QueuedJobsHighWater(ctx)
 }
 
 type switchAudit struct{ fail atomic.Bool }

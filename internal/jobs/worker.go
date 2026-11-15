@@ -437,7 +437,8 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 	// F6 precedence across the entire error tree: explicit interruption, then
 	// effectful deadline safety / retry, ordinary terminal, and coded deadline.
 	if interrupted := codedError(err, func(code string) bool { return code == "interrupted" }); interrupted != nil {
-		if j.Effectful || errors.Is(err, ErrRecoveryRequired) {
+		unapplied, _ := ctx.Value(operationUnappliedKey{}).(bool)
+		if j.Effectful || errors.Is(err, ErrRecoveryRequired) || unapplied {
 			return q.finish(ctx, j, interrupted)
 		}
 		err = errors.Join(err, ErrRetry)

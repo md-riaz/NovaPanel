@@ -36,6 +36,12 @@ func TestSiteDeleteQueueCancelReopen(t *testing.T) {
 				t.Fatal(err)
 			}
 			admitted, err := q.EnqueueOperation(ctx, store.OperationRequest{Kind: store.SiteDelete, SiteID: site.ID, PurgeDatabases: purge, PurgeFiles: !purge}, nil)
+			if !purge {
+				if err == nil {
+					t.Fatal("attached database admitted without purge")
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
