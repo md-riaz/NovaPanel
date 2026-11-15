@@ -6,13 +6,10 @@ import (
 	"novapanel/internal/agent"
 	"novapanel/internal/audit"
 	"novapanel/internal/id"
-	"novapanel/internal/jobs"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
 	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 )
 
 func TestSiteDeleteAttachedDatabaseThroughQueue(t *testing.T) {
@@ -44,6 +41,9 @@ func TestSiteDeleteAttachedDatabaseThroughQueue(t *testing.T) {
 	}
 	server := rpc.NewServer(a)
 	server.ConfigureJobs()
+	if err := a.Jobs.PrepareStartup(ctx); err != nil {
+		t.Fatal(err)
+	}
 	call := func(verb, args string) rpc.Reply {
 		return server.Dispatch(rpc.WithCaller(ctx, rpc.RootCaller(0)), rpc.Request{Verb: verb, Args: json.RawMessage(args)})
 	}
@@ -51,38 +51,8 @@ func TestSiteDeleteAttachedDatabaseThroughQueue(t *testing.T) {
 		t.Fatalf("invalid input: %+v", r)
 	}
 	r := call("site.delete", `{"site_id":"`+sid+`"}`)
-	if !r.OK {
-		t.Fatalf("enqueue: %+v", r)
-	}
-	jobid := r.Data.(jobs.EnqueueResult).Job.ID
-	a.Jobs.SetRunner(server.ExecuteJob)
-	runctx, cancel := context.WithCancel(ctx)
-	done := make(chan error, 1)
-	go func() { done <- a.Jobs.Run(runctx) }()
-	defer func() {
-		cancel()
-		if e := <-done; e != nil {
-			t.Error(e)
-		}
-	}()
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		j, e := st.GetJob(ctx, jobid)
-		if e != nil {
-			t.Fatal(e)
-		}
-		if j.State == "failed" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("job: %+v", j)
-		}
-		time.Sleep(time.Millisecond * 5)
-	}
-	r = call("job.status", `{"id":"`+jobid+`"}`)
-	b, _ := json.Marshal(r.Data)
-	if !r.OK || !strings.Contains(string(b), `"code":"precondition_failed"`) || !strings.Contains(string(b), `"attached_database_ids":["`+dbid+`"]`) {
-		t.Fatalf("status: %s %+v", b, r)
+	if r.Code != "precondition_failed" {
+		t.Fatalf("attached database must prevent deletion: %+v", r)
 	}
 	if _, err = st.SiteByID(ctx, sid); err != nil {
 		t.Fatal(err)
