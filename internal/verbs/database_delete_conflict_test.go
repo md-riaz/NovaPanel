@@ -52,6 +52,9 @@ func TestDeletePersistentConflictTerminalizes(t *testing.T) {
 			a.Audit = log
 			a.Exec = r
 			a.Jobs = jobs.NewQueue(s, seal, log)
+			if err := a.Jobs.PrepareOperations(ctx); err != nil {
+				t.Fatal(err)
+			}
 			server := rpc.NewServer(a)
 			args := map[string]string{"dbuser_id": user}
 			if verb == "database.delete" {

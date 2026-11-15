@@ -93,6 +93,9 @@ func TestQueueDeleteForeignSchemaWithLiveChildren(t *testing.T) {
 	a := agent.New()
 	a.Store, a.Audit, a.Exec = s, log, r
 	a.Jobs = jobs.NewQueue(s, seal, log)
+	if err := a.Jobs.PrepareOperations(ctx); err != nil {
+		t.Fatal(err)
+	}
 	server := rpc.NewServer(a)
 	a.Jobs.SetRunner(server.ExecuteJob)
 	raw, _ := json.Marshal(map[string]string{"db_id": db})
@@ -178,6 +181,9 @@ func TestQueueDeleteForeignUserMarker(t *testing.T) {
 			a := agent.New()
 			a.Store, a.Audit, a.Exec = s, log, &mismatchOwnerRunner{runner}
 			a.Jobs = jobs.NewQueue(s, seal, log)
+			if err := a.Jobs.PrepareOperations(ctx); err != nil {
+				t.Fatal(err)
+			}
 			server := rpc.NewServer(a)
 			a.Jobs.SetRunner(server.ExecuteJob)
 			args := map[string]string{"dbuser_id": stale}

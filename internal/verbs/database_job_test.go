@@ -169,6 +169,9 @@ func TestDatabaseCreateReservedPresentDoesNotAdoptOrDrop(t *testing.T) {
 	}
 	a := agent.New()
 	a.Store, a.Audit, a.Jobs = s, log, jobs.NewQueue(s, seal, log)
+	if err := a.Jobs.PrepareOperations(ctx); err != nil {
+		t.Fatal(err)
+	}
 	runner := &recordingDatabaseRunner{databaseRunner: &databaseRunner{objects: make(map[string]string)}}
 	a.Exec = runner
 	server := rpc.NewServer(a)
@@ -228,6 +231,9 @@ func TestDatabaseCreateUnknownSiteHasNoExternalEffects(t *testing.T) {
 	a.Store = s
 	a.Audit = log
 	a.Jobs = jobs.NewQueue(s, seal, log)
+	if err := a.Jobs.PrepareOperations(ctx); err != nil {
+		t.Fatal(err)
+	}
 	runner := &databaseRunner{}
 	a.Exec = runner
 	server := rpc.NewServer(a)
@@ -266,6 +272,9 @@ func TestDatabaseCreateJobAndClaim(t *testing.T) {
 	a.Store = s
 	a.Audit = l
 	a.Jobs = jobs.NewQueue(s, seal, l)
+	if err := a.Jobs.PrepareOperations(ctx); err != nil {
+		t.Fatal(err)
+	}
 	runner := &databaseRunner{}
 	if testingLive := os.Getenv("NOVAPANEL_MARIADB_TEST") == "1"; testingLive {
 		a.Exec = exec.Real{}
