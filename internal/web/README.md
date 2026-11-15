@@ -12,7 +12,9 @@ F16's `rate_limit_rps` and `rate_limit_burst` default to 5 and 20. `panel-web` r
 
 Every routed request carrying the canonical session cookie spends one token before dialing RPC, including anonymous login and authenticated requests. Only the credential passed to RPC keys the bucket; Authorization, role and forwarded-address headers do not change it. Origin and duplicate-cookie refusals run first; security headers wrap all responses. Exhaustion returns HTTP 429 with `Retry-After: 1` without an RPC connection. Agent credential-failure budgets are unchanged.
 
-The process retains at most 4096 SHA-256 credential keys and token counters, not credentials or session authority. On capacity pressure it removes only fully replenished buckets; if all budgets remain active, new keyed requests fail closed with 429. Assets and cookie-less login bootstrap remain reachable. The spec defines no cookie-less transport identity, so no IP/header/global policy is invented; the agent's existing per-peer mint throttle still applies. Limits are process-local and reset on restart.
+The process retains at most 4096 SHA-256 keys and token counters, not credentials or session authority. Cookie-less `GET /login` spends the same configured allowance in a separate client-address namespace before dialing RPC. It uses only the connection's `RemoteAddr` IP, normalizes IP spelling and ignores source ports and all forwarded headers. No trusted-proxy support is introduced. Behind a reverse proxy, cookie-less clients therefore share that proxy's address budget; do not assume forwarded client IPs are trusted.
+
+On capacity pressure the limiter removes only fully replenished buckets; if all budgets remain active, new keyed requests fail closed with 429. Public assets remain reachable. The agent independently applies `anon_mint_rps`/`anon_mint_burst`, default 20/100, to fresh mints per trusted peer UID as a high global backstop, returning `rate_limited` on exhaustion. Existing anonymous-session reuse does not spend that mint budget. Limits are process-local and reset on restart.
 
 ## Checks
 
