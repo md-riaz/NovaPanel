@@ -53,7 +53,7 @@ func (s *Store) prepareWordPress(ctx context.Context, j Job, c JobClaim, r Opera
 		w := *r.WordPress
 		w.Input.DatabaseID = r.DatabaseID
 		w.Input.DatabaseUserID = r.UserID
-		ident := OperationIdentity{Version: 1, Database: Database{ID: r.DatabaseID, SiteID: r.SiteID, Name: "d_" + strings.ToLower(r.DatabaseID), Engine: "mariadb", PrimaryUserID: r.UserID}, Accounts: []OperationAccount{{ID: r.UserID, Username: "u_" + strings.ToLower(r.UserID), Host: "127.0.0.1"}}, WordPress: &w}
+		ident := OperationIdentity{Version: 1, Database: OperationDatabaseRecord{ID: r.DatabaseID, SiteID: r.SiteID, Name: "d_" + strings.ToLower(r.DatabaseID), Engine: "mariadb", PrimaryUserID: r.UserID}, Accounts: []OperationAccount{{ID: r.UserID, Username: "u_" + strings.ToLower(r.UserID), Host: "127.0.0.1"}}, WordPress: &w}
 		op = Operation{JobID: j.ID, Owner: j.CreatedBy, Kind: WordPressInstall, SiteID: r.SiteID, DatabaseID: r.DatabaseID, Checkpoint: "prepared", Identity: ident, Nonce: nonce, Ciphertext: ciphertext}
 		if !validWordPressIdentity(op) {
 			return ErrSiteInvalid
@@ -105,10 +105,10 @@ func completeWordPress(ctx context.Context, tx *sql.Tx, op Operation, now int64,
 	}
 	db := op.Identity.Database
 	a := op.Identity.Accounts[0]
-	if _, e = tx.ExecContext(ctx, "INSERT INTO databases(id,site_id,name,primary_user_id,created) VALUES(?,?,?,?,?)", db.ID, op.SiteID, db.Name, db.PrimaryUserID, now); e != nil {
+	if _, e = tx.ExecContext(ctx, "INSERT INTO databases(id,site_id,name,created) VALUES(?,?,?,?)", db.ID, op.SiteID, db.Name, now); e != nil {
 		return e
 	}
-	if _, e = tx.ExecContext(ctx, "INSERT INTO db_users(id,db_id,username,host,created) VALUES(?,?,?,?,?)", a.ID, db.ID, a.Username, a.Host, now); e != nil {
+	if _, e = tx.ExecContext(ctx, "INSERT INTO db_users(id,db_id,username,host,owner,created) VALUES(?,?,?,?,1,?)", a.ID, db.ID, a.Username, a.Host, now); e != nil {
 		return e
 	}
 	if _, e = tx.ExecContext(ctx, "INSERT INTO wordpress_bindings(site_id,db_id) VALUES(?,?)", op.SiteID, db.ID); e != nil {

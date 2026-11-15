@@ -16,13 +16,13 @@ import (
 	"time"
 )
 
-type phpSetArgs struct {
+type legacyPHPSetArgs struct {
 	SiteID  string          `json:"site_id"`
 	Version string          `json:"version"`
 	Limits  store.PHPLimits `json:"limits,omitempty"`
 }
 
-func (v *phpSetArgs) Validate() error {
+func (v *legacyPHPSetArgs) Validate() error {
 	if err := (&siteIDArgs{v.SiteID}).Validate(); err != nil {
 		return err
 	}
@@ -33,9 +33,6 @@ func (v *phpSetArgs) Validate() error {
 		return rpc.Errf("unsupported", "Unsupported PHP version")
 	}
 	return php.ValidateLimits(v.Limits)
-}
-func init() {
-	rpc.Register(rpc.Verb{Name: "php.set", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, NewArgs: func() any { return &phpSetArgs{} }, ObjectKey: func(v any) string { return "site:" + v.(*phpSetArgs).SiteID }, Run: phpSet, Exec: phpSetExec})
 }
 func phpAvailable(ctx context.Context, runner exec.Runner) error {
 	if runner == nil {
@@ -63,8 +60,8 @@ func activePHPLimits(ctx context.Context, st *store.Store, siteID string) (store
 		return php.ChildrenCap(php.TotalMemoryMB(), active)
 	})
 }
-func phpSet(ctx context.Context, a *agent.Agent, args any) (any, error) {
-	v := args.(*phpSetArgs)
+func legacyPHPSet(ctx context.Context, a *agent.Agent, args any) (any, error) {
+	v := args.(*legacyPHPSetArgs)
 	if err := v.Validate(); err != nil {
 		return nil, err
 	}
@@ -80,8 +77,8 @@ func phpSet(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	}
 	return a.Jobs.Enqueue(ctx, "php.set", v, "site:"+v.SiteID)
 }
-func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
-	var v phpSetArgs
+func legacyPHPSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
+	var v legacyPHPSetArgs
 	if err := json.Unmarshal(j.Args, &v); err != nil {
 		return rpc.Errf("bad_request", "Invalid PHP arguments")
 	}

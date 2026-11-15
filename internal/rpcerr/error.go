@@ -1,7 +1,12 @@
 // Package rpcerr provides cycle-free errors shared by leaf packages and RPC.
 package rpcerr
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+var ErrRetry = errors.New("jobs: retry required")
 
 type CodedError struct{ Code, Msg string }
 

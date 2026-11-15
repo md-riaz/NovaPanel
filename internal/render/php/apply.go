@@ -8,7 +8,6 @@ import (
 	"golang.org/x/sys/unix"
 	"io"
 	runner "novapanel/internal/exec"
-	"novapanel/internal/platform"
 	"novapanel/internal/rpcerr"
 	"os"
 	"path/filepath"
@@ -154,7 +153,7 @@ func (a *Applier) validate(ctx context.Context) error {
 	return a.command(ctx, "/usr/sbin/php-fpm8.3", []string{"-t"})
 }
 func (a *Applier) reload(ctx context.Context) error {
-	return a.command(ctx, platform.Systemctl, []string{"reload", "php8.3-fpm"})
+	return a.command(ctx, "/usr/bin/systemctl", []string{"reload", "php8.3-fpm"})
 }
 func (a *Applier) command(ctx context.Context, prog string, args []string) error {
 	_, _, code, err := a.Runner.Run(ctx, prog, args, runner.RunOpts{})

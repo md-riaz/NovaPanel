@@ -23,7 +23,7 @@ func TestPublicationPendingProjectionPrecedesPagination(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	ident := OperationIdentity{Version: 1, Database: Database{ID: "01K8WMXZF57CGNZKX1FZ38DZMQ", Name: "d_01k8wmxzf57cgnzkx1fz38dzmq", Engine: "mariadb", PrimaryUserID: "01K8WMXZF57CGNZKX1FZ38DZMR"}, Accounts: []OperationAccount{{ID: "01K8WMXZF57CGNZKX1FZ38DZMR", Username: "u_01k8wmxzf57cgnzkx1fz38dzmr", Host: "127.0.0.1"}}}
+	ident := OperationIdentity{Version: 1, Database: OperationDatabaseRecord{ID: "01K8WMXZF57CGNZKX1FZ38DZMQ", Name: "d_01k8wmxzf57cgnzkx1fz38dzmq", Engine: "mariadb", PrimaryUserID: "01K8WMXZF57CGNZKX1FZ38DZMR"}, Accounts: []OperationAccount{{ID: "01K8WMXZF57CGNZKX1FZ38DZMR", Username: "u_01k8wmxzf57cgnzkx1fz38dzmr", Host: "127.0.0.1"}}}
 	// Fixture persisted by an atomic terminal transaction interrupted before final audit.
 	raw, _ := json.Marshal(ident)
 	var fields map[string]any

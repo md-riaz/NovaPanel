@@ -7,12 +7,7 @@ import (
 	"novapanel/internal/agent"
 	"novapanel/internal/exec"
 	"novapanel/internal/platform"
-	"novapanel/internal/rpc"
 )
-
-func init() {
-	rpc.Register(rpc.Verb{Name: "php.list", MinRole: rpc.ReadOnly, ReadOnly: true, Scope: "sites:read", NewArgs: func() any { return &emptyArgs{} }, Run: phpList})
-}
 
 func phpList(ctx context.Context, a *agent.Agent, _ any) (any, error) {
 	versions := []string{}

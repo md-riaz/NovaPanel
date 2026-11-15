@@ -64,7 +64,7 @@ func checkTerminalWordPressConfig(ctx context.Context, tx *sql.Tx, jid string) (
 		return op, ErrSitePrecondition
 	}
 	if op.Identity.ConfigCleanup == "" {
-		err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sites s JOIN databases d ON d.id=? JOIN wordpress_bindings w ON w.site_id=s.id AND w.db_id=d.id WHERE s.id=? AND s.name=? AND s.type='wordpress' AND s.docroot=? AND d.site_id=s.id AND d.name=? AND d.primary_user_id=?`, op.DatabaseID, op.SiteID, op.Identity.WordPress.Input.SiteName, plan.Docroot, op.Identity.Database.Name, op.Identity.Database.PrimaryUserID).Scan(&n)
+		err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sites s JOIN databases d ON d.id=? JOIN wordpress_bindings w ON w.site_id=s.id AND w.db_id=d.id WHERE s.id=? AND s.name=? AND s.type='wordpress' AND s.docroot=? AND d.site_id=s.id AND d.name=? AND EXISTS(SELECT 1 FROM db_users u WHERE u.db_id=d.id AND u.owner=1 AND u.id=?)`, op.DatabaseID, op.SiteID, op.Identity.WordPress.Input.SiteName, plan.Docroot, op.Identity.Database.Name, op.Identity.Database.PrimaryUserID).Scan(&n)
 		if err != nil {
 			return op, err
 		}

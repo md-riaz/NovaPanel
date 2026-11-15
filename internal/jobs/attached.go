@@ -12,9 +12,9 @@ import (
 
 // lockAttachedDatabases discovers under the site lock, then reserves the entire
 // sorted set once and revalidates. Membership changes fail rather than add locks.
-func (q *Queue) lockAttachedDatabases(ctx context.Context, siteID string) ([]store.Database, func(), error) {
+func (q *Queue) lockAttachedDatabases(ctx context.Context, siteID string) ([]store.OperationDatabaseRecord, func(), error) {
 	s, ok := q.store.(interface {
-		AttachedDatabases(context.Context, string) ([]store.Database, error)
+		AttachedDatabases(context.Context, string) ([]store.OperationDatabaseRecord, error)
 	})
 	if !ok {
 		return nil, nil, errors.New("jobs: attached database discovery unavailable")
@@ -63,7 +63,7 @@ func (q *Queue) lockJob(ctx context.Context, j Job) (func(), error) {
 		}
 		if j.Verb == "site.delete" {
 			if store, ok := q.store.(interface {
-				AttachedDatabases(context.Context, string) ([]store.Database, error)
+				AttachedDatabases(context.Context, string) ([]store.OperationDatabaseRecord, error)
 			}); ok {
 				if journal, ok := q.store.(operationStore); ok {
 					_, err := journal.LoadOperation(ctx, j.ID)

@@ -81,13 +81,13 @@ func testPHPSetReplay(t *testing.T, legacy bool) {
 	a.PHP = &php.PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
 	a.Jobs = jobs.NewQueue(st, nil, nil)
 	upload := 32
-	raw, _ := json.Marshal(phpSetArgs{SiteID: sid, Version: version, Limits: store.PHPLimits{UploadMB: &upload}})
+	raw, _ := json.Marshal(legacyPHPSetArgs{SiteID: sid, Version: version, Limits: store.PHPLimits{UploadMB: &upload}})
 	jid, _ := id.New()
 	job := jobs.Job{ID: jid, Verb: "php.set", ObjectKey: "site:" + sid, State: "running", Args: raw, Attempts: 2}
 	if err = st.CreateJob(ctx, job); err != nil {
 		t.Fatal(err)
 	}
-	if err = phpSetExec(ctx, a, &job); err != nil {
+	if err = legacyPHPSetExec(ctx, a, &job); err != nil {
 		t.Fatal(err)
 	}
 	limits, err := st.SitePHPLimits(ctx, sid)
@@ -108,7 +108,7 @@ func testPHPSetReplay(t *testing.T, legacy bool) {
 	if err = st.UpdateJob(ctx, durable); err != nil {
 		t.Fatal(err)
 	}
-	if err = phpSetExec(ctx, a, &job); err != nil {
+	if err = legacyPHPSetExec(ctx, a, &job); err != nil {
 		t.Fatal(err)
 	}
 	limits, err = st.SitePHPLimits(ctx, sid)

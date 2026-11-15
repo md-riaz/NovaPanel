@@ -18,7 +18,7 @@ func snapshotSiteDelete(ctx context.Context, tx *sql.Tx, siteID string) (out Ope
 	if site.Status != "active" && site.Status != "failed" {
 		return out, ErrSitePrecondition
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT id,coalesce(site_id,''),name,engine,primary_user_id,created FROM databases WHERE site_id=? ORDER BY id", siteID)
+	rows, err := tx.QueryContext(ctx, "SELECT id,coalesce(site_id,''),name,engine,(SELECT id FROM db_users WHERE db_id=databases.id AND owner=1),created FROM databases WHERE site_id=? ORDER BY id", siteID)
 	if err != nil {
 		return out, err
 	}
@@ -60,7 +60,7 @@ func snapshotSiteDelete(ctx context.Context, tx *sql.Tx, siteID string) (out Ope
 
 func validSiteDeleteIdentity(op Operation) bool {
 	id := op.Identity
-	if id.Version != 1 || op.Owner == "" || op.DatabaseID != "" || op.SiteID == "" || id.Site == nil || id.Site.ID != op.SiteID || id.Site.Name == "" || id.Site.Docroot == "" || (id.Site.Status != "active" && id.Site.Status != "failed") || id.Database != (Database{}) || len(id.Accounts) != 0 || id.TargetUserID != "" {
+	if id.Version != 1 || op.Owner == "" || op.DatabaseID != "" || op.SiteID == "" || id.Site == nil || id.Site.ID != op.SiteID || id.Site.Name == "" || id.Site.Docroot == "" || (id.Site.Status != "active" && id.Site.Status != "failed") || id.Database != (OperationDatabaseRecord{}) || len(id.Accounts) != 0 || id.TargetUserID != "" {
 		return false
 	}
 	previous := ""

@@ -17,7 +17,7 @@ import (
 var errPHPRestored = errors.New("jobs: PHP original restored and failure reconciled")
 
 // ErrRetry retains a running job for roll-forward when cleanup could not finish.
-var ErrRetry = errors.New("jobs: retry required")
+var ErrRetry = rpcerr.ErrRetry
 
 // ErrRecoveryRequired marks a journaled publication requiring dedicated recovery.
 var ErrRecoveryRequired = errors.New("jobs: recovery required")

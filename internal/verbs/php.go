@@ -120,12 +120,3 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 }
 
 var _ json.Unmarshaler = (*phpSetArgs)(nil)
-
-// phpList reports the supported version policy, not host package discovery.
-// Installation and service readiness remain mutation preconditions.
-func phpList(context.Context, *agent.Agent, any) (any, error) {
-	return struct {
-		Versions []string `json:"versions"`
-		Default  string   `json:"default"`
-	}{[]string{"8.3"}, "8.3"}, nil
-}

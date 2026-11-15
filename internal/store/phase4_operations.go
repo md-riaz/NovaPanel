@@ -35,13 +35,13 @@ type OperationRequest struct {
 	PHP                        *php.SetRequest
 }
 type OperationDatabase struct {
-	Database Database
+	Database OperationDatabaseRecord
 	Accounts []OperationAccount
 }
 type OperationAccount struct{ ID, Username, Host string }
 type OperationIdentity struct {
 	Version                    int
-	Database                   Database
+	Database                   OperationDatabaseRecord
 	Accounts                   []OperationAccount
 	TargetUserID               string
 	Site                       *Site               `json:",omitempty"`
@@ -231,7 +231,7 @@ func (s *Store) PrepareOperation(ctx context.Context, j Job, c JobClaim, r Opera
 			if !phase4ResourceID.MatchString(r.UserID) {
 				return ErrSiteInvalid
 			}
-			ident.Database = Database{ID: r.DatabaseID, SiteID: r.SiteID, Name: "d_" + strings.ToLower(r.DatabaseID), Engine: "mariadb", PrimaryUserID: r.UserID}
+			ident.Database = OperationDatabaseRecord{ID: r.DatabaseID, SiteID: r.SiteID, Name: "d_" + strings.ToLower(r.DatabaseID), Engine: "mariadb", PrimaryUserID: r.UserID}
 			ident.Accounts = []OperationAccount{{ID: r.UserID, Username: "u_" + strings.ToLower(r.UserID), Host: "127.0.0.1"}}
 			var n int
 			if e := tx.QueryRowContext(ctx, "SELECT count(*) FROM databases WHERE id=? OR name=?", r.DatabaseID, ident.Database.Name).Scan(&n); e != nil {
@@ -250,7 +250,7 @@ func (s *Store) PrepareOperation(ctx context.Context, j Job, c JobClaim, r Opera
 					return ErrSiteConflict
 				}
 			}
-			if e := tx.QueryRowContext(ctx, "SELECT id,coalesce(site_id,''),name,engine,primary_user_id,created FROM databases WHERE id=?", dbid).Scan(&ident.Database.ID, &ident.Database.SiteID, &ident.Database.Name, &ident.Database.Engine, &ident.Database.PrimaryUserID, &ident.Database.Created); e != nil {
+			if e := tx.QueryRowContext(ctx, "SELECT id,coalesce(site_id,''),name,engine,(SELECT id FROM db_users WHERE db_id=databases.id AND owner=1),created FROM databases WHERE id=?", dbid).Scan(&ident.Database.ID, &ident.Database.SiteID, &ident.Database.Name, &ident.Database.Engine, &ident.Database.PrimaryUserID, &ident.Database.Created); e != nil {
 				return e
 			}
 			if r.SiteID != "" && r.SiteID != ident.Database.SiteID {
@@ -447,7 +447,7 @@ func (s *Store) checkOperation(ctx context.Context, jid string, restoration bool
 				return ErrSiteConflict
 			}
 			var primary string
-			if e = tx.QueryRowContext(ctx, "SELECT primary_user_id FROM databases WHERE id=?", op.DatabaseID).Scan(&primary); e != nil {
+			if e = tx.QueryRowContext(ctx, "SELECT id FROM db_users WHERE db_id=? AND owner=1", op.DatabaseID).Scan(&primary); e != nil {
 				return e
 			}
 			if primary != op.Identity.Database.PrimaryUserID {
@@ -478,8 +478,8 @@ func checkOperationSite(ctx context.Context, tx *sql.Tx, op Operation) error {
 }
 
 func checkOperationMembership(ctx context.Context, tx *sql.Tx, op Operation) error {
-	var db Database
-	if e := tx.QueryRowContext(ctx, "SELECT id,coalesce(site_id,''),name,engine,primary_user_id,created FROM databases WHERE id=?", op.DatabaseID).Scan(&db.ID, &db.SiteID, &db.Name, &db.Engine, &db.PrimaryUserID, &db.Created); e != nil {
+	var db OperationDatabaseRecord
+	if e := tx.QueryRowContext(ctx, "SELECT id,coalesce(site_id,''),name,engine,(SELECT id FROM db_users WHERE db_id=databases.id AND owner=1),created FROM databases WHERE id=?", op.DatabaseID).Scan(&db.ID, &db.SiteID, &db.Name, &db.Engine, &db.PrimaryUserID, &db.Created); e != nil {
 		return e
 	}
 	if db != op.Identity.Database {
@@ -610,12 +610,12 @@ func (s *Store) CompleteOperation(ctx context.Context, jid string, claim *JobCla
 		db := op.Identity.Database
 		switch op.Kind {
 		case DatabaseCreate:
-			_, e = tx.ExecContext(ctx, "INSERT INTO databases(id,site_id,name,primary_user_id,created) VALUES(?,?,?,?,?)", db.ID, nullableString(db.SiteID), db.Name, db.PrimaryUserID, now)
+			_, e = tx.ExecContext(ctx, "INSERT INTO databases(id,site_id,name,created) VALUES(?,?,?,?)", db.ID, nullableString(db.SiteID), db.Name, now)
 			if e != nil {
 				return siteWriteError(e)
 			}
 			a := op.Identity.Accounts[0]
-			_, e = tx.ExecContext(ctx, "INSERT INTO db_users(id,db_id,username,host,created) VALUES(?,?,?,?,?)", a.ID, db.ID, a.Username, a.Host, now)
+			_, e = tx.ExecContext(ctx, "INSERT INTO db_users(id,db_id,username,host,owner,created) VALUES(?,?,?,?,1,?)", a.ID, db.ID, a.Username, a.Host, now)
 			result = map[string]string{"db_id": db.ID, "db_name": db.Name, "db_user": a.Username}
 		case DBUserCreate:
 			a := op.Identity.Accounts[0]

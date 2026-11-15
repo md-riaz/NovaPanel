@@ -51,7 +51,7 @@ func (s *Store) MergePHPLimits(ctx context.Context, id string, p php.LimitsPatch
 }
 
 type DatabasePrimary struct{ ID, UserID, SiteID string }
-type Database struct {
+type OperationDatabaseRecord struct {
 	ID, SiteID, Name, Engine, PrimaryUserID string
 	Created                                 int64
 }
@@ -71,24 +71,24 @@ func (s *Store) CreateDatabasePrimary(ctx context.Context, p DatabasePrimary) er
 		if p.SiteID != "" {
 			site = p.SiteID
 		}
-		if _, e := tx.ExecContext(ctx, "INSERT INTO databases(id,site_id,name,primary_user_id,created) VALUES(?,?,?,?,?)", p.ID, site, "d_"+strings.ToLower(p.ID), p.UserID, now); e != nil {
+		if _, e := tx.ExecContext(ctx, "INSERT INTO databases(id,site_id,name,created) VALUES(?,?,?,?)", p.ID, site, "d_"+strings.ToLower(p.ID), now); e != nil {
 			return siteWriteError(e)
 		}
-		_, e := tx.ExecContext(ctx, "INSERT INTO db_users(id,db_id,username,host,created) VALUES(?,?,?,'127.0.0.1',?)", p.UserID, p.ID, "u_"+strings.ToLower(p.UserID), now)
+		_, e := tx.ExecContext(ctx, "INSERT INTO db_users(id,db_id,username,host,owner,created) VALUES(?,?,?,'127.0.0.1',1,?)", p.UserID, p.ID, "u_"+strings.ToLower(p.UserID), now)
 		return siteWriteError(e)
 	})
 }
 
 // ListDatabases returns persisted database metadata without credentials.
-func (s *Store) ListDatabases(ctx context.Context) ([]Database, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id,coalesce(site_id,''),name,engine,primary_user_id,created FROM databases ORDER BY name,id")
+func (s *Store) ListOperationDatabases(ctx context.Context) ([]OperationDatabaseRecord, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT id,coalesce(site_id,''),name,engine,(SELECT id FROM db_users WHERE db_id=databases.id AND owner=1),created FROM databases ORDER BY name,id")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []Database{}
+	out := []OperationDatabaseRecord{}
 	for rows.Next() {
-		var v Database
+		var v OperationDatabaseRecord
 		if err := rows.Scan(&v.ID, &v.SiteID, &v.Name, &v.Engine, &v.PrimaryUserID, &v.Created); err != nil {
 			return nil, err
 		}
@@ -97,7 +97,7 @@ func (s *Store) ListDatabases(ctx context.Context) ([]Database, error) {
 	return out, rows.Err()
 }
 
-func (s *Store) GetDatabase(ctx context.Context, id string) (v Database, err error) {
-	err = s.db.QueryRowContext(ctx, "SELECT id,coalesce(site_id,''),name,engine,primary_user_id,created FROM databases WHERE id=?", id).Scan(&v.ID, &v.SiteID, &v.Name, &v.Engine, &v.PrimaryUserID, &v.Created)
+func (s *Store) GetDatabase(ctx context.Context, id string) (v OperationDatabaseRecord, err error) {
+	err = s.db.QueryRowContext(ctx, "SELECT id,coalesce(site_id,''),name,engine,(SELECT id FROM db_users WHERE db_id=databases.id AND owner=1),created FROM databases WHERE id=?", id).Scan(&v.ID, &v.SiteID, &v.Name, &v.Engine, &v.PrimaryUserID, &v.Created)
 	return
 }
