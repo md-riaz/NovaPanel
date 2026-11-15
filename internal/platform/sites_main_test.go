@@ -23,6 +23,9 @@ func (r *mainAccountRunner) Run(_ context.Context, p string, args []string, _ ru
 		if args[0] == "group" {
 			return []byte(args[1] + ":x:33:\n"), nil, 0, nil
 		}
+		if args[0] == "passwd" && args[1] == "www-data" {
+			return []byte("www-data:x:33:33::/var/www:/usr/sbin/nologin\n"), nil, 0, nil
+		}
 		if !r.exists {
 			return nil, nil, 2, nil
 		}
