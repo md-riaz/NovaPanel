@@ -2,6 +2,7 @@ package verbs
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,8 +111,15 @@ func testPHPSetReplay(t *testing.T, legacy bool) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		j, e := st.GetJob(ctx, result.Job.ID)
-		if e != nil {
+		if e != nil && !errors.Is(e, store.ErrPublicationPending) {
 			t.Fatal(e)
+		}
+		if errors.Is(e, store.ErrPublicationPending) {
+			if time.Now().After(deadline) {
+				t.Fatal("publication remained pending")
+			}
+			time.Sleep(5 * time.Millisecond)
+			continue
 		}
 		if j.State == "done" {
 			break
