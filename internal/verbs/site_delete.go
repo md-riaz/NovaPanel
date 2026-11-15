@@ -262,22 +262,6 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 	return nil
 }
 
-type legacyDeleteState struct{ agent *agent.Agent }
-
-func (d legacyDeleteState) preflight(ctx context.Context, s store.Site) error {
-	if s.Type != "static" {
-		return rpc.Errf("unsupported", "Legacy deletion supports static sites only")
-	}
-	dbs, err := d.agent.Store.AttachedDatabases(ctx, s.ID)
-	if err != nil {
-		return err
-	}
-	if len(dbs) != 0 {
-		return rpc.Errf("unsupported", "Attached site deletion requires a durable journal")
-	}
-	return nil
-}
-
 func removeSiteCertificates(path string, domains []store.Domain) error {
 	resolved, e := filepath.EvalSymlinks(path)
 	if os.IsNotExist(e) {
