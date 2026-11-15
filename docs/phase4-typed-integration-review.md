@@ -12,7 +12,7 @@ Author identity and dates are preserved. The pure WordPress patch also matches h
 
 ## Assessment and correction
 
-The saved patches add typed WordPress and site-delete reservation, sealed credentials, metadata publication and journal recovery. Existing scratch SQLite and injected-runner tests pass. The new code does not open any runtime consumer or enable production installation or deletion effects.
+The saved patches add typed WordPress and site-delete reservation, sealed credentials, metadata publication and journal recovery. The historical scratch SQLite and injected-runner test pass is unverified here because its evidence is unavailable. The new code does not open any runtime consumer or enable production installation or deletion effects.
 
 Review found that unfinished WordPress reservations protected site names and database identities but not domain identities. Two different site names could reserve the same primary domain before metadata existed, allowing both workflows to begin effects before one terminal publication failed. The regression first failed with `primary domain reservation collision: <nil>`. WordPress operation keys now also include the reserved domain ID and FQDN. Existing complete-set locking and durable blocker checks therefore reject overlapping domain reservations before insertion. The regression also checks domain-ID collisions and absence of rejected job rows.
 
@@ -20,6 +20,6 @@ The sealed envelope still binds the complete reservation and durable authority. 
 
 ## Acceptance scope
 
-Final-head `make ci`, full uncached race JSON and repeated focused Phase 4 race tests are run after this document is committed. Logs and the exact-SHA manifest live outside the repository in `/root/.hermes/cache/scratch/phase4-typed-wp-reviewed-evidence-20261031`. Preliminary focused race acceptance passed before this final documentation commit and is not substituted for final-head evidence.
+Final-head `make ci`, full uncached race JSON and repeated focused Phase 4 race tests are to be run after this document is committed. The referenced host-local scratch logs and exact-SHA manifest are unavailable here; no final-head result is established here. The reported preliminary focused race pass is also unverified here and is not substituted for final-head evidence.
 
 This is ready for independent review as a bounded source integration candidate, not whole-Phase-4 completion. Remaining source work includes production DB and WordPress consumers, trusted provisioning identities, protected config publication/recovery, artifact descriptor custody, concrete offline fixture and reviewed PHP ini, and external site-delete cleanup. Cross-service PHP/nginx durable recovery and all-kind runtime/audit/authority acceptance remain required. Real VM and power-loss acceptance are deferred to product finish by user authorization; they do not block source implementation and remain unpassed. No host services, accounts, firewall, CA or signing keys were changed.
