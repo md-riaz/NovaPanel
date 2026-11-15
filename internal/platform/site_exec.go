@@ -24,14 +24,23 @@ type siteRunner struct {
 // quiescence, authorization or exclusion of trusted root identity changes.
 // The supplied runner is the existing trusted process boundary, never RPC input.
 func NewSiteRunner(ctx context.Context, r runner.Runner, sites, name string, uid, gid uint32) (runner.Runner, error) {
-	if r == nil || uid == 0 || gid == 0 || !filepath.IsAbs(sites) || filepath.Clean(sites) != sites || sites == "/" || strings.ContainsAny(sites, "\x00\r\n") || (&validate.V{}).SiteName(name) != nil {
-		return nil, errSiteExecution
-	}
-	s := &siteRunner{runner: r, root: sites, name: name, uid: uid, gid: gid}
-	if err := s.check(ctx); err != nil {
+	s, _, err := newSiteRunner(ctx, r, sites, name, uid, gid)
+	if err != nil {
 		return nil, err
 	}
 	return s, nil
+}
+
+func newSiteRunner(ctx context.Context, r runner.Runner, sites, name string, uid, gid uint32) (*siteRunner, uint32, error) {
+	if r == nil || uid == 0 || gid == 0 || !filepath.IsAbs(sites) || filepath.Clean(sites) != sites || sites == "/" || strings.ContainsAny(sites, "\x00\r\n") || (&validate.V{}).SiteName(name) != nil {
+		return nil, 0, errSiteExecution
+	}
+	s := &siteRunner{runner: r, root: sites, name: name, uid: uid, gid: gid}
+	webGID, err := s.check(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	return s, webGID, nil
 }
 
 func (s *siteRunner) lookup(ctx context.Context, database, key string, fields int) ([]string, error) {
@@ -58,34 +67,34 @@ func numericIdentity(text string) (uint32, bool) {
 	n, err := strconv.ParseUint(text, 10, 32)
 	return uint32(n), err == nil && n != 0 && strconv.FormatUint(n, 10) == text
 }
-func (s *siteRunner) check(ctx context.Context) error {
+func (s *siteRunner) check(ctx context.Context) (uint32, error) {
 	f, err := s.lookup(ctx, "passwd", s.name, 7)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	uid, ok := numericIdentity(f[2])
 	gid, gok := numericIdentity(f[3])
 	if !ok || !gok || uid != s.uid || gid != s.gid || f[5] != filepath.Join(s.root, s.name) || f[6] != "/usr/sbin/nologin" {
-		return errSiteExecution
+		return 0, errSiteExecution
 	}
 	web, err := s.lookup(ctx, "passwd", "www-data", 7)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	webUID, ok := numericIdentity(web[2])
 	webGID, gok := numericIdentity(web[3])
 	if !ok || !gok || s.uid == webUID || s.gid == webGID {
-		return errSiteExecution
+		return 0, errSiteExecution
 	}
 	group, err := s.lookup(ctx, "group", "www-data", 4)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	webGID, ok = numericIdentity(group[2])
 	if !ok || s.gid == webGID {
-		return errSiteExecution
+		return 0, errSiteExecution
 	}
-	return nil
+	return webGID, nil
 }
 
 // Run rechecks the original account and strips supplementary groups. Credentials
@@ -95,7 +104,7 @@ func (s *siteRunner) Run(ctx context.Context, prog string, args []string, o runn
 	if (o.Uid != 0 && o.Uid != s.uid) || (o.Gid != 0 && o.Gid != s.gid) || len(o.Groups) != 0 {
 		return nil, nil, -1, errSiteExecution
 	}
-	if err := s.check(ctx); err != nil {
+	if _, err := s.check(ctx); err != nil {
 		return nil, nil, -1, err
 	}
 	o.Uid, o.Gid, o.Groups = s.uid, s.gid, []uint32{}

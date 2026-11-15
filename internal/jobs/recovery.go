@@ -95,6 +95,19 @@ func (q *Queue) PrepareStartup(ctx context.Context) error {
 	if e := q.audit.Healthy(); e != nil {
 		return e
 	}
+	if s, ok := q.store.(interface {
+		PrepareExpiredPHPRestoration(context.Context) ([]Job, error)
+	}); ok {
+		pending, err := s.PrepareExpiredPHPRestoration(ctx)
+		if err != nil {
+			return errors.Join(ErrRecoveryBlocked, err)
+		}
+		for _, j := range pending {
+			if err = q.executeOperation(ctx, j, true); !errors.Is(err, errPHPRestored) {
+				return errors.Join(ErrRecoveryBlocked, err)
+			}
+		}
+	}
 	if e := q.expireOperations(ctx); e != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()

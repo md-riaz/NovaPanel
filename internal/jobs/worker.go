@@ -108,6 +108,10 @@ func (q *Queue) Run(ctx context.Context) error {
 	}
 }
 func (q *Queue) execute(ctx context.Context, j Job) error {
+	return q.executeOperation(ctx, j, false)
+}
+
+func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP bool) error {
 	ctx, release, err := q.AdmitMutation(ctx)
 	if err != nil {
 		return err
@@ -150,6 +154,9 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 	if s, ok := q.store.(operationStore); ok {
 		if op, loadErr := s.LoadOperation(ctx, j.ID); loadErr == nil {
 			isOperation = true
+			if restoreExpiredPHP && (op.Kind != store.PHPSet || j.Verb != "php.set") {
+				return ErrRecoveryBlocked
+			}
 			if op.Kind == store.PHPSet {
 				phpRecovery = op.Checkpoint == "config_published" || op.Checkpoint == "verified"
 				request, decodeErr := php.DecodeSetRequest(j.Args)
@@ -163,7 +170,17 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 				}
 			}
 			if err == nil {
-				err = s.CheckOperation(ctx, j.ID)
+				if restoreExpiredPHP {
+					check, ok := q.store.(interface {
+						CheckExpiredPHPRestoration(context.Context, string) error
+					})
+					if !ok {
+						return ErrRecoveryBlocked
+					}
+					err = check.CheckExpiredPHPRestoration(ctx, j.ID)
+				} else {
+					err = s.CheckOperation(ctx, j.ID)
+				}
 			}
 			if err == nil && len(op.Ciphertext) > 0 {
 				if op.Kind == store.WordPressInstall {
@@ -172,13 +189,15 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 					_, err = q.OpenOperationCredentials(ctx, j.ID)
 				}
 			}
-		} else if !errors.Is(loadErr, sql.ErrNoRows) {
+		} else if restoreExpiredPHP || !errors.Is(loadErr, sql.ErrNoRows) {
 			return loadErr
 		}
+	} else if restoreExpiredPHP {
+		return ErrRecoveryBlocked
 	}
 	if err == nil {
 		workerCtx, cancel := context.WithCancel(WithMetadata(ctx, metadata(j)))
-		lease := &configWorkerLease{queue: q, job: j.ID, cancel: cancel}
+		lease := &configWorkerLease{queue: q, job: j.ID, cancel: cancel, restoreExpiredPHP: restoreExpiredPHP}
 		lease.ctx = context.WithValue(workerCtx, configWorkerKey{}, lease)
 		lease.active.Store(true)
 		err = func() error {

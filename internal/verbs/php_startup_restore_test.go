@@ -24,7 +24,7 @@ import (
 // both desired files. A fresh startup must restore the original, not replay it.
 func TestPHPStartupRestorationRecordsFailure(t *testing.T) {
 	requireRootPHPCustody(t)
-	for _, mode := range []string{"restore", "missing snapshot"} {
+	for _, mode := range []string{"restore", "missing snapshot", "expired", "expired missing snapshot"} {
 		t.Run(mode, func(t *testing.T) { testPHPStartupRestoration(t, mode) })
 	}
 }
@@ -93,6 +93,14 @@ func testPHPStartupRestoration(t *testing.T, mode string) {
 	if err := st.Tx(ctx, func(tx *sql.Tx) error { _, err := tx.ExecContext(ctx, `DROP TRIGGER fail_php_terminal`); return err }); err != nil {
 		t.Fatal(err)
 	}
+	if mode == "expired" || mode == "expired missing snapshot" {
+		if err := st.Tx(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `UPDATE phase4_operations SET expires=1 WHERE job_id=?`, job.ID)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := log.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +110,7 @@ func testPHPStartupRestoration(t *testing.T, mode string) {
 	st, log, a, _ = open()
 	defer st.Close()
 	defer log.Close()
-	if mode == "missing snapshot" {
+	if mode == "missing snapshot" || mode == "expired missing snapshot" {
 		if err := os.Remove(filepath.Join(root, "journal", job.ID+".json")); err != nil {
 			t.Fatal(err)
 		}
@@ -130,6 +138,12 @@ func testPHPStartupRestoration(t *testing.T, mode string) {
 		t.Fatalf("job=%+v err=%v", got, err)
 	}
 	var n int
+	if mode == "expired" {
+		op, err := st.LoadOperation(ctx, job.ID)
+		if err != nil || op.Checkpoint != "expired" || !op.Reconciled || got.Code != "interrupted" {
+			t.Fatalf("expired restoration job=%+v operation=%+v err=%v", got, op, err)
+		}
+	}
 	if err := st.Tx(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `SELECT count(*) FROM events WHERE verb='php.set' AND outcome='error' AND json_extract(detail_json,'$.job_id')=?`, job.ID).Scan(&n)
 	}); err != nil || n == 0 {
