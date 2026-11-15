@@ -234,10 +234,15 @@ func TestReviewRunChangedPreconditions(t *testing.T) {
 				if _, err := s.GetDatabase(ctx, j.ObjectKey[3:]); !errors.Is(err, sql.ErrNoRows) {
 					t.Fatal("ineligible create published", err)
 				}
-				if _, err := q.Claim(ctx, j.ID, r.ClaimToken); err == nil {
-					t.Fatal("ineligible create published claim")
-				}
 				op, err := s.LoadOperation(ctx, j.ID)
+				if err != nil || op.Checkpoint != "expired" || len(op.Ciphertext) == 0 || op.Reconciled {
+					t.Fatalf("ambiguous credential lost: %+v %v", op, err)
+				}
+				claim, err := q.Claim(ctx, j.ID, r.ClaimToken)
+				if err != nil || claim["password"] != "private" {
+					t.Fatalf("retained claim: %v %v", claim, err)
+				}
+				op, err = s.LoadOperation(ctx, j.ID)
 				if err != nil || op.Checkpoint != "expired" || len(op.Ciphertext) != 0 || op.Reconciled {
 					t.Fatalf("failed publication lost its unreconciled tombstone: %+v %v", op, err)
 				}
