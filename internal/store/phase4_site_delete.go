@@ -135,6 +135,7 @@ func checkSiteDelete(ctx context.Context, tx *sql.Tx, op Operation) error {
 		current.Site.ForceHTTPS = op.Identity.Site.ForceHTTPS
 		current.Site.HSTSMaxAge = op.Identity.Site.HSTSMaxAge
 	}
+	current.PublicationAudit = op.Identity.PublicationAudit
 	current.PurgeFiles = op.Identity.PurgeFiles
 	current.PurgeDatabases = op.Identity.PurgeDatabases
 	if !reflect.DeepEqual(current, op.Identity) {
