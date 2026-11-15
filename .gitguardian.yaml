@@ -1,0 +1,17 @@
+# GitGuardian configuration.
+#
+# Go test files carry fake credentials by design: login-flow fixtures
+# (e.g. `password=secret` in internal/web/security_test.go) and audit-no-leak
+# assertions (e.g. "correct password" in internal/verbs/session_test.go) are
+# test data, not real secrets. NovaPanel's real secrets are sealed by
+# panel-agent with a root-held key (00-foundations.md F12) and never live in
+# source, so these trip GitGuardian's "generic password" detector as false
+# positives on every PR.
+#
+# Allowlist *_test.go fixtures only; all non-test source is still scanned.
+# A real credential belongs in the sealed store, never in a test file — do not
+# widen this beyond test fixtures.
+version: 2
+secret:
+  ignored-paths:
+    - "**/*_test.go"

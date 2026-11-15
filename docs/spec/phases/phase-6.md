@@ -12,7 +12,14 @@ Phases 1–4 (jobs, sites, DB). Reads: `00-foundations.md` F6, F7, F10, F11, F12
 1. **Repo management + restic backups.** `repo.create/list/delete` register a restic repo (local/SFTP/
    S3; **B2 via its S3-compatible endpoint**) — the repo password + object-store/SFTP creds are
    **sealed** (`secrets` name `repo:<id>:*`), the password shown once via the F19 claim; `restic init`
-   runs on create. `backup.create/list/restore/verify` then reference a `repo_id`: per-site path backup
+   runs on create. **Seal-before-init + delete semantics (F20/F12, head ruling):** the repo password is
+   **sealed write-ahead (F20.1) *before* `restic init`**, so a crash after init never leaves an encrypted
+   external repo whose only key was lost; replay re-inits/uses the same sealed password (`restic init` is
+   idempotent / already-init is a no-op). **`repo.delete` removes the NovaPanel `repos` row + sealed
+   creds only — it does NOT destroy the external repository data or its snapshots** (deleting remote
+   backups is catastrophic and needs a separate explicit purge verb with typed confirmation), and it
+   surfaces that the sealed password is being discarded. `backup.create/list/restore/verify` then
+   reference a `repo_id`: per-site path backup
    + per-DB **failure-aware stream** backup; all restic secrets go via env/`*_FILE` written to a
    root-`0600` tmp and removed after, never argv. Recurring backups/verify/retention are driven by the
    **F18 scheduler** (a `schedule` row per repo), not an inline loop.
@@ -49,6 +56,14 @@ Phases 1–4 (jobs, sites, DB). Reads: `00-foundations.md` F6, F7, F10, F11, F12
   ok); `11` = failed to lock repo; `12` = wrong password; unknown code = failure. On `11`: `restic
   unlock` (stale-only) + retry once; `--retry-lock` on normal runs; `unlock --remove-all` only after
   confirming via `list locks` + process check that nothing is live.
+- **Per-attempt timeout is effectful, not transient (F6 per-attempt deadline, head ruling 2026-11-05).**
+  `backup.create`, `backup.restore` and `panel.backup_config` are **effectful** (external object store).
+  A per-attempt `deadline_exceeded` mid-run follows the F6 **`interrupted` + reconcile** path, **not** the
+  idempotent transient re-queue: the next pass reconciles against restic's own crash-safe state (an
+  incomplete snapshot is never referenced; `restore` does **not** auto-reswap — it reports the
+  `interrupted` restore leaving `<db>__old` + the pre-restore dump for the operator). A long restic run
+  that needs more than the default ceiling raises that verb's `MaxDeadlineMs`; the timeout never
+  re-issues the external effect blindly.
 
 ### UFW safe-apply (the deadman — reference)
 ```
@@ -159,10 +174,14 @@ plan; v1 ships single-manifest verify + anti-rollback.)
   (no JSON re-canonicalization). `manifest.json.sig` is the 64-byte Ed25519 signature **base64-encoded**
   (RFC 4648, padded; trim surrounding whitespace before decode). Verify `ed25519.Verify(pub,
   manifestBytes, sig)` **before** any JSON parse; failure → `invalid_argument`.
-- **Trust anchor:** the 32-byte Ed25519 **public key is a compile-time constant** (`internal/update`);
-  the updater **never** accepts a key from the manifest or any downloaded content. Rotation ships a
-  **new binary** (signed by the current key) carrying the next key — no in-band key swap. Tests inject a
-  test key through a seam; the production constant is the release signer's key.
+- **Trust anchor:** the 32-byte Ed25519 **public key is injected at release-build time** (ldflags `-X`
+  or a release-pipeline-generated file in `internal/update`) — **never a production literal committed to
+  source**. An **unset key fails closed**: a dev/CI build with no injected key **refuses all updates**
+  (`unsupported`), so an unsigned build can't be hijacked by a forged update. The updater **never**
+  accepts a key from the manifest or any downloaded content. Rotation ships a **new binary** (signed by
+  the current key) carrying the next key — no in-band key swap. Tests inject a test key through the same
+  seam; the **production key comes from the release signer's key custody (project owner)**, not the
+  source tree.
 - **Manifest schema:** `{ "version":"<semver>", "security_fix"?:bool, "notes"?:string, "artifacts":[ {
   "os","arch","filename","sha256":"<hex>","size":<bytes>,"url":"<https>" } ] }`. The agent selects the
   artifact matching `runtime.GOOS`/`GOARCH` (no match → `unsupported`); integrity comes from the

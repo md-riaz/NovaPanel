@@ -51,6 +51,7 @@ type view struct {
 	Page, CSRF, User, Role, Message, URI string
 	Codes                                []string
 	Status, Metrics                      any
+	Console                              *consoleView
 }
 
 func New(o Options) (http.Handler, error) {
@@ -96,7 +97,7 @@ func New(o Options) (http.Handler, error) {
 		}
 		_, _ = w.Write(data)
 	})
-	for _, rt := range routes {
+	for _, rt := range append(routes, consoleRoutes...) {
 		route := rt
 		r.MethodFunc(route.method, route.path, func(w http.ResponseWriter, r *http.Request) { s.serve(w, r, route) })
 	}
@@ -214,6 +215,10 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 		return
 	}
 	if token == "" {
+		if r.Header.Get("HX-Request") == "true" {
+			render(w, http.StatusUnauthorized, view{Page: "/login-required", Message: "unauthenticated: Session expired. Sign in again."})
+			return
+		}
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
@@ -233,19 +238,30 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 		return
 	}
 	if r.Method != "GET" {
-		values := r.Header.Values("X-CSRF-Token")
-		if len(values) != 1 || values[0] == "" || subtle.ConstantTimeCompare([]byte(values[0]), []byte(v.CSRF)) != 1 {
-			http.Error(w, "Invalid CSRF token", http.StatusForbidden)
-			return
-		}
 		contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		if err != nil || contentType != "application/x-www-form-urlencoded" {
 			http.Error(w, "Form content type required", http.StatusUnsupportedMediaType)
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+		limit := int64(16 << 10)
+		if rt.verb == "ssl.upload" {
+			limit = 700 << 10
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		if e := r.ParseForm(); e != nil {
 			http.Error(w, "Invalid form", 400)
+			return
+		}
+		values := r.Header.Values("X-CSRF-Token")
+		if rt.verb == "database.delete" && r.Header.Get("HX-Request") != "true" && len(values) == 0 {
+			values = r.PostForm["csrf_token"]
+		}
+		if len(values) != 1 || values[0] == "" || subtle.ConstantTimeCompare([]byte(values[0]), []byte(v.CSRF)) != 1 {
+			http.Error(w, "Invalid CSRF token", http.StatusForbidden)
+			return
+		}
+		if isConsole(rt.path) {
+			s.console(w, r, c, rt, token, v)
 			return
 		}
 		args := map[string]any{}
@@ -303,6 +319,10 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 			v.Page = "/mfa"
 		}
 	}
+	if isConsole(rt.path) {
+		s.console(w, r, c, rt, token, v)
+		return
+	}
 	if rt.path == "/" {
 		v.Status = readDashboard(r, c, "system.status", token)
 		v.Metrics = readDashboard(r, c, "system.metrics", token)
@@ -317,15 +337,41 @@ func readDashboard(r *http.Request, c RPCClient, verb, token string) any {
 	return reply.Data
 }
 func call(w http.ResponseWriter, r *http.Request, c RPCClient, verb string, args any, token string) (map[string]any, bool) {
-	reply, e := c.Call(r.Context(), verb, args, token)
+	var reply rpc.Reply
+	var e error
+	if key, ok := r.Context().Value(submissionKey{}).(string); ok {
+		if keyed, ok := c.(interface {
+			CallWithIdempotency(context.Context, string, any, string, string) (rpc.Reply, error)
+		}); ok {
+			reply, e = keyed.CallWithIdempotency(r.Context(), verb, args, token, key)
+		} else {
+			http.Error(w, "Idempotent transport unavailable", http.StatusServiceUnavailable)
+			return nil, false
+		}
+	} else {
+		reply, e = c.Call(r.Context(), verb, args, token)
+	}
 	if e != nil || !reply.OK {
 		data, _ := reply.Data.(map[string]any)
+		if reply.Code == "unauthenticated" {
+			render(w, http.StatusUnauthorized, view{Page: "/login-required", Message: "unauthenticated: Session expired. Sign in again."})
+			return nil, false
+		}
 		if hint, _ := data["reauth_required"].(bool); hint {
 			render(w, 403, view{Page: "/reauth-required", Message: "Reauthentication required"})
 			return nil, false
 		}
 		status := http.StatusBadGateway
 		switch reply.Code {
+		case "rate_limited":
+			status = http.StatusTooManyRequests
+			w.Header().Set("Retry-After", "1")
+		case "not_found":
+			status = http.StatusNotFound
+		case "locked":
+			status = http.StatusConflict
+		case "unknown_verb":
+			status = http.StatusNotImplemented
 		case "unauthenticated":
 			status = 401
 		case "forbidden":
@@ -339,7 +385,13 @@ func call(w http.ResponseWriter, r *http.Request, c RPCClient, verb string, args
 		case "interrupted":
 			status = http.StatusConflict
 		}
-		http.Error(w, http.StatusText(status), status)
+		code := reply.Code
+		switch code {
+		case "unknown_verb", "unsupported", "precondition_failed", "locked", "rate_limited", "not_found", "unauthenticated", "forbidden", "bad_request", "invalid_argument", "conflict", "interrupted", "deadline_exceeded", "agent_error":
+		default:
+			code = "agent_unavailable"
+		}
+		render(w, status, view{Page: "/error", Message: code + ": " + http.StatusText(status) + ". Refresh the page before retrying. No success was confirmed."})
 		return nil, false
 	}
 	raw, e := json.Marshal(reply.Data)

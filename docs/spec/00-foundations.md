@@ -93,7 +93,9 @@ Rules:
 - **`code`** is a stable, lowercase_snake string the UI/clients branch on (catalog F3). Never
   localize or reword `code`; `error` is the human string and may change.
 - **`deadline_ms`** is advisory from the caller; the agent clamps it to a per-verb max and enforces
-  it on the handler's `context.Context`.
+  it on the handler's `context.Context`. For a **slow** verb this bounds only the synchronous dispatch
+  leg (validate → enqueue → return); its queued execution is bounded **per attempt** by
+  `Verb.MaxDeadlineMs`, **not** the caller deadline (which is gone after enqueue) — see F6.
 
 Codec lives in `internal/rpc/codec.go`: the server reads a line with a `bufio.Scanner` (buffer cap
 **1 MiB**, the request cap) and calls `DecodeLine([]byte) (Request, error)` on it (so Decode composes
@@ -287,26 +289,106 @@ object_key = the resource a job serializes on (see the site rule below)
 - **Secret job *input* (decided).** A slow verb that takes a **secret input** (e.g. `ssl.upload`'s
   `key_pem`) **seals it (F12) before the job row is written** — `args_json` holds only the sealed
   ciphertext (or a sealed-blob reference), **never plaintext**. `Exec` opens it to use it, and the
-  sealed input is destroyed on the job's terminal state. A crash leaves the job `interrupted` (effectful,
-  not blindly re-run) with its sealed input for a retry; plaintext never reaches `args_json`,
-  `result_json`, `job_events`, audit, or web state.
+  sealed input is destroyed on the job's terminal state (and **retained** while the job is `interrupted`,
+  for the retry). Crash recovery depends on the verb's class: an **effectful** secret-input verb recovers
+  as `interrupted` (not blindly re-run); an **idempotent** one may roll forward (re-run) safely **provided
+  an intent journal prevents a half-applied state** — `ssl.upload` takes this path (installing a
+  user-supplied cert is idempotent, and a TLS intent journal guards the publish step). Either way,
+  plaintext never reaches `args_json`, `result_json`, `job_events`, audit, or web state.
 
 - A slow verb's handler **enqueues a row and returns** `202`-style `{ ok:true, data:{ job } }`
   immediately. The web tier polls `job.status{id}` or `job.list`.
+- **Enqueue admission & uncertain-reply (head ruling — resolves the enqueue-audit finding, F6/F11).**
+  The enqueue is **one atomic SQLite transaction** — the same shape as the scheduler's
+  `EnqueueScheduledJob` (F18): it commits the `queued` **job row**, the **sealed input** (F12), the
+  **`job_claims`** reservation (when the verb mints a show-once secret), **and** the **`idempotency`**
+  row (`idempotency_key → job_id`, when a key is present) **all-or-nothing**. This commit **is** the
+  admission boundary: the operation is admitted iff the tx commits, so a failure *before* it leaves
+  **nothing queued** and the caller's failure is truthful.
+  - **The job row is the sole execution authority.** The worker and `PrepareOperations` execute **only**
+    a committed `queued`/`running` job row — **never** an audit line. So a mutation runs **iff** its
+    admission tx committed; there is no path by which an un-admitted operation executes.
+  - **Audit ordering is unchanged (F11): job-tx first, then the enqueue event (file append first, then
+    the `events` row), reconciled at startup.** A committed job is admitted and **runs regardless of the
+    enqueue-audit write** — the enqueue event *records* an admitted op, it is **not** a second gate that
+    can un-admit a durable job. No effect is ever unaudited: the **terminal** event (F11, mandatory)
+    records the effect, and a torn enqueue event is backfilled by the F11 file-only reconcile; an audit
+    **sink failure** trips F11's sticky-`unhealthy` gate, stopping the *next* mutation. (This is why the
+    finding's "enqueue-audit `Record` failed, yet `PrepareOperations` runs the job" is **safe**: the job
+    ran because it was durably admitted, and its effect is terminal-audited.)
+  - **Uncertain/lost reply is bounded and recoverable, never prevented** — losing the reply after the job
+    is durably queued is unavoidable for any durable async job. **At-most-once effect:** the single
+    admission tx + the `idempotency` mapping — a retry with the same `idempotency_key` returns the
+    **existing** `job_id` (and re-reads the F19 claim within TTL), never a second operation; without a
+    key the agent cannot dedup, so sending an `Idempotency-Key` for mutations is the web tier's job
+    (F2/B-D5). **Undeliverable show-once secret:** if the reply is lost and the claim's TTL lapses (or no
+    key), the minted secret is recovered by `rotate_password` (fresh F12 seal + F19 claim) — never
+    silently wrong, never a second uncommitted operation.
 - **One worker goroutine** drains `queued` oldest-first. Concurrency is bounded by a **keyed mutex on
   `object_key`** (`internal/jobs/keyedlock.go`): two jobs on the same object never interleave; jobs on
   different objects may run on a small worker pool (default 1; configurable, still per-object serial).
+- **Oldest-first is a tie-break among the *eligible* set — never a licence to hot-spin one job (head
+  ruling, 2026-11-05).** "Oldest-first" orders **admission fairness**; it does **not** mean re-select the
+  same job the instant it asks to retry. A job is **eligible this pass** only if it is `queued`, its
+  `object_key` lock (and every key it needs, in the F20.7 fixed order) is acquirable now, and it did **not**
+  just yield on this pass. A job that returns `ErrRetry` or a transient `deadline_exceeded`/`interrupted`
+  **yields to a later pass** (F6 "retried on a later pass"): the worker advances to the next eligible
+  `queued` job rather than re-running the yielder, so one persistently-indeterminate create, claim
+  publication, or lock-contended job **can never starve** later jobs — **including the periodic
+  `reconcile`/F18 jobs, which must always stay schedulable** (the F20.9 convergence guarantee depends on
+  reconcile running even while another job is wedged). A **bounded in-memory inter-pass delay** (a small
+  liveness ceiling so a pass holding only yielded jobs does not busy-loop the CPU) is **permitted** and is
+  a liveness clamp of the same family as the per-attempt `MaxDeadlineMs` — it is **not** the "backoff
+  machinery" F6 excludes. What F6 excludes is **persisted** retry-policy state: no `attempts` column, no
+  durable next-retry timestamp, no dead-letter queue, no max-attempts cap. All eligibility/yield/delay
+  state is **in-memory only**: a restart (roll-forward resets `running`→`queued`) rebuilds it from scratch,
+  and the **sealed input is untouched** by any yield or delay (F20.1 — a delayed retry reuses the same
+  sealed args/password unchanged). This closes the oldest-first starvation window without adding durable
+  backoff state or reopening the #90 freeze.
 - **Crash recovery = roll-forward.** On agent start, every job left `running` is reset to `queued` and
   **re-run from the top**. This is safe because every step is idempotent (F7). **No compensation for
   local resources.** Compensation is written **only** for external/billed side effects (ACME issuance,
   provider DNS) and is itself idempotent.
   > Supersedes `vpspanel-plan.md` §7 Phase-1's older "compensation/rollback" wording — local
   > multi-resource jobs roll forward, they do not compensate.
+- **Per-attempt worker deadline (head ruling, 2026-11-05).** The caller's F2 `deadline_ms` bounds only
+  the **synchronous dispatch leg** (validate → enqueue → the `202`-style return) and is **consumed at
+  enqueue**; a slow verb's real work runs later on the worker, where there is **no live caller** and the
+  original request deadline is gone. So a queued/replayed attempt is **not** bound by the caller deadline,
+  and `jobs` stores **no** deadline column (the bound is a property of the **verb**, not the row).
+  Instead **each execution attempt** — first run and every replay — runs under a fresh `Exec` context
+  bounded by **`Verb.MaxDeadlineMs`** (`0` → `deadline_default_ms`), recomputed per attempt. This is a
+  **liveness clamp, not the caller's SLA**: it exists so a stuck `db:`/`dbuser:` lock-wait or a hung
+  external call fails **`deadline_exceeded`** rather than pinning the worker; a normal attempt finishes
+  well under it. Binding worker execution to the original request deadline would be **wrong** — a durable
+  job must stay completable long after the RPC returned, which is the whole point of the queue.
+- **Attempt `deadline_exceeded` is transient, not terminal.** It aborts the attempt and releases its
+  locks; the job returns to the roll-forward set (`running`→`queued`) and is retried on a later pass — it
+  is **not** marked `failed`. Idempotent ensure-state (F7) + provenance-phase branching (F20.4) make the
+  retry safe (the next attempt re-reads recorded state and resumes). **This transient re-queue is for an
+  idempotent attempt only.** For an **effectful** verb (external/billed side-effect: ACME issuance,
+  provider DNS, an object-store/`restic` run — the same class F6 recovers as `interrupted`, not blind
+  re-run), an attempt `deadline_exceeded` **mid-effect** takes that **same `interrupted` + reconcile
+  path** — the verb's effect-specific idempotence check / intent journal decides whether the external
+  call landed — and is **not** blindly re-queued, because a naive replay could double-issue, burn a
+  rate-limit, or duplicate a provider record. The **sealed input is
+  deadline-invariant**: the write-ahead sealed args/password (F12/F20.1) are reused **unchanged** on every
+  replay, including one after a timeout — a timeout never re-mints, re-seals, or invalidates them, and the
+  F19 claim publishes from that same sealed value when an attempt finally commits. (A genuine business
+  precondition failure stays terminal `failed` with its F3 code; a resource that is persistently
+  unreachable fails fast at the verb's own pre-check — e.g. MariaDB down → `precondition_failed`, not a
+  deadline spin — and a job that never reaches `done` stays visible to the operator; no max-attempts or
+  backoff machinery is added here.)
 - **Lock = liveness-checked**, never a bare lockfile. The single-worker invariant is held in-process;
   a second agent instance is prevented by an advisory lock on the DB + a pidfile checked for liveness
   (ISPConfig's stale `.ispconfig_lock` wedge is the anti-pattern).
 - `reconcile{scope?}` re-renders derived config from the DB and reloads; heals drift and
   half-created state. Config files are **derived artifacts**, never parsed back into the DB.
+
+**Durable MFA admission.** Dispatch snapshots a successful MFA gate in the existing job authority
+columns as specified in 02's worker admission clarification. User/local-root admission is distinct
+from a token automation grant; the worker never requires an expired or rotated session to remain
+live. This changes no schedule automation policy and adds no migration.
 
 **Executor binding (how a slow verb runs).** A slow verb's `Verb.Run` (F13) **validates args,
 generates any new id, persists the row (e.g. a `sites` row in `state='creating'`), writes that id into
@@ -314,7 +396,10 @@ the job's `args_json`, and enqueues** (returning `{job}`); the **worker** calls 
 `Verb.Exec(ctx, a, *Job)`. So `Exec` re-runs idempotently from `args_json` alone after a crash (the id
 is already there). `Verb.ObjectKey(args) string` derives the lock key **from ids in args** — the
 convention is `site:<site_id>` / `db:<db_id>` / `zone:<zone>` / `system` / `firewall` (an **id**, which
-`Run` has already ensured is present; it never needs a store lookup). `step` names the last completed
+`Run` has already ensured is present; it never needs a store lookup). A resource with an identity in a
+store-global namespace distinct from its parent takes its **own** lock as well — a MariaDB user is
+global (`user@host`), so user verbs lock `dbuser:<username>` **and** the parent `db:<db_id>` in a fixed
+order (F20.7); a verb may hold more than one keyed lock when it spans namespaces. `step` names the last completed
 step; the worker updates `progress` and appends `job_events`. A panic inside `Exec` is recovered →
 `state=failed`, `code="agent_error"`, audited with the job's stored `actor`/`role` (F11). **Recovery**
 reads `jobs.effectful` (a column, 02) so `internal/jobs` needs no Registry: on start, an idempotent
@@ -339,8 +424,33 @@ job left `running` → `queued` (re-run); an effectful one → `failed`,`code="i
 
 Every mutating verb is written as *"make reality match this row,"* not *"do this action."*
 
-- **Check-before-create:** `useradd` only if absent; `CREATE DATABASE IF NOT EXISTS`; write a vhost
-  only if the rendered bytes differ from disk.
+- **Check-before-create:** `useradd` only if absent; write a vhost only if the rendered bytes differ
+  from disk. **Exception — F20-governed two-store resources:** for a site resource whose ownership
+  cannot be proven by existence (a site MariaDB database/user, a **per-site OS user** — ownership by its
+  GECOS marker, see §Panel-owned OS-user provenance — a DNS record), idempotency comes from the
+  **F20 provenance marker**, not from `IF NOT EXISTS` or a reusable name. There a plain `CREATE` gated by a pre-flight
+  absent-check **plus** the provenance row gives the same "run-twice = no change" property, while
+  `CREATE … IF NOT EXISTS` is **forbidden** (it would adopt an unmanaged collision — F20.3). This does
+  **not** apply to the agent's own control schema the way it applies to managed objects: the provenance
+  store is self-owned, so `CREATE … IF NOT EXISTS` is correct **when the schema is absent, or present but
+  table-less with root-only grants** (a fresh box, or the agent's own interrupted two-statement bootstrap
+  → **complete it** — an empty/table-less schema holds no markers, so nothing is adopted and the bootstrap
+  rolls forward without an operator). But the store is a **trust root** (the executor trusts its markers
+  to authorize a `DROP`), so a **pre-existing** control schema that already carries a table is **verified
+  before any marker in it is trusted, never adopted on sight**: structure (a **malformed** table fails
+  closed — the agent's own fixed DDL never emits one) + **no site-reachable grant** (the root/agent
+  exemption is by exact `user@host`, never by username, so `root@<non-local>` is non-exempt). A
+  verification failure fails closed and the operator reconciles, never auto-repair; lock/MariaDB waits are
+  bounded (`deadline_exceeded`). See the Phase-4 bootstrap ruling. `DROP … IF EXISTS` stays correct for
+  delete.
+  The **OS user / home / docroot** are two-store too (`/etc/passwd` + disk vs SQLite), but take a
+  **lighter** ownership proof: the single-VPS agent is root and owns the box, and `sites.name` is a
+  validated-unique 1:1 of the Unix username, so the **SQLite `sites` row is the provenance** (no on-disk
+  marker). The never-adopt rule still binds: on **first** create (a fresh `sites` row, not a replay) a
+  pre-existing user/home or non-empty docroot of that name is an **unmanaged collision → `conflict`**,
+  never a silent `useradd`-if-absent adopt; a **replay** (the `sites` row already `creating`, job
+  re-running) owns and resumes its own. `site.delete` removes the user/home as **its own `sites`-row
+  resource** (ensure-absent), never a name-only `userdel` of state it cannot show is ours.
 - **Writes are temp + atomic rename** under a known, non-symlinked parent, `O_NOFOLLOW` under site
   homes. Never `chown -R` a site-influenced path.
 - **The crash-safety test (mandatory per slow verb):** run the verb twice against the same desired
@@ -380,6 +490,54 @@ revert           → on probe failure restore <target>.lkg + reload; return code
 - **Hostname/domain:** RFC-1123 labels, total ≤ 253, no leading/trailing dot, IDN pre-encoded to
   punycode, reject `..`, whitespace, and `_` in hostnames; a wildcard only where the verb allows it.
 - **Site/unix-user name:** `^[a-z][a-z0-9-]{1,30}$`; never a reserved name; maps 1:1 to a system user.
+- **Panel-owned OS-user provenance (F20 instantiation, no control table):** an OS user lives in a store
+  not transactional with SQLite but has no `managed_objects`-style table, so its ownership token is the
+  account's **GECOS comment**, written atomically at `useradd -c "novapanel-site=<site_ULID>"`. GECOS
+  forbids `:` (passwd field sep) and `,` (GECOS subfield sep), so the exact marker is
+  **`novapanel-site=<ULID>`** (ULID is Crockford base32 — no separators); parse by the `novapanel-site=`
+  prefix. The name proves nothing (a slug is reusable across a delete+recreate); the marker is the
+  **obj_id-analogue**. **Never `userdel`/`usermod`-adopt on a name match.**
+  - **Authority to destroy/re-drive** = the `novapanel-site=` sentinel **plus** a matching site ULID. The
+    **owning `site.delete` job** (row legitimately `deleting`, live job) drives teardown by that marker
+    match — "no live row/job" is **not** required of it. The **"no live `sites` row and no live job"**
+    guard applies only to **reconcile adopting an orphan**, so reconcile never races the owning op.
+  - **Orphan home/log directory deletion — the marked ACCOUNT is the authority; a `sites` row is NOT
+    required** (it is absent by definition in an orphan sweep and corroborates only live/active ops). When no
+    `sites` row exists, an orphan's per-site **home** (`/srv/sites/<name>`) and **log dir**
+    (`/var/log/novapanel/<name>`) are proven panel-created — and so deletable — when **all** hold: (1) the
+    owning account carries the **`novapanel-site=`** sentinel (never `novapanel-retained=`), with no live
+    `sites` row and no live job (the orphan definition); (2) the directory sits at the **canonical managed
+    path** for that account's name; (3) the directory **and every file under it** are owned by that account's
+    **UID/GID**. This composes with the create-time no-adopt invariant (first create fails `conflict` on a
+    foreign non-empty dir, so a marked account never acquires a foreign home), hence a marked account's
+    canonical, UID-owned tree is panel-created **by construction** — the account marker is the durable
+    obj_id the (now-absent) row would merely have corroborated. Purge contents-first, then `userdel`
+    (UID-reuse guard). Any file under the tree owned by a **different** UID, a non-canonical path, an
+    unreadable/absent marker, or an unparseable ULID → **ownership uncertain → retain + operator**, never
+    delete by name or path. The fail-closed skip is correct, not a bug — but with this evidence present,
+    automatic purge proceeds and converges.
+  - A reserved-scheme name whose account lacks the sentinel, or carries a **different** site's ULID than
+    the op, is **not proven this op's** → fail closed (`conflict`, operator/reconcile), never adopt or
+    delete a foreign account.
+  - **Pre-existing unmarked (Phase-3) accounts:** never silently adopted. A **one-time, bounded startup
+    migration** stamps the marker (`usermod -c`) onto an unmarked account **only** when it matches a live
+    `sites` row by the frozen 1:1 name mapping — re-asserting provenance the `sites` row already proves
+    (Phase 3 created it), not adopting an unknown. Thereafter the marker is authoritative; an unmarked
+    account with **no** matching `sites` row stays foreign and is never touched.
+  - **Retain vs purge (phase-3 `site.delete`):** `userdel` + home removal happen **only** when
+    `purge_files` is set. On **retain**, the files and OS user are kept **dormant** and the account's GECOS
+    is rewritten to the retained sentinel **`novapanel-retained=<ULID>`**; reconcile sweeps only
+    `novapanel-site=` accounts and **never** a `novapanel-retained=` one, so retained files never land on an
+    orphaned, reusable UID.
+  - **Locking:** verbs that create/mutate/delete the per-site OS user hold the site key then
+    `osuser:<username>` in that fixed order (F20.7). The site key is **`site:<name>`** for `site.create`
+    (ensure-absent, the `site_id` not yet existing — F6 §Site-scoped lock key) and **`site:<site_id>`** for
+    every existing-site op. Reconcile takes the same `site:`/`osuser:` (and `db:`/`dbuser:`) keys **per
+    candidate at execution** in that order, so it never races a lifecycle job; its registry ObjectKey stays
+    coarse `system` (admission) while the per-candidate keys are acquired dynamically.
+  This is the generic rule for any two-store resource without a native control table (reuse F20/F6/F7;
+  the in-band marker replaces the control row). It **supersedes** the older "SQLite row alone is the
+  proof" shortcut for OS users (F7 check-before-create), because the slug is reusable.
 - **DB / DB-user name:** `^[a-z][a-z0-9_]{1,46}$`; generated, never raw from the user.
 - **Filesystem path:** must resolve (after `filepath.Clean` + symlink eval) **inside** the declared
   project root; reject absolute escapes, `..`, and symlinks that cross the boundary.
@@ -416,13 +574,18 @@ Record(Event) error                                    -- fail-closed: see sinks
   Audit is invariant 7: a privileged **mutation** must not be reported complete if its record could
   not be durably written. Reads are not gated.
 - **Outcome stays `{ok, refused, error}`** — never add new outcome values for auth/queue phases.
-  Where it matters, the **stage** goes in `detail_json` as `detail.stage ∈ {authz, enqueue, exec,
+  Where it matters, the **stage** goes in `detail_json` as `detail.stage ∈ {authz, resolve, enqueue, exec,
   claim}`. So an authorization refusal is `outcome=refused, detail.stage=authz`; a worker failure is
   `outcome=error, detail.stage=exec`.
 - **Required events:** a pre-authorization **refusal** event for any denied attempt (so denials are on
   the record, not just successes — aaPanel/BHPanel log only post-auth actions; we log the refusal too),
   and a **final outcome** event. A slow verb records **enqueue** (`ok`, stage=enqueue) at `Run` and the
   worker's **terminal** event (`ok`/`error`, stage=exec) at the end, correlated by `job_id` in detail.
+  The **enqueue** event records an **already-admitted** operation (admission is the atomic job tx, F6) —
+  it never gates whether a committed `queued` job runs; the **terminal** event is the mandatory
+  "no effect reported complete without a durable record". So an enqueue-audit `Record` failure does not
+  un-admit the job (it trips the sticky-`unhealthy` gate for the *next* mutation and is backfilled by the
+  startup reconcile); the job's effect is still terminal-audited.
 - **Dual-sink ordering (decided): file append **first**, then the `events` row.** The `chattr +a` file
   is the tamper-proof source of truth; if the two ever diverge, the file wins. The two are **not
   atomic** and we do not promise they are: a crash between them can leave a **file-only** event (never
@@ -467,6 +630,40 @@ Record(Event) error                                    -- fail-closed: see sinks
   the installer and re-made by the agent if missing; **no `LogsDirectory=`** in the unit (systemd
   re-chowns an ExecDirectory on every start and fails against `chattr +a` — BHPanel incident).
 - Secrets are redacted before an event is written (F12 redaction helper).
+- **Resolved audit identity projection (ADR-0009).** New dispatch records carry
+  `detail.principal`, independent of the untrusted `actor` label. Its `kind` is `user`, `anon`,
+  `token`, `local-root`, or `unresolved`. Successful session resolution supplies `session_id`
+  and, for authenticated users, `user_id`; PAT resolution supplies only `token_id` because the
+  resolver does not provide a resolved user identity for PATs. These are agent-resolved row IDs, never the presented credential, token
+  secret, hash, sealed input or private bytes. Local root uses `{kind:"local-root"}`. Missing or
+  failed resolution uses `{kind:"unresolved"}` without deriving identity from actor or input IDs.
+  Capture occurs after session resolution and before argument decoding, authorization refusals
+  and execution; malformed arguments retain a successfully resolved principal. Unknown or
+  unavailable verbs rejected before resolution explicitly remain unresolved.
+  Admission and dispatch completion preserve the incoming principal, not a newly minted identity.
+  Queue enqueue and terminal execution records project existing durable `jobs.created_by` and
+  `role`: local-root sentinel, token ID for stored token authority, otherwise user session ID.
+  The existing job snapshot has no user ID column, so queued records omit `user_id` rather than
+  inventing one or consulting an expired/revoked live session. Correlate their `job_id` to the
+  dispatch records for the full admission identity. This projection uses existing `detail_json`;
+  no migration or DDL change is authorized or needed. Old replayed records remain unchanged.
+  Typed trusted principal fields bypass only key-name redaction for `token_id`; their string
+  values still undergo secret-shape redaction, and arbitrary detail retains normal redaction.
+  File-first mirroring/replay, sticky failure gates and actor-label semantics are unchanged.
+- **Phase-3 object attribution clarification.** Authorization precedes resource lookups, including
+  lookups used for audit attribution. Before authorization, `detail.stage='authz'` identifies a
+  refusal; `object_key` may identify only a validated resource ID supplied in the request
+  (`site:<site_id>`, `domain:<domain_id>`, `redirect:<redirect_id>`) or a validated create name.
+  Otherwise it is empty, never a fabricated parent or the incomplete key `site:`. The request key
+  does not assert existence or parent resolution. After registry role/scope/MFA authorization and
+  argument validation, a shared dispatcher resolution step may read persisted parent bindings.
+  Child-removal admission and completion then use `site:<persisted_site_id>`, as do their queued
+  events; resolution failures retain the safe request key with `detail.stage='resolve'`.
+  Synchronous `ssl.auto_set` admission and completion use `site:<site_id>`. Durable admission must
+  still precede every mutation; resolution is read-only and cannot bypass registry authorization.
+  Existing sticky fail-closed audit behavior, actor-label semantics and authenticated roles remain
+  unchanged. Test seams are the production dispatcher with file/SQLite audit mirrors and the real
+  queue worker in the confined Pebble/nginx lab.
 
 ---
 
@@ -726,8 +923,38 @@ A slow verb that mints a secret (DB/admin password) writes it **sealed** into `j
 the one-time `claim` token (`EnqueueResult.ClaimToken`, F15). The caller later calls
 `job.claim{job_id, claim}`; the agent checks the claim hash, opens the secret, **deletes the row**, and
 returns it exactly once. The secret is never in `jobs.result_json`, `job_events`, audit, or any log.
-For the public API, the `202` body includes the `claim` so a token caller can retrieve its secret; an
-idempotent replay returns the same (still-unclaimed) `claim` or `410`-style `not_found` once claimed.
+For the public API, the `202` body includes the `claim` so a token caller can retrieve its secret.
+
+**Two different surfaces return two different "gone"s — do not conflate them (head ruling, 2026-11-05).**
+- **`job.claim{job_id, claim}` is the secret-retrieval verb.** It returns the sealed secret exactly once;
+  once the `job_claims` row is **consumed or expired** it returns `410`-style **`not_found`** — the
+  *secret* is not retrievable again. Unchanged (F19 single-use).
+- **The idempotent enqueue-replay is a *different* operation** (a retry carrying the same
+  `idempotency_key`, F6). It returns the **existing job**, and must **not** return `not_found` merely
+  because the claim row is gone — the `idempotency_key→job_id` mapping is still live and the job reached a
+  real outcome. Its response shape:
+  - **job still `queued`/`running`** → existing `job_id` + that status, and the **live `claim`** re-read
+    if still within TTL and unconsumed.
+  - **job `done`, claim live** → existing `job_id` + `done` + the same still-unclaimed `claim`.
+  - **job `done`, claim consumed or expired or otherwise removed** → existing `job_id` + `done`, **no
+    `claim`**, `claim_state=none` (secret **not retrievable** → recover with **`rotate_password`**).
+    **Never `not_found`** — the operation succeeded; only the secret is unrecoverable, and rotate is the
+    recovery (fresh F12 seal + fresh F19 claim). **Consumed vs expired is *not* durably distinguished**
+    (head ruling, 2026-11-05, simplifying the earlier wording): once the `job_claims` row is deleted the
+    canonical state is identical and the caller's action is identical (rotate), so **no durable non-secret
+    per-claim history is authorized or needed** to tell a historical consumed claim from an expired one.
+    `none` is the single determinate "secret gone" answer; distinguishing the two would be exactly the
+    kind of per-feature durable state the scope freeze forbids.
+  - **job terminal `failed`** → existing `job_id` + `failed` + its F3 `code`, **no `claim`**. Not
+    `not_found` (a real terminal outcome, reported at-most-once — the caller sees the failure, never a
+    phantom success).
+  - **no such `idempotency_key` at all** → **`not_found`** (the *only* `not_found` from this surface).
+
+  This keeps F19 **single-use / no secret re-disclosure / at-most-once** intact: a consumed claim is never
+  re-handed, recovery is always a *new* `rotate_password` (never a re-read), and the replay performs **no
+  second effect**. `03`'s `EnqueueResult`/`job.status` shape carries `claim` as **optional** with a
+  `claim_state` reason enum of just **`live` | `none`** (retrievable, or gone → rotate); updated in the
+  same change.
 
 **Lifecycle (decided).**
 - **TTL is anchored at secret publication** — the moment `Exec` commits the `job_claims` row — not at
@@ -747,3 +974,272 @@ idempotent replay returns the same (still-unclaimed) `claim` or `410`-style `not
   reports the job done. If the page is lost before claiming, the secret is recovered only by re-running
   the verb (rotate/recreate) — never re-read. This is the single browser-side claim path for **every**
   `+ claim(…)` verb.
+- **An applied secret is never lost before its claim is published (head ruling, 2026-11-05; corrected
+  2026-11-06).** A rotate (`database.rotate_password`) mints a new password sealed (F12), applies it with
+  `ALTER USER`, and publishes the F19 claim. The `ALTER` can land and then lose its reply; the bug to
+  forbid is **terminalizing-and-erasing the sealed input on a retry error while the `ALTER` may have
+  landed** — that strands the applied password (the user has the new credential, but it was never
+  published as a claim and the sealed value is gone, so no one can recover it). The fix is **one
+  retention invariant**, not a new recovery mode:
+  1. **Rotation is NOT effectful — do not over-model it.** Canonical `01` marks `rotate_password` **Slow
+     but not `Eff`**, and that is correct: re-applying the **same sealed password** via `ALTER USER` is
+     **idempotent** (the identical value is a safe no-op), **unlike** the genuinely effectful class
+     (`ssl.issue`/ACME, provider DNS, `restic`) where a blind replay double-issues or burns a rate limit.
+     So rotation **auto-replays through ordinary F6 roll-forward** (F7 ensure-state + F20.1 same-secret
+     replay) — it does **not** take the effectful `interrupted`+reconcile path, and **`01` is not
+     changed**. (This supersedes the earlier "rotation is effectful" wording, which over-classified it.)
+  2. **The one real invariant — retention.** The write-ahead **sealed new password (F12/F20.1) is retained
+     until the F19 claim is published from it** (then the applied password is owner-recoverable) **or**
+     until a terminal in which the secret **provably never landed and no target user holds it**. The
+     sealed input is **never** erased on an ambiguous/transient retry while the target user may still hold
+     the applied password. Order: seal → **`jobs.step` pre-`ALTER` checkpoint** → `ALTER` → **publish
+     claim** → commit `done` → only then is the sealed input consumable. The `jobs.step` checkpoint is the
+     canonical "last completed step," **not** new durability; on replay "`ALTER` may have landed" → re-run
+     the same idempotent `ALTER` + publish the claim → the credential is **recovered, never lost**.
+  3. **Which "interrupted" yields vs reconciles — `01`'s `Eff` flag decides (answers the overload).** A
+     **non-effectful** verb (rotation, the MariaDB create/`ALTER` DDL) that hits a transient
+     lock/deadline/`interrupted` **yields and auto-replays** (F6 roll-forward, idempotent). An
+     **effectful** verb (`ssl.issue` and the TLS publication path) returns a **coded `interrupted`** that
+     deliberately routes to **startup/`reconcile`**, never a blind in-pass retry — because its effect
+     can't be blindly replayed. The `Eff` column is the single discriminator; a verb is never both.
+  4. **Owner/provenance conflict on retry (the reported failure), and a lost admission token.** `never
+     `ALTER` an uncertain/foreign owner` stands. When ownership can't be confirmed **and the `ALTER` may
+     have landed**, the job does **not** terminalize-erase: it reaches a terminal that **preserves
+     claim-recoverability** — publish the claim from the sealed value (the applied password is retrievable
+     **exactly once by the owner who still holds the admission token**) + record
+     `conflict`/`precondition_failed` for the operator. If the **admission reply (the claim token) was
+     lost**, that one-shot claim cannot be re-handed (F19 single-use/owner-bound) — recovery is a **fresh
+     `rotate_password`**, exactly as for any lost reply (no new mechanism, no second durable token path);
+     the conflict-published claim is a **best-effort** convenience for a caller who still has the token,
+     not a guarantee the token survives. If the target user is provably **gone**, there is no stranded
+     credential and the sealed input may be released. Codes (`agent_error`, `conflict`,
+     `precondition_failed`) F3-catalog; machinery is `jobs.step` + F12 seal + F19 claim + F20.1
+     invariance — all existing, no `01`/`02`/`03` change, no reopening of the #90
+     freeze.
+
+---
+
+## F20. External-resource provenance & two-store roll-forward (F6 detail)
+
+Some slow verbs mutate a store that is **not transactional with the agent's SQLite** — MariaDB DDL
+(Phase 4), a DNS provider (Phase 7), the filesystem. F6 requires roll-forward recovery, and invariant 4
+/ the phase guardrails forbid **adopting a pre-existing unmanaged object** (no blind `IF NOT EXISTS`,
+no inferring ownership from a matching name). Those two collide in one window: if the agent creates the
+external object and dies **before** recording success in SQLite, a restart cannot tell *its own
+half-finished resource* from *an unmanaged collision* by existence alone. A reservation held only in
+SQLite proves the intended **name**, not **ownership** of a separately-created external object.
+
+This is a **contract**, not per-feature recovery machinery (it does not reopen the #90 scope freeze):
+it is the minimum needed for any two-store create to roll forward safely without adoption. The
+mechanism is a **provenance marker written in the external store itself, keyed to the operation**, so
+ownership is provable on the far side of the transaction boundary.
+
+**Rules (every two-store mutating verb).**
+1. **Write-ahead intent + sealed inputs in SQLite first.** Before touching the external store, commit
+   the operation row with its generated **identities** (names) and any minted **secret sealed** per
+   F12. Replay reuses these exact values (so a re-applied step is idempotent and an F19 claim
+   re-publishes the *same* secret — never a second, unseen one). TTL/claim semantics are unchanged (F19).
+   **This "operation" is the verb's existing Phase-1 job — 02 `jobs` — not a new table or state:** the
+   generated identities (names **and** the durable **resource id** — `databases.id` / `db_users.id`, a
+   ULID) live in `args_json`, the sealed secret in `secrets` (F12), both written by `Verb.Run` before
+   enqueue (F6). "An op with no success record" = **a job not yet `done`** (the F6 `running`→`queued`
+   roll-forward set) — this is the **replay trigger**. **Ownership, however, is keyed to the durable
+   resource id, not the job id** (rule 2): the create job, its replay, and the later *delete* job are
+   three different `jobs.id` but share the one resource id, so that id — never the name, never a job id —
+   is what proves far-side ownership across the whole lifecycle. No `prepared` state or operation table
+   is added to 02.
+2. **Provenance-before-object, under the per-name lock.** Record a durable provenance row **in the
+   external store** — `(kind, name, obj_id, phase)`, where **`obj_id` is the owning SQLite resource's
+   stable id** (not the job id) — **before** creating the object, and create the object only after a
+   pre-flight check shows it absent. The object is therefore never created without a matching provenance
+   row that names *this resource*. The name is unique in the store (a PK on `(kind, name)`); **ownership
+   is the `obj_id`**.
+3. **Never adopt.** A pre-flight collision (object present, no provenance row carrying **this resource's
+   `obj_id`**) **fails closed** with `conflict` — never `IF NOT EXISTS`-adopt, never auto-delete someone
+   else's object. A provenance row carrying a *different* `obj_id` is likewise `conflict`.
+4. **Replay decision (roll-forward), branching on the provenance `phase`.** For a job not yet `done`
+   (the object may or may not exist, because the provenance row is written one DDL statement *before*
+   the object — the reserve→create window):
+   - provenance row for the name carrying **this resource's** `obj_id`:
+     - `phase='created'` → the object is proven **ours** (it is only ever created *after* its row is
+       advanced past `reserved`) → re-run the remaining idempotent steps with the sealed
+       identities/secret (`GRANT`/`ALTER`), publish the claim, finish. If the object is unexpectedly
+       **absent** here (dropped out-of-band) → `conflict` for **operator reconciliation** — never
+       silently re-create.
+     - `phase='reserved'` → creation was **not** confirmed; pre-flight the object:
+       - **absent** → resume at `CREATE` (we hold the reservation and the per-name lock — a clean
+         resume, not adoption), then the remaining idempotent steps, advance to `created`, publish.
+       - **present** → we **cannot** prove we created it — an out-of-band create landing in the
+         reserve→create window (which the per-name lock bounds but cannot forbid), **or our own `CREATE`
+         that the client reported with a nonzero/indeterminate exit** so success was never confirmed and
+         `created` never written; the two are **indistinguishable** from the external state → `conflict`
+         for operator reconciliation. **Never adopt** (ownership unprovable) and **never `DROP`** (it may
+         be a foreign object) on the strength of a `reserved` row alone. An **indeterminate external exit**
+         (a nonzero client exit where the server-side outcome is unknown) is classified **`agent_error`**,
+         the op is **not** `done`, and it rolls forward into exactly this branch — the ambiguity is *why*
+         the window is unresolvable. Stamping the object with its `obj_id` at creation (so an
+         ambiguous-exit replay can prove ownership and advance to `created`) is the **owed** optimization
+         to shrink the window — out of current scope; the `conflict`-to-operator path is the contract.
+     - `phase='deleting'` → complete the delete idempotently (F20.5), then remove the row. For a
+       **delete verb** this finalizes `done`; for a **create** that finds its *own* `obj_id` here (an
+       F20.8 abort) it finalizes **`failed`** (never re-creates, even if the collision cleared) — and the
+       terminal `failed` is committed **before** the row is removed (F20.8 step 3).
+   - **no** provenance row carrying this resource's `obj_id` (none for the name, or one under a
+     *different* `obj_id`), object **present** in the external store → not ours (an **unmanaged
+     collision**, or another resource's object) → `conflict`, surfaced for **operator reconciliation**
+     (rename/remove the external object, or a future explicit adopt verb — never automatic).
+   - no provenance row for this resource, object **absent** → we died before reserving → restart the op
+     cleanly with the same sealed identities.
+5. **Delete is provenance-last, and verifies ownership by `obj_id` — never by name alone.** The delete
+   job knows the resource id (from its args) and resolves the name from the SQLite row. It DROPs **only**
+   when a provenance row matches **both** `(kind, name)` **and** this resource's `obj_id`: set
+   `phase=deleting`, `DROP`, then remove the row (a crash mid-delete leaves `phase=deleting` + object-
+   maybe-gone → replay completes the `DROP` idempotently). A provenance row for the name carrying a
+   *different* `obj_id` → **not ours**: never `DROP`; the SQLite row is a failed-create / stale artifact
+   → remove it (surface the mismatch), leaving the other owner's object untouched. No provenance row and
+   the SQLite row present → the object was never created under us → remove the SQLite row, no `DROP`.
+   Already-deleted replay (no owned row, object absent) is a no-op. Name reuse is safe: a new resource
+   reserves the freed name under *its own* `obj_id`, which a stale delete can never match.
+   **Delete ordering & roll-forward (head ruling, 2026-11-06).** The full order is: mark `phase=deleting`
+   → `DROP` by `obj_id` → remove the provenance row → **remove the SQLite owning row** → commit the job
+   `done`. A **transient** SQL/lock failure at any step is **not** terminal — the delete **rolls forward**
+   (it is idempotent ensure-absent, F7), and a canonical `jobs.step` (`delete_started`/`deleting`) keeps
+   it in the roll-forward set until **both** the external teardown **and** the SQLite owning-row removal
+   have completed. So a delete is **never terminalized with teardown incomplete**, and the "terminalized
+   `failed` job + surviving SQLite owner" state the WIP hit does **not** arise under this order. The
+   `jobs.step` checkpoint is the canonical last-completed-step, **not** new durability (same shape as the
+   create-side F20.8 ordering). A **persistent** conflict — the provenance `obj_id` no longer matches, or
+   ownership cannot be proven — is **not** retried forever: it surfaces `conflict`/`precondition_failed`
+   to the **operator**, never a blind `DROP` of an uncertain object (frozen F20). A **historical** residue
+   (a job wrongly terminalized before this ordering, leaving `deleting`-but-object-gone + a surviving
+   SQLite owner row) is converged by the F20.9 reconcile: the external side is finished under the
+   proven-own `deleting` marker, and the now-marker-less SQLite owning row with its object **absent** is
+   the rule-5 "no provenance row + SQLite row present → remove the SQLite row, **no** `DROP`" case.
+6. **No weaker substitute.** A SQLite-only reservation does **not** satisfy this (it cannot prove
+   far-side ownership). If a store genuinely cannot hold a provenance marker, that is a **blocker to
+   raise**, not a license to adopt by name or to fail every retry.
+7. **Cross-namespace locking & admission (serialize the right key; re-validate at execution).** The
+   object-key lock (F6) serializes **execution**, not admission, so the ordering safety is at execution
+   time under the lock, not in the queue. (a) **Lock the object's own namespace.** A resource with an
+   identity in a store-global namespace distinct from its parent takes its *own* lock, not only the
+   parent's — e.g. a MariaDB user is global (`user@host`), so user verbs lock `dbuser:<username>` **and**
+   the parent `db:<db_id>` (fixed acquisition order to avoid deadlock); a create that makes both a schema
+   and its owner user holds both. Two creates contending the same global name then serialize, and the
+   loser hits the pre-flight/PK conflict. A resource parented to another in a **non-transactional parent
+   store** — a site-associated MariaDB database/user whose SQLite `site` row governs it — also holds the
+   **grandparent** lock (`site:<site_id>`) in the fixed order `site:` → `db:` → `dbuser:`, so a create
+   serializes against a parent `site.delete` that locks only `site:<site_id>` (the `db:`/`dbuser:` locks
+   do not overlap it). A detached resource (NULL `site_id`) takes no grandparent lock. (b) **Execution
+   re-validates its preconditions under the lock** (ensure-state): a child create whose parent **or
+   grandparent** (its `site`) was deleted while it sat queued finds it gone and fails
+   `precondition_failed` — admission need not reject the ordering, because the lock + re-validation make a
+   stale queued op fail closed rather than resurrect a deleted parent. A cascade delete removes the
+   parent's children by their own `obj_id` provenance (rule 5), so a not-yet-created queued child leaves
+   nothing to adopt.
+8. **Two-store atomicity of the owning SQLite row (no orphan in either direction).** The external object
+   and the SQLite resource row are all-or-nothing **for this `obj_id`**. The SQLite row is committed **at
+   success** (rule 2: the `obj_id` is minted write-ahead, but the row is written only once the external
+   create + provenance have committed), so a failed create leaves **no orphan row**. The converse is
+   equally binding: an external object must **never outlive a create that cannot commit its owning SQLite
+   row**. So (a) **pre-flight every parent the row's FK requires** — any SQLite parent (e.g. a
+   `databases.site_id`, when non-null) is validated **before the first external mutation**; a
+   missing/invalid parent fails `not_found`/`precondition_failed` with **zero external effect** — and so
+   are the create's own names (schema **and** owner-username absent/unowned) so a name collision fails
+   `conflict` before either object is made. And (b) if a **terminal** failure still strands an external
+   object the create provably made (its own `obj_id`: a TOCTOU collision landing after `CREATE DATABASE`),
+   the create **rolls its own `obj_id`-owned objects back to absent by the rule-5 delete path**. **The
+   durable abort decision is the `phase='deleting'` marker under the create's own `obj_id`** — the
+   existing provenance phase in the external store, never a separate SQLite "cleanup intent" flag (that
+   would be prohibited per-feature durability). The ordering is what makes it survive both stores:
+   1. advance the owned provenance row(s) → **`phase='deleting'`** (durable "this create is aborting");
+   2. `DROP` the object(s) by `obj_id` (idempotent);
+   3. **commit the job terminal `failed` with its `code` (SQLite `jobs.state`/`jobs.code` — canonical
+      Phase-1 columns, not a new flag) *before* removing the last provenance row**;
+   4. remove the provenance row(s).
+   The linearization point is step 3: a create that reaches it is terminally `failed` and **never rolls
+   forward**. So the one dangerous state — **no marker + no object** — is reachable **only after** step 3,
+   where the job is already terminal and cannot re-create. (The #101 ordering, which removed the row
+   *before* finalizing, left a window where a crash gave non-terminal job + no marker + no object → the
+   re-create trap this closes.) **Replay before step 3** finds the create's **own `obj_id` in
+   `phase='deleting'`** → this is an **abort, not a create**: complete the `DROP` (idempotent), then
+   finalize the job `failed` (code from `jobs.code`, else re-derived by re-running the deterministic
+   pre-flight), then remove the row — it **never** re-creates, **even if the obstacle has cleared**,
+   because its own `deleting` marker is the durable proof it decided to abort. **After step 3**, a
+   leftover `deleting`-row-with-object-absent is a completed-delete **tombstone**: harmless (names are
+   generated-unique, so no new op collides), reclaimed by a startup/periodic reconcile or by the next op
+   on that exact name (object absent under a `deleting` row = the delete finished → the row is removable,
+   never a `DROP`). For **multiple owned objects** the same holds: mark all `deleting` → `DROP` all →
+   **one** terminal `failed` commit → remove all rows; a crash between individual row removals leaves only
+   tombstones. This removes **only** objects whose ownership is **proven** by this resource's `obj_id` —
+   it is roll-forward of the create's *own* effect, and is distinct from (never a license to weaken) rules
+   3–4's "never auto-delete an object of uncertain ownership."
+9. **Startup/periodic provenance reconcile (the catch-all backstop).** Job roll-forward (F6) re-drives a
+   non-`done` job, but it cannot clean up after a job that reached a **terminal** state (`done`/`failed`)
+   or whose row is gone — e.g. the rule-8 tombstone, or an object owned by a create whose SQLite resource
+   row never committed. A **reconcile pass** over the provenance store closes that remainder. It runs on
+   agent start (**after** F6 job roll-forward) and periodically (F18), is itself idempotent and
+   crash-safe, and is **generic over every F20 resource** (the F20 counterpart of F6's "reset `running`→
+   `queued` at boot" — **not** per-feature machinery, and it uses only canonical state: `managed_objects`,
+   `jobs`, and the owning SQLite resource rows). It acts **only on markers whose `obj_id` it can match to
+   our own SQLite** (a marker whose `obj_id` is unknown/foreign is **never** touched → operator). For each
+   of our markers it converges by the rule-4 table, keyed on (`phase`, object present?, owning resource
+   row present?, owning job terminal?):
+   - `phase='deleting'`, object **absent** → completed-delete **tombstone** → remove the row.
+   - `phase='deleting'`, object **present** → an authorized teardown of *our own* `obj_id` that didn't
+     finish → complete the `DROP`, remove the row.
+   - `phase='created'`, **no** owning resource row, owning job **terminal (`failed`) or gone** → our own
+     object (ownership **proven** by `created` — rule 4: `created` is written only *after* our own create
+     confirmed) whose SQLite owner can never commit → drive the rule-8 abort (`deleting` → `DROP` by
+     `obj_id` → remove). This is safe to `DROP` **because `created` proves ownership**. (It stays within
+     the `obj_id`-provable guard above: if neither the job nor any resource row carries this `obj_id`, the
+     marker is unmatchable → treated as foreign → operator, never dropped.)
+   - `phase='reserved'`, object **absent**, no owning row, owning job **terminal or gone** → a create that
+     died before a confirmed `CREATE` and can never commit its owner → there is **no object to drop** →
+     remove the stranded `reserved` marker (frees the name; the marker is `obj_id`-proven ours and nothing
+     external is touched).
+   - `phase='reserved'`, object **present**, no owning row, owning job **terminal or gone** → **`conflict`
+     → operator; never `DROP`, never adopt.** This is exactly rule 4's unprovable `reserved`+present: our
+     own `CREATE` with an indeterminate exit (`created` never written) *or* a foreign object that landed in
+     the reserve→create window — **indistinguishable** from external state. A terminal/gone job only
+     removes the *replay* that would have owned it; it does **not** make the present object's ownership
+     provable, so reconcile must fail closed to the operator, identically to rule 4 — it may **not** `DROP`
+     on the strength of a `reserved` row. (Rule 4's owed `obj_id`-stamp optimization would let reconcile
+     read the stamp, prove ownership and resolve this automatically; out of scope — the operator path is
+     the contract.)
+   - `phase='created'`, owning resource row **present** → live and healthy → leave.
+   - `phase='reserved'`, object **present**, no owning row, a job still **live** → leave it to that job's
+     replay (rules 3–4); reconcile never races a live job on the same `obj_id`.
+   - **SQLite owning row present, its provenance marker gone, external object absent** (the historical
+     failed-delete residue: a delete that tore down the external object + marker but was terminalized
+     before removing its own SQLite row) → **remove the orphaned SQLite owning row** (rule 5 "no provenance
+     row + SQLite row present → remove the row, **no** `DROP`"). This is the one case reconcile reaches by
+     the **SQLite side**, not a marker; it touches nothing external (the object is already gone), so it
+     cannot harm a foreign object.
+   Because reconcile acts only on `obj_id`-proven-own markers and only ever `DROP`s an object under a
+   `deleting` marker it owns (never a `reserved`-present or foreign one), it preserves rules 3–4 (never
+   adopt, never delete an object of uncertain ownership) while guaranteeing **convergence**: whatever
+   inter-store crash state a stop leaves, the next boot (plus the periodic pass) drives it to **a correct
+   terminal state**. For every *provable* state that means **no orphan and no stranded marker** — the
+   object and its marker are either both present (healthy), or both removed (tombstone/abort). The **one
+   deliberate exception** is the unprovable `reserved`+present (an indeterminate-exit `CREATE`
+   indistinguishable from a foreign object): there the correct terminal state is the **fail-closed
+   operator-conflict that preserves *both* the object and its `reserved` marker** — the retained marker is
+   **not** a "stranded marker" bug but the durable record of an unresolved-ownership conflict awaiting the
+   operator, and the retained object is **not** an "orphan" to reclaim but a possibly-foreign object we are
+   forbidden to `DROP`. Convergence therefore means "reaches its correct terminal state," which for that one
+   case is preservation-for-operator, not removal (never-delete-uncertain, rules 3–4, wins over automatic
+   cleanup).
+
+**Completeness & freeze.** Rules 1–9 are the *closed* contract for a two-store create/rotate/delete: the
+provenance `phase` is the external authority, the SQLite terminal state is ordered against it (rule 8),
+and the reconcile (rule 9) converges every residue. Every inter-store crash point is therefore covered by
+roll-forward (F6) **or** reconcile (rule 9); there is no window left that needs a *new* per-feature rule.
+Implementations prove this by the **F7 crash-safety replay test across the enumerated inter-store points**
+(before/after each of: reserve, CREATE, phase→created, SQLite commit; and for teardown: →deleting, DROP,
+terminal commit, row removal), plus one reconcile pass from each stopped state. A genuinely new *contract*
+gap is still raised; a sub-statement timing window that rules 1–9 + reconcile already converge is **not** a
+fresh ruling — it is covered here, with power-loss/VM acceptance of the residue deferred to #90.
+
+Phases instantiate this: Phase 4 with a MariaDB control schema (see `phases/phase-4.md`), Phase 7 with
+the provider's own record keyed by the resource `obj_id`. Power-loss/VM acceptance of the window stays deferred (#90);
+the contract itself is verified by the crash-safety replay test (F7) against a simulated mid-op stop.

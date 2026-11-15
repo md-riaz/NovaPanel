@@ -1,0 +1,493 @@
+=== RUN   TestRealPebbleSchedulerMutationAcceptance
+    realnginx_test.go:46: real nginx [] exit=0 stderr=
+    realnginx_test.go:46: real nginx [-t] exit=0 stderr=nginx: the configuration file /tmp/p3-1434872403/nginx.conf syntax is ok
+        nginx: configuration file /tmp/p3-1434872403/nginx.conf test is successful
+    realnginx_test.go:46: real nginx [-s reload] exit=0 stderr=2026/10/30 18:47:15 [notice] 47#47: signal process started
+    realnginx_test.go:46: real nginx [-t] exit=0 stderr=2026/10/30 18:47:20 [warn] 52#52: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:22
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:22
+        2026/10/30 18:47:20 [warn] 52#52: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:23
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:23
+        nginx: the configuration file /tmp/p3-1434872403/nginx.conf syntax is ok
+        nginx: configuration file /tmp/p3-1434872403/nginx.conf test is successful
+    realnginx_test.go:46: real nginx [-s reload] exit=0 stderr=2026/10/30 18:47:20 [warn] 53#53: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:22
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:22
+        2026/10/30 18:47:20 [warn] 53#53: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:23
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:23
+        2026/10/30 18:47:20 [notice] 53#53: signal process started
+    realnginx_test.go:46: real nginx [-t] exit=0 stderr=2026/10/30 18:47:29 [warn] 55#55: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:22
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:22
+        2026/10/30 18:47:29 [warn] 55#55: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:23
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:23
+        nginx: the configuration file /tmp/p3-1434872403/nginx.conf syntax is ok
+        nginx: configuration file /tmp/p3-1434872403/nginx.conf test is successful
+    realnginx_test.go:46: real nginx [-s reload] exit=0 stderr=2026/10/30 18:47:29 [warn] 56#56: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:22
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:22
+        2026/10/30 18:47:29 [warn] 56#56: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:23
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:23
+        2026/10/30 18:47:29 [notice] 56#56: signal process started
+    realnginx_test.go:46: real nginx [-t] exit=0 stderr=2026/10/30 18:47:37 [warn] 59#59: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:22
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:22
+        2026/10/30 18:47:37 [warn] 59#59: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:23
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:23
+        nginx: the configuration file /tmp/p3-1434872403/nginx.conf syntax is ok
+        nginx: configuration file /tmp/p3-1434872403/nginx.conf test is successful
+    realnginx_test.go:46: real nginx [-s reload] exit=0 stderr=2026/10/30 18:47:37 [warn] 60#60: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:22
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:22
+        2026/10/30 18:47:37 [warn] 60#60: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:23
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:23
+        2026/10/30 18:47:37 [notice] 60#60: signal process started
+    realnginx_test.go:46: real nginx [-t] exit=0 stderr=2026/10/30 18:47:37 [warn] 62#62: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:37 [warn] 62#62: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: the configuration file /tmp/p3-1434872403/nginx.conf syntax is ok
+        nginx: configuration file /tmp/p3-1434872403/nginx.conf test is successful
+    realnginx_test.go:46: real nginx [-s reload] exit=0 stderr=2026/10/30 18:47:37 [warn] 63#63: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:37 [warn] 63#63: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        2026/10/30 18:47:37 [notice] 63#63: signal process started
+    scheduler_acceptance_test.go:257: HTTP / status=301 body="<html>\r\n<head><title>301 Moved Permanently</title></head>\r\n<body>\r\n<center><h1>301 Moved Permanently</h1></center>\r\n<hr><center>nginx/1.29.5</center>\r\n</body>\r\n</html>\r\n"
+    realnginx_test.go:46: real nginx [-t] exit=0 stderr=2026/10/30 18:47:38 [warn] 65#65: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:40
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:40
+        2026/10/30 18:47:38 [warn] 65#65: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:41
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:41
+        nginx: the configuration file /tmp/p3-1434872403/nginx.conf syntax is ok
+        nginx: configuration file /tmp/p3-1434872403/nginx.conf test is successful
+    realnginx_test.go:46: real nginx [-s reload] exit=0 stderr=2026/10/30 18:47:38 [warn] 66#66: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:40
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:40
+        2026/10/30 18:47:38 [warn] 66#66: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:41
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:41
+        2026/10/30 18:47:38 [notice] 66#66: signal process started
+    realnginx_test.go:46: real nginx [-t] exit=0 stderr=2026/10/30 18:47:52 [warn] 68#68: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:52 [warn] 68#68: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: the configuration file /tmp/p3-1434872403/nginx.conf syntax is ok
+        nginx: configuration file /tmp/p3-1434872403/nginx.conf test is successful
+    realnginx_test.go:46: real nginx [-s reload] exit=0 stderr=2026/10/30 18:47:52 [warn] 69#69: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:52 [warn] 69#69: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        2026/10/30 18:47:52 [notice] 69#69: signal process started
+    scheduler_acceptance_test.go:289: HTTP /.well-known/acme-challenge/missing status=404 body="<html>\r\n<head><title>404 Not Found</title></head>\r\n<body>\r\n<center><h1>404 Not Found</h1></center>\r\n<hr><center>nginx/1.29.5</center>\r\n</body>\r\n</html>\r\n"
+    realnginx_test.go:46: real nginx [-t] exit=0 stderr=2026/10/30 18:47:52 [warn] 71#71: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:52 [warn] 71#71: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: the configuration file /tmp/p3-1434872403/nginx.conf syntax is ok
+        nginx: configuration file /tmp/p3-1434872403/nginx.conf test is successful
+    realnginx_test.go:46: real nginx [-s reload] exit=0 stderr=2026/10/30 18:47:52 [warn] 72#72: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:52 [warn] 72#72: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        2026/10/30 18:47:52 [notice] 72#72: signal process started
+    realnginx_test.go:46: real nginx [-t] exit=0 stderr=2026/10/30 18:47:52 [warn] 74#74: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:52 [warn] 74#74: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: the configuration file /tmp/p3-1434872403/nginx.conf syntax is ok
+        nginx: configuration file /tmp/p3-1434872403/nginx.conf test is successful
+    realnginx_test.go:46: real nginx [-s reload] exit=0 stderr=2026/10/30 18:47:52 [warn] 75#75: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:52 [warn] 75#75: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        2026/10/30 18:47:52 [notice] 75#75: signal process started
+    realnginx_test.go:46: real nginx [-t] exit=0 stderr=2026/10/30 18:47:52 [warn] 77#77: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:52 [warn] 77#77: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: the configuration file /tmp/p3-1434872403/nginx.conf syntax is ok
+        nginx: configuration file /tmp/p3-1434872403/nginx.conf test is successful
+    realnginx_test.go:46: real nginx [-s reload] exit=0 stderr=2026/10/30 18:47:52 [warn] 78#78: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:52 [warn] 78#78: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        2026/10/30 18:47:52 [notice] 78#78: signal process started
+    realnginx_test.go:46: real nginx [-t] exit=0 stderr=2026/10/30 18:47:53 [warn] 80#80: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:53 [warn] 80#80: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: the configuration file /tmp/p3-1434872403/nginx.conf syntax is ok
+        nginx: configuration file /tmp/p3-1434872403/nginx.conf test is successful
+    realnginx_test.go:46: real nginx [-s reload] exit=0 stderr=2026/10/30 18:47:53 [warn] 81#81: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:53 [warn] 81#81: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        2026/10/30 18:47:53 [notice] 81#81: signal process started
+    realnginx_test.go:46: real nginx [-t] exit=0 stderr=2026/10/30 18:47:53 [warn] 83#83: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:53 [warn] 83#83: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: the configuration file /tmp/p3-1434872403/nginx.conf syntax is ok
+        nginx: configuration file /tmp/p3-1434872403/nginx.conf test is successful
+    realnginx_test.go:46: real nginx [-s reload] exit=0 stderr=2026/10/30 18:47:53 [warn] 84#84: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:53 [warn] 84#84: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        2026/10/30 18:47:53 [notice] 84#84: signal process started
+    realnginx_test.go:46: real nginx [-t] exit=0 stderr=2026/10/30 18:47:53 [warn] 86#86: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:53 [warn] 86#86: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: the configuration file /tmp/p3-1434872403/nginx.conf syntax is ok
+        nginx: configuration file /tmp/p3-1434872403/nginx.conf test is successful
+    realnginx_test.go:46: real nginx [-s reload] exit=0 stderr=2026/10/30 18:47:53 [warn] 87#87: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:53 [warn] 87#87: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        2026/10/30 18:47:53 [notice] 87#87: signal process started
+    realnginx_test.go:46: real nginx [-t] exit=1 stderr=2026/10/30 18:47:53 [warn] 89#89: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:53 [warn] 89#89: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        2026/10/30 18:47:53 [emerg] 89#89: unknown directive "invalid_lab_directive" in /tmp/p3-1434872403/active.conf:42
+        nginx: [emerg] unknown directive "invalid_lab_directive" in /tmp/p3-1434872403/active.conf:42
+        nginx: configuration file /tmp/p3-1434872403/nginx.conf test failed
+    realnginx_test.go:46: real nginx [-t] exit=0 stderr=2026/10/30 18:47:53 [warn] 90#90: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:53 [warn] 90#90: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: the configuration file /tmp/p3-1434872403/nginx.conf syntax is ok
+        nginx: configuration file /tmp/p3-1434872403/nginx.conf test is successful
+    realnginx_test.go:46: real nginx [-s reload] exit=0 stderr=2026/10/30 18:47:53 [warn] 91#91: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:53 [warn] 91#91: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        nginx: [warn] the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        2026/10/30 18:47:53 [notice] 91#91: signal process started
+    realnginx_test.go:46: real nginx [-t] exit=0 stderr=nginx: the configuration file /tmp/p3-1434872403/nginx.conf syntax is ok
+        nginx: configuration file /tmp/p3-1434872403/nginx.conf test is successful
+    realnginx_test.go:46: real nginx [-s reload] exit=0 stderr=2026/10/30 18:47:54 [notice] 94#94: signal process started
+    scheduler_acceptance_test.go:514: real queue mutation matrix verified 16 jobs; scheduler cadence, restart, SAN expansion, sealed upload and manual exclusion passed
+    realnginx_test.go:46: real nginx [-s quit] exit=0 stderr=2026/10/30 18:47:54 [notice] 96#96: signal process started
+    realnginx_test.go:122: error.log:
+        2026/10/30 18:47:15 [notice] 43#43: using the "epoll" event method
+        2026/10/30 18:47:15 [notice] 43#43: nginx/1.29.5
+        2026/10/30 18:47:15 [notice] 43#43: built by gcc 15.2.0 (Alpine 15.2.0) 
+        2026/10/30 18:47:15 [notice] 43#43: OS: Linux 6.8.0-146-generic
+        2026/10/30 18:47:15 [notice] 43#43: getrlimit(RLIMIT_NOFILE): 1024:524288
+        2026/10/30 18:47:15 [notice] 44#44: start worker processes
+        2026/10/30 18:47:15 [notice] 44#44: start worker process 45
+        2026/10/30 18:47:15 [notice] 44#44: signal 1 (SIGHUP) received from 47, reconfiguring
+        2026/10/30 18:47:15 [notice] 44#44: reconfiguring
+        2026/10/30 18:47:15 [notice] 44#44: using the "epoll" event method
+        2026/10/30 18:47:15 [notice] 44#44: start worker processes
+        2026/10/30 18:47:15 [notice] 44#44: start worker process 48
+        2026/10/30 18:47:15 [notice] 45#45: gracefully shutting down
+        2026/10/30 18:47:15 [notice] 45#45: exiting
+        2026/10/30 18:47:15 [notice] 45#45: exit
+        2026/10/30 18:47:15 [notice] 44#44: signal 17 (SIGCHLD) received from 45
+        2026/10/30 18:47:15 [notice] 44#44: worker process 45 exited with code 0
+        2026/10/30 18:47:15 [notice] 44#44: signal 29 (SIGIO) received
+        2026/10/30 18:47:20 [notice] 44#44: signal 1 (SIGHUP) received from 53, reconfiguring
+        2026/10/30 18:47:20 [notice] 44#44: reconfiguring
+        2026/10/30 18:47:20 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:22
+        2026/10/30 18:47:20 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:23
+        2026/10/30 18:47:20 [notice] 44#44: using the "epoll" event method
+        2026/10/30 18:47:20 [notice] 44#44: start worker processes
+        2026/10/30 18:47:20 [notice] 44#44: start worker process 54
+        2026/10/30 18:47:20 [notice] 48#48: gracefully shutting down
+        2026/10/30 18:47:20 [notice] 48#48: exiting
+        2026/10/30 18:47:20 [notice] 48#48: exit
+        2026/10/30 18:47:20 [notice] 44#44: signal 17 (SIGCHLD) received from 48
+        2026/10/30 18:47:20 [notice] 44#44: worker process 48 exited with code 0
+        2026/10/30 18:47:20 [notice] 44#44: signal 29 (SIGIO) received
+        2026/10/30 18:47:29 [notice] 44#44: signal 1 (SIGHUP) received from 56, reconfiguring
+        2026/10/30 18:47:29 [notice] 44#44: reconfiguring
+        2026/10/30 18:47:29 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:22
+        2026/10/30 18:47:29 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:23
+        2026/10/30 18:47:29 [notice] 44#44: using the "epoll" event method
+        2026/10/30 18:47:29 [notice] 44#44: start worker processes
+        2026/10/30 18:47:29 [notice] 44#44: start worker process 57
+        2026/10/30 18:47:29 [notice] 54#54: gracefully shutting down
+        2026/10/30 18:47:29 [notice] 54#54: exiting
+        2026/10/30 18:47:29 [notice] 54#54: exit
+        2026/10/30 18:47:29 [notice] 44#44: signal 17 (SIGCHLD) received from 54
+        2026/10/30 18:47:29 [notice] 44#44: worker process 54 exited with code 0
+        2026/10/30 18:47:29 [notice] 44#44: signal 29 (SIGIO) received
+        2026/10/30 18:47:37 [notice] 44#44: signal 1 (SIGHUP) received from 60, reconfiguring
+        2026/10/30 18:47:37 [notice] 44#44: reconfiguring
+        2026/10/30 18:47:37 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:22
+        2026/10/30 18:47:37 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:23
+        2026/10/30 18:47:37 [notice] 44#44: using the "epoll" event method
+        2026/10/30 18:47:37 [notice] 44#44: start worker processes
+        2026/10/30 18:47:37 [notice] 44#44: start worker process 61
+        2026/10/30 18:47:37 [notice] 57#57: gracefully shutting down
+        2026/10/30 18:47:37 [notice] 57#57: exiting
+        2026/10/30 18:47:37 [notice] 57#57: exit
+        2026/10/30 18:47:37 [notice] 44#44: signal 17 (SIGCHLD) received from 57
+        2026/10/30 18:47:37 [notice] 44#44: worker process 57 exited with code 0
+        2026/10/30 18:47:37 [notice] 44#44: signal 29 (SIGIO) received
+        2026/10/30 18:47:37 [notice] 44#44: signal 1 (SIGHUP) received from 63, reconfiguring
+        2026/10/30 18:47:37 [notice] 44#44: reconfiguring
+        2026/10/30 18:47:37 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:37 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        2026/10/30 18:47:37 [notice] 44#44: using the "epoll" event method
+        2026/10/30 18:47:37 [notice] 44#44: start worker processes
+        2026/10/30 18:47:37 [notice] 44#44: start worker process 64
+        2026/10/30 18:47:38 [notice] 61#61: gracefully shutting down
+        2026/10/30 18:47:38 [notice] 61#61: exiting
+        2026/10/30 18:47:38 [notice] 61#61: exit
+        2026/10/30 18:47:38 [notice] 44#44: signal 17 (SIGCHLD) received from 61
+        2026/10/30 18:47:38 [notice] 44#44: worker process 61 exited with code 0
+        2026/10/30 18:47:38 [notice] 44#44: signal 29 (SIGIO) received
+        2026/10/30 18:47:38 [notice] 44#44: signal 1 (SIGHUP) received from 66, reconfiguring
+        2026/10/30 18:47:38 [notice] 44#44: reconfiguring
+        2026/10/30 18:47:38 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:40
+        2026/10/30 18:47:38 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:41
+        2026/10/30 18:47:38 [notice] 44#44: using the "epoll" event method
+        2026/10/30 18:47:38 [notice] 44#44: start worker processes
+        2026/10/30 18:47:38 [notice] 44#44: start worker process 67
+        2026/10/30 18:47:38 [notice] 64#64: gracefully shutting down
+        2026/10/30 18:47:38 [notice] 64#64: exiting
+        2026/10/30 18:47:38 [notice] 64#64: exit
+        2026/10/30 18:47:38 [notice] 44#44: signal 17 (SIGCHLD) received from 64
+        2026/10/30 18:47:38 [notice] 44#44: worker process 64 exited with code 0
+        2026/10/30 18:47:38 [notice] 44#44: signal 29 (SIGIO) received
+        2026/10/30 18:47:52 [notice] 44#44: signal 1 (SIGHUP) received from 69, reconfiguring
+        2026/10/30 18:47:52 [notice] 44#44: reconfiguring
+        2026/10/30 18:47:52 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:52 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        2026/10/30 18:47:52 [notice] 44#44: using the "epoll" event method
+        2026/10/30 18:47:52 [notice] 44#44: start worker processes
+        2026/10/30 18:47:52 [notice] 44#44: start worker process 70
+        2026/10/30 18:47:52 [notice] 67#67: gracefully shutting down
+        2026/10/30 18:47:52 [notice] 67#67: exiting
+        2026/10/30 18:47:52 [notice] 67#67: exit
+        2026/10/30 18:47:52 [notice] 44#44: signal 17 (SIGCHLD) received from 67
+        2026/10/30 18:47:52 [notice] 44#44: worker process 67 exited with code 0
+        2026/10/30 18:47:52 [notice] 44#44: signal 29 (SIGIO) received
+        2026/10/30 18:47:52 [notice] 44#44: signal 1 (SIGHUP) received from 72, reconfiguring
+        2026/10/30 18:47:52 [notice] 44#44: reconfiguring
+        2026/10/30 18:47:52 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:52 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        2026/10/30 18:47:52 [notice] 44#44: using the "epoll" event method
+        2026/10/30 18:47:52 [notice] 44#44: start worker processes
+        2026/10/30 18:47:52 [notice] 44#44: start worker process 73
+        2026/10/30 18:47:52 [notice] 70#70: gracefully shutting down
+        2026/10/30 18:47:52 [notice] 70#70: exiting
+        2026/10/30 18:47:52 [notice] 70#70: exit
+        2026/10/30 18:47:52 [notice] 44#44: signal 17 (SIGCHLD) received from 70
+        2026/10/30 18:47:52 [notice] 44#44: worker process 70 exited with code 0
+        2026/10/30 18:47:52 [notice] 44#44: signal 29 (SIGIO) received
+        2026/10/30 18:47:52 [notice] 44#44: signal 1 (SIGHUP) received from 75, reconfiguring
+        2026/10/30 18:47:52 [notice] 44#44: reconfiguring
+        2026/10/30 18:47:52 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:52 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        2026/10/30 18:47:52 [notice] 44#44: using the "epoll" event method
+        2026/10/30 18:47:52 [notice] 44#44: start worker processes
+        2026/10/30 18:47:52 [notice] 44#44: start worker process 76
+        2026/10/30 18:47:52 [notice] 73#73: gracefully shutting down
+        2026/10/30 18:47:52 [notice] 73#73: exiting
+        2026/10/30 18:47:52 [notice] 73#73: exit
+        2026/10/30 18:47:52 [notice] 44#44: signal 17 (SIGCHLD) received from 73
+        2026/10/30 18:47:52 [notice] 44#44: worker process 73 exited with code 0
+        2026/10/30 18:47:52 [notice] 44#44: signal 29 (SIGIO) received
+        2026/10/30 18:47:52 [notice] 44#44: signal 1 (SIGHUP) received from 78, reconfiguring
+        2026/10/30 18:47:52 [notice] 44#44: reconfiguring
+        2026/10/30 18:47:52 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:52 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        2026/10/30 18:47:52 [notice] 44#44: using the "epoll" event method
+        2026/10/30 18:47:52 [notice] 44#44: start worker processes
+        2026/10/30 18:47:52 [notice] 44#44: start worker process 79
+        2026/10/30 18:47:53 [notice] 76#76: gracefully shutting down
+        2026/10/30 18:47:53 [notice] 76#76: exiting
+        2026/10/30 18:47:53 [notice] 76#76: exit
+        2026/10/30 18:47:53 [notice] 44#44: signal 17 (SIGCHLD) received from 76
+        2026/10/30 18:47:53 [notice] 44#44: worker process 76 exited with code 0
+        2026/10/30 18:47:53 [notice] 44#44: signal 29 (SIGIO) received
+        2026/10/30 18:47:53 [notice] 44#44: signal 1 (SIGHUP) received from 81, reconfiguring
+        2026/10/30 18:47:53 [notice] 44#44: reconfiguring
+        2026/10/30 18:47:53 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:53 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        2026/10/30 18:47:53 [notice] 44#44: using the "epoll" event method
+        2026/10/30 18:47:53 [notice] 44#44: start worker processes
+        2026/10/30 18:47:53 [notice] 44#44: start worker process 82
+        2026/10/30 18:47:53 [notice] 79#79: gracefully shutting down
+        2026/10/30 18:47:53 [notice] 79#79: exiting
+        2026/10/30 18:47:53 [notice] 79#79: exit
+        2026/10/30 18:47:53 [notice] 44#44: signal 17 (SIGCHLD) received from 79
+        2026/10/30 18:47:53 [notice] 44#44: worker process 79 exited with code 0
+        2026/10/30 18:47:53 [notice] 44#44: signal 29 (SIGIO) received
+        2026/10/30 18:47:53 [notice] 44#44: signal 1 (SIGHUP) received from 84, reconfiguring
+        2026/10/30 18:47:53 [notice] 44#44: reconfiguring
+        2026/10/30 18:47:53 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:53 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        2026/10/30 18:47:53 [notice] 44#44: using the "epoll" event method
+        2026/10/30 18:47:53 [notice] 44#44: start worker processes
+        2026/10/30 18:47:53 [notice] 44#44: start worker process 85
+        2026/10/30 18:47:53 [notice] 82#82: gracefully shutting down
+        2026/10/30 18:47:53 [notice] 82#82: exiting
+        2026/10/30 18:47:53 [notice] 82#82: exit
+        2026/10/30 18:47:53 [notice] 44#44: signal 17 (SIGCHLD) received from 82
+        2026/10/30 18:47:53 [notice] 44#44: worker process 82 exited with code 0
+        2026/10/30 18:47:53 [notice] 44#44: signal 29 (SIGIO) received
+        2026/10/30 18:47:53 [notice] 44#44: signal 1 (SIGHUP) received from 87, reconfiguring
+        2026/10/30 18:47:53 [notice] 44#44: reconfiguring
+        2026/10/30 18:47:53 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:53 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        2026/10/30 18:47:53 [notice] 44#44: using the "epoll" event method
+        2026/10/30 18:47:53 [notice] 44#44: start worker processes
+        2026/10/30 18:47:53 [notice] 44#44: start worker process 88
+        2026/10/30 18:47:53 [notice] 85#85: gracefully shutting down
+        2026/10/30 18:47:53 [notice] 85#85: exiting
+        2026/10/30 18:47:53 [notice] 85#85: exit
+        2026/10/30 18:47:53 [notice] 44#44: signal 17 (SIGCHLD) received from 85
+        2026/10/30 18:47:53 [notice] 44#44: worker process 85 exited with code 0
+        2026/10/30 18:47:53 [notice] 44#44: signal 29 (SIGIO) received
+        2026/10/30 18:47:53 [notice] 44#44: signal 1 (SIGHUP) received from 91, reconfiguring
+        2026/10/30 18:47:53 [notice] 44#44: reconfiguring
+        2026/10/30 18:47:53 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:20
+        2026/10/30 18:47:53 [warn] 44#44: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /tmp/p3-1434872403/active.conf:21
+        2026/10/30 18:47:53 [notice] 44#44: using the "epoll" event method
+        2026/10/30 18:47:53 [notice] 44#44: start worker processes
+        2026/10/30 18:47:53 [notice] 44#44: start worker process 92
+        2026/10/30 18:47:54 [notice] 88#88: gracefully shutting down
+        2026/10/30 18:47:54 [notice] 88#88: exiting
+        2026/10/30 18:47:54 [notice] 88#88: exit
+        2026/10/30 18:47:54 [notice] 44#44: signal 17 (SIGCHLD) received from 88
+        2026/10/30 18:47:54 [notice] 44#44: worker process 88 exited with code 0
+        2026/10/30 18:47:54 [notice] 44#44: signal 29 (SIGIO) received
+        2026/10/30 18:47:54 [notice] 44#44: signal 1 (SIGHUP) received from 94, reconfiguring
+        2026/10/30 18:47:54 [notice] 44#44: reconfiguring
+        2026/10/30 18:47:54 [notice] 44#44: using the "epoll" event method
+        2026/10/30 18:47:54 [notice] 44#44: start worker processes
+        2026/10/30 18:47:54 [notice] 44#44: start worker process 95
+        2026/10/30 18:47:54 [notice] 92#92: gracefully shutting down
+        2026/10/30 18:47:54 [notice] 92#92: exiting
+        2026/10/30 18:47:54 [notice] 92#92: exit
+        2026/10/30 18:47:54 [notice] 44#44: signal 17 (SIGCHLD) received from 92
+        2026/10/30 18:47:54 [notice] 44#44: worker process 92 exited with code 0
+        2026/10/30 18:47:54 [notice] 44#44: signal 29 (SIGIO) received
+        2026/10/30 18:47:54 [notice] 44#44: signal 3 (SIGQUIT) received from 96, shutting down
+        2026/10/30 18:47:54 [notice] 95#95: gracefully shutting down
+        2026/10/30 18:47:54 [notice] 95#95: exiting
+        2026/10/30 18:47:54 [notice] 95#95: exit
+    realnginx_test.go:122: access.log:
+        127.0.0.1 - - [30/Oct/2026:18:47:15 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:15 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:16 +0000] "GET /.well-known/acme-challenge/lInJ4l_SSqUzmz_nVSyGFEtqqZgu20oxRu4TrQ23zec HTTP/1.1" 200 87 "-" "LetsEncrypt-Pebble-VA (linux; amd64)"
+        127.0.0.1 - - [30/Oct/2026:18:47:16 +0000] "GET /.well-known/acme-challenge/lInJ4l_SSqUzmz_nVSyGFEtqqZgu20oxRu4TrQ23zec HTTP/1.1" 200 87 "-" "LetsEncrypt-Pebble-VA (linux; amd64)"
+        127.0.0.1 - - [30/Oct/2026:18:47:16 +0000] "GET /.well-known/acme-challenge/lInJ4l_SSqUzmz_nVSyGFEtqqZgu20oxRu4TrQ23zec HTTP/1.1" 200 87 "-" "LetsEncrypt-Pebble-VA (linux; amd64)"
+        127.0.0.1 - - [30/Oct/2026:18:47:20 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:20 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:20 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:20 +0000] "GET /.well-known/acme-challenge/6oxWe39BOb8vWmdJK4Itc6NyRD7mFJ_pOiP4L7rsEOo HTTP/1.1" 200 87 "-" "LetsEncrypt-Pebble-VA (linux; amd64)"
+        127.0.0.1 - - [30/Oct/2026:18:47:20 +0000] "GET /.well-known/acme-challenge/6oxWe39BOb8vWmdJK4Itc6NyRD7mFJ_pOiP4L7rsEOo HTTP/1.1" 200 87 "-" "LetsEncrypt-Pebble-VA (linux; amd64)"
+        127.0.0.1 - - [30/Oct/2026:18:47:20 +0000] "GET /.well-known/acme-challenge/6oxWe39BOb8vWmdJK4Itc6NyRD7mFJ_pOiP4L7rsEOo HTTP/1.1" 200 87 "-" "LetsEncrypt-Pebble-VA (linux; amd64)"
+        127.0.0.1 - - [30/Oct/2026:18:47:29 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:29 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:29 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:29 +0000] "GET /.well-known/acme-challenge/r1pxJz61WO3-6w2gcyneEn5ld-QG-AGJdwn17BIbxgY HTTP/1.1" 200 87 "-" "LetsEncrypt-Pebble-VA (linux; amd64)"
+        127.0.0.1 - - [30/Oct/2026:18:47:29 +0000] "GET /.well-known/acme-challenge/r1pxJz61WO3-6w2gcyneEn5ld-QG-AGJdwn17BIbxgY HTTP/1.1" 200 87 "-" "LetsEncrypt-Pebble-VA (linux; amd64)"
+        127.0.0.1 - - [30/Oct/2026:18:47:29 +0000] "GET /.well-known/acme-challenge/r1pxJz61WO3-6w2gcyneEn5ld-QG-AGJdwn17BIbxgY HTTP/1.1" 200 87 "-" "LetsEncrypt-Pebble-VA (linux; amd64)"
+        127.0.0.1 - - [30/Oct/2026:18:47:37 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:37 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:37 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:38 +0000] "GET / HTTP/1.1" 301 169 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:38 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:38 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:38 +0000] "GET / HTTP/1.1" 301 169 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:38 +0000] "GET / HTTP/1.1" 301 169 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:38 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:38 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:38 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:38 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:38 +0000] "GET /.well-known/acme-challenge/zrfG5JBnKLvgGWxOoNfNkoM_qifQ3lujjI9aAdCdAJI HTTP/1.1" 200 87 "-" "LetsEncrypt-Pebble-VA (linux; amd64)"
+        127.0.0.1 - - [30/Oct/2026:18:47:38 +0000] "GET /.well-known/acme-challenge/zrfG5JBnKLvgGWxOoNfNkoM_qifQ3lujjI9aAdCdAJI HTTP/1.1" 200 87 "-" "LetsEncrypt-Pebble-VA (linux; amd64)"
+        127.0.0.1 - - [30/Oct/2026:18:47:38 +0000] "GET /.well-known/acme-challenge/zrfG5JBnKLvgGWxOoNfNkoM_qifQ3lujjI9aAdCdAJI HTTP/1.1" 200 87 "-" "LetsEncrypt-Pebble-VA (linux; amd64)"
+        127.0.0.1 - - [30/Oct/2026:18:47:45 +0000] "GET /.well-known/acme-challenge/GuMejW4skrtOEKHQ9RrlD2QrZEJyTdVncaLPQfVkmzY HTTP/1.1" 200 87 "-" "LetsEncrypt-Pebble-VA (linux; amd64)"
+        127.0.0.1 - - [30/Oct/2026:18:47:45 +0000] "GET /.well-known/acme-challenge/GuMejW4skrtOEKHQ9RrlD2QrZEJyTdVncaLPQfVkmzY HTTP/1.1" 200 87 "-" "LetsEncrypt-Pebble-VA (linux; amd64)"
+        127.0.0.1 - - [30/Oct/2026:18:47:45 +0000] "GET /.well-known/acme-challenge/GuMejW4skrtOEKHQ9RrlD2QrZEJyTdVncaLPQfVkmzY HTTP/1.1" 200 87 "-" "LetsEncrypt-Pebble-VA (linux; amd64)"
+        127.0.0.1 - - [30/Oct/2026:18:47:52 +0000] "GET / HTTP/1.1" 301 169 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:52 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:52 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:52 +0000] "GET / HTTP/1.1" 301 169 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:52 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:52 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:52 +0000] "GET /.well-known/acme-challenge/missing HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:52 +0000] "GET / HTTP/1.1" 301 169 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:52 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:52 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:52 +0000] "GET / HTTP/1.1" 301 169 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:52 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:52 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:52 +0000] "GET / HTTP/1.1" 301 169 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:52 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:52 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:52 +0000] "GET / HTTP/1.1" 301 169 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:52 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:52 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET / HTTP/1.1" 301 169 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET / HTTP/1.1" 301 169 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET / HTTP/1.1" 301 169 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET / HTTP/1.1" 503 15 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET / HTTP/1.1" 301 169 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET / HTTP/1.1" 503 15 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET / HTTP/1.1" 301 169 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET / HTTP/1.1" 301 169 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET / HTTP/1.1" 301 169 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET / HTTP/1.1" 301 169 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:53 +0000] "GET / HTTP/1.1" 200 17 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:54 +0000] "GET / HTTP/1.1" 301 169 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:54 +0000] "GET /.well-known/acme-challenge/novapanel-probe HTTP/1.1" 404 153 "-" "Go-http-client/1.1"
+        127.0.0.1 - - [30/Oct/2026:18:47:54 +0000] "GET / HTTP/1.1" 503 15 "-" "Go-http-client/1.1"
+--- PASS: TestRealPebbleSchedulerMutationAcceptance (38.66s)
+PASS
+2026/10/30 18:47:16 [INFO] acme: Registering account for lab@example.test
+2026/10/30 18:47:16 [INFO] [demo.test] acme: Obtaining bundled SAN certificate
+2026/10/30 18:47:16 [INFO] [demo.test] AuthURL: https://localhost:14000/authZ/wKlqnpbVnuG-tteNe72PuNnWx4EcHzH_sdafRfDyqCY
+2026/10/30 18:47:16 [INFO] [demo.test] acme: Could not find solver for: tls-alpn-01
+2026/10/30 18:47:16 [INFO] [demo.test] acme: use http-01 solver
+2026/10/30 18:47:16 [INFO] [demo.test] acme: Trying to solve HTTP-01
+2026/10/30 18:47:18 [INFO] [demo.test] The server validated our request
+2026/10/30 18:47:18 [INFO] [demo.test] acme: Validations succeeded; requesting certificates
+2026/10/30 18:47:18 [INFO] Wait for certificate [timeout: 2m0s, interval: 2s]
+2026/10/30 18:47:20 [INFO] [demo.test] Server responded with a certificate.
+2026/10/30 18:47:20 [INFO] [demo.test] acme: Obtaining bundled SAN certificate
+2026/10/30 18:47:20 [INFO] [demo.test] AuthURL: https://localhost:14000/authZ/cCeV13nxVZvzveRs_N6RmFqpfmLcwRaT6vQWUSABqhw
+2026/10/30 18:47:20 [INFO] [demo.test] acme: Could not find solver for: tls-alpn-01
+2026/10/30 18:47:20 [INFO] [demo.test] acme: use http-01 solver
+2026/10/30 18:47:20 [INFO] [demo.test] acme: Trying to solve HTTP-01
+2026/10/30 18:47:27 [INFO] [demo.test] The server validated our request
+2026/10/30 18:47:27 [INFO] [demo.test] acme: Validations succeeded; requesting certificates
+2026/10/30 18:47:27 [INFO] Wait for certificate [timeout: 2m0s, interval: 2s]
+2026/10/30 18:47:29 [INFO] [demo.test] Server responded with a certificate.
+2026/10/30 18:47:29 [INFO] acme: Registering account for lab@example.test
+2026/10/30 18:47:29 [INFO] [demo.test] acme: Obtaining bundled SAN certificate
+2026/10/30 18:47:29 [INFO] [demo.test] AuthURL: https://localhost:14000/authZ/Omr80jXvQKn43s3rhK_bLjBmky0geCPGwRCFfuzSu1A
+2026/10/30 18:47:29 [INFO] [demo.test] acme: Could not find solver for: tls-alpn-01
+2026/10/30 18:47:29 [INFO] [demo.test] acme: use http-01 solver
+2026/10/30 18:47:29 [INFO] [demo.test] acme: Trying to solve HTTP-01
+2026/10/30 18:47:35 [INFO] [demo.test] The server validated our request
+2026/10/30 18:47:35 [INFO] [demo.test] acme: Validations succeeded; requesting certificates
+2026/10/30 18:47:35 [INFO] Wait for certificate [timeout: 2m0s, interval: 2s]
+2026/10/30 18:47:37 [INFO] [demo.test] Server responded with a certificate.
+2026/10/30 18:47:38 [INFO] [demo.test, alias.test] acme: Obtaining bundled SAN certificate
+2026/10/30 18:47:38 [INFO] [demo.test] AuthURL: https://localhost:14000/authZ/EzASNb4D9S8npWMW1c72fkTn4lnZ5C9DJrZwMja5Py0
+2026/10/30 18:47:38 [INFO] [alias.test] AuthURL: https://localhost:14000/authZ/VOf2PtO736aYvoQ5_pYHpUrT3a74ngU0b9sobHKyYqw
+2026/10/30 18:47:38 [INFO] [demo.test] acme: Could not find solver for: tls-alpn-01
+2026/10/30 18:47:38 [INFO] [demo.test] acme: use http-01 solver
+2026/10/30 18:47:38 [INFO] [alias.test] acme: Could not find solver for: tls-alpn-01
+2026/10/30 18:47:38 [INFO] [alias.test] acme: use http-01 solver
+2026/10/30 18:47:38 [INFO] [demo.test] acme: Trying to solve HTTP-01
+2026/10/30 18:47:45 [INFO] [demo.test] The server validated our request
+2026/10/30 18:47:45 [INFO] [alias.test] acme: Trying to solve HTTP-01
+2026/10/30 18:47:50 [INFO] [alias.test] The server validated our request
+2026/10/30 18:47:50 [INFO] [demo.test, alias.test] acme: Validations succeeded; requesting certificates
+2026/10/30 18:47:50 [INFO] retry due to: acme: error: 400 :: POST :: https://localhost:14000/finalize-order/9CxankPjsAf9R2-um-9Q-bISA5Jb8zWlxhbxTEo6eYA :: urn:ietf:params:acme:error:badNonce :: JWS has an invalid anti-replay nonce: _qlcek8HZNgbVcFB7MGAGQ
+2026/10/30 18:47:50 [INFO] Wait for certificate [timeout: 2m0s, interval: 2s]
+2026/10/30 18:47:52 [INFO] [demo.test] Server responded with a certificate.

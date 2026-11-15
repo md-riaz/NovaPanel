@@ -32,7 +32,9 @@ func TestStateRejectsWritableDirectory(t *testing.T) {
 	cfg.SealKeyPath = filepath.Join(d, "state", "seal.key")
 	cfg.LogDir = filepath.Join(d, "logs")
 	cfg.SocketPath = filepath.Join(d, "run", "agent.sock")
+	cfg.SitesRoot = filepath.Join(d, "sites")
 	cfg.ACMEWebroot = filepath.Join(d, "acme")
+	cfg.TLSDir = filepath.Join(d, "tls")
 	if e := os.MkdirAll(filepath.Dir(cfg.DBPath), 0700); e != nil {
 		t.Fatal(e)
 	}
@@ -46,20 +48,40 @@ func TestStateRejectsWritableDirectory(t *testing.T) {
 	}
 }
 
+func TestStateRejectsSharedPrivateLogDirectory(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.LogDir = filepath.Dir(cfg.DBPath)
+	a := NewWithDependencies(cfg, &startupRunner{}, nil)
+	if cleanup, err := a.OpenState(context.Background()); err == nil {
+		cleanup()
+		t.Fatal("accepted shared private state and log directory")
+	}
+}
+
 func TestStateStartup(t *testing.T) {
-	for _, fail := range []bool{false, true} {
-		t.Run(map[bool]string{false: "success", true: "append-only failure"}[fail], func(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		fail, existing bool
+	}{{"new log root", false, false}, {"existing log root", false, true}, {"append-only failure", true, false}} {
+		t.Run(tc.name, func(t *testing.T) {
 			d := t.TempDir()
 			cfg := config.Defaults()
 			cfg.DBPath = filepath.Join(d, "state", "panel.db")
 			cfg.SealKeyPath = filepath.Join(d, "state", "seal.key")
 			cfg.LogDir = filepath.Join(d, "logs")
 			cfg.SocketPath = filepath.Join(d, "run", "agent.sock")
+			cfg.SitesRoot = filepath.Join(d, "sites")
 			cfg.ACMEWebroot = filepath.Join(d, "acme")
-			r := &startupRunner{fail: fail}
+			cfg.TLSDir = filepath.Join(d, "tls")
+			if tc.existing {
+				if e := os.Mkdir(cfg.LogDir, 0750); e != nil {
+					t.Fatal(e)
+				}
+			}
+			r := &startupRunner{fail: tc.fail}
 			a := NewWithDependencies(cfg, r, nil)
 			close, e := a.OpenState(context.Background())
-			if fail {
+			if tc.fail {
 				if e == nil {
 					close()
 					t.Fatal("ignored append-only failure")
@@ -70,6 +92,14 @@ func TestStateStartup(t *testing.T) {
 				t.Fatal(e)
 			}
 			defer close()
+			logInfo, err := os.Stat(cfg.LogDir)
+			if err != nil || logInfo.Mode().Perm() != 0755 {
+				t.Fatalf("log root must be 0755: %v, %v", logInfo, err)
+			}
+			auditInfo, err := os.Stat(filepath.Join(cfg.LogDir, "audit.log"))
+			if err != nil || auditInfo.Mode().Perm() != 0600 {
+				t.Fatalf("audit file must remain private: %v, %v", auditInfo, err)
+			}
 			if r.calls != 1 || a.Store == nil || a.Secret == nil || a.Audit == nil {
 				t.Fatal("state not wired")
 			}

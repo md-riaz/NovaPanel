@@ -7,7 +7,13 @@ the `NewArgs` struct exactly as listed and validates fields (F9) before `Run`.
 **Conventions (stated once):**
 - **Reads** return `data` = the shape shown. **Slow verbs** return `data:{job:{id,state,verb}}`
   immediately (F6); the real result lands in `jobs.result_json` (shape = the "→result" shown) and is
-  read via `job.status`. **Show-once secrets** ride the `claim` (F19), never the result.
+  read via `job.status`. **Show-once secrets** ride the `claim` (F19), never the result. The slow-verb
+  reply's `claim` is **optional**, accompanied by a `claim_state` reason enum of just **`live` | `none`**:
+  an **idempotent replay** (same `idempotency_key`, F6) returns the **existing** job and includes `claim`
+  only when `claim_state=live`; a gone claim (consumed **or** expired — not durably distinguished) returns
+  the job (`done`) with **no** `claim` and `claim_state=none` (recover via `rotate_password`), **never**
+  `not_found`. `not_found` from the replay surface means only "no such `idempotency_key`"; a gone secret
+  on the **`job.claim`** retrieval verb still returns `410`-style `not_found` (F19, unchanged).
 - All ids are ULIDs (`site_…`, `db_…`, `job_…`, etc. — opaque). Timestamps are unix-ms. Field names
   are snake_case. Unlisted optional fields default as noted. Every string that is a name/path/url/host
   is validated per F9.
@@ -61,22 +67,49 @@ panel.backup_config{repo_id}                            → job → {snapshot_id
 ```
 site.create{name?, type:'static'|'php'|'wordpress', primary_domain, php_version?} → job → {site_id}
                                                         # name generated from the domain if omitted
-site.update{site_id, php_version?, force_https?:bool, hsts_max_age?:int, maintenance?:bool} → job → {}
+site.update{site_id, primary_domain_id?:string, php_version?, force_https?:bool, hsts_max_age?:int, maintenance?:bool} → job → {}
 site.delete{site_id, purge_files?:bool}                 → job → {}      # MFA; removes user/docroot/certs/DB rows per flags
 site.list{}                                            → {sites:[{id,name,type,primary_domain,status,php_version}]}
-site.get{site_id}                                       → {site:{…}, domains:[…], cert:{state,not_after}}
+site.get{site_id}                                       → {site:{…}, domains:[…], redirects:[{id,source,target,code}], cert:{state,not_after}}
 domain.add{site_id, fqdn}                               → job → {domain_id}
 domain.remove{domain_id}                                → job → {}
 ssl.issue{site_id, staging?:bool, wildcard?:bool}       → job → {fqdns:[string], not_after}
 ssl.renew{site_id}                                      → job → {not_after}
 ssl.upload{site_id, cert_pem, key_pem}                  → job → {fqdns:[string], not_after}  # MFA; validates key↔cert + dates
 ssl.auto_set{site_id, enabled:bool}                     → {}        # Let's Encrypt auto-renew on/off
-ssl.status{site_id}                                     → {source:'letsencrypt'|'manual'|'none', force_https:bool, domains:[{fqdn,cert_state,not_after}]}
+ssl.status{site_id}                                     → {source:'letsencrypt'|'manual'|'none', ssl_auto:bool, force_https:bool, domains:[{fqdn,cert_state,not_after}]}
 php.set{site_id, version, limits?:{memory_mb?,upload_mb?,max_exec_sec?}} → job → {}
 php.list{}                                              → {versions:[string], default}
 redirect.add{site_id, source, target, code:301|302}     → job → {redirect_id}   # source/target validated (F9)
 redirect.remove{redirect_id}                            → job → {}
 ```
+
+### ACME renewal environment
+`ssl.renew` accepts only `site_id`. Admission records the installed primary certificate's
+persisted staging/production provenance in trusted durable job arguments, never the
+current global issuance default. Installed domain metadata must agree; uncertified new
+aliases do not establish provenance. Missing installed certificate input or conflicting
+provenance fails with `precondition_failed`. The worker rechecks this binding, including
+for scheduler-owned renewals, and refuses environment changes rather than switching CAs.
+Successful no-op admission still returns the normal job/claim envelope; its worker writes
+the canonical terminal result without contacting the CA.
+
+### Primary promotion amendment
+`site.update.primary_domain_id` names an existing domain ULID belonging to the site, not a new FQDN.
+The registry remains admin, `sites:write`, slow, non-effectful, with `site:<site_id>` locking.
+HSTS changes still require an owner. Before enqueue and again in execution under the site lock,
+validate active lifecycle, same-site target, at least one domain and exactly one current primary.
+The store repeats these checks in the metadata transaction. A same-primary request makes no
+primary or timestamp change; other requested settings still apply. Promotion never creates or
+removes domains or regenerates SANs.
+
+TLS promotion must validate the actual installed pair against the full persisted domain set,
+stage the same pair under the new primary while preserving the old path, then coordinate nginx,
+SQLite and recovery through a durable publication journal. TLS promotion is supported by the
+version-2 journal binding old/new primary IDs, unchanged domains, both recovery tokens and the
+nginx snapshot. The old path is retained; metadata and the replay marker commit only after probing.
+A metadata-only TLS promotion is not an implementation of re-keying. `site.get` redirects and
+`ssl.status` auto-renew read fields remain separate contract decisions, not additions in this amendment.
 
 ## databases (Phase 4)
 ```
@@ -84,7 +117,8 @@ database.create{site_id?, name?}                        → job → {db_id, db_n
 database.rotate_password{db_id}                         → job → {}                          + claim(password)
 database.delete{db_id}                                  → job → {}      # MFA
 database.list{}                                         → {databases:[{id,name,site_id,engine}]}
-dbuser.create{db_id, username?}                         → job → {dbuser_id}                 + claim(password)
+dbuser.create{db_id, username?}                         → job → {dbuser_id, db_user}        + claim(password)   # db_user = the final username (non-secret); only the password rides the claim
+dbuser.list{db_id}                                      → {users:[{id, username}]}           # retrieval path for secondary usernames (non-secret identity)
 dbuser.delete{dbuser_id}                                → job → {}
 ```
 

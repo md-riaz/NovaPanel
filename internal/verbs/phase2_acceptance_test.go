@@ -101,6 +101,23 @@ func (h *phase2AuditHarness) call(name, verb, token string, root bool, args any,
 		caller = rpc.RootCaller(0)
 		caller.MFAat = h.clock.now
 	}
+	expected := map[string]any{"kind": "unresolved"}
+	if root {
+		expected = map[string]any{"kind": "local-root"}
+	} else if token != "" {
+		resolved, err := h.s.Sessions.Resolve(context.Background(), token)
+		if err == nil {
+			expected = map[string]any{"kind": resolved.Kind}
+			if resolved.Kind == "token" {
+				expected["token_id"] = resolved.Session
+			} else {
+				expected["session_id"] = resolved.Session
+				if resolved.UserID != "" {
+					expected["user_id"] = resolved.UserID
+				}
+			}
+		}
+	}
 	reply := h.s.Dispatch(rpc.WithCaller(context.Background(), caller), rpc.Request{ID: sessionID(h.t), Verb: verb, Session: token, Actor: actor, Args: phase2JSON(h.t, args)})
 	if reply.Code != code || reply.OK != (code == "") {
 		h.t.Fatalf("%s: code=%q ok=%v; want code=%q", name, reply.Code, reply.OK, code)
@@ -134,7 +151,7 @@ func (h *phase2AuditHarness) call(name, verb, token string, root bool, args any,
 			h.t.Fatalf("%s: wrong audit attribution/outcome: %+v", name, record)
 		}
 		detail, ok := record["detail"].(map[string]any)
-		if !ok || !reflect.DeepEqual(detail, map[string]any{"stage": wantStage}) {
+		if !ok || !reflect.DeepEqual(detail, map[string]any{"stage": wantStage, "principal": expected}) {
 			h.t.Fatalf("%s: unexpected detail: %+v", name, record["detail"])
 		}
 		if len(record) != 9 || record["ts"].(float64) <= 0 {

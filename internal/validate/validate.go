@@ -43,7 +43,7 @@ func (*V) SiteName(s string) error {
 }
 func (v *V) UnixUser(s string) error { return v.SiteName(s) }
 func (*V) DBName(s string) error {
-	if !db.MatchString(s) || s == "mysql" || s == "sys" || s == "information_schema" || s == "performance_schema" {
+	if !db.MatchString(s) || s == "mysql" || s == "sys" || s == "information_schema" || s == "performance_schema" || s == "novapanel" {
 		return invalid("database name")
 	}
 	return nil
@@ -156,6 +156,17 @@ func (*V) CIDR(s string) error {
 }
 func unsafe(s string) bool {
 	return strings.ContainsAny(s, ";{}\\\"'`$") || strings.IndexFunc(s, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0
+}
+
+// RedirectSource accepts a literal path or hostname, never an ACME challenge path.
+func (v *V) RedirectSource(s string) error {
+	if strings.HasPrefix(s, "/") {
+		if strings.HasPrefix(s, "/.well-known") || strings.ContainsAny(s, "?#%") {
+			return invalid("redirect source")
+		}
+		return v.RedirectTarget(s)
+	}
+	return v.Hostname(s)
 }
 func (*V) RedirectTarget(s string) error {
 	decoded, e := url.PathUnescape(s)

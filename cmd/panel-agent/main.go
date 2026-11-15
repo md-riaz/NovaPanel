@@ -11,11 +11,13 @@ import (
 	"novapanel/internal/agent"
 	"novapanel/internal/config"
 	"novapanel/internal/exec"
+	"novapanel/internal/jobs"
 	"novapanel/internal/rpc"
 	"novapanel/internal/validate"
-	_ "novapanel/internal/verbs"
+	"novapanel/internal/verbs"
 	"os"
 	"os/signal"
+	"time"
 )
 
 var geteuid = os.Geteuid
@@ -118,6 +120,17 @@ func serve(ctx context.Context, a *agent.Agent) (err error) {
 	s.WebUID = a.Cfg.WebUID
 	s.DefaultDeadlineMs = a.Cfg.DeadlineDefaultMs
 	s.ConfigureJobs()
+	if err = migrateLegacyUsers(ctx, a); err != nil {
+		return err
+	}
+	// Restore the committed projection before accepting requests or replaying jobs.
+	// A failure must stop startup rather than expose or compound divergent state.
+	recoveryCtx, stopRecovery := context.WithTimeout(ctx, 2*time.Minute)
+	err = verbs.RecoverCommittedPHP(recoveryCtx, a.Store, a.Jobs, a.Exec, a.PHP, a.Cfg.SitesRoot)
+	stopRecovery()
+	if err != nil {
+		return fmt.Errorf("startup PHP recovery: %w", err)
+	}
 	l, err := listenSocket(a.Cfg.SocketPath, a.Cfg.WebGID)
 	if err != nil {
 		return err
@@ -141,6 +154,9 @@ running:
 		case e := <-results:
 			consumed++
 			// A worker may stop on sticky audit failure; reads must remain available.
+			if errors.Is(e, jobs.ErrRecoveryBlocked) {
+				continue
+			}
 			if health := a.Audit.Healthy(); health != nil && errors.Is(e, health) {
 				continue
 			}

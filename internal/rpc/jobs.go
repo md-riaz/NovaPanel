@@ -4,12 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"novapanel/internal/jobs"
 	"slices"
+	"time"
 )
 
 // ExecuteJob authorizes only durable authority, never a live session or argument label.
 func (s *Server) ExecuteJob(ctx context.Context, j *jobs.Job) error {
+	return s.executeJob(ctx, j, false)
+}
+
+func (s *Server) executeJob(ctx context.Context, j *jobs.Job, recovery bool) error {
 	v, ok := s.Registry[j.Verb]
 	if !ok || !v.Slow || v.Exec == nil || v.Module != "" {
 		return Errf("unsupported", "Job verb unavailable")
@@ -17,23 +24,99 @@ func (s *Server) ExecuteJob(ctx context.Context, j *jobs.Job) error {
 	if j.CreatedBy == "" {
 		return Errf("forbidden", "Job identity required")
 	}
-	if len(j.Scopes) > 0 && j.CreatedBy != "local-root" {
-		if v.Scope == "" || (!slices.Contains(j.Scopes, v.Scope) && !slices.Contains(j.Scopes, "*")) {
+	if j.Role == "token" || (j.Role == "" && len(j.Scopes) > 0) {
+		if j.CreatedBy == "local-root" || v.Scope == "" || (!slices.Contains(j.Scopes, v.Scope) && !slices.Contains(j.Scopes, "*")) {
 			return Errf("forbidden", "Stored scope denied")
 		}
 	} else {
+		if len(j.Scopes) != 0 && j.CreatedBy != "local-root" {
+			return Errf("forbidden", "Stored authority kind mismatch")
+		}
 		rank, ok := map[string]Role{"read_only": ReadOnly, "admin": Admin, "owner": Owner}[j.Role]
 		if !ok || (rank < v.MinRole && !(rank == ReadOnly && v.ReadOnly)) || (rank == ReadOnly && !v.ReadOnly) {
 			return Errf("forbidden", "Stored role denied")
 		}
 	}
 	if v.MFA && !j.Automation {
-		return Errf("forbidden", "Stored automation grant required")
+		return Errf("forbidden", "Stored MFA admission required")
 	}
-	args := v.NewArgs()
-	d := json.NewDecoder(bytes.NewReader(j.Args))
+	if j.Verb == "database.rotate_password" || j.Verb == "database.create" || j.Verb == "dbuser.create" {
+		durable, err := s.Agent.Store.GetJob(ctx, j.ID)
+		if err != nil {
+			return jobs.ErrRetry
+		}
+		if durable.Verb != j.Verb || durable.ObjectKey != j.ObjectKey || durable.CreatedBy != j.CreatedBy || durable.Role != j.Role || durable.Automation != j.Automation || durable.Effectful != j.Effectful || !slices.Equal(durable.Scopes, j.Scopes) || !bytes.Equal(durable.Args, j.Args) || j.Effectful != v.Effectful {
+			return Errf("forbidden", "Stored job binding mismatch")
+		}
+		if durable.Step == "database_committed" {
+			var binding struct {
+				DBID string `json:"db_id"`
+			}
+			if json.Unmarshal(durable.Args, &binding) != nil || binding.DBID == "" || durable.ObjectKey != "db:"+binding.DBID || recovery {
+				return Errf("forbidden", "Stored job binding mismatch")
+			}
+			j.Step, j.Result, j.Code = durable.Step, durable.Result, durable.Code
+			if j.Verb == "database.rotate_password" && (durable.Code == "conflict" || durable.Code == "precondition_failed") {
+				return Errf(durable.Code, "Database rotation requires operator reconciliation")
+			}
+			if durable.Code != "" {
+				return Errf("forbidden", "Invalid stored rotation outcome")
+			}
+			return nil
+		}
+	}
+	raw := j.Args
+	if j.Verb == "ssl.upload" {
+		// A committed publication replays its durable result without reopening input.
+		durable, err := s.Agent.Store.GetJob(ctx, j.ID)
+		if err != nil {
+			return err
+		}
+		if durable.Verb != j.Verb || durable.ObjectKey != j.ObjectKey || j.Effectful != v.Effectful {
+			return Errf("forbidden", "Stored job binding mismatch")
+		}
+		if durable.Step == "tls_committed" {
+			if recovery {
+				if v.ValidateRecovery == nil {
+					return Errf("forbidden", "Recovery unavailable")
+				}
+				return v.ValidateRecovery(ctx, s.Agent, j)
+			}
+			return v.Exec(ctx, s.Agent, j)
+		}
+		raw, err = s.Agent.Jobs.OpenInput(j)
+		if err != nil {
+			return Errf("bad_request", "Invalid sealed arguments")
+		}
+		defer clear(raw)
+	} else if v.SealedInput {
+		var err error
+		raw, err = s.Agent.Jobs.OpenInput(j)
+		if err != nil {
+			if j.Verb == "database.rotate_password" || j.Verb == "database.create" || j.Verb == "dbuser.create" {
+				durable, lookupErr := s.Agent.Store.GetJob(ctx, j.ID)
+				if lookupErr != nil {
+					return jobs.ErrRetry
+				}
+				if durable.Verb != j.Verb || durable.ObjectKey != j.ObjectKey {
+					return Errf("forbidden", "Stored job binding mismatch")
+				}
+				if durable.Step == "rotation_started" || durable.Step == "create_started" || errors.Is(err, jobs.ErrRetry) {
+					return jobs.ErrRetry
+				}
+			}
+			return Errf("bad_request", "Invalid sealed arguments")
+		}
+		defer clear(raw)
+	}
+	newArgs, objectKey := v.NewArgs, v.ObjectKey
+	if v.NewJobArgs != nil {
+		newArgs, objectKey = v.NewJobArgs, v.JobObjectKey
+	}
+	args := newArgs()
+	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
-	if d.Decode(args) != nil {
+	if d.Decode(args) != nil || d.Decode(new(any)) != io.EOF {
 		return Errf("bad_request", "Invalid stored arguments")
 	}
 	if validator, ok := args.(interface{ Validate() error }); ok {
@@ -41,11 +124,17 @@ func (s *Server) ExecuteJob(ctx context.Context, j *jobs.Job) error {
 			return e
 		}
 	}
-	if v.ObjectKey != nil && v.ObjectKey(args) != j.ObjectKey {
+	if objectKey != nil && objectKey(args) != j.ObjectKey {
 		return Errf("forbidden", "Stored object key mismatch")
 	}
 	if j.Effectful != v.Effectful {
 		return Errf("forbidden", "Stored effect class mismatch")
+	}
+	if recovery {
+		if v.ValidateRecovery == nil || v.Recover == nil {
+			return Errf("forbidden", "Recovery unavailable")
+		}
+		return v.ValidateRecovery(ctx, s.Agent, j)
 	}
 	return v.Exec(ctx, s.Agent, j)
 }
@@ -81,6 +170,22 @@ func (s *Server) ConfigureJobs() {
 	a := s.Agent
 	a.Jobs = jobs.NewQueue(a.Store, a.Secret, a.Audit)
 	a.Jobs.SetRunner(s.ExecuteJob)
+	a.Jobs.SetAttemptDeadline(func(name string) time.Duration {
+		ms := s.Registry[name].MaxDeadlineMs
+		if ms <= 0 {
+			ms = a.Cfg.DeadlineDefaultMs
+		}
+		if ms <= 0 {
+			ms = 120000
+		}
+		return time.Duration(ms) * time.Millisecond
+	})
+	a.Jobs.SetStartupRecovery(s.prepareTLSRecovery, s.resumeTLSRecovery)
+	a.Jobs.SetPostRecovery(func(ctx context.Context) error {
+		ctx = jobs.WithMetadata(ctx, jobs.Metadata{Actor: "startup@local", Role: "owner", CreatedBy: "local-root", Effectful: true})
+		_, err := a.Jobs.Enqueue(ctx, "reconcile", struct{}{}, "system")
+		return err
+	})
 	policies := map[string]jobs.SchedulePolicy{}
 	for _, name := range []string{"reconcile"} {
 		v, ok := s.Registry[name]
