@@ -133,6 +133,19 @@ func checkPHPSet(ctx context.Context, tx *sql.Tx, op Operation) error {
 	if err != nil {
 		return err
 	}
+	var raw sql.NullString
+	if err = tx.QueryRowContext(ctx, "SELECT (SELECT value_json FROM settings WHERE key=?)", phpLimitsKey(op.SiteID)).Scan(&raw); err != nil {
+		return err
+	}
+	if raw.Valid {
+		var saved storedPHPLimits
+		if err = json.Unmarshal([]byte(raw.String), &saved); err != nil {
+			return err
+		}
+		if saved.MaxChildren != nil && *saved.MaxChildren != op.Identity.PHP.OriginalCap {
+			return ErrSiteConflict
+		}
+	}
 	if !reflect.DeepEqual(site, *op.Identity.Site) || (limits != nil) != op.Identity.PHP.OriginalLimitsPresent || (limits != nil && *limits != op.Identity.PHP.OriginalLimits) {
 		return ErrSiteConflict
 	}
