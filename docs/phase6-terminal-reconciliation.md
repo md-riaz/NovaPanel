@@ -2,7 +2,7 @@
 
 Delegated decision for the next bounded implementation after b92c84f. This is not production activation or Phase 6 completion.
 
-Canonical authority is docs/spec/phases/phase-6.md, especially the journal authority and daemon-only reconciliation contract. The existing events table and canonical fw_pending testdata suffice. Production 0006/0007 now supply this schema through ordinary Store.Open.
+Canonical authority is docs/spec/phases/phase-6.md, especially the journal authority and daemon-only reconciliation contract. The existing events table and canonical fw_pending testdata suffice. The current sequence supplies this schema through ordinary Store.Open: `0006_databases.sql`, `0007_session_expiry_indexes.sql`, then `0008_phase6.sql`. Earlier references to Phase 6 as 0007 are historical.
 
 The daemon-side audit Log will reconcile through the existing journal lock. The Store transaction acquires the SQLite writer lock, validates the matching pending ID, exact unit, millisecond deadline equal to journal seconds times 1000, and confirmed=0. SnapshotPath is not trusted or opened by reconciliation. Journal metadata cannot prove a SQL snapshot pathname, and the journal's ID-bound verified digest remains the recovery authority. Any other pending row or mismatched projection fails closed.
 

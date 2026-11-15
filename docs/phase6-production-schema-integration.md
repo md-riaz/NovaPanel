@@ -2,13 +2,13 @@
 
 This bounded schema-only stack starts at `c47fdfffce9478bfd8cf5e8c2a14327398ae6f77`. It does not complete Phase 6 or permit public firewall activation.
 
-## Immutable predecessor
+## Current migration order and historical predecessor
 
-Only `internal/store/migrations/0006_phase4.sql` is carried from published PR87 commit `2581e7c86376032776197f8da3a80e34cbbc1a38`. Its SHA-256 is `549740ffa8b38ce925b524ad82013b8df75ff97c0346b6f7b3679ef267639698`, identical to foundation `42dfcae0f9ec92989a5a82629c03a24a3ef0c8a2`. No Phase 4 Agent, jobs, platform, executor or startup implementation is imported. Earlier migration bytes and hash meanings remain unchanged.
+The current merged predecessor is `0006_databases.sql`, followed by `0007_session_expiry_indexes.sql` and `0008_phase6.sql`. The Phase 6 migration contains the canonical section-02 schema for repos, backups, fw_pending and webhook_deliveries, plus repos_one_panel. Phase 8 must reuse webhook_deliveries. Its SHA-256 is `405e1a61297ac2123ca905b1309be6cf9e34a01e7c34a976646298902102a055`; the same bytes were formerly named `0007_phase6.sql`.
 
-Production `0007_phase6.sql` has SHA-256 `405e1a61297ac2123ca905b1309be6cf9e34a01e7c34a976646298902102a055`. It contains the entire canonical section-02 schema for repos, backups, fw_pending and webhook_deliveries, plus repos_one_panel. Phase 8 must reuse webhook_deliveries.
+Historical, superseded candidate: the schema-only stack carried `internal/store/migrations/0006_phase4.sql` from published PR87 commit `2581e7c86376032776197f8da3a80e34cbbc1a38`. Its SHA-256 is `549740ffa8b38ce925b524ad82013b8df75ff97c0346b6f7b3679ef267639698`, identical to foundation `42dfcae0f9ec92989a5a82629c03a24a3ef0c8a2`. It is not the current merged version 0006. That candidate imported no Phase 4 Agent, jobs, platform, executor or startup implementation.
 
-PR85's alternative version 0006 has hash `af263cda18b1affbe82be79095b32bdb5d0a835278db2284893f56ed56be24a0`. Such scratch history is incompatible and Store.Open refuses with database hash mismatch. No ledger repair or session-index migration renumbering occurs here. Its owner must independently select the next verified free version before integration.
+Historical PR85 version-0006 session-index bytes have hash `af263cda18b1affbe82be79095b32bdb5d0a835278db2284893f56ed56be24a0`; those bytes are now version 0007. A database ledger containing either incompatible historical version-0006 hash cannot be assumed compatible with merged 0006; Store.Open verifies hashes and refuses a mismatch. No ledger repair is implied.
 
 ## Exercised interfaces
 

@@ -65,10 +65,11 @@ func testPriorFirewallSchema(t *testing.T) {
 	mustTerminal(t, json.Unmarshal(raw, &hashes))
 	delete(hashes, "0006")
 	delete(hashes, "0007")
+	delete(hashes, "0008")
 	b, e := json.Marshal(hashes)
 	mustTerminal(t, e)
 	mustTerminal(t, os.WriteFile(build+"/hashes.json", b, 0600))
-	replacements := map[string]string{repo + "/internal/store/migrations/hashes.json": build + "/hashes.json", repo + "/internal/store/migrations/0006_databases.sql": "", repo + "/internal/store/migrations/0007_phase6.sql": ""}
+	replacements := map[string]string{repo + "/internal/store/migrations/hashes.json": build + "/hashes.json", repo + "/internal/store/migrations/0006_databases.sql": "", repo + "/internal/store/migrations/0007_session_expiry_indexes.sql": "", repo + "/internal/store/migrations/0008_phase6.sql": ""}
 	b, e = json.Marshal(map[string]any{"Replace": replacements})
 	mustTerminal(t, e)
 	mustTerminal(t, os.WriteFile(build+"/overlay.json", b, 0600))
@@ -93,7 +94,7 @@ func(r *migratedRunner)Run(ctx context.Context,p string,a []string,o execpkg.Run
  return nil,nil,1,errors.New("unexpected command")
 }
 func TestMigratedTerminalFixture(t *testing.T){
- for _,prefix:=range []int{0,6}{for _,enabled:=range []bool{false,true}{for _,outcome:=range []string{"confirmed","reverted"}{t.Run(fmt.Sprintf("prefix-%d/%s/enabled-%t",prefix,outcome,enabled),func(t *testing.T){
+ for _,prefix:=range []int{0,6,7}{for _,enabled:=range []bool{false,true}{for _,outcome:=range []string{"confirmed","reverted"}{t.Run(fmt.Sprintf("prefix-%d/%s/enabled-%t",prefix,outcome,enabled),func(t *testing.T){
  root:=t.TempDir();mustTerminal(t,os.Chmod(root,0700))
  for _,d:=range []string{"state","journal","snapshots","restore","restore/markers","rules"}{mustTerminal(t,os.Mkdir(root+"/"+d,0700))};mustTerminal(t,os.WriteFile(root+"/journal/lock",nil,0600))
  rules:=map[string][]byte{};for _,n:=range []string{"after.rules","after6.rules","before.rules","before6.rules","user.rules","user6.rules"}{rules[n]=[]byte("verified "+n);mustTerminal(t,os.WriteFile(root+"/rules/"+n,[]byte("old"),0640))}
@@ -114,7 +115,7 @@ func TestMigratedTerminalFixture(t *testing.T){
  events,e:=a.Store.ListEvents(t.Context(),100,"");mustTerminal(t,e);want:=terminalEvent(r);found:=0;for _,ev:=range events{if ev.ID==id{found++;if ev.TS!=want.TS||ev.Actor!=want.Actor||ev.Verb!=want.Verb||ev.ObjectKey!=want.ObjectKey||ev.Outcome!=want.Outcome||string(ev.Detail)!=string(want.Detail){t.Fatal(ev)}}};if found!=1{t.Fatal("SQL event count",found)}
  b,e:=os.ReadFile(cfg.LogDir+"/audit.log");mustTerminal(t,e);raw,_:=json.Marshal(r);if !strings.Contains(string(b),string(raw)){t.Fatal("ordinary audit missing exact detail")}
  if other,e:=store.Open(cfg.DBPath);e==nil{other.Close();t.Fatal("lifetime lock lost")};if a.FirewallRecovery!=nil{t.Fatal("public recovery opened")}
- mustTerminal(t,a.Store.Tx(t.Context(),func(tx *sql.Tx)error{var n int;return tx.QueryRow("SELECT count(*) FROM schema_migrations WHERE version='0007'").Scan(&n)}))
+ mustTerminal(t,a.Store.Tx(t.Context(),func(tx *sql.Tx)error{var n int;return tx.QueryRow("SELECT count(*) FROM schema_migrations WHERE version='0008'").Scan(&n)}))
  })}}}
 }
 func fixturePrefix(t *testing.T,path string,prefix int){

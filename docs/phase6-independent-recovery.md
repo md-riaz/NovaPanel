@@ -43,8 +43,8 @@ The internal Agent.CommitFirewallTerminal consumer separately opens the fixed
 journal and commits confirmed/reverted through ordinary audit replay and the
 existing exact Store transaction. It never acknowledges or runs recovery/timer
 commands. Ordinary serve separately uses the outcome-preserving terminal startup
-lifecycle in `docs/phase6-terminal-startup-lifecycle.md`. Production migrations
-0006/0007 are present. Public activation remains closed.
+lifecycle in `docs/phase6-terminal-startup-lifecycle.md`. The current migration sequence is `0006_databases.sql`,
+`0007_session_expiry_indexes.sql`, and `0008_phase6.sql`. Public activation remains closed.
 
 ## Required service ownership
 
@@ -120,7 +120,8 @@ or substituting manual Revert. Terminal outcomes require daemon audit/Store
 reconciliation; acknowledged still refuses new arms. Clock rollback provides no
 bounded elapsed-time guarantee.
 
-Historical design note: production 0006/0007 are now installed through ordinary
+Historical design note: the earlier candidate's production 0006/0007 numbering
+is superseded by the current 0006/0007/0008 sequence above, installed through ordinary
 Store.Open. Do not acknowledge terminal files using file evidence alone or treat
 missing SQL tables as absence. Later reconciliation runs after ordinary audit
 replay and before mutation workers. Public apply, confirmation and legacy wiring

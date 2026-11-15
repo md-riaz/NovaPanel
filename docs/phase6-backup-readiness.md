@@ -7,9 +7,10 @@ store, agent, runner, firewall or updater code.
 
 ## Existing independent components
 
-- `Store.Open` applies canonical schema-only `0006_phase4.sql` and
-  `0007_phase6.sql`. Repositories and the single-panel-role unique index exist.
-  The older backup README's missing-schema statement was stale.
+- `Store.Open` applies `0006_databases.sql`, `0007_session_expiry_indexes.sql`,
+  and `0008_phase6.sql`. Repositories and the single-panel-role unique index exist.
+  This assessment originally referred to the superseded PR87 `0006_phase4.sql`
+  predecessor and `0007_phase6.sql` numbering; those references are historical.
 - `CreateRepository` atomically stores public metadata and a sealed password;
   `ListRepositories` includes role; `RepositoryPassword` returns ciphertext.
 - `GeneratePassword`, `OpenPassword` and `PublishClaim` provide ephemeral custody

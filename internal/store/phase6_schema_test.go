@@ -8,7 +8,7 @@ import (
 
 func TestPhase6ProductionSchema(t *testing.T) {
 	s := fresh(t)
-	ddl, e := migrations.ReadFile("migrations/0007_phase6.sql")
+	ddl, e := migrations.ReadFile("migrations/0008_phase6.sql")
 	if e != nil {
 		t.Fatal(e)
 	}

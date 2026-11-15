@@ -82,7 +82,7 @@ func phase6OldDatabase(t *testing.T, version int) string {
 }
 
 func TestPhase6MigrationUpgrade(t *testing.T) {
-	for _, version := range []int{5, 6} {
+	for _, version := range []int{5, 6, 7} {
 		t.Run(fmt.Sprint(version), func(t *testing.T) {
 			path := phase6OldDatabase(t, version)
 			for range 2 {
@@ -96,7 +96,7 @@ func TestPhase6MigrationUpgrade(t *testing.T) {
 						t.Fatal(q, got, e)
 					}
 				}
-				if version == 6 {
+				if version >= 6 {
 					var got string
 					if e = s.db.QueryRow("SELECT db_users.db_id FROM db_users JOIN databases ON databases.id=db_users.db_id WHERE databases.site_id='site' AND databases.name='site_db' AND db_users.username='site_user' AND db_users.owner=1").Scan(&got); e != nil || got != "db" {
 						t.Fatal(got, e)
@@ -148,15 +148,19 @@ func assertPhase6Hashes(t *testing.T, s *Store) {
 	if e = rows.Err(); e != nil {
 		t.Fatal(e)
 	}
-	if n != 7 || len(hashes) != 7 {
+	if n != 8 || len(hashes) != 8 {
 		t.Fatal("migration inventory", n, len(hashes))
 	}
 }
 
 func TestPhase6MigrationRefusal(t *testing.T) {
-	for _, kind := range []string{"phase85", "hash", "unknown"} {
+	for _, kind := range []string{"phase85", "legacy-phase6", "hash", "unknown"} {
 		t.Run(kind, func(t *testing.T) {
-			path := phase6OldDatabase(t, 5)
+			version := 5
+			if kind == "legacy-phase6" {
+				version = 6
+			}
+			path := phase6OldDatabase(t, version)
 			db, e := sql.Open("sqlite", path)
 			if e != nil {
 				t.Fatal(e)
@@ -164,6 +168,9 @@ func TestPhase6MigrationRefusal(t *testing.T) {
 			query := `UPDATE schema_migrations SET hash='wrong' WHERE version='0005'`
 			if kind == "phase85" {
 				query = `CREATE INDEX idx_sessions_idle_deadline_id ON sessions(idle_deadline, id);CREATE INDEX idx_sessions_abs_deadline_id ON sessions(abs_deadline, id);INSERT INTO schema_migrations VALUES('0006','af263cda18b1affbe82be79095b32bdb5d0a835278db2284893f56ed56be24a0',1)`
+			}
+			if kind == "legacy-phase6" {
+				query = `INSERT INTO schema_migrations VALUES('0007','405e1a61297ac2123ca905b1309be6cf9e34a01e7c34a976646298902102a055',1)`
 			}
 			if kind == "unknown" {
 				query = `INSERT INTO schema_migrations VALUES('9999','unknown',1)`
@@ -184,7 +191,7 @@ func TestPhase6MigrationRefusal(t *testing.T) {
 			}
 			defer db.Close()
 			var n int
-			if e = db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name IN ('repos','fw_pending','databases')").Scan(&n); e != nil || n != 0 {
+			if e = db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name IN ('repos','fw_pending')").Scan(&n); e != nil || n != 0 {
 				t.Fatal("partial upgrade", n, e)
 			}
 			var email string
@@ -246,14 +253,14 @@ func TestPhase6RejectsPRMigrationHistory(t *testing.T) {
 func TestPhase6MigrationAtomicity(t *testing.T) {
 	for _, kind := range []string{"ddl", "commit"} {
 		t.Run(kind, func(t *testing.T) {
-			path := phase6OldDatabase(t, 6)
+			path := phase6OldDatabase(t, 7)
 			db, e := sql.Open("sqlite", path)
 			if e != nil {
 				t.Fatal(e)
 			}
 			q := `CREATE TABLE backups(collision TEXT)`
 			if kind == "commit" {
-				q = `CREATE TABLE fault_parent(id INTEGER PRIMARY KEY);CREATE TABLE fault_child(id INTEGER REFERENCES fault_parent(id) DEFERRABLE INITIALLY DEFERRED);CREATE TRIGGER fault AFTER INSERT ON schema_migrations WHEN NEW.version='0007' BEGIN INSERT INTO fault_child VALUES(1);END`
+				q = `CREATE TABLE fault_parent(id INTEGER PRIMARY KEY);CREATE TABLE fault_child(id INTEGER REFERENCES fault_parent(id) DEFERRABLE INITIALLY DEFERRED);CREATE TRIGGER fault AFTER INSERT ON schema_migrations WHEN NEW.version='0008' BEGIN INSERT INTO fault_child VALUES(1);END`
 			}
 			if _, e = db.Exec(q); e != nil {
 				t.Fatal(e)
@@ -271,7 +278,7 @@ func TestPhase6MigrationAtomicity(t *testing.T) {
 			if e = db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name IN ('repos','fw_pending','webhook_deliveries','repos_one_panel')").Scan(&n); e != nil || n != 0 {
 				t.Fatal("partial DDL survived", n, e)
 			}
-			if e = db.QueryRow("SELECT count(*) FROM schema_migrations WHERE version='0007'").Scan(&n); e != nil || n != 0 {
+			if e = db.QueryRow("SELECT count(*) FROM schema_migrations WHERE version='0008'").Scan(&n); e != nil || n != 0 {
 				t.Fatal("ledger survived", n, e)
 			}
 			if kind == "ddl" {

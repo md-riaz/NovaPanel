@@ -8,4 +8,4 @@ The tests retain valid sealed preparation, inherited EOF offsets, immutable inpu
 
 Focused RED and GREEN evidence is stored outside the repository in `pr80-helper-fixture-evidence` under the agent scratch directory. Root package race tests and UID65534 focused race tests passed before the final gates. An attempted full-package UID-dropping descriptor harness also reached process-spawn and SQLite failures caused by inaccessible host scratch paths and descriptor inheritance. That attempt is not a full non-root suite pass.
 
-Final exact-commit gates and independent review are separate acceptance requirements. This fix does not enable public apply or confirmation, set release trust, add production migration 0007, or claim phase completion.
+Final exact-commit gates and independent review are separate acceptance requirements. Historically, this fixture fix did not add the then-proposed production migration 0007. The current Phase 6 migration is 0008, after merged 0006 databases and 0007 session indexes. This fix does not enable public apply or confirmation, set release trust, or claim phase completion.

@@ -56,13 +56,14 @@ func TestTransportIsolationRefillAndCanonicalKey(t *testing.T) {
 	request("nps_session_a", "/", "GET", 200)
 	request("nps_session_a", "/", "GET", 200)
 	request("nps_session_a", "/", "GET", 429)
-	// No invented IP/role/header budget for cookie-less requests.
+	// Cookie-less bootstrap now has its own per-client budget.
 	f.reply = func(string) (rpc.Reply, error) {
 		return rpc.Reply{OK: true, Data: map[string]any{"session": "nps_anon", "csrf_token": "expected"}}, nil
 	}
-	for i := 0; i < 25; i++ {
+	for i := 0; i < 2; i++ {
 		request("", "/login", "GET", 200)
 	}
+	request("", "/login", "GET", 429)
 }
 
 func TestTransportConcurrentAdmissionBeforeDial(t *testing.T) {

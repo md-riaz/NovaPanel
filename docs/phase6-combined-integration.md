@@ -25,9 +25,9 @@ The first five source/destination stable patch IDs match. Updater base `1fe8b9e`
 
 ## Production schema stack
 
-The explicitly approved schema-only stack carries exact published PR87 migration `0006_phase4.sql` and full production `0007_phase6.sql`. It imports no Phase 4 runtime. See `phase6-production-schema-integration.md` for immutable provenance, hashes and the incompatible PR85 version-0006 history.
+The current merged sequence is `0006_databases.sql`, `0007_session_expiry_indexes.sql`, then `0008_phase6.sql`. The earlier schema-only candidate used PR87's `0006_phase4.sql` and called Phase 6 `0007_phase6.sql`; that predecessor and numbering are historical, not the current production sequence. See `phase6-production-schema-integration.md` for provenance and hashes.
 
-Production 0007 contains the entire canonical Phase 6 DDL from `docs/spec/02-data-model.md` plus the partial unique index enforcing one panel repository. Fresh and prefix-0005/0006 upgrade tests exercise ordinary Store.Open. The retained testdata is a historical contract reference, not a runtime installer.
+Migration 0008 contains the entire canonical Phase 6 DDL from `docs/spec/02-data-model.md` plus the partial unique index enforcing one panel repository. Fresh and prefix-0005/0006 upgrade tests exercise ordinary Store.Open. The retained testdata is a historical contract reference, not a runtime installer.
 
 Canonical section 02 places `webhook_deliveries` in Phase 6 even though Phase 8 owns the deploy-hook replay consumer. Reserve creation here and coordinate with the Phase 8 owner before activation. Phase 8 must reuse this table, not create a second replay seen-set or duplicate migration. This is a documented ownership handoff, not a claim that the Phase 8 owner has acknowledged it. Firewall confirmation uses canonical `pending_id`, with no extra nonce column or argument.
 
@@ -57,7 +57,7 @@ The confined journal uses a stable flock inode, bounded canonical metadata, file
 
 The new helper command only inspects signed sealed memfds and a versioned installation. Production signing trust stays unset, service units are unchanged, and apply/recovery activation stays unsupported. Scratch child-survival and post-switch kill tests exercise existing offline apply with fake runners, not the prepare command or real systemd cgroup survival. Independent helper probes are test-only overlays with no implementation replacements.
 
-Final candidate gates run after this documentation commit. Evidence is external at `/root/.hermes/cache/scratch/phase6-journal-helper-review/` and must be tied to the resulting full SHA. No retrospective test-first claim is made for saved commits. No Phase 4/7 paths or production migrations are added; `0007` stays testdata behind the absent production `0006`. Passing these gates does not complete Phase 6 and does not authorize merge.
+Historical candidate state (superseded by the production schema stack above): Final candidate gates run after this documentation commit. Evidence is external at `/root/.hermes/cache/scratch/phase6-journal-helper-review/` and must be tied to the resulting full SHA. No retrospective test-first claim is made for saved commits. No Phase 4/7 paths or production migrations are added; `0007` stays testdata behind the absent production `0006`. Passing these gates does not complete Phase 6 and does not authorize merge.
 
 ## Journal confirmation fault correction
 
@@ -65,7 +65,7 @@ The fixed journal source `647139e8a7eeeed3b9459ffd00a8b72023ef8d49` is carried u
 
 Confirmation now publishes recoverable `confirming` preparation before the terminal `confirmed` record. Cancellation before publication leaves the armed record and timer untouched. A directory-sync failure during preparation permits restoration after reopen. Errors after confirmed rename carry `ErrConfirmationCommitted`, and readers must successfully sync that visible commit before suppressing restoration or projecting it. These are confined file-journal guarantees, not production firewall confirmation support or power-loss acceptance.
 
-All final-head gates run after this documentation commit. Evidence belongs outside the tree at `/root/.hermes/cache/scratch/phase6-journal-fixed-evidence/`. Independent review remains pending until its separate result is received; passing local gates alone does not authorize publication or merge. Public firewall apply/confirmation and updater apply remain unsupported, the production update trust anchor remains unset, and production migration `0007` remains deferred behind absent `0006`.
+Historical candidate state (superseded by the production schema stack above): All final-head gates run after this documentation commit. Evidence belongs outside the tree at `/root/.hermes/cache/scratch/phase6-journal-fixed-evidence/`. Independent review remains pending until its separate result is received; passing local gates alone does not authorize publication or merge. Public firewall apply/confirmation and updater apply remain unsupported, the production update trust anchor remains unset, and production migration `0007` remains deferred behind absent `0006`.
 
 ## Verification
 
