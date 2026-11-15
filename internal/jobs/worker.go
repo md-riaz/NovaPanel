@@ -242,6 +242,11 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 }
 
 func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP bool) error {
+	ctx, release, err := q.AdmitMutation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	attemptCtx := ctx
 	q.mu.Lock()
 	deadline := q.attemptDeadline
@@ -253,14 +258,11 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 			defer cancel()
 		}
 	}
-	ctx = attemptCtx
-	ctx, release, err := q.AdmitMutation(ctx)
-	if err != nil {
-		return err
-	}
-	defer release()
-	unlock, keyErr := q.lockJob(ctx, j)
+	unlock, keyErr := q.lockJob(attemptCtx, j)
 	if keyErr != nil {
+		if errors.Is(keyErr, context.DeadlineExceeded) && ctx.Err() == nil {
+			return nil
+		}
 		var coded *rpcerr.CodedError
 		if errors.As(keyErr, &coded) && coded.Code == "unsupported" {
 			if err := q.healthy(); err != nil {
@@ -338,7 +340,7 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 		return ErrRecoveryBlocked
 	}
 	if err == nil {
-		workerCtx, cancel := context.WithCancel(WithMetadata(ctx, metadata(j)))
+		workerCtx, cancel := context.WithCancel(WithMetadata(attemptCtx, metadata(j)))
 		lease := &configWorkerLease{queue: q, job: j.ID, cancel: cancel, restoreExpiredPHP: restoreExpiredPHP}
 		lease.ctx = context.WithValue(workerCtx, configWorkerKey{}, lease)
 		lease.active.Store(true)
