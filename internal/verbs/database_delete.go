@@ -12,6 +12,8 @@ import (
 	"novapanel/internal/store"
 )
 
+type databaseTeardownRuntime struct{ agent *agent.Agent }
+
 type databaseDeleteJob struct {
 	DBID   string  `json:"db_id"`
 	Name   string  `json:"name"`
@@ -42,7 +44,7 @@ func databaseDelete(ctx context.Context, a *agent.Agent, args any) (any, error) 
 }
 func databaseDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error) {
 	if op, e := a.Store.LoadOperation(ctx, j.ID); e == nil {
-		return databaseDeleteDurable(ctx, a, j, op)
+		return (databaseTeardownRuntime{a}).databaseDeleteDurable(ctx, j, op)
 	} else if !errors.Is(e, sql.ErrNoRows) {
 		return e
 	}
@@ -153,7 +155,8 @@ func databaseDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err e
 	return nil
 }
 
-func databaseDeleteDurable(ctx context.Context, a *agent.Agent, j *jobs.Job, op store.Operation) error {
+func (r databaseTeardownRuntime) databaseDeleteDurable(ctx context.Context, j *jobs.Job, op store.Operation) error {
+	a := r.agent
 	if op.Kind != store.DatabaseDelete || op.DatabaseID == "" || j.ObjectKey != "db:"+op.DatabaseID {
 		return rpc.Errf("precondition_failed", "Invalid deletion journal")
 	}

@@ -64,7 +64,7 @@ func dbuserDelete(ctx context.Context, a *agent.Agent, args any) (any, error) {
 }
 func dbuserDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error) {
 	if op, e := a.Store.LoadOperation(ctx, j.ID); e == nil {
-		return dbuserDeleteDurable(ctx, a, j, op)
+		return (databaseTeardownRuntime{a}).dbuserDeleteDurable(ctx, j, op)
 	} else if !errors.Is(e, sql.ErrNoRows) {
 		return e
 	}
@@ -143,7 +143,8 @@ func dbuserDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err err
 	return nil
 }
 
-func dbuserDeleteDurable(ctx context.Context, a *agent.Agent, j *jobs.Job, op store.Operation) error {
+func (r databaseTeardownRuntime) dbuserDeleteDurable(ctx context.Context, j *jobs.Job, op store.Operation) error {
+	a := r.agent
 	if op.Kind != store.DBUserDelete || op.DatabaseID == "" || j.ObjectKey != "db:"+op.DatabaseID {
 		return rpc.Errf("precondition_failed", "Invalid deletion journal")
 	}
