@@ -40,6 +40,14 @@ func (r *accountRunner) Run(ctx context.Context, prog string, args []string, opt
 
 type siteRunner struct{ calls int }
 
+// phpUnavailableRunner makes the php8.3 CLI probe fail, so site.create's
+// php-type precondition is independent of the host's installed PHP.
+type phpUnavailableRunner struct{}
+
+func (phpUnavailableRunner) Run(context.Context, string, []string, runner.RunOpts) ([]byte, []byte, int, error) {
+	return nil, nil, 1, nil
+}
+
 func (r *siteRunner) Run(context.Context, string, []string, runner.RunOpts) ([]byte, []byte, int, error) {
 	r.calls++
 	return nil, nil, 0, nil
@@ -65,6 +73,7 @@ func TestQueuedSiteCreate(t *testing.T) {
 			a.Audit = log
 			a.Cfg.SitesRoot = filepath.Join(root, "sites")
 			a.Cfg.ACMEWebroot = filepath.Join(root, "acme")
+			a.Exec = phpUnavailableRunner{}
 			for _, p := range []string{a.Cfg.SitesRoot, a.Cfg.ACMEWebroot, filepath.Join(root, "nginx", "sites-available"), filepath.Join(root, "nginx", "sites-enabled")} {
 				if e = os.MkdirAll(p, 0755); e != nil {
 					t.Fatal(e)
