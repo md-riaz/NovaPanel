@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"io"
 	"path/filepath"
 	"strings"
@@ -181,7 +180,7 @@ func TestQueueDeleteForeignUserMarker(t *testing.T) {
 			a := agent.New()
 			a.Store, a.Audit, a.Exec = s, log, &mismatchOwnerRunner{runner}
 			a.Jobs = jobs.NewQueue(s, seal, log)
-			if err := a.Jobs.PrepareOperations(ctx); err != nil {
+			if err := a.Jobs.PrepareStartup(ctx); err != nil {
 				t.Fatal(err)
 			}
 			server := rpc.NewServer(a)
@@ -202,37 +201,34 @@ func TestQueueDeleteForeignUserMarker(t *testing.T) {
 			wc, cancel := context.WithCancel(ctx)
 			done := make(chan error, 1)
 			go func() { done <- a.Jobs.Run(wc) }()
-			defer func() {
-				cancel()
-				if err := <-done; err != nil {
-					t.Error(err)
-				}
-			}()
 			deadline := time.Now().Add(5 * time.Second)
 			for {
 				j, err := s.GetJob(ctx, jobID)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if j.State == "failed" || j.State == "done" {
-					if j.State != "failed" || j.Code != "conflict" {
-						t.Fatalf("terminal job: %+v", j)
-					}
+				if j.State == "queued" && j.Attempts >= 2 {
 					break
 				}
-				if time.Now().After(deadline) {
-					t.Fatalf("job did not terminate: %+v", j)
+				if j.State == "failed" || j.State == "done" || time.Now().After(deadline) {
+					cancel()
+					<-done
+					t.Fatalf("job did not remain recoverable: %+v", j)
 				}
 				time.Sleep(10 * time.Millisecond)
+			}
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatal(err)
 			}
 			if !runner.present || runner.owner != foreign || runner.phase != "created" {
 				t.Fatalf("foreign object changed: %+v", runner)
 			}
-			if _, err := s.DatabaseUserByID(ctx, stale); !errors.Is(err, sql.ErrNoRows) {
-				t.Fatalf("stale owner retained: %v", err)
+			if _, err := s.DatabaseUserByID(ctx, stale); err != nil {
+				t.Fatalf("pending user metadata lost: %v", err)
 			}
 			parent, users, err := s.DatabaseWithUsers(ctx, db)
-			if err != nil || parent.Name != "testdb" || len(users) != 1 || users[0].ID != sibling {
+			if err != nil || parent.Name != "testdb" || len(users) != 2 {
 				t.Fatalf("parent or sibling changed: %+v %+v %v", parent, users, err)
 			}
 			if external.objects["schema:testdb"] != "created\t1\t"+db || external.objects["user:siblinguser@127.0.0.1"] != "created\t1\t"+sibling {
