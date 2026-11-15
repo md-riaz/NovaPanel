@@ -87,7 +87,7 @@ func TestDirectMutationExcludesRecoveryAndFailedRecoveryClosesAdmission(t *testi
 	}
 	a.Jobs = q2
 	r := s.Dispatch(context.Background(), Request{Verb: "test", Args: []byte(`{}`)})
-	if r.OK || r.Code != "agent_error" || effects.Load() != 1 {
+	if r.OK || r.Code != "precondition_failed" || effects.Load() != 1 {
 		t.Fatalf("failed recovery reply=%+v handler calls=%d", r, effects.Load())
 	}
 }

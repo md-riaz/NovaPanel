@@ -336,6 +336,9 @@ func errorReply(err error) Reply {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return Err("deadline_exceeded", "Deadline exceeded")
 	}
+	if errors.Is(err, jobs.ErrRecoveryBlocked) {
+		return Err("precondition_failed", "Startup recovery unresolved")
+	}
 	var ce *CodedError
 	if errors.As(err, &ce) && validCode(ce.Code) {
 		r := Err(ce.Code, ce.Msg)
