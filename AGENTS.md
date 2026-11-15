@@ -156,3 +156,12 @@ was written about. From here:
 - **Ship bar.** A step is **done** when its verbs work and its Verification gate (incl. the F7
   crash-replay at the enumerated stops) is green — that is *ship*, not a prompt to hunt the next
   sub-window. Power-loss/VM acceptance stays deferred (#90).
+
+---
+
+## Migration numbering is late-bound
+
+New schema arrives as the **next-free `NNNN_*.sql`, assigned at merge/reconciliation**, and specs describe
+it **by content**, not by number. Shipped migrations are **frozen**; `hashes.json` is **append-only**;
+**never reserve a migration number during development** (parallel branches collide on it). The migration
+map lives in `docs/spec/02-data-model.md`.

@@ -167,7 +167,7 @@ post-reload request probe is the real safety net.
   `Run` persists `status='creating'`; the worker flips it to `active` on success or **`failed`** on
   error (a `failed` site is retry-able via `site.create` ensure-semantics or removable via `site.delete`);
   `site.delete` sets `deleting`. `site.list`/`get` return `status` (already in the 03 shape).
-- **Lock keys** per F6: `site.create` → `site:<name>`; all other site/domain/redirect/ssl verbs →
+- **Lock keys** per F6: `site.create` **and** `site.delete` → `site:<name>`; all other site/domain/redirect/ssl verbs →
   `site:<site_id>` resolved before enqueue.
 - **`ssl.upload` key handling** per F6 "secret job input": the agent **seals `cert_pem`+`key_pem` before
   the job row is written**; `args_json` holds only the sealed blob; plaintext never lands in
@@ -257,3 +257,13 @@ post-reload request probe is the real safety net.
   first issuance and burns the 5-failures/hour limit. Test against **staging** first.
 - Pin the lego major version here before coding; the FPM pool itself is Phase 4 (this phase renders
   the `fastcgi_pass` to the expected socket path).
+
+### Handoff owed from #124 (tracked follow-up — not necessarily a Phase-3 DoD gate)
+- `ssl.issue` / `ssl.renew` **ensure-create** the root-owned `/var/www/acme/<site>` (idempotent `mkdir`,
+  `root:root 0755`) before the ACME webroot client runs; `site.create` does not create it.
+- A durable **site-ULID `.novapanel-owner` marker** inside that tree is **owed** (name/path alone does not
+  prove ownership — the slug is reusable). Keyed on the ULID, with the same create/replay/retain/purge shape
+  as the OS user (00 §Panel-owned OS-user provenance).
+- `site.delete` teardown removes the ACME tree **only on proven ownership** (matching marker, or empty/our own
+  challenge files); an ambiguous non-empty tree is **retained and surfaced to the operator**, never `rm`-by-name.
+- Phase 4 Step 2 never creates, deletes or adopts this tree (see `phase-4.md`).

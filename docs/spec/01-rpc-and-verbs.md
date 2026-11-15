@@ -39,14 +39,14 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 | `service.restart` | | A | | system:write | ✓ | ✓ | | `service:<unit>` |
 | `site.list` / `site.get` | | RO | ✓ | sites:read | | | | |
 | `site.create` | | A | | sites:write | ✓ | | | `site:<name>`+`osuser:<username>` (F20.7 order; per-site OS user) |
-| `site.update` | | A | | sites:write | ✓ | | | `site:<name>` |
-| `site.delete` | | A | | sites:write | ✓ | | ✓ | `site:<name>`+`osuser:<username>` (ensure-absent; F20.7 order) |
-| `domain.add` / `domain.remove` | | A | | sites:write | ✓ | | | `site:<name>` |
-| `ssl.issue` / `ssl.renew` | | A | | sites:write | ✓ | ✓ | | `site:<name>` (ACME, rate-limited) |
-| `ssl.upload` | | A | | sites:write | ✓ | | ✓ | `site:<name>` — install a user-supplied cert+key (manual) |
-| `ssl.auto_set` | | A | | sites:write | | | | `site:<name>` — turn Let's Encrypt auto-renew on/off |
+| `site.update` | | A | | sites:write | ✓ | | | `site:<site_id>` |
+| `site.delete` | | A | | sites:write | ✓ | | ✓ | `site:<name>`+`osuser:<username>` (ensure-absent; F20.7 order); refuses `precondition_failed` while any `databases.site_id` references the site (no cascade flag; `purge_files` controls user/home/docroot only) |
+| `domain.add` / `domain.remove` | | A | | sites:write | ✓ | | | `site:<site_id>` |
+| `ssl.issue` / `ssl.renew` | | A | | sites:write | ✓ | ✓ | | `site:<site_id>` (ACME, rate-limited) |
+| `ssl.upload` | | A | | sites:write | ✓ | | ✓ | `site:<site_id>` — install a user-supplied cert+key (manual) |
+| `ssl.auto_set` | | A | | sites:write | | | | `site:<site_id>` — turn Let's Encrypt auto-renew on/off |
 | `ssl.status` | | RO | ✓ | sites:read | | | | |
-| `php.set` | | A | | sites:write | ✓ | | | `site:<name>` |
+| `php.set` | | A | | sites:write | ✓ | | | `site:<site_id>` |
 | `php.list` | | RO | ✓ | sites:read | | | | |
 | `redirect.add` / `redirect.remove` | | A | | sites:write | ✓ | | | `site:<site_id>` |
 | `database.create` | | A | | databases:write | ✓ | | | `site:<site_id>`(if bound)+`db:<db_id>`+`dbuser:<username>` (F20.7; show-once pw via claim) |
@@ -57,12 +57,12 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 | `dbuser.list` | | RO | ✓ | databases:read | | | | lists secondary usernames for a `db_id` (non-secret identity; no password) |
 | `files.list` / `files.read` | | A | | sites:read | | | | rooted at docroot, not home (B-D10) |
 | `files.write`/`mkdir`/`move`/`delete`/`chmod` | | A | | sites:write | | | | runs as site user |
-| `files.upload`/`archive`/`extract` | | A | | sites:write | ✓ | | | `site:<name>` (chunked/large) |
+| `files.upload`/`archive`/`extract` | | A | | sites:write | ✓ | | | `site:<site_id>` (chunked/large) |
 | `deploy.configure` | | A | | deploy | | | | per-site deploy key |
-| `deploy.run` | | A | | deploy | ✓ | | | `site:<name>` (pinned SHA) |
-| `deploy.rollback` | | A | | deploy | ✓ | | | `site:<name>` |
+| `deploy.run` | | A | | deploy | ✓ | | | `site:<site_id>` (pinned SHA) |
+| `deploy.rollback` | | A | | deploy | ✓ | | | `site:<site_id>` |
 | `deploy.status` / `deploy.history` | | RO | ✓ | deploy | | | | |
-| `cron.create`/`delete`/`enable`/`disable` | | A | | sites:write | ✓ | | | `site:<name>` |
+| `cron.create`/`delete`/`enable`/`disable` | | A | | sites:write | ✓ | | | `site:<site_id>` |
 | `cron.list` | | RO | ✓ | sites:read | | | | |
 | `log.tail` | | A | | sites:read | | | | allowlisted targets only |
 | `sshkey.add` / `sshkey.remove` | | A | | ssh:write | | | ✓ | public keys only |
@@ -71,7 +71,7 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 | `backup.create` | | A | | backups:write | ✓ | ✓ | | `backup:<repo>` |
 | `backup.list` | | RO | ✓ | backups:read | | | | |
 | `backup.verify` | | A | | backups:read | ✓ | | | `backup:<repo>` |
-| `backup.restore` | | A | | **backups:restore** | ✓ | ✓ | ✓ | `db:<name>` or `site:<name>` per target (excluded scope) |
+| `backup.restore` | | A | | **backups:restore** | ✓ | ✓ | ✓ | `site:<site_id>` or `db:<db_id>` per target, resolved from `backups.target_ref` before enqueue (excluded scope) |
 | `firewall.status` | | A | ✓ | system:read | | | | |
 | `firewall.apply` | | A | | **firewall:write** | ✓ | ✓ | ✓ | `firewall` (excluded scope, armed revert) |
 | `firewall.confirm` / `firewall.revert` | | A | | firewall:write | | | ✓ | cancels/fires the deadman (automation can confirm) |
@@ -103,7 +103,6 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 | `schedule.list`/`set`/`enable`/`disable` | | A | list:✓ | system:read/write | | | | drives F18 |
 | `ols.status` | | A | ✓ | system:read | | | | module (Phase 9, private per-site backend) |
 | `ols.enable`/`ols.disable` | | O | | — | ✓ | ✓ | ✓ | site-scoped, auto-rollback |
-| `firewall.apply` confirm flow → `firewall.confirm`/`revert` | | A | | **firewall:write** | | | ✓ | now token-reachable so automation can confirm |
 
 **Internal** (not web/registry-reachable in the public scope map, called by `panel-web` handlers over
 the socket from a **uid-authenticated** peer, i.e. the web uid, with an internal verb flag — not a
@@ -115,7 +114,7 @@ role** where its phase assigns one: `deploy.hook_create`/`list`/`delete` require
 be **≥ admin** (phase-8) on top of the web-peer gate; `tokens.verify` and `deploy.hook` are pure
 peer-gated plumbing (no user session).
 
-**HTTP status for the pass-2 codes:** `interrupted` → 409; `unsupported` → 501.
+**HTTP status:** every code's HTTP status is the `HTTP` column of the F3 catalog in 00 (e.g. `interrupted` → 409, `unsupported` → 501, `precondition_failed` → 412).
 
 **Excluded scopes** (`backups:restore`, `firewall:write`, `ssh:write`, `tokens:write`,
 `system:power`) are never on an ordinary token; they require a user+MFA session or an automation-grant

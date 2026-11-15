@@ -68,7 +68,7 @@ Phases 1–4 (jobs, sites, DB). Reads: `00-foundations.md` F6, F7, F10, F11, F12
 ### UFW safe-apply (the deadman — reference)
 ```
 1. snapshot: capture `iptables-save`/`ip6tables-save` (stdout → file via exec, not shell `>`) + `ufw status numbered`
-2. dry-run:  `firewall.apply{rules:[{action,proto,port,source?,comment?}], default_incoming?, window_min?}`
+2. dry-run:  `firewall.apply{rules:[{action,proto,port,source?,comment?}], window_min?}` (canonical `03:164`; the earlier `default_incoming?` field is **not canonical** and is dropped)
       is a **full desired set** (not a delta): the agent computes the target ruleset, renders the ufw
       commands, `ufw --dry-run` each, and asserts the pinned SSH allow is present and ordered first.
       Every field is validated (`validate.Port`/`validate.CIDR`, F9); **raw ufw strings are refused**.
@@ -83,7 +83,12 @@ Phases 1–4 (jobs, sites, DB). Reads: `00-foundations.md` F6, F7, F10, F11, F12
 6. confirm:  cancel the revert (stop the transient unit / `atrm <id>`). No confirmation in N min → auto-revert fires.
 ```
 Model the admin/SSH allow as a **pinned invariant** the engine re-asserts (prepended) on every apply;
-it is never deletable or orderable below a deny. (CSF's `TESTING` cron-flush + pinning the SSH IP is
+it is never deletable or orderable below a deny.
+
+**Ruling — pinned-invariant set.** The full-desired-set apply always re-asserts the pinned set
+**{`ssh_port`, panel listen port, 80, 443}** (ports from `Cfg`; any rule set that omits one is completed with
+it, and a rule that would deny one is refused). **Phase-9 modules register extra pinned ports** through the
+module interface; Phase 6 itself pins only these four. (CSF's `TESTING` cron-flush + pinning the SSH IP is
 the canonical prior art.)
 
 ### Self-backup (reference)
@@ -130,6 +135,11 @@ recoverable out-of-band** — never store the only copy inside the repo they unl
   token) may `firewall.confirm`/`revert` the **single** armed pending — `firewall.apply` returns
   `conflict` if one is already armed, so there is never ambiguity about which; an unknown or expired
   `pending_id` → `not_found`; every confirm/revert is audited with its actor.
+
+> **OWED — scratch-DB provenance.** The restore scratch/old databases (`<db>__old`, `<db>__r<ts>`) are
+> two-store objects owed the F20 treatment: either **register them in `managed_objects`** or adopt a
+> **prefix + reconcile rule** (reconcile drops only objects matching the reserved prefix that no live restore
+> job references). **Ruled at build time**; do not leave scratch DBs unowned.
 
 **MariaDB restore swap (no RENAME DATABASE).** Steps: (1) take a **pre-restore safety dump** of the
 live DB to the panel repo first (so the current state is always recoverable); (2) create a **scratch

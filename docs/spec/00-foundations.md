@@ -113,23 +113,23 @@ whole string as `session`.
 Agents return one of these in `code`. Extend only by adding to this list (never reuse a retired
 string).
 
-| `code` | Meaning |
-|---|---|
-| `ok` | success (reply uses `ok:true`; `code` omitted on success) |
-| `unknown_verb` | verb not in the registry |
-| `bad_request` | args failed decode/shape |
-| `invalid_argument` | a value failed sink validation (name/path/url) |
-| `unauthenticated` | no/invalid session where one is required |
-| `forbidden` | session's role may not call this verb |
-| `not_found` | target object does not exist |
-| `conflict` | object exists / concurrent mutation on the same object |
-| `precondition_failed` | required prior state missing (e.g. no cert before force-HTTPS) |
-| `locked` | another job holds this object |
-| `deadline_exceeded` | handler/child exceeded the clamped deadline |
-| `agent_error` | internal failure (logged + audited; never leaks internals to web) |
-| `interrupted` | an effectful job was left running by a crash/restart and was not blindly re-run (F6) |
-| `unsupported` | feature is a deferred module / not enabled |
-| `rate_limited` | a throttle or quota was hit (an **agent-side** limiter, e.g. the ACME per-domain issuance cap); retry later |
+| `code` | HTTP | Meaning |
+|---|---|---|
+| `ok` | 200 / 202 (mutation accepted, +job) | success (reply uses `ok:true`; `code` omitted on success) |
+| `unknown_verb` | 404 | verb not in the registry |
+| `bad_request` | 400 | args failed decode/shape |
+| `invalid_argument` | 400 | a value failed sink validation (name/path/url) |
+| `unauthenticated` | 401 | no/invalid session where one is required |
+| `forbidden` | 403 | session's role may not call this verb |
+| `not_found` | 404 | target object does not exist |
+| `conflict` | 409 | object exists / concurrent mutation on the same object |
+| `precondition_failed` | 412 | required prior state missing (e.g. no cert before force-HTTPS) |
+| `locked` | 423 | another job holds this object |
+| `deadline_exceeded` | 504 | handler/child exceeded the clamped deadline |
+| `agent_error` | 500 (503 when the agent is unreachable: `agent_unavailable`) | internal failure (logged + audited; never leaks internals to web) |
+| `interrupted` | 409 | an effectful job was left running by a crash/restart and was not blindly re-run (F6) |
+| `unsupported` | 501 | feature is a deferred module / not enabled |
+| `rate_limited` | 429 (+`Retry-After`) | a throttle or quota was hit (an **agent-side** limiter, e.g. the ACME per-domain issuance cap); retry later |
 
 **Public-API superset.** Agent handlers return only the codes above. The HTTP/API layer (`panel-web`)
 may additionally surface codes for conditions where **no agent reply exists**: `agent_unavailable`
@@ -185,8 +185,8 @@ mfa_at}` where `kind ∈ {anon, user, token}`.
   GC uses strict `now > idle_deadline OR now > abs_deadline`: live and exact-boundary rows survive.
   Authentication separately rejects `now >= deadline`; retention must not weaken authentication.
   Do not log credentials or deleted session contents. Revocation remains a row delete.
-  **Migration slot:** main owns shipped 0001–0006 (`0005_sites.sql`, `0006_databases.sql`); the session
-  expiry indexes ship as `0007_session_expiry_indexes.sql` (head ruling). Do not edit shipped 0001–0006.
+  **Migrations:** shipped through 0007 — `0005_sites`, `0006_databases`, `0007_session_expiry_indexes`;
+  later phases append at merge (numbering is late-bound, see 02). Never edit a shipped migration.
 - **Login** (`session.login{user, password, totp?}`): agent verifies (Argon2id; TOTP if enrolled),
   **mints a new session id** (the anon one is deleted — this is the "rotate on login"), stores
   `kind=user`, sets `mfa_at = now` iff a TOTP/backup code was verified, returns the token. `panel-web`
@@ -274,12 +274,13 @@ job_events(id, job_id, ts, msg)            -- the streamed progress lines the AP
 state ∈ { queued, running, done, failed }
 object_key = the resource a job serializes on (see the site rule below)
 ```
-- **Site-scoped lock key (reconciles F6↔01).** `site.create` keys on **`site:<name>`** (ensure-absent
-  on the new name — the `site_id` does not exist yet); **every other** site-scoped verb keys on
-  **`site:<site_id>`** resolved from persisted state **before enqueue** (a `domain.*`/`redirect.*`/
-  `ssl.*` verb resolves its parent `site_id` first; `domain.remove`/`redirect.remove` look the parent up
-  by the child id). The `site:<name>` entries in 01 are shorthand for this rule. Other domains key on
-  their stable id likewise (`db:<name>`, `zone:<zone>`).
+- **Site-scoped lock key (reconciles F6↔01).** `site.create` **and** `site.delete` key on
+  **`site:<name>`** (create: ensure-absent on the new name — the `site_id` does not exist yet; delete:
+  ensure-absent on the name); **every other** site-scoped verb keys on **`site:<site_id>`** resolved from
+  persisted state **before enqueue** (a `domain.*`/`redirect.*`/`ssl.*` verb resolves its parent `site_id`
+  first; `domain.remove`/`redirect.remove` look the parent up by the child id). `backup.restore` resolves
+  its `site:<site_id>` / `db:<db_id>` key from `backups.target_ref` before enqueue. Other domains key on
+  their stable id likewise (`db:<db_id>`, `zone:<zone>`).
 - `result_json` holds the **non-secret** result (the created resource / a link). A **show-once
   secret** (a generated DB or admin password) is **never** written to `result_json`, the row, or
   audit — it is delivered once via a sealed one-shot: the enqueue reply carries a `claim` token and
@@ -442,14 +443,13 @@ Every mutating verb is written as *"make reality match this row,"* not *"do this
   verification failure fails closed and the operator reconciles, never auto-repair; lock/MariaDB waits are
   bounded (`deadline_exceeded`). See the Phase-4 bootstrap ruling. `DROP … IF EXISTS` stays correct for
   delete.
-  The **OS user / home / docroot** are two-store too (`/etc/passwd` + disk vs SQLite), but take a
-  **lighter** ownership proof: the single-VPS agent is root and owns the box, and `sites.name` is a
-  validated-unique 1:1 of the Unix username, so the **SQLite `sites` row is the provenance** (no on-disk
-  marker). The never-adopt rule still binds: on **first** create (a fresh `sites` row, not a replay) a
-  pre-existing user/home or non-empty docroot of that name is an **unmanaged collision → `conflict`**,
-  never a silent `useradd`-if-absent adopt; a **replay** (the `sites` row already `creating`, job
-  re-running) owns and resumes its own. `site.delete` removes the user/home as **its own `sites`-row
-  resource** (ensure-absent), never a name-only `userdel` of state it cannot show is ours.
+  The **OS user / home / docroot** are two-store too (`/etc/passwd` + disk vs SQLite). Ownership is the
+  account's GECOS marker **`novapanel-site=<ULID>`** (see §Panel-owned OS-user provenance), because the
+  slug is reusable across a delete+recreate: a replay proves ownership by **marker + site ULID**, not by
+  the `sites` row. The never-adopt rule still binds: on **first** create (a fresh `sites` row, not a
+  replay) a pre-existing user/home or non-empty docroot of that name is an **unmanaged collision →
+  `conflict`**, never a silent `useradd`-if-absent adopt. `site.delete` removes the user/home as **its own
+  marked resource** (ensure-absent), never a name-only `userdel` of state it cannot show is ours.
 - **Writes are temp + atomic rename** under a known, non-symlinked parent, `O_NOFOLLOW` under site
   homes. Never `chown -R` a site-influenced path.
 - **The crash-safety test (mandatory per slow verb):** run the verb twice against the same desired
@@ -496,25 +496,34 @@ revert           → on probe failure restore <target>.lkg + reload; return code
   **`novapanel-site=<ULID>`** (ULID is Crockford base32 — no separators); parse by the `novapanel-site=`
   prefix. The name proves nothing (a slug is reusable across a delete+recreate); the marker is the
   **obj_id-analogue**. **Never `userdel`/`usermod`-adopt on a name match.**
+  - **Definition of "live" (used throughout this section).** A **live `sites` row** = any row for that
+    name/ULID **in any state** (`creating`, `active`, `failed`, `deleting`). A **live job** = a
+    `queued`/`running` job referencing that site id/name.
   - **Authority to destroy/re-drive** = the `novapanel-site=` sentinel **plus** a matching site ULID. The
-    **owning `site.delete` job** (row legitimately `deleting`, live job) drives teardown by that marker
-    match — "no live row/job" is **not** required of it. The **"no live `sites` row and no live job"**
-    guard applies only to **reconcile adopting an orphan**, so reconcile never races the owning op.
-  - **Orphan home/log directory deletion — the marked ACCOUNT is the authority; a `sites` row is NOT
+    **owning `site.delete` job** (live `sites` row legitimately `deleting`, live job) drives teardown by
+    that marker match — "no live row/job" is **not** required of it. The **"no live `sites` row and no live
+    job"** guard applies only to **reconcile adopting an orphan**, so reconcile never races the owning op.
+  - **Orphan home/log directory evidence (future contract; automatic purge is deferred — issue #128, see
+    below) — the marked ACCOUNT is the authority; a `sites` row is NOT
     required** (it is absent by definition in an orphan sweep and corroborates only live/active ops). When no
     `sites` row exists, an orphan's per-site **home** (`/srv/sites/<name>`) and **log dir**
     (`/var/log/novapanel/<name>`) are proven panel-created — and so deletable — when **all** hold: (1) the
     owning account carries the **`novapanel-site=`** sentinel (never `novapanel-retained=`), with no live
-    `sites` row and no live job (the orphan definition); (2) the directory sits at the **canonical managed
-    path** for that account's name; (3) the directory **and every file under it** are owned by that account's
-    **UID/GID**. This composes with the create-time no-adopt invariant (first create fails `conflict` on a
+    `sites` row and no live job (the orphan definition above); (2) the directory sits at the **canonical
+    managed path** for that account's name; (3) the directory **and every file under it** are owned by
+    that account's **UID** (owner **UID == account UID**; GID is not required), checked with **`lstat`**
+    (never following symlinks) and on the **same device**; the per-site log dir satisfies the UID check
+    because its owner is the site uid. This composes with the create-time no-adopt invariant (first create fails `conflict` on a
     foreign non-empty dir, so a marked account never acquires a foreign home), hence a marked account's
     canonical, UID-owned tree is panel-created **by construction** — the account marker is the durable
     obj_id the (now-absent) row would merely have corroborated. Purge contents-first, then `userdel`
     (UID-reuse guard). Any file under the tree owned by a **different** UID, a non-canonical path, an
     unreadable/absent marker, or an unparseable ULID → **ownership uncertain → retain + operator**, never
-    delete by name or path. The fail-closed skip is correct, not a bug — but with this evidence present,
-    automatic purge proceeds and converges.
+    delete by name or path. The fail-closed skip is correct, not a bug.
+  - **#128 deferral (current behavior).** The orphan sweep currently **retains and surfaces to the
+    operator**; automatic directory/account purge (`userdel`) is **deferred, tracked in issue #128**
+    (pending a UID non-reuse allocation scheme and process quiescence). The evidence, stamping and purge-order
+    rules in this section remain the **future contract** for that purge, not current automatic behavior.
   - A reserved-scheme name whose account lacks the sentinel, or carries a **different** site's ULID than
     the op, is **not proven this op's** → fail closed (`conflict`, operator/reconcile), never adopt or
     delete a foreign account.
@@ -527,7 +536,9 @@ revert           → on probe failure restore <target>.lkg + reload; return code
     `purge_files` is set. On **retain**, the files and OS user are kept **dormant** and the account's GECOS
     is rewritten to the retained sentinel **`novapanel-retained=<ULID>`**; reconcile sweeps only
     `novapanel-site=` accounts and **never** a `novapanel-retained=` one, so retained files never land on an
-    orphaned, reusable UID.
+    orphaned, reusable UID. A `novapanel-retained=` account is **terminal**: reconcile never sweeps it; it
+    is purged only by an explicit operator action / `site.purge` that **re-stamps it to
+    `novapanel-site=<ULID>` under the lock**, then follows the purge order above.
   - **Locking:** verbs that create/mutate/delete the per-site OS user hold the site key then
     `osuser:<username>` in that fixed order (F20.7). The site key is **`site:<name>`** for `site.create`
     (ensure-absent, the `site_id` not yet existing — F6 §Site-scoped lock key) and **`site:<site_id>`** for
@@ -705,11 +716,13 @@ type Verb struct {
 var Registry = map[string]Verb{} // populated by verb packages' init() (see F14)
 ```
 Every reachable verb is in `Registry`; the dispatcher reads the attributes before `Run`. The per-verb
-table is `01-rpc-and-verbs.md` (one **`Min` role** column = `anon`|`read_only`|`admin`|`owner`;
-`Public` ⇔ `Min=anon`). Resolving the review's contract gaps:
-- **Role semantics:** `Min` is the floor. `ReadOnly=true` additionally lets a `read_only` user call a
-  verb whose `Min` is higher (reads only). A `kind=token` session is gated by `Scope`, **not** by
-  `Min`. `anon` sessions may call only `Public` verbs.
+table is `01-rpc-and-verbs.md`, which carries separate **`Pub`** and **`Role`** columns (`Role` =
+`RO`|`A`|`O`, i.e. read_only|admin|owner; `Pub ✓` ⇔ callable by `anon`). **Internal/module verbs**
+(`tokens.verify`, `deploy.hook*`, `ols.*`, `module.*`) are flagged in 01's prose, not by a column.
+Resolving the review's contract gaps:
+- **Role semantics:** `Role` is the floor (`Pub` verbs need none). `ReadOnly=true` additionally lets a `read_only` user call a
+  verb whose `Role` is higher (reads only). A `kind=token` session is gated by `Scope`, **not** by
+  `Role`. `anon` sessions may call only `Pub` verbs.
 - **The caller reaches a handler via context**, not a parameter: the dispatcher puts a
   `Caller{Session, Actor, Role, Scopes, UserID, MFAat}` in `ctx`; handlers read `agent.CallerFrom(ctx)`
   (needed by `tokens.create`, `job.claim`, enqueue, audit). `Run`/`Exec` keep the `(ctx, *Agent, …)`

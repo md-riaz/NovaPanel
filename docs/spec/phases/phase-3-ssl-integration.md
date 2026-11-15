@@ -34,3 +34,13 @@ Tests use generated ephemeral certificates, fake runners, scratch nginx/TLS root
 - Existing site mutations continue to refuse installed TLS state rather than render HTTP-only over it. Intent checks stop lifecycle mutation before changing recovery bindings; full TLS-aware site editing is separate work.
 - Audit completion and terminal job publication remain the queue's existing protocol. The committed marker prevents repeat reload after a crash before terminal publication; duplicate completion audit rows remain possible after a crash between audit and terminal update.
 - Real nginx/systemd, VM acceptance and live CA requests remain unperformed. ACME, module dependencies and console changes belong to other workers.
+
+## Handoff owed from #124
+- `ssl.issue` / `ssl.renew` **ensure-create** the root-owned `/var/www/acme/<site>` (idempotent `mkdir`,
+  `root:root 0755`) before the ACME webroot client runs; `site.create` does not create it.
+- A durable **site-ULID `.novapanel-owner` marker** inside that tree is **owed** (name/path alone does not
+  prove ownership — the slug is reusable). Keyed on the ULID, with the same create/replay/retain/purge shape
+  as the OS user (00 §Panel-owned OS-user provenance).
+- `site.delete` teardown removes the ACME tree **only on proven ownership** (matching marker, or empty/our own
+  challenge files); an ambiguous non-empty tree is **retained and surfaced to the operator**, never `rm`-by-name.
+- Phase 4 Step 2 never creates, deletes or adopts this tree (see `phase-4.md`).

@@ -44,6 +44,8 @@ Phase 0. Reads: `00-foundations.md` F1, F5, F6, F7, F10, F11, F13.
    (job queue) to exercise F6.
    *(The `panel-web` rendering of `service.status` moves to Phase 2, once sessions exist.)*
 
+**Migration note.** `0002_schedule_authority` is part of Phase 1 (schedule authority; see 02).
+
 ## Blueprint
 - **`internal/store/store.go`** — `type Store`; `Open(path) (*Store, error)`; `migrate()`; typed
   methods per table added as phases need them. Jobs/events/settings methods complete now.

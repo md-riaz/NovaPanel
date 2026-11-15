@@ -9,6 +9,17 @@ unblocks **wildcard certs via DNS-01** (gated out of Phase 3).
 Phases 1–3 (jobs, auth, sites/TLS). Reads: `00-foundations.md` F6, F9, F10, F11, F12.
 
 ## Deliverables
+0. **`dns.record.*` is effectful, with a durable identity.** `dns.record.create/update/delete` are
+   **effectful** provider calls (a per-attempt timeout or crash recovers as `interrupted`; the provider
+   record is reconciled by `obj_id` before any re-issue — never a blind re-run). A new **`dns_records`**
+   table (SQLite) carries one row per managed record with an **`obj_id`** (the row ULID — the F20 identity,
+   never name/existence) as the provenance key; delete is `obj_id`-matched (never name-only), create is
+   reserve→create roll-forward, and a `dns.record.*` queued against a zone/integration being deleted
+   re-validates at execution (`dns_zones` is `ON DELETE CASCADE`). The registry flag in `01` (`Eff`) and the
+   `dns_records` DDL in `02` land in the **same change** that builds the verbs (registry and code must
+   agree). **DoD:** the `dns_records` row + `obj_id` provenance exists and `dns.record.*` is flagged
+   effectful. **Verification:** the F7 crash-replay at the enumerated stops (create/update/delete) makes
+   zero duplicate provider records and never deletes an object whose `obj_id` does not match.
 1. **`dns.Provider` interface** — one interface, provider implementations behind it; Cloudflare is the
    first and only v1 implementation.
 2. **Record CRUD** (`dns.record.create/update/delete/list`): A, AAAA, CNAME, TXT, MX — validated
@@ -30,8 +41,8 @@ Phases 1–3 (jobs, auth, sites/TLS). Reads: `00-foundations.md` F6, F9, F10, F1
   error; PresentTXT/CleanupTXT(fqdn, value) error }` (the last two back ACME DNS-01).
 - **`internal/dns/cloudflare/`** — implement `Provider` against the Cloudflare API (token auth; zone
   lookup; record CRUD; proxied flag only for web record types). Reuse lego's Cloudflare DNS provider
-  for the DNS-01 solver, or drive `PresentTXT`/`CleanupTXT` directly — head to pick; keep the token
-  path identical (sealed, agent-only).
+  for the DNS-01 solver (**decided: lego's Cloudflare provider**, see Resolved types & flows); keep the
+  token path identical (sealed, agent-only).
 - **`internal/verbs/dns.go`** — the `dns.*` verbs; the **proxy-toggle guard** rejects a proxied flag
   on any non-web record type with `code:"invalid_argument"`.
 - **ACME DNS-01 glue** — extend `ssl.issue` (Phase 3) so a wildcard domain routes through the
@@ -74,9 +85,12 @@ type Record struct {
   (`secrets` name `integration:<id>:token`) and records zones in `dns_zones`. The Cloudflare token
   must carry **Zone:Read + DNS:Edit + Cache Purge** on exactly the listed zones (least privilege but
   enough for the listed ops — the review's "DNS:Edit only" was too narrow). The agent does not mint
-  the token; it validates scope by a probe call and reports if insufficient.
+  the token; it validates scope by a **functional probe within the granted scope** and reports if
+  insufficient (attestation ruled on #65: the probe proves the token can do the listed ops, it does not
+  read back token metadata).
 - **`dns.verify(domain)`** = a public-resolver lookup that the domain resolves to this host's public
-  IP(s) (from config/detection); for a **proxied** record it instead confirms via the provider API
+  IP(s) (from config/detection — **OWED:** a `public_ip` config key in F16 is not yet defined; add it there when
+  `dns.verify` is built); for a **proxied** record it instead confirms via the provider API
   that the record exists and is proxied (a plain lookup would see Cloudflare IPs). Returns which check
   was used.
 - **`Purge(zone, []string)`** takes URLs (empty = purge-everything for the zone).
@@ -87,8 +101,8 @@ type Record struct {
   lego's Cloudflare DNS provider** (same pinned lego/v4) to avoid re-implementing propagation waits.
 
 ## External refs (gathered by the head)
-- Cloudflare API: token auth (scoped to a zone, least privilege — `DNS:Edit` on the one zone, not a
-  global key); record objects carry a `proxied` boolean valid only for A/AAAA/CNAME; MX/TXT are never
+- Cloudflare API: token auth (scoped to the listed zones, least privilege — **Zone:Read + DNS:Edit +
+  Cache Purge** on exactly those zones, not a global key); record objects carry a `proxied` boolean valid only for A/AAAA/CNAME; MX/TXT are never
   proxied. (Implementer confirms the current API version + the Go client/`lego` Cloudflare provider
   signatures against docs when coding.)
 - DNS-01: the challenge is a TXT record at `_acme-challenge.<domain>` with the key-authorization
@@ -122,7 +136,7 @@ type Record struct {
 
 ## Guardrails (this phase)
 - **Never proxy mail/auth records.** The proxy toggle is server-gated to web record types.
-- **The provider token is least-privilege (one zone, DNS edit) and sealed** — never a global API key,
+- **The provider token is least-privilege (Zone:Read + DNS:Edit + Cache Purge on the listed zones) and sealed** — never a global API key,
   never in the web tier.
 - **Wildcards only via DNS-01;** HTTP-01 stays default for non-wildcard (Phase 3).
 - One provider interface — do not special-case Cloudflare logic outside its implementation package.

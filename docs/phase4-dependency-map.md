@@ -1,5 +1,10 @@
 # Phase 4 bounded dependency map
 
+> **SUPERSEDED — see [phase-4.md](spec/phases/phase-4.md) (per-step status).** The 0750/0751 home-mode
+> conflict is resolved (home `0751`, docroot `site:www-data 2750`) and the Phase 4 split is merged
+> (Step 1 MariaDB #109, Step 2 PHP #129; Step 3 WordPress pending). Kept for historical context only; do not
+> plan from this file.
+
 Planning only. Do not implement this map until Phase 3 is review-ready and the
 next implementation scope is authorized. The controlling contract is
 [Phase 4](spec/phases/phase-4.md), with foundations F6–F12 and F15.
