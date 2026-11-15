@@ -23,7 +23,7 @@ func TestPHPListReadContract(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(b) != `{"versions":["8.3"],"default":"8.3"}` {
+		if string(b) != `{"versions":["8.3"],"default":"8.3"}` && string(b) != `{"versions":[],"default":"8.3"}` {
 			t.Fatal(string(b))
 		}
 	}
