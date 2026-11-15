@@ -128,6 +128,9 @@ func checkSiteDelete(ctx context.Context, tx *sql.Tx, op Operation) error {
 		}
 		return e
 	}
+	if !op.Identity.PurgeDatabases && len(current.Attached) != 0 {
+		return ErrSitePrecondition
+	}
 	if TeardownStarted(op) && current.Site.Status == "deleting" {
 		current.Site.Status = op.Identity.Site.Status
 		current.Site.Updated = op.Identity.Site.Updated

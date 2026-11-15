@@ -47,9 +47,6 @@ func TestSiteDeleteDatabaseCreateOrders(t *testing.T) {
 			a.Audit = l
 			a.Secret = seal
 			a.Jobs = jobs.NewQueue(s, seal, l)
-			if err := a.Jobs.PrepareOperations(ctx); err != nil {
-				t.Fatal(err)
-			}
 			a.Cfg.SitesRoot = filepath.Join(root, "sites")
 			a.Cfg.TLSDir = filepath.Join(root, "tls")
 			for _, d := range []string{"sites-available", "sites-enabled"} {
@@ -74,6 +71,9 @@ func TestSiteDeleteDatabaseCreateOrders(t *testing.T) {
 			}
 			server := rpc.NewServer(a)
 			server.ConfigureJobs()
+			if err := a.Jobs.PrepareStartup(ctx); err != nil {
+				t.Fatal(err)
+			}
 			call := func(verb string) jobs.EnqueueResult {
 				t.Helper()
 				b, _ := json.Marshal(map[string]string{"site_id": sid})
