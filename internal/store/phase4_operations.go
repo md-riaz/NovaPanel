@@ -64,25 +64,32 @@ type Operation struct {
 }
 
 func (o Operation) Keys() []string {
-	if o.Kind == PHPSet {
-		return []string{"site:" + o.SiteID}
-	}
-	if o.Kind == WordPressInstall {
-		return OrderedOperationKeys([]string{"site:" + o.SiteID, "site:" + o.Identity.WordPress.Input.SiteName, "db:" + o.DatabaseID, "db:" + o.Identity.Database.Name, "domain:" + o.Identity.WordPress.DomainID, "domain:" + o.Identity.WordPress.Input.PrimaryDomain})
-	}
-	if o.Kind == SiteDelete {
-		keys := []string{"site:" + o.SiteID}
-		for _, db := range o.Identity.Attached {
-			keys = append(keys, "db:"+db.Database.ID)
-		}
-		return OrderedOperationKeys(keys)
-	}
-	keys := []string{"db:" + o.DatabaseID}
+	keys := []string{}
 	if o.SiteID != "" {
 		keys = append(keys, "site:"+o.SiteID)
 	}
-	if o.Kind == DatabaseCreate {
-		keys = append(keys, "db:"+o.Identity.Database.Name)
+	if o.Identity.Site != nil && o.Identity.Site.Name != "" {
+		keys = append(keys, "site:"+o.Identity.Site.Name, "osuser:"+o.Identity.Site.Name)
+	}
+	if o.DatabaseID != "" {
+		keys = append(keys, "db:"+o.DatabaseID)
+	}
+	if o.Identity.Database.Name != "" {
+		keys = append(keys, "dbname:"+o.Identity.Database.Name)
+	}
+	for _, account := range o.Identity.Accounts {
+		if account.Username != "" {
+			keys = append(keys, "dbuser:"+account.Username)
+		}
+	}
+	for _, db := range o.Identity.Attached {
+		keys = append(keys, "db:"+db.Database.ID, "dbname:"+db.Database.Name)
+		for _, account := range db.Accounts {
+			keys = append(keys, "dbuser:"+account.Username)
+		}
+	}
+	if o.Kind == WordPressInstall && o.Identity.WordPress != nil {
+		keys = append(keys, "site:"+o.Identity.WordPress.Input.SiteName, "osuser:"+o.Identity.WordPress.Input.SiteName, "domain:"+o.Identity.WordPress.DomainID, "domain:"+o.Identity.WordPress.Input.PrimaryDomain)
 	}
 	return OrderedOperationKeys(keys)
 }
