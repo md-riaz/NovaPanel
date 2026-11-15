@@ -256,8 +256,14 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 	}
 	for {
 		worked, err := q.executeEligible(waitCtx, j)
-		if err != nil || worked {
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+				return nil
+			}
 			return err
+		}
+		if worked {
+			return nil
 		}
 		select {
 		case <-waitCtx.Done():
