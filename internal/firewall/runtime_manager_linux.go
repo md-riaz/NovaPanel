@@ -16,7 +16,6 @@ import (
 
 	"golang.org/x/sys/unix"
 	execpkg "novapanel/internal/exec"
-	"novapanel/internal/platform"
 )
 
 const managerLimit = 256 << 10
@@ -302,7 +301,7 @@ func (m runtimeManager) call(ctx context.Context, path, iface, method, sig strin
 		a = append(a, sig)
 		a = append(a, args...)
 	}
-	b, e := m.run(ctx, platform.Busctl, a...)
+	b, e := m.run(ctx, execpkg.Busctl, a...)
 	if e != nil {
 		return nil, e
 	}
@@ -619,7 +618,7 @@ func (m runtimeManager) ensure(ctx context.Context, r JournalRecord) error {
 		}
 		a = append(a, "--", "/usr/sbin/novapanel-agent", "fw-revert", productionFirewallRoot+"/snapshots/"+r.ID)
 		// Failure has ambiguous external effects. Readback, never rollback, decides.
-		_, _ = m.run(ctx, platform.SystemdRun, a...)
+		_, _ = m.run(ctx, execpkg.SystemdRun, a...)
 	} else {
 		if e = verifyService(service, r); e != nil {
 			return e
@@ -630,7 +629,7 @@ func (m runtimeManager) ensure(ctx context.Context, r JournalRecord) error {
 					return e
 				}
 			}
-			if _, e = m.run(ctx, platform.Systemctl, "--system", "start", "--no-block", r.Unit+".service"); e != nil {
+			if _, e = m.run(ctx, execpkg.Systemctl, "--system", "start", "--no-block", r.Unit+".service"); e != nil {
 				return e
 			}
 			future = false
@@ -681,7 +680,7 @@ func (m runtimeManager) stop(ctx context.Context, stem string) error {
 	if !validJournal(r) {
 		return errManager
 	}
-	if _, e := m.run(ctx, platform.Systemctl, "--system", "stop", stem+".timer"); e != nil {
+	if _, e := m.run(ctx, execpkg.Systemctl, "--system", "stop", stem+".timer"); e != nil {
 		return e
 	}
 	p, e := m.query(ctx, stem+".timer")

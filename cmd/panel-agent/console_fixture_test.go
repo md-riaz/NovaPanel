@@ -45,8 +45,8 @@ func configureConsoleFixture(t *testing.T, a *agent.Agent) {
 	// OpenState must provision TLSDir, not this browser fixture.
 	r := consoleRunner{sites: a.Cfg.SitesRoot}
 	a.Exec = r
-	a.ProvisionSite = func(ctx context.Context, name string) error {
-		return platform.EnsureSite(ctx, r, a.Cfg.SitesRoot, a.Cfg.ACMEWebroot, name)
+	a.ProvisionSite = func(ctx context.Context, name, siteID string) error {
+		return platform.EnsureSite(ctx, r, a.Cfg.SitesRoot, a.Cfg.ACMEWebroot, a.Cfg.LogDir, name, siteID)
 	}
 	ng := filepath.Join(root, "nginx")
 	for _, path := range []string{a.Cfg.SitesRoot, a.Cfg.ACMEWebroot, filepath.Join(ng, "sites-available"), filepath.Join(ng, "sites-enabled")} {

@@ -1,9 +1,11 @@
 // Package platform centralizes Ubuntu 24.04 command paths and managed units.
 package platform
 
-const Systemctl = "/usr/bin/systemctl"
-const SystemdRun = "/usr/bin/systemd-run"
-const Busctl = "/usr/bin/busctl"
+import "novapanel/internal/exec"
+
+const Systemctl = exec.Systemctl
+const SystemdRun = exec.SystemdRun
+const Busctl = exec.Busctl
 const NginxRoot = "/etc/nginx"
 const Nginx = "/usr/sbin/nginx"
 const Chattr = "/usr/bin/chattr"

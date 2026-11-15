@@ -3,6 +3,7 @@ package exec
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -13,6 +14,11 @@ import (
 )
 
 const DefaultMaxOutput = 1 << 20
+
+// Shared systemd command paths, used by platform and firewall without a dependency cycle.
+const Systemctl = "/usr/bin/systemctl"
+const SystemdRun = "/usr/bin/systemd-run"
+const Busctl = "/usr/bin/busctl"
 
 type RunOpts struct {
 	Dir       string
@@ -28,6 +34,13 @@ type Runner interface {
 type Real struct{}
 
 var _ Runner = Real{}
+
+// NormalExit reports whether err represents the given ordinary nonzero exit.
+// Signals, cancellation, and errors starting or running the process are excluded.
+func NormalExit(err error, code int) bool {
+	var exitErr *exec.ExitError
+	return code > 0 && errors.As(err, &exitErr) && exitErr.ExitCode() == code
+}
 
 // boundedWriter retains a prefix while draining excess data so children cannot
 // block on a full pipe. The cap applies independently to stdout and stderr.
