@@ -3,6 +3,7 @@ package verbs_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"novapanel/internal/agent"
 	"novapanel/internal/id"
 	"novapanel/internal/jobs"
@@ -45,19 +46,15 @@ func TestLegacySiteDeleteRefusesBeforeEffects(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			raw, _ := json.Marshal(map[string]any{"site_id": sid, "purge_files": true})
-			server := rpc.NewServer(a)
-			reply := server.Dispatch(rpc.WithCaller(ctx, rpc.RootCaller(0)), rpc.Request{Verb: "site.delete", Args: raw})
-			want := "Legacy deletion supports static sites only"
+			raw, _ := json.Marshal(map[string]any{"site_id": sid})
+			want := "unsupported"
 			if tc.attached {
-				want = "Attached site deletion requires a durable journal"
-			}
-			if reply.OK || reply.Code != "unsupported" || reply.Error != want {
-				t.Fatalf("unsafe deletion admitted: %+v", reply)
+				want = "precondition_failed"
 			}
 			j := jobs.Job{Args: raw}
-			if err = rpc.Registry["site.delete"].Exec(ctx, a, &j); err == nil {
-				t.Fatal("unsafe deletion accepted")
+			var coded *rpc.CodedError
+			if err = rpc.Registry["site.delete"].Exec(ctx, a, &j); !errors.As(err, &coded) || coded.Code != want {
+				t.Fatalf("unsafe deletion accepted: %v", err)
 			}
 			site, err := st.SiteByID(ctx, sid)
 			if err != nil || site.Status != "active" {

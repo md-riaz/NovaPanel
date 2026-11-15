@@ -134,6 +134,9 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 		}
 		return rpc.Errf("precondition_failed", "Attached databases: %s", strings.Join(attached, ", "))
 	}
+	if !journaled && s.Type != "static" {
+		return rpc.Errf("unsupported", "Legacy deletion supports static sites only")
+	}
 	if journaled && (a.Nginx == nil || a.Exec == nil) {
 		return rpc.Errf("agent_error", "Site deletion dependencies unavailable")
 	}
