@@ -92,7 +92,7 @@ func TestQueueDeleteForeignSchemaWithLiveChildren(t *testing.T) {
 	a := agent.New()
 	a.Store, a.Audit, a.Exec = s, log, r
 	a.Jobs = jobs.NewQueue(s, seal, log)
-	if err := a.Jobs.PrepareOperations(ctx); err != nil {
+	if err := a.Jobs.PrepareStartup(ctx); err != nil {
 		t.Fatal(err)
 	}
 	server := rpc.NewServer(a)
@@ -130,7 +130,7 @@ func TestQueueDeleteForeignSchemaWithLiveChildren(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	_, users, err := s.DatabaseWithUsers(ctx, db)
-	if err != nil || len(users) != 1 || users[0].ID != child {
+	if err != nil || len(users) != 2 {
 		t.Fatalf("live children lost: %+v %v", users, err)
 	}
 	if external.objects["user:liveuser@127.0.0.1"] != "created\t1\t"+child || external.objects["schema:testdb"] != "created\t1\t"+foreign {

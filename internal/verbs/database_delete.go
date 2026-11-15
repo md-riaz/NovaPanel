@@ -167,6 +167,9 @@ func (r databaseTeardownRuntime) databaseDeleteDurable(ctx context.Context, j *j
 		return err
 	}
 	if err := database.CheckSchemaDelete(ctx, a.Exec, op.Identity.Database.Name, op.DatabaseID); err != nil {
+		if errors.Is(err, database.ErrConflict) {
+			return rpc.Errf("conflict", "Database provenance conflict")
+		}
 		return err
 	}
 	if op.Checkpoint == "prepared" {
