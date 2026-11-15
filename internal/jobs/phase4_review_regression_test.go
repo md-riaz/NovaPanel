@@ -104,12 +104,12 @@ func TestReviewRunDeadlineAfterStartup(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if claims != 1 {
-		t.Fatal("expired claim reservation lost")
+	if claims != 0 {
+		t.Fatal("proven unapplied reservation retained")
 	}
 	t.Logf("exact deadline after startup: state=%s code=%s checkpoint=%s ciphertext=%d commands=%d", j.State, j.Code, op.Checkpoint, len(op.Ciphertext), calls)
-	if calls != 0 || j.Code != "interrupted" || op.Checkpoint != "expired" || len(op.Ciphertext) == 0 {
-		t.Fatal("expired recovery must fail interrupted, retain recovery input and run no commands")
+	if calls != 0 || j.Code != "interrupted" || op.Checkpoint != "expired" || len(op.Ciphertext) != 0 {
+		t.Fatal("proven unapplied recovery must fail interrupted, clear input and run no commands")
 	}
 }
 func TestReviewRunChangedPreconditions(t *testing.T) {
