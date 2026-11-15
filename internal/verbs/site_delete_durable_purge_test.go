@@ -13,6 +13,7 @@ import (
 	"novapanel/internal/store"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -108,8 +109,12 @@ func TestSiteDeletePurgeDropsManagedDatabaseAndUser(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			cancel()
-			<-done
+			workerErr := <-done
+			t.Logf("worker error: %v", workerErr)
 			op, oe := st.LoadOperation(ctx, job.ID)
+			buf := make([]byte, 1<<20)
+			n := runtime.Stack(buf, true)
+			t.Log(string(buf[:n]))
 			t.Fatalf("job %+v err %v op %+v opErr %v statements %v", j, e, op, oe, runner.statements)
 		}
 		time.Sleep(5 * time.Millisecond)
