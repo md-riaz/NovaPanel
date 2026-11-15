@@ -11,7 +11,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: true
       - name: Install pinned analyzers
         run: |
@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: true
       - name: Scratch socket, peer credentials and jobs with injected privileged commands
         run: sudo env "PATH=$PATH" "GOCACHE=$RUNNER_TEMP/root-go-cache" make integration
