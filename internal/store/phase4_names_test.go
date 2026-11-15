@@ -16,7 +16,7 @@ func TestDurableOperationValidatesOptionalNames(t *testing.T) {
 	defer s.Close()
 	base := OperationRequest{Kind: DatabaseCreate, DatabaseID: "01K8WMXZF57CGNZKX1FZ38DZMQ", UserID: "01K8WMXZF57CGNZKX1FZ38DZMR"}
 	j := Job{ID: "name-job", Verb: "database.create", CreatedBy: "owner", State: "queued", Args: []byte(`{}`)}
-	for _, tc := range []struct{ name, user string }{{"mysql", "safe_user"}, {"unsafe`name", "safe_user"}, {"valid_name", "root'@'%"}, {"valid_name", "abcdefghijklmnopqrstuvwxyzabcdefg"}} {
+	for _, tc := range []struct{ name, user string }{{"mysql", "safe_user"}, {"valid_name", "root"}, {"unsafe`name", "safe_user"}, {"valid_name", "root'@'%"}, {"valid_name", "abcdefghijklmnopqrstuvwxyzabcdefg"}} {
 		r := base
 		r.DatabaseName = tc.name
 		r.Username = tc.user
