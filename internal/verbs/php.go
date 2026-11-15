@@ -81,7 +81,7 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 		}
 		return nginx.ErrPHPOriginalRestored
 	}
-	if a.Jobs.PHPRecoveryOnly(ctx, j.ID) {
+	if a.Jobs.PHPRecoveryOnly(ctx, j.ID) || j.Attempts > 1 {
 		return restore()
 	}
 	if op.Checkpoint != "prepared" {

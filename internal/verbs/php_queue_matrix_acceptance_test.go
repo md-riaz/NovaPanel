@@ -17,8 +17,8 @@ import (
 	"novapanel/internal/agent"
 	"novapanel/internal/audit"
 	"novapanel/internal/jobs"
+	"novapanel/internal/php"
 	"novapanel/internal/render/nginx"
-	"novapanel/internal/render/php"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
 )
@@ -34,14 +34,14 @@ func (s *matrixStore) CheckOperation(ctx context.Context, id string) error {
 		return err
 	}
 	if s.point == "first" || s.point == "second" {
-		index := 1
+		op, e := s.Store.LoadOperation(ctx, id)
+		old, e1 := os.ReadFile(filepath.Join(s.root, "old-0"))
+		now, e2 := os.ReadFile(filepath.Join(s.root, "pool", "novapanel-demo.conf"))
+		checkpoint := "prepared"
 		if s.point == "second" {
-			index = 3
+			checkpoint = "config_published"
 		}
-		paths := []string{"pool/demo.conf", "pool/demo.conf.lkg", "sites-available/demo.conf", "sites-available/demo.conf.lkg"}
-		old, e1 := os.ReadFile(filepath.Join(s.root, fmt.Sprintf("old-%d", index)))
-		now, e2 := os.ReadFile(filepath.Join(s.root, paths[index]))
-		if e1 == nil && e2 == nil && !bytes.Equal(old, now) {
+		if e == nil && op.Checkpoint == checkpoint && e1 == nil && e2 == nil && !bytes.Equal(old, now) {
 			os.Exit(42)
 		}
 	}
@@ -60,7 +60,7 @@ func (s *matrixStore) CompleteOperation(ctx context.Context, id string, claim *s
 		if err != nil || op.Identity.PublicationAudit == nil {
 			panic("missing committed publication reservation")
 		}
-		for i, path := range []string{"pool/demo.conf", "pool/demo.conf.lkg", "sites-available/demo.conf", "sites-available/demo.conf.lkg"} {
+		for i, path := range []string{"pool/novapanel-demo.conf"} {
 			data, err := os.ReadFile(filepath.Join(s.root, path))
 			if err != nil {
 				panic(err)
@@ -87,7 +87,7 @@ func (matrixRunner) Run(ctx context.Context, name string, args []string, opts ru
 	if role == "failfpm" && strings.Contains(name, "php-fpm") || role == "failnginx" && strings.Contains(name, "nginx") {
 		return nil, nil, 1, errors.New("injected restoration service failure")
 	}
-	return nil, nil, 0, nil
+	return (phpScratchRunner{}).Run(ctx, name, args, opts)
 }
 
 // Exercise process death after each promotion and SQL commit, plus returned
@@ -105,7 +105,7 @@ func TestPHPQueueCrashIndependent(t *testing.T) {
 					if point == "sql" || point == "beforecommit" || point == "aftercommit" {
 						return []string{"crash", "recover"}
 					}
-					return []string{"crash", "failfpm", "failnginx", "recover"}
+					return []string{"crash", "failfpm", "recover"}
 				}() {
 					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					out, stderr, exit, e := (runner.Real{}).Run(ctx, os.Args[0], []string{"-test.run=^TestPHPQueueCrashIndependent$", "-test.v"}, runner.RunOpts{Env: append(os.Environ(), "CRASH_ROLE="+role, "CRASH_ROOT="+root, "CRASH_POINT="+point)})
@@ -133,6 +133,13 @@ func TestPHPQueueCrashIndependent(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		master := `[global]
+pid = /run/php/php8.3-fpm.pid
+error_log = /var/log/php8.3-fpm.log
+include = ` + filepath.Join(root, "pool", "*.conf") + "\n"
+		if err := os.WriteFile(filepath.Join(root, "php-fpm.conf"), []byte(master), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	dbPath, auditPath := filepath.Join(root, "panel.db"), filepath.Join(root, "audit.log")
 	open := func() (*store.Store, *audit.Log, *agent.Agent, *rpc.Server) {
@@ -146,8 +153,9 @@ func TestPHPQueueCrashIndependent(t *testing.T) {
 		}
 		a := agent.New()
 		a.Store, a.Audit = st, log
+		a.Exec = matrixRunner{}
 		a.Nginx = &nginx.Applier{Root: root, Runner: matrixRunner{}, Probe: func(context.Context, nginx.Desired) error { return nil }}
-		a.DurablePHP = &agent.PHPDependencies{Pools: &php.Applier{Root: filepath.Join(root, "pool"), Runner: matrixRunner{}, Probe: func(context.Context, php.Desired) error { return nil }}, RecoveryRoot: filepath.Join(root, "journal"), ResolveIdentity: func(context.Context, store.Site) (uint32, uint32, error) { return 1001, 1001, nil }}
+		a.PHP = &php.PoolApplier{Dir: filepath.Join(root, "pool"), Runner: a.Exec, Probe: func(context.Context) error { return nil }}
 		server := rpc.NewServer(a)
 		server.ConfigureJobs()
 		if mode == "crash" {
@@ -175,22 +183,8 @@ func TestPHPQueueCrashIndependent(t *testing.T) {
 		}
 		return
 	}
-	paths := []string{"pool/demo.conf", "pool/demo.conf.lkg", "sites-available/demo.conf", "sites-available/demo.conf.lkg"}
-	if mode == "crash" {
-		old := nginx.Desired{Name: "demo", Domains: []string{"old.example.test"}, Docroot: "/srv/sites/demo/public", ACMERoot: "/var/www/acme/demo", PHP: &php.Desired{Name: "demo", Type: "php", Version: "8.3", UID: 1001, GID: 1001}}
-		if err := a.Nginx.ApplyPHP(ctx, a.DurablePHP.Pools, old, func(context.Context) error { return nil }, func(context.Context) error { return nil }); err != nil {
-			t.Fatal(err)
-		}
-		for i, p := range paths {
-			b, e := os.ReadFile(filepath.Join(root, p))
-			if e != nil {
-				t.Fatal(e)
-			}
-			if e = os.WriteFile(filepath.Join(root, fmt.Sprintf("old-%d", i)), b, 0600); e != nil {
-				t.Fatal(e)
-			}
-		}
-	}
+	paths := []string{"pool/novapanel-demo.conf"}
+
 	if mode == "recover" {
 		defer func() {
 			for i, p := range paths {
@@ -263,7 +257,7 @@ func TestPHPQueueCrashIndependent(t *testing.T) {
 		if err != nil || count != 1 {
 			t.Fatalf("state count=%d err=%v", count, err)
 		}
-		pool, e := os.ReadFile(filepath.Join(root, "pool", "demo.conf"))
+		pool, e := os.ReadFile(filepath.Join(root, "pool", "novapanel-demo.conf"))
 		if os.Getenv("CRASH_POINT") == "sql" || os.Getenv("CRASH_POINT") == "aftercommit" {
 			if e != nil || !strings.Contains(string(pool), "memory_limit] = 512M") {
 				t.Fatalf("committed pool: %v", e)
@@ -289,8 +283,23 @@ func TestPHPQueueCrashIndependent(t *testing.T) {
 		t.Fatalf("dispatch: %+v", reply)
 	}
 	job := reply.Data.(jobs.EnqueueResult).Job
-	_ = job
-	err := a.Jobs.Run(ctx)
+	op, err := st.LoadOperation(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := op.Identity.PHP
+	limits := store.PHPLimits{MemoryMB: &p.OriginalLimits.MemoryMB, UploadMB: &p.OriginalLimits.UploadMB, MaxExecSec: &p.OriginalLimits.MaxExecSec, MaxChildren: &p.OriginalCap}
+	if err := a.PHP.Recover(ctx, "demo", php.PoolState{SiteID: sid, Exists: true, MaxChildren: p.OriginalCap, Limits: limits}); err != nil {
+		t.Fatal(err)
+	}
+	old, err := os.ReadFile(filepath.Join(root, paths[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "old-0"), old, 0600); err != nil {
+		t.Fatal(err)
+	}
+	err = a.Jobs.Run(ctx)
 	if os.Getenv("CRASH_POINT") == "aftercommit" || os.Getenv("CRASH_POINT") == "beforecommit" {
 		if err == nil {
 			t.Fatal("expected injected commit error")
