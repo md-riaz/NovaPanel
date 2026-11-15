@@ -130,6 +130,36 @@ func (q *Queue) enqueueOperation(ctx context.Context, r store.OperationRequest, 
 	if r.Kind == store.SiteDelete || r.Kind == store.PHPSet {
 		j.ObjectKey = "site:" + r.SiteID
 	}
+	if r.Kind == store.DatabaseDelete {
+		var site *string
+		if r.SiteID != "" {
+			site = &r.SiteID
+		}
+		j.Args, e = json.Marshal(struct {
+			DBID   string  `json:"db_id"`
+			Name   string  `json:"name"`
+			SiteID *string `json:"site_id,omitempty"`
+		}{r.DatabaseID, r.DatabaseName, site})
+		if e != nil {
+			return out, e
+		}
+	}
+	if r.Kind == store.DBUserDelete {
+		var site *string
+		if r.SiteID != "" {
+			site = &r.SiteID
+		}
+		j.Args, e = json.Marshal(struct {
+			UserID   string  `json:"dbuser_id"`
+			DBID     string  `json:"db_id"`
+			SiteID   *string `json:"site_id,omitempty"`
+			DBName   string  `json:"db_name"`
+			Username string  `json:"username"`
+		}{r.UserID, r.DatabaseID, site, r.DatabaseName, r.Username})
+		if e != nil {
+			return out, e
+		}
+	}
 	if r.Kind == store.SiteDelete {
 		j.Args, e = json.Marshal(struct {
 			SiteID         string `json:"site_id"`
