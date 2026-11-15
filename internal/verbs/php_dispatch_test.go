@@ -11,7 +11,7 @@ import (
 	"novapanel/internal/agent"
 	"novapanel/internal/audit"
 	"novapanel/internal/jobs"
-	"novapanel/internal/render/nginx"
+	mainphp "novapanel/internal/php"
 	php "novapanel/internal/render/php"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
@@ -32,6 +32,7 @@ func TestPHPSetProductionDispatch(t *testing.T) {
 	a := agent.New()
 	a.Store = st
 	a.Audit = log
+	a.PHP = nil
 	s := rpc.NewServer(a)
 	s.ConfigureJobs()
 	if err := a.Jobs.PrepareOperations(ctx); err != nil {
@@ -71,41 +72,16 @@ func TestPHPSetProductionDispatch(t *testing.T) {
 	if rows, e := st.ListJobs(ctx, store.JobFilter{Limit: 100}); e != nil || len(rows) != 0 {
 		t.Fatalf("refusal created jobs: %v %v", rows, e)
 	}
-	a.Nginx = &nginx.Applier{Runner: phpScratchRunner{}, Probe: func(context.Context, nginx.Desired) error { return nil }}
-	a.DurablePHP = &agent.PHPDependencies{Pools: &php.Applier{Runner: phpScratchRunner{}, Probe: func(context.Context, php.Desired) error { return nil }}, RecoveryRoot: t.TempDir(), ResolveIdentity: func(context.Context, store.Site) (uint32, uint32, error) { return 1001, 1001, nil }}
+	a.Exec = phpScratchRunner{}
+	a.PHP = &mainphp.PoolApplier{Runner: a.Exec, Probe: func(context.Context) error { return nil }}
 	for _, tc := range []struct {
 		name   string
 		remove func() func()
 	}{
-		{"nginx", func() func() { old := a.Nginx; a.Nginx = nil; return func() { a.Nginx = old } }},
-		{"nginx runner", func() func() { old := a.Nginx.Runner; a.Nginx.Runner = nil; return func() { a.Nginx.Runner = old } }},
-		{"nginx probe", func() func() { old := a.Nginx.Probe; a.Nginx.Probe = nil; return func() { a.Nginx.Probe = old } }},
-		{"php", func() func() { old := a.DurablePHP; a.DurablePHP = nil; return func() { a.DurablePHP = old } }},
-		{"pools", func() func() {
-			old := a.DurablePHP.Pools
-			a.DurablePHP.Pools = nil
-			return func() { a.DurablePHP.Pools = old }
-		}},
-		{"pool runner", func() func() {
-			old := a.DurablePHP.Pools.Runner
-			a.DurablePHP.Pools.Runner = nil
-			return func() { a.DurablePHP.Pools.Runner = old }
-		}},
-		{"pool probe", func() func() {
-			old := a.DurablePHP.Pools.Probe
-			a.DurablePHP.Pools.Probe = nil
-			return func() { a.DurablePHP.Pools.Probe = old }
-		}},
-		{"identity", func() func() {
-			old := a.DurablePHP.ResolveIdentity
-			a.DurablePHP.ResolveIdentity = nil
-			return func() { a.DurablePHP.ResolveIdentity = old }
-		}},
-		{"recovery root", func() func() {
-			old := a.DurablePHP.RecoveryRoot
-			a.DurablePHP.RecoveryRoot = ""
-			return func() { a.DurablePHP.RecoveryRoot = old }
-		}},
+		{"php", func() func() { old := a.PHP; a.PHP = nil; return func() { a.PHP = old } }},
+		{"pool runner", func() func() { old := a.PHP.Runner; a.PHP.Runner = nil; return func() { a.PHP.Runner = old } }},
+		{"pool probe", func() func() { old := a.PHP.Probe; a.PHP.Probe = nil; return func() { a.PHP.Probe = old } }},
+		{"executor", func() func() { old := a.Exec; a.Exec = nil; return func() { a.Exec = old } }},
 	} {
 		t.Run("missing "+tc.name, func(t *testing.T) {
 			restore := tc.remove()
@@ -149,12 +125,12 @@ func TestPHPSetProductionDispatch(t *testing.T) {
 			}
 		})
 	}
-	deps := a.DurablePHP
-	a.DurablePHP = nil
+	deps := a.PHP
+	a.PHP = nil
 	if err = s.ExecuteJob(ctx, &jobs.Job{Verb: "php.set", CreatedBy: "admin-session", Role: "admin", ObjectKey: "site:" + sid, Args: []byte(valid)}); err == nil || err.Error() != "PHP execution unavailable" {
 		t.Fatalf("unfinished executor must fail closed: %v", err)
 	}
-	a.DurablePHP = deps
+	a.PHP = deps
 	for _, raw := range []string{
 		fmt.Sprintf(`{"site_id":%q,"version":"8.3","version":"8.3"}`, sid),
 		fmt.Sprintf(`{"site_id":%q,"version":"8.3","limits":{"upload_mb":1,"upload_mb":2}}`, sid),
