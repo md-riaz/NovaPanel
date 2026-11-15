@@ -16,7 +16,7 @@ import (
 	"novapanel/internal/store"
 )
 
-func TestDeletePersistentConflictTerminalizes(t *testing.T) {
+func TestDeletePersistentConflictRemainsRecoverable(t *testing.T) {
 	for _, verb := range []string{"dbuser.delete", "database.delete"} {
 		t.Run(verb, func(t *testing.T) {
 			ctx := context.Background()
@@ -52,7 +52,7 @@ func TestDeletePersistentConflictTerminalizes(t *testing.T) {
 			a.Audit = log
 			a.Exec = r
 			a.Jobs = jobs.NewQueue(s, seal, log)
-			if err := a.Jobs.PrepareOperations(ctx); err != nil {
+			if err := a.Jobs.PrepareStartup(ctx); err != nil {
 				t.Fatal(err)
 			}
 			server := rpc.NewServer(a)
@@ -70,23 +70,25 @@ func TestDeletePersistentConflictTerminalizes(t *testing.T) {
 			wc, cancel := context.WithCancel(ctx)
 			done := make(chan error, 1)
 			go func() { done <- a.Jobs.Run(wc) }()
-			defer func() { cancel(); <-done }()
 			deadline := time.Now().Add(5 * time.Second)
 			for {
 				j, e := s.GetJob(ctx, job.ID)
 				if e != nil {
 					t.Fatal(e)
 				}
-				if j.State == "failed" {
-					if j.Code != "conflict" {
-						t.Fatalf("job: %+v", j)
-					}
+				if j.State == "queued" && j.Attempts >= 2 {
 					break
 				}
-				if time.Now().After(deadline) {
-					t.Fatalf("job did not fail: %+v", j)
+				if j.State == "failed" || time.Now().After(deadline) {
+					cancel()
+					<-done
+					t.Fatalf("job did not remain recoverable: %+v", j)
 				}
 				time.Sleep(10 * time.Millisecond)
+			}
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatal(err)
 			}
 			for _, q := range r.statements {
 				if len(q) >= 5 && q[:5] == "DROP " {
