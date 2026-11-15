@@ -15,7 +15,7 @@ import (
 	"novapanel/internal/audit"
 	"novapanel/internal/jobs"
 	"novapanel/internal/render/nginx"
-	"novapanel/internal/render/php"
+	"novapanel/internal/php"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
 )
@@ -32,6 +32,10 @@ func TestPHPStartupRestoresAfterTerminalSQLFailure(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	master := "[global]\npid = /run/php/php8.3-fpm.pid\nerror_log = /var/log/php8.3-fpm.log\ninclude = " + filepath.Join(root, "pool", "*.conf") + "\n"
+	if err := os.WriteFile(filepath.Join(root, "php-fpm.conf"), []byte(master), 0600); err != nil {
+		t.Fatal(err)
+	}
 	dbPath, auditPath := filepath.Join(root, "panel.db"), filepath.Join(root, "audit.log")
 	open := func() (*store.Store, *audit.Log, *agent.Agent, *rpc.Server) {
 		st, err := store.Open(dbPath)
@@ -44,8 +48,9 @@ func TestPHPStartupRestoresAfterTerminalSQLFailure(t *testing.T) {
 		}
 		a := agent.New()
 		a.Store, a.Audit = st, log
+		a.Exec = phpScratchRunner{}
 		a.Nginx = &nginx.Applier{Root: root, Runner: phpScratchRunner{}, Probe: func(context.Context, nginx.Desired) error { return nil }}
-		a.DurablePHP = &agent.PHPDependencies{Pools: &php.Applier{Root: filepath.Join(root, "pool"), Runner: phpScratchRunner{}, Probe: func(context.Context, php.Desired) error { return nil }}, RecoveryRoot: filepath.Join(root, "journal"), ResolveIdentity: func(context.Context, store.Site) (uint32, uint32, error) { return 1001, 1001, nil }}
+		a.PHP = &php.PoolApplier{Dir: filepath.Join(root, "pool"), Runner: a.Exec, Probe: func(context.Context) error { return nil }}
 		server := rpc.NewServer(a)
 		server.ConfigureJobs()
 		return st, log, a, server
@@ -80,7 +85,7 @@ func TestPHPStartupRestoresAfterTerminalSQLFailure(t *testing.T) {
 	if err != nil || op.Checkpoint != "verified" {
 		t.Fatalf("checkpoint=%+v err=%v", op, err)
 	}
-	pool, err := os.ReadFile(filepath.Join(root, "pool", "demo.conf"))
+	pool, err := os.ReadFile(filepath.Join(root, "pool", "novapanel-demo.conf"))
 	if err != nil || !strings.Contains(string(pool), "memory_limit] = 512M") {
 		t.Fatalf("expected desired bytes before recovery: %s %v", pool, err)
 	}
@@ -99,8 +104,9 @@ func TestPHPStartupRestoresAfterTerminalSQLFailure(t *testing.T) {
 	if err := a.PrepareStartup(ctx); err != nil {
 		t.Fatalf("startup must restore precommit original: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "pool", "demo.conf")); !os.IsNotExist(err) {
-		t.Fatalf("original pool was absent, stat: %v", err)
+	pool, err = os.ReadFile(filepath.Join(root, "pool", "novapanel-demo.conf"))
+	if err != nil || strings.Contains(string(pool), "memory_limit] = 512M") {
+		t.Fatalf("original pool not restored: %s %v", pool, err)
 	}
 	got, err := st.GetJob(ctx, job.ID)
 	if err != nil || got.State != "failed" {
