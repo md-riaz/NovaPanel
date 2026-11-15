@@ -384,10 +384,12 @@ Expiry query, bound now is injected unix-ms, with the terminal filter applied be
 ```sql
 SELECT job_id FROM phase4_operations INDEXED BY idx_phase4_operations_expiry
 WHERE expires <= ? AND checkpoint NOT IN ('done','expired')
+  AND NOT (kind IN ('site_delete','database_delete','dbuser_delete')
+           AND checkpoint IN ('teardown_started','db_applied'))
 ORDER BY expires,job_id LIMIT 100;
 ```
 
-Preparation expiry is exactly now + 86400000 ms. Claim delivery TTL starts at actual atomic publication per F19, not preparation. An expired operation cannot continue old external mutations. A fresh authorized operation may reconcile only after resolving the old blocker under the complete lock set.
+Preparation expiry is exactly now + 86400000 ms. Claim delivery TTL starts at actual atomic publication per F19, not preparation. An expired operation cannot continue old external mutations; begun destructive teardown remains unexpired and rolls forward. A fresh authorized operation may reconcile only after resolving the old blocker under the complete lock set.
 
 ## Phase 5 — deploys, cron, ssh
 
