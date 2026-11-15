@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"novapanel/internal/agent"
 	"novapanel/internal/jobs"
@@ -44,14 +45,14 @@ func (s sslPublication) publication(ctx context.Context, siteID string, j *jobs.
 	a := s.a
 	defer func() {
 		if recover() != nil {
-			result = rpc.Errf("interrupted", "TLS publication requires recovery")
+			result = errors.Join(jobs.ErrRecoveryRequired, rpc.Errf("interrupted", "TLS publication requires recovery"))
 		}
 		if result != nil {
 			recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 			defer cancel()
 			raw, err := a.Store.TLSIntent(recovery)
 			if err != nil || len(raw) > 0 {
-				result = rpc.Errf("interrupted", "TLS publication requires recovery")
+				result = errors.Join(jobs.ErrRecoveryRequired, rpc.Errf("interrupted", "TLS publication requires recovery"))
 			}
 		}
 	}()

@@ -38,9 +38,9 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 | `service.status` | | RO | ✓ | system:read | | | | systemctl is-active |
 | `service.restart` | | A | | system:write | ✓ | ✓ | | `service:<unit>` |
 | `site.list` / `site.get` | | RO | ✓ | sites:read | | | | |
-| `site.create` | | A | | sites:write | ✓ | | | `site:<name>` |
+| `site.create` | | A | | sites:write | ✓ | | | `site:<name>`+`osuser:<username>` (F20.7 order; per-site OS user) |
 | `site.update` | | A | | sites:write | ✓ | | | `site:<name>` |
-| `site.delete` | | A | | sites:write | ✓ | | ✓ | `site:<name>` (ensure-absent) |
+| `site.delete` | | A | | sites:write | ✓ | | ✓ | `site:<name>`+`osuser:<username>` (ensure-absent; F20.7 order) |
 | `domain.add` / `domain.remove` | | A | | sites:write | ✓ | | | `site:<name>` |
 | `ssl.issue` / `ssl.renew` | | A | | sites:write | ✓ | ✓ | | `site:<name>` (ACME, rate-limited) |
 | `ssl.upload` | | A | | sites:write | ✓ | | ✓ | `site:<name>` — install a user-supplied cert+key (manual) |
@@ -49,11 +49,12 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 | `php.set` | | A | | sites:write | ✓ | | | `site:<name>` |
 | `php.list` | | RO | ✓ | sites:read | | | | |
 | `redirect.add` / `redirect.remove` | | A | | sites:write | ✓ | | | `site:<site_id>` |
-| `database.create` | | A | | databases:write | ✓ | | | `db:<name>` (show-once pw via claim) |
-| `database.rotate_password` | | A | | databases:write | ✓ | | ✓ | `db:<name>` |
-| `database.delete` | | A | | databases:write | ✓ | | ✓ | `db:<name>` |
+| `database.create` | | A | | databases:write | ✓ | | | `site:<site_id>`(if bound)+`db:<db_id>`+`dbuser:<username>` (F20.7; show-once pw via claim) |
+| `database.rotate_password` | | A | | databases:write | ✓ | | ✓ | `site:<site_id>`(if bound)+`db:<db_id>`+`dbuser:<username>` (owner acct; F20.7 grandparent order, serializes against `site.delete`) |
+| `database.delete` | | A | | databases:write | ✓ | | ✓ | `site:<site_id>`(if bound)+`db:<db_id>` (cascades users; F20.5 obj_id-matched) |
 | `database.list` | | RO | ✓ | databases:read | | | | |
-| `dbuser.create` / `dbuser.delete` | | A | | databases:write | ✓ | | | `db:<name>` |
+| `dbuser.create` / `dbuser.delete` | | A | | databases:write | ✓ | | | `db:<db_id>`+`dbuser:<username>` (F20.7) |
+| `dbuser.list` | | RO | ✓ | databases:read | | | | lists secondary usernames for a `db_id` (non-secret identity; no password) |
 | `files.list` / `files.read` | | A | | sites:read | | | | rooted at docroot, not home (B-D10) |
 | `files.write`/`mkdir`/`move`/`delete`/`chmod` | | A | | sites:write | | | | runs as site user |
 | `files.upload`/`archive`/`extract` | | A | | sites:write | ✓ | | | `site:<name>` (chunked/large) |
@@ -82,7 +83,7 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 | `job.status` / `job.list` | | RO | ✓ | system:read | | | | |
 | `job.claim` | | RO | | — | | | | one-shot secret (F6) |
 | `job.cancel` | | A | | system:write | | | | |
-| `reconcile` | | O | | — | ✓ | ✓ | | `system` |
+| `reconcile` | | O | | — | ✓ | ✓ | | `system` (+ per-candidate `site:`/`osuser:`/`db:`/`dbuser:` acquired at execution, fixed order) |
 | `update.check` | | A | ✓ | system:read | | | | |
 | `update.apply` | | O | | — | ✓ | ✓ | ✓ | `system` (D2 signed) |
 | `panel.backup_config` | | O | | — | ✓ | ✓ | | self-backup (B-D11/B20) |

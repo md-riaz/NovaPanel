@@ -43,7 +43,7 @@ func (*V) SiteName(s string) error {
 }
 func (v *V) UnixUser(s string) error { return v.SiteName(s) }
 func (*V) DBName(s string) error {
-	if !db.MatchString(s) || s == "mysql" || s == "sys" || s == "information_schema" || s == "performance_schema" {
+	if !db.MatchString(s) || s == "mysql" || s == "sys" || s == "information_schema" || s == "performance_schema" || s == "novapanel" {
 		return invalid("database name")
 	}
 	return nil

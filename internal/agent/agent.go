@@ -28,22 +28,23 @@ type Agent struct {
 	firewallStartupPlan     func(context.Context) (*firewall.FirewallStartupPlan, error)
 	firewallTerminalJournal func(context.Context) (*firewall.Journal, error)
 	// Nil until durable snapshot recovery and independent deadman ownership are wired.
-	FirewallRecovery *firewall.Recovery
-	ProvisionSite    func(context.Context, string) error
-	Nginx            *nginx.Applier
-	PasswordFailures auth.FailureBudgets
-	UnknownFailures  auth.FailureBudgets
-	MFAFailures      auth.FailureBudgets
-	Jobs             *jobs.Queue
-	Scheduler        *jobs.Scheduler
-	Store            *store.Store
-	Secret           *secret.Sealer
-	Audit            *audit.Log
-	Cfg              config.Config
-	Exec             exec.Runner
-	Validate         *validate.V
-	Clock            Clock
-	Started          int64
+	FirewallRecovery     *firewall.Recovery
+	ProvisionSite        func(context.Context, string) error
+	Nginx                *nginx.Applier
+	PasswordFailures     auth.FailureBudgets
+	UnknownFailures      auth.FailureBudgets
+	MFAFailures          auth.FailureBudgets
+	Jobs                 *jobs.Queue
+	Scheduler            *jobs.Scheduler
+	Store                *store.Store
+	Secret               *secret.Sealer
+	Audit                *audit.Log
+	Cfg                  config.Config
+	Exec                 exec.Runner
+	Validate             *validate.V
+	Clock                Clock
+	Started              int64
+	DeleteDatabaseForJob func(context.Context, string, string, string) error
 }
 
 func New() *Agent { return NewWithDependencies(config.Defaults(), exec.Real{}, &validate.V{}) }

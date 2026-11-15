@@ -1,14 +1,44 @@
 package web
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/go-chi/chi/v5"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 )
 
+type submissionKey struct{}
+
+var databaseIDPattern = regexp.MustCompile(`^[0-7][0-9A-HJKMNP-TV-Z]{25}$`)
+
+func validBrowserKey(key string) bool {
+	if len(key) != 36 {
+		return false
+	}
+	for i, c := range key {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if c != '-' {
+				return false
+			}
+			continue
+		}
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 var consoleRoutes = []route{
+	{"GET", "/databases", "user", "database.list"},
+	{"POST", "/databases/create", "user", "database.create"},
+	{"POST", "/databases/{dbID}/rotate", "user", "database.rotate_password"},
+	{"POST", "/databases/{dbID}/delete", "user", "database.delete"},
+	{"POST", "/jobs/{jobID}/claim", "user", "job.claim"},
 	{"GET", "/sites", "user", "site.list"},
 	{"GET", "/sites/{siteID}", "user", "site.get"},
 	{"GET", "/sites/{siteID}/ssl", "user", "ssl.status"},
@@ -35,7 +65,7 @@ type consoleView struct {
 }
 
 func isConsole(path string) bool {
-	return strings.HasPrefix(path, "/sites") || strings.HasPrefix(path, "/jobs/")
+	return strings.HasPrefix(path, "/databases") || strings.HasPrefix(path, "/sites") || strings.HasPrefix(path, "/jobs/")
 }
 func (s *server) console(w http.ResponseWriter, r *http.Request, c RPCClient, rt route, token string, v view) {
 	cv := &consoleView{SiteID: chi.URLParam(r, "siteID"), Section: rt.verb, Writable: v.Role == "owner" || v.Role == "admin"}
@@ -48,20 +78,56 @@ func (s *server) console(w http.ResponseWriter, r *http.Request, c RPCClient, rt
 		args["id"] = chi.URLParam(r, "jobID")
 	}
 	if r.Method == "POST" {
+		if (rt.verb == "database.create" || rt.verb == "database.rotate_password") && r.Header.Get("HX-Request") != "true" {
+			http.Error(w, "JavaScript is required to receive the one-time password", http.StatusBadRequest)
+			return
+		}
 		if !cv.Writable {
 			http.Error(w, "forbidden: read-only account", http.StatusForbidden)
 			return
 		}
 		var err error
-		args, err = consoleArgs(rt.verb, cv.SiteID, r)
+		if rt.verb == "job.claim" {
+			args = map[string]any{"job_id": chi.URLParam(r, "jobID"), "claim": r.PostForm.Get("claim")}
+		} else if rt.verb == "database.rotate_password" || rt.verb == "database.delete" {
+			args = map[string]any{"db_id": chi.URLParam(r, "dbID")}
+		} else {
+			args, err = consoleArgs(rt.verb, cv.SiteID, r)
+		}
 		if err != nil {
 			http.Error(w, "Invalid form: "+err.Error(), 400)
 			return
 		}
 	}
+	if rt.verb == "database.create" || rt.verb == "database.rotate_password" || (rt.verb == "database.delete" && r.Header.Get("HX-Request") == "true") {
+		values := r.Header.Values("Idempotency-Key")
+		if r.Header.Get("HX-Request") != "true" || len(values) != 1 || !validBrowserKey(values[0]) {
+			http.Error(w, "A valid browser submission key is required", http.StatusBadRequest)
+			return
+		}
+		r = r.WithContext(context.WithValue(r.Context(), submissionKey{}, values[0]))
+	}
 	data, ok := call(w, r, c, rt.verb, args, token)
 	if !ok {
 		return
+	}
+	if rt.verb == "job.claim" {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(data)
+		return
+	}
+	if rt.verb == "job.status" && data["verb"] == "site.delete" && data["state"] == "failed" && data["code"] == "precondition_failed" {
+		if result, ok := data["result"].(map[string]any); ok {
+			if ids, ok := result["attached_database_ids"].([]any); ok {
+				valid := make([]string, 0, len(ids))
+				for _, value := range ids {
+					if id, ok := value.(string); ok && databaseIDPattern.MatchString(id) {
+						valid = append(valid, id)
+					}
+				}
+				result["attached_database_ids"] = valid
+			}
+		}
 	}
 	cv.Data = data
 	status := 200
@@ -78,6 +144,21 @@ func (s *server) console(w http.ResponseWriter, r *http.Request, c RPCClient, rt
 			if !valid || job["id"] == nil || job["state"] == nil {
 				http.Error(w, "Invalid agent job reply", http.StatusBadGateway)
 				return
+			}
+			if rt.verb == "database.create" || rt.verb == "database.rotate_password" {
+				claim, _ := data["claim"].(string)
+				if claim != "" {
+					if r.Header.Get("HX-Request") != "true" {
+						http.Error(w, "Claim requires JavaScript", http.StatusBadGateway)
+						return
+					}
+					w.Header().Set("X-Job-Claim", claim)
+				} else if data["claim_state"] != "none" {
+					http.Error(w, "Invalid agent claim reply", http.StatusBadGateway)
+					return
+				} else if job["state"] == "done" {
+					v.Message = "The one-time password is no longer available. Rotate the password to recover access."
+				}
 			}
 			cv.Section = "job.status"
 			cv.Data = job
@@ -122,6 +203,12 @@ func consoleArgs(verb, site string, r *http.Request) (map[string]any, error) {
 		return nil
 	}
 	switch verb {
+	case "database.create":
+		for _, name := range []string{"name", "site_id"} {
+			if value := r.PostForm.Get(name); value != "" {
+				args[name] = value
+			}
+		}
 	case "site.create":
 		if err := required("type", "primary_domain"); err != nil {
 			return nil, err

@@ -199,6 +199,10 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 		return
 	}
 	if token == "" {
+		if r.Header.Get("HX-Request") == "true" {
+			render(w, http.StatusUnauthorized, view{Page: "/login-required", Message: "unauthenticated: Session expired. Sign in again."})
+			return
+		}
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
@@ -218,11 +222,6 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 		return
 	}
 	if r.Method != "GET" {
-		values := r.Header.Values("X-CSRF-Token")
-		if len(values) != 1 || values[0] == "" || subtle.ConstantTimeCompare([]byte(values[0]), []byte(v.CSRF)) != 1 {
-			http.Error(w, "Invalid CSRF token", http.StatusForbidden)
-			return
-		}
 		contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		if err != nil || contentType != "application/x-www-form-urlencoded" {
 			http.Error(w, "Form content type required", http.StatusUnsupportedMediaType)
@@ -235,6 +234,14 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		if e := r.ParseForm(); e != nil {
 			http.Error(w, "Invalid form", 400)
+			return
+		}
+		values := r.Header.Values("X-CSRF-Token")
+		if rt.verb == "database.delete" && r.Header.Get("HX-Request") != "true" && len(values) == 0 {
+			values = r.PostForm["csrf_token"]
+		}
+		if len(values) != 1 || values[0] == "" || subtle.ConstantTimeCompare([]byte(values[0]), []byte(v.CSRF)) != 1 {
+			http.Error(w, "Invalid CSRF token", http.StatusForbidden)
 			return
 		}
 		if isConsole(rt.path) {
@@ -314,9 +321,26 @@ func readDashboard(r *http.Request, c RPCClient, verb, token string) any {
 	return reply.Data
 }
 func call(w http.ResponseWriter, r *http.Request, c RPCClient, verb string, args any, token string) (map[string]any, bool) {
-	reply, e := c.Call(r.Context(), verb, args, token)
+	var reply rpc.Reply
+	var e error
+	if key, ok := r.Context().Value(submissionKey{}).(string); ok {
+		if keyed, ok := c.(interface {
+			CallWithIdempotency(context.Context, string, any, string, string) (rpc.Reply, error)
+		}); ok {
+			reply, e = keyed.CallWithIdempotency(r.Context(), verb, args, token, key)
+		} else {
+			http.Error(w, "Idempotent transport unavailable", http.StatusServiceUnavailable)
+			return nil, false
+		}
+	} else {
+		reply, e = c.Call(r.Context(), verb, args, token)
+	}
 	if e != nil || !reply.OK {
 		data, _ := reply.Data.(map[string]any)
+		if reply.Code == "unauthenticated" {
+			render(w, http.StatusUnauthorized, view{Page: "/login-required", Message: "unauthenticated: Session expired. Sign in again."})
+			return nil, false
+		}
 		if hint, _ := data["reauth_required"].(bool); hint {
 			render(w, 403, view{Page: "/reauth-required", Message: "Reauthentication required"})
 			return nil, false

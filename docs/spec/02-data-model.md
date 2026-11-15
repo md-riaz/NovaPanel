@@ -267,7 +267,7 @@ disk under `tls_dir/<fqdn>/` (versioned dir + symlink swap, B-D9), not in the DB
 ```sql
 CREATE TABLE databases (
   id        TEXT PRIMARY KEY,
-  site_id   TEXT REFERENCES sites(id) ON DELETE SET NULL,
+  site_id   TEXT REFERENCES sites(id) ON DELETE SET NULL, -- NULL = detached DB (valid). Verb policy: site.delete REFUSES while a DB is attached (phase-4); SET NULL is a defensive backstop only. site-bound create/delete also lock site:<site_id> (F20.7).
   name      TEXT NOT NULL UNIQUE,    -- ^[a-z][a-z0-9_]{1,46}$ (generated)
   engine    TEXT NOT NULL DEFAULT 'mariadb',
   created   INTEGER NOT NULL
@@ -277,8 +277,12 @@ CREATE TABLE db_users (
   db_id     TEXT NOT NULL REFERENCES databases(id) ON DELETE CASCADE,
   username  TEXT NOT NULL UNIQUE,    -- bound to '...'@'127.0.0.1'
   host      TEXT NOT NULL DEFAULT '127.0.0.1',
+  owner     INTEGER NOT NULL DEFAULT 0,  -- the account database.create made; database.rotate_password{db_id} targets it
   created   INTEGER NOT NULL
 );
+-- Exactly one owner per database: database.create inserts owner=1, dbuser.create owner=0, dbuser.delete
+-- refuses the owner (delete the database to remove it). rotate_password{db_id} rotates the owner.
+CREATE UNIQUE INDEX idx_db_users_owner ON db_users(db_id) WHERE owner=1;
 ```
 DB-user passwords are **not** stored (show-once via the F6 claim; the app keeps them in its own
 `wp-config.php`). The MariaDB admin path uses `unix_socket` (no stored admin password).

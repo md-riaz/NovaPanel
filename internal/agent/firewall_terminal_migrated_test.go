@@ -68,7 +68,7 @@ func testPriorFirewallSchema(t *testing.T) {
 	b, e := json.Marshal(hashes)
 	mustTerminal(t, e)
 	mustTerminal(t, os.WriteFile(build+"/hashes.json", b, 0600))
-	replacements := map[string]string{repo + "/internal/store/migrations/hashes.json": build + "/hashes.json", repo + "/internal/store/migrations/0006_phase4.sql": "", repo + "/internal/store/migrations/0007_phase6.sql": ""}
+	replacements := map[string]string{repo + "/internal/store/migrations/hashes.json": build + "/hashes.json", repo + "/internal/store/migrations/0006_databases.sql": "", repo + "/internal/store/migrations/0007_phase6.sql": ""}
 	b, e = json.Marshal(map[string]any{"Replace": replacements})
 	mustTerminal(t, e)
 	mustTerminal(t, os.WriteFile(build+"/overlay.json", b, 0600))

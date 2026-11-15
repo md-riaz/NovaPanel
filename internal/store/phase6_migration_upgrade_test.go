@@ -69,7 +69,7 @@ func phase6OldDatabase(t *testing.T, version int) string {
 		}
 	}
 	if version >= 6 {
-		for _, q := range []string{`INSERT INTO databases(id,site_id,name,primary_user_id,created)VALUES('db','site','site_db','du',1)`, `INSERT INTO db_users(id,db_id,username,created)VALUES('du','db','site_user',1)`} {
+		for _, q := range []string{`INSERT INTO databases(id,site_id,name,created)VALUES('db','site','site_db',1)`, `INSERT INTO db_users(id,db_id,username,owner,created)VALUES('du','db','site_user',1,1)`} {
 			if _, e = tx.Exec(q); e != nil {
 				t.Fatal(e)
 			}
@@ -98,7 +98,7 @@ func TestPhase6MigrationUpgrade(t *testing.T) {
 				}
 				if version == 6 {
 					var got string
-					if e = s.db.QueryRow("SELECT db_users.db_id FROM db_users JOIN databases ON databases.id=db_users.db_id WHERE databases.site_id='site'").Scan(&got); e != nil || got != "db" {
+					if e = s.db.QueryRow("SELECT db_users.db_id FROM db_users JOIN databases ON databases.id=db_users.db_id WHERE databases.site_id='site' AND databases.name='site_db' AND db_users.username='site_user' AND db_users.owner=1").Scan(&got); e != nil || got != "db" {
 						t.Fatal(got, e)
 					}
 				}
@@ -192,6 +192,54 @@ func TestPhase6MigrationRefusal(t *testing.T) {
 				t.Fatal(email, e)
 			}
 		})
+	}
+}
+
+// The PR-only 0006 is a different historical schema, not an upgrade source.
+func TestPhase6RejectsPRMigrationHistory(t *testing.T) {
+	path := phase6OldDatabase(t, 5)
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := os.ReadFile("testdata/pr_0006_phase4.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := sha256.Sum256(fixture)
+	if got := hex.EncodeToString(h[:]); got != "549740ffa8b38ce925b524ad82013b8df75ff97c0346b6f7b3679ef267639698" {
+		t.Fatal(got)
+	}
+	if _, err = db.Exec(string(fixture)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`INSERT INTO schema_migrations VALUES('0006',?,1)`, hex.EncodeToString(h[:])); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`INSERT INTO databases(id,site_id,name,primary_user_id,created) VALUES('db','site','site_db','du',1); INSERT INTO db_users(id,db_id,username,created) VALUES('du','db','site_user',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := Open(path); err == nil {
+		s.Close()
+		t.Fatal("PR-only history accepted")
+	} else if !strings.Contains(err.Error(), "database hash mismatch") {
+		t.Fatal(err)
+	}
+	db, err = sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var count int
+	if err = db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name IN ('repos','fw_pending')`).Scan(&count); err != nil || count != 0 {
+		t.Fatal(count, err)
+	}
+	var name string
+	if err = db.QueryRow(`SELECT name FROM databases WHERE id='db'`).Scan(&name); err != nil || name != "site_db" {
+		t.Fatal(name, err)
 	}
 }
 

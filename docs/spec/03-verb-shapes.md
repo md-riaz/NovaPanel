@@ -7,7 +7,13 @@ the `NewArgs` struct exactly as listed and validates fields (F9) before `Run`.
 **Conventions (stated once):**
 - **Reads** return `data` = the shape shown. **Slow verbs** return `data:{job:{id,state,verb}}`
   immediately (F6); the real result lands in `jobs.result_json` (shape = the "→result" shown) and is
-  read via `job.status`. **Show-once secrets** ride the `claim` (F19), never the result.
+  read via `job.status`. **Show-once secrets** ride the `claim` (F19), never the result. The slow-verb
+  reply's `claim` is **optional**, accompanied by a `claim_state` reason enum of just **`live` | `none`**:
+  an **idempotent replay** (same `idempotency_key`, F6) returns the **existing** job and includes `claim`
+  only when `claim_state=live`; a gone claim (consumed **or** expired — not durably distinguished) returns
+  the job (`done`) with **no** `claim` and `claim_state=none` (recover via `rotate_password`), **never**
+  `not_found`. `not_found` from the replay surface means only "no such `idempotency_key`"; a gone secret
+  on the **`job.claim`** retrieval verb still returns `410`-style `not_found` (F19, unchanged).
 - All ids are ULIDs (`site_…`, `db_…`, `job_…`, etc. — opaque). Timestamps are unix-ms. Field names
   are snake_case. Unlisted optional fields default as noted. Every string that is a name/path/url/host
   is validated per F9.
@@ -111,7 +117,8 @@ database.create{site_id?, name?}                        → job → {db_id, db_n
 database.rotate_password{db_id}                         → job → {}                          + claim(password)
 database.delete{db_id}                                  → job → {}      # MFA
 database.list{}                                         → {databases:[{id,name,site_id,engine}]}
-dbuser.create{db_id, username?}                         → job → {dbuser_id}                 + claim(password)
+dbuser.create{db_id, username?}                         → job → {dbuser_id, db_user}        + claim(password)   # db_user = the final username (non-secret); only the password rides the claim
+dbuser.list{db_id}                                      → {users:[{id, username}]}           # retrieval path for secondary usernames (non-secret identity)
 dbuser.delete{dbuser_id}                                → job → {}
 ```
 

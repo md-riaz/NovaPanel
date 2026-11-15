@@ -29,7 +29,7 @@ func waitACMEAdmissionJob(t *testing.T, f *acmeWorkerFixture, reply rpc.Reply) j
 	if err = json.Unmarshal(raw, &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if len(envelope) != 2 || envelope["job"] == nil || envelope["claim"] == nil {
+	if len(envelope) != 3 || envelope["job"] == nil || envelope["claim"] == nil || string(envelope["claim_state"]) != `"live"` {
 		t.Fatalf("noncanonical admission: %s", raw)
 	}
 	enq := reply.Data.(jobs.EnqueueResult)
