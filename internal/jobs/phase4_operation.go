@@ -123,6 +123,16 @@ func (q *Queue) enqueueOperation(ctx context.Context, r store.OperationRequest, 
 	if r.Kind == store.SiteDelete || r.Kind == store.PHPSet {
 		j.ObjectKey = "site:" + r.SiteID
 	}
+	if r.Kind == store.SiteDelete {
+		j.Args, e = json.Marshal(struct {
+			SiteID         string `json:"site_id"`
+			PurgeFiles     bool   `json:"purge_files,omitempty"`
+			PurgeDatabases bool   `json:"purge_databases,omitempty"`
+		}{r.SiteID, r.PurgeFiles, r.PurgeDatabases})
+		if e != nil {
+			return out, e
+		}
+	}
 	if r.Kind == store.PHPSet {
 		if r.PHP == nil {
 			return out, rpcerr.Errf("invalid_argument", "PHP request required")

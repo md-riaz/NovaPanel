@@ -277,6 +277,17 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 		return keyErr
 	}
 	defer unlock()
+	if _, ok := attemptCtx.Value(heldLocksKey{}).(map[string]bool); !ok {
+		keys, keyErr := q.operationKeys(attemptCtx, j)
+		if keyErr != nil {
+			return keyErr
+		}
+		held := make(map[string]bool, len(keys))
+		for _, key := range keys {
+			held[key] = true
+		}
+		attemptCtx = context.WithValue(attemptCtx, heldLocksKey{}, held)
+	}
 	if e := q.healthy(); e != nil {
 		return e
 	}
