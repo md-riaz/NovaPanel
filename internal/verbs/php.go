@@ -88,6 +88,9 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 		return restore()
 	}
 	if err = a.PHP.ApplyCommitted(ctx, site.Name, desired, old); err != nil {
+		if errors.Is(err, jobs.ErrRetry) {
+			return errors.Join(nginx.ErrPHPRecoveryRequired, err)
+		}
 		return err
 	}
 	if err = check(ctx); err != nil {
