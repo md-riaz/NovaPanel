@@ -21,8 +21,8 @@ and real demand. Reads: `00-foundations.md` (all), `vpspanel-plan.md` §1 non-go
 5. **Docker / Compose** — for self-hosted apps; isolated; never required by the core.
 
 ## Blueprint
-- Each module is a package under `internal/modules/<name>/` exposing a `Module` interface:
-  `Install()/Enable(site)/Disable(site)/Status()/Uninstall()`. `module.install` only
+- Each module is a package under `internal/modules/<name>/` implementing the `Module` interface (the single resolved definition under
+  "Resolved interface" below). `module.install` only
   **enables/configures a shipped module** — it never fetches or executes downloaded code (D4).
 - A module registers its verbs in the **same** registry (F13) with the same validation/audit/job
   rules; a disabled module's verbs return `code:"unsupported"`.
@@ -81,6 +81,8 @@ type Module interface {
 ```
 
 ## Definition of Done (per module)
+**Phase 9 DoD = module interface + dispatcher gate + arch tests** (this phase builds no module itself).
+
 - [ ] Off by default; demand-gated; its verbs are `unsupported` until enabled.
 - [ ] Enable/disable idempotent, audited, fully reversible.
 - [ ] If OLS is enabled for a site, it remains private behind Nginx and rollback restores only that

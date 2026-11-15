@@ -4,6 +4,12 @@
 The everyday operations an owner does on a live site: browse/edit files safely, deploy from Git,
 schedule jobs, read logs, and manage SSH keys — each scoped to a site and validated at the sink.
 
+> **OWED — upfront lifecycle + concurrency ruling (do not build deploy/cron/sshkey until it lands).** Per
+> `AGENTS.md`, the head owes one ruling covering: **teardown order** on `site.delete`; **cron = systemd
+> timers, not crontab**; **F15 `RunOpts`** for the privilege drop; **`sshkey.remove` `key_id` resolution**;
+> and **`sshkey.sftp_only`** (F8 render / validate / reload / revert of the sshd config). The full lifecycle is
+> deliberately **not specified here yet**.
+
 ## Depends on
 Phases 1–4 (jobs, auth, sites+users, per-site Unix user & home). Reads: `00-foundations.md`
 F6, F7, F9, F10, F11.
@@ -15,8 +21,8 @@ F6, F7, F9, F10, F11.
    site's project root** (F9 path rule), symlinks that cross the boundary rejected, archive entries
    checked for traversal/absolute/`..` before extract (tar-slip/zip-slip). Ops run **as the site
    user** (drop privileges), never as root. A read-only safe editor rides `files.read`/`files.write`.
-2. **Git deploy** (`deploy.*` / `app.*`): `deploy.configure` (repo URL, branch, project dir, generate
-   a per-site **deploy key**), `deploy.pull` (slow job: fetch + checkout a **pinned SHA**, fixed
+2. **Git deploy** (`deploy.*`; there is no `app.*` alias — verb names are those in 01): `deploy.configure` (repo URL, branch, project dir, generate
+   a per-site **deploy key**), `deploy.run` (slow job: fetch + checkout a **pinned SHA**, fixed
    argv, run as the site user), `deploy.status`, `deploy.history`, `deploy.rollback` (checkout a prior
    recorded SHA). URL forms limited to `https`/`ssh` (F9); no `file://`/`ext::`; no arbitrary
    post-checkout hooks executed by the agent.
@@ -38,7 +44,7 @@ F6, F7, F9, F10, F11.
   dropped to the site uid/gid (or a `setuid`-less helper that `seteuid`s — head to pick the mechanism
   in the blueprint; default: the agent forks a worker that `setgid`+`setuid`+`setgroups` to the site
   user, then does the fs op). Archive extract streams entries through the F9 archive check.
-- **`internal/verbs/deploy.go`** — `deploy.pull` is a **slow** verb (objectKey `site:<name>`): argv
+- **`internal/verbs/deploy.go`** — `deploy.run` is a **slow** verb (objectKey `site:<site_id>`): argv
   `git -C <projdir> fetch --depth 50 origin <branch>` then `git -C <projdir> checkout --detach <sha>`;
   record the SHA + timestamp in a `deploys` table; deploy key stored sealed (F12), written to a
   per-site `GIT_SSH_COMMAND` identity file `0600` owned by the site user at use, removed after.
@@ -55,7 +61,7 @@ F6, F7, F9, F10, F11.
   sane length), append to the site user's `~/.ssh/authorized_keys` (`0600`, owned by site user,
   `O_NOFOLLOW` parent), idempotent (no duplicate keys). **`sshkey.add`/`remove` do a read-modify-write of
   one `authorized_keys`; even though they are sync verbs, they MUST serialize on the site's keyed lock
-  (`site:<name>`) so two concurrent edits cannot lose an update** (atomic temp+rename of the file, not an
+  (`site:<site_id>`) so two concurrent edits cannot lose an update** (atomic temp+rename of the file, not an
   in-place append race).
 - **`internal/verbs/log.go`** — allowlist map `{name → (path | journalctl unit)}`; tail with a line
   cap; never accept a raw path.
@@ -107,7 +113,7 @@ F6, F7, F9, F10, F11.
 2.  files.write is atomic (temp+rename), runs as the site user (resulting file owned by site user),
       and O_NOFOLLOW blocks a pre-planted symlink at the target.
 3.  Archive extract of a crafted zip/tar with a `../` entry → refused, nothing written outside root.
-4.  deploy.pull checks out the pinned SHA as the site user; a `file://`/`ext::` URL → refused;
+4.  deploy.run checks out the pinned SHA as the site user; a `file://`/`ext::` URL → refused;
       deploy.rollback restores a prior SHA; deploy key never world-readable, removed after use.
 5.  cron creates a systemd timer running as the site user; no root cron entry is ever written;
       disable/delete removes it; `@reboot`-as-root is impossible via the API.

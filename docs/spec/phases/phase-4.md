@@ -1,5 +1,12 @@
 # Phase 4 — PHP, WordPress, MariaDB
 
+## Status (per step)
+- **Step 1 — MariaDB DB/user lifecycle:** merged (#109).
+- **Step 2 — PHP runtime (user marking/hardening + FPM pool, `php.set`/`php.list`):** merged (#129).
+- **Step 3 — WordPress install:** pending.
+
+Every Verification row and DoD box below is tagged with its step.
+
 ## Goal
 PHP sites with per-site isolation (own Unix user + FPM pool), a least-privilege MariaDB DB/user
 lifecycle, and a checksum-verified WordPress install. One supported PHP version first.
@@ -33,31 +40,38 @@ build it.
 **Build order — independent-first, each runtime-open and verified before the next:**
 1. **MariaDB DB/user lifecycle** (Deliverable 3): `database.create/rotate_password/delete/list`,
    `dbuser.*`; `unix_socket` root admin, least-privilege grant (never `*.*`), show-once password via
-   the F6 claim. No PHP/WordPress needed. Closes Verification rows 3, 4 (transport), 7.
+   the F6 claim. No PHP/WordPress needed. Closes Verification rows 3, 4 (transport leg only — the
+   `--dbhost`/wp-config leg of row 4 is a **Step-3** check, as wp-config does not exist yet), 7.
 2. **PHP runtime** (Deliverables 1–2): per-site user + FPM pool with the socket-owner **502 fix**, then
    `php.set` / `php.list`. Closes Verification rows 1, 2, 7.
 3. **WordPress install** (Deliverable 4): `download → verify-checksums → config create → install`, run
    as the site user, wp-config 440/400, non-empty-docroot refusal; destructive ops stay `unsupported`
    (Deliverable 5 / row 6). Closes Verification rows 5, 6.
 
+**Ruling — `site.create` types and `php_version`.** The Phase-3 `site.create type=php|wordpress`
+`unsupported` refusal is **lifted for `php` in Step 2** and **for `wordpress` in Step 3**. `php_version` on
+`site.create`/`site.update` is **sugar** that delegates to the `php.set` computed-cap path (one code path;
+no separate version/limit logic).
+
 **One PR per step** (steps 1 and 2 may each ship on their own), each small and independently
 mergeable — not one 285-file mega-draft. Drive each with `docs/spec/PHASE-DRIVER-PROMPT.md`
 (`{{TARGET}}` = the step), with **one independent verifier pass per step, not per commit.**
 
 ## Deliverables
-1. **Per-site Unix user + FPM pool** (§6): one non-login user per site (`/usr/sbin/nologin`, `0751`
+1. **Per-site Unix user hardening + FPM pool** (§6; **Step 2**). Phase 3 creates the per-site user; Phase 4
+   (Step 2) **marks/hardens** that user (GECOS marker, perms) and **adds the FPM pool**. One non-login user per site (`/usr/sbin/nologin`, `0751`
    home, `2750 site:www-data` docroot); one PHP-FPM pool over a Unix socket where the **worker runs as the site user** but the
    **socket is owned by the nginx user** (the 502 fix); `pm=ondemand`; per-pool hardening.
-2. **PHP version management** (`php.set`, `php.list`): one supported version first; per-site version +
+2. **PHP version management** (`php.set`, `php.list`; **Step 2**): one supported version first; per-site version +
    limits.
-3. **MariaDB DB/user lifecycle** (`database.create/rotate_password/delete/list`, `dbuser.*`):
+3. **MariaDB DB/user lifecycle** (**Step 1**; `database.create/rotate_password/delete/list`, `dbuser.*`):
    per-site DB + dedicated user bound to loopback, **least-privilege grant** (never `*.*`), generated
    names + show-once passwords; the **agent authenticates to MariaDB as root via `unix_socket`** (no
    stored admin password anywhere).
-4. **WordPress install** (`site.create type=wordpress` or `wp.install`): `wp core download` →
+4. **WordPress install** (**Step 3**; `site.create type=wordpress` or `wp.install`): `wp core download` →
    `wp core verify-checksums` → `wp config create` → `wp core install`, run **as the site user**,
    `wp-config.php` perms `440`/`400`, never over a non-empty docroot.
-5. **Guard:** no destructive WordPress ops (update/clone/staging) until backups/restore land (Phase 6).
+5. **Guard** (Step 3): no destructive WordPress ops (update/clone/staging) until backups/restore land (Phase 6).
 
 ## Blueprint
 
@@ -102,7 +116,7 @@ php_admin_flag[log_errors]         = on
   carries that header; any pool file lacking it (distro `www.conf`, an operator's file) is **never touched**.
   A managed-path collision whose header names a **different** ULID → `conflict`, never overwrite.
 - **FPM service lifecycle (zero-pool) — gate on the EFFECTIVE pool set, never only the managed count**
-  (resolving the #121 stop-on-zero-managed-vs-unmanaged conflict). `php8.3-fpm -t` rejects an empty pool set
+  (stop-on-zero-managed must not stop an operator's unmanaged running config). `php8.3-fpm -t` rejects an empty pool set
   (exit 78) and F0a does **not** require a permanent `www.conf`, but an operator may run their own unmanaged
   pool (`www.conf` or any non-`novapanel-` file in `pool.d/`) that NovaPanel must **never take offline**. So
   the service is ensure-state on the **effective** pool set = every `.conf` in `pool.d/` (managed **and**
@@ -114,10 +128,9 @@ php_admin_flag[log_errors]         = on
   an operator pool. The next `site.create` re-ensures it active. Never report success on an invalid
   (zero-pool, un-`-t`-able) running config.
 - **`-t` validates the WHOLE `pool.d` — a `-t`/reload failure (ours OR a foreign pool) always takes the ONE
-  F8/#119 outcome; a baseline only sets the error ATTRIBUTION, never a different state** (correcting #125,
-  which said a foreign-baseline failure should *leave our new file in place* — that diverges on-disk from
-  committed SQLite, which #119 reconcile would revert anyway, so "takes effect on the next reload" was wrong
-  and it contradicted F8/SQLite-authoritative recovery). `php8.3-fpm -t` is global, so a **pre-existing broken
+  F8 outcome; a baseline only sets the error ATTRIBUTION, never a different state** (a foreign-baseline
+  failure must **not** leave our new file in place: that diverges on-disk from committed SQLite, which
+  reconcile would revert anyway, and contradicts F8/SQLite-authoritative recovery). `php8.3-fpm -t` is global, so a **pre-existing broken
   operator pool** (`www.conf` or any non-`novapanel-` file) can make our `-t`/reload fail through no fault of
   our change. **Single outcome on ANY `-t`/reload/probe failure:** re-render our pool file from the
   **committed SQLite** state (F8 revert — the file is a pure projection, #119), **do not checkpoint the new
@@ -132,11 +145,11 @@ php_admin_flag[log_errors]         = on
   to committed SQLite, never a left-behind divergent file, never silent success over a `-t` we made fail.
 - **`pm.max_children` sizing (deterministic, persisted — a pure SQLite projection per #119).** The cap is
   **not** read from live RAM at render time (that would make the pool non-deterministic on reconcile). It is
-  computed **once** at `site.create`/`php.set` and **persisted in the site's SQLite `limits`**; the pool
+  computed **once** at `site.create`/`php.set` and **persisted in the key-value store (`site:php_limits:<id>`, JSON — see 02; not a `sites` column)**; the pool
   file renders `pm.max_children` from that committed value and reconcile re-renders the same value. Default
   formula: `php_budget_mb = max(256, floor(MemTotalMB * 0.5)) − 256` (reserve for OS/MariaDB/nginx);
   `cap = clamp(floor(php_budget_mb / 64 / max(1, active_site_count)), 2, 32)` (worker RSS assumed **64 MB**;
-  bounds **[2, 32]**). **No user-facing `max_children` override in v1** — correcting #122: canonical `03`
+  bounds **[2, 32]**). **No user-facing `max_children` override in v1**: canonical `03`
   `php.set.limits` carries only `memory_mb`/`upload_mb`/`max_exec_sec`, and `03` is **not** amended; the cap
   is always the computed+persisted value (an operator rebalance is future). If RAM can't be detected at
   compute time, fall back to the min (`2`) and persist it — never fabricate a RAM-sized value. **Legacy
@@ -454,8 +467,7 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
 - **PHP version pinned: 8.3** (F0a). Pool dir `/etc/php/8.3/fpm/pool.d/`, reload `php8.3-fpm`.
 - **`php.list` / `php.set` semantics** (canonical `03`: `php.list{} → {versions:[string], default}` is
   sync RO `sites:read`; `php.set{site_id, version, limits?}` is slow `sites:write` and **`version` is
-  required** — the registry/shape precedence the implementer asked about: follow `01`/`03`, not the
-  issue prose). v1 supports exactly the pinned set `["8.3"]`. `php.list.versions` = the supported
+  required** — registry/shape precedence: follow `01`/`03`, not issue prose). v1 supports exactly the pinned set `["8.3"]`. `php.list.versions` = the supported
   versions whose **CLI and FPM both probe OK** (`php8.3 -v` succeeds **and** the `php8.3-fpm` unit is
   present); `default` = the pinned `"8.3"` constant (there is no mutable global default yet, so it is not
   read from any stored setting). If the pinned runtime is missing or a probe fails, `php.list` still
@@ -479,7 +491,8 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
   `/srv/sites/<site>` **`0751`**) so nginx can traverse and serve. Home `0751` gives `other`
   traverse-only (`--x`), **not** read/list, and the `2750 site:www-data` docroot denies `other`
   entirely, so cross-site isolation still holds: a second site's uid can neither list another home nor
-  read its docroot/files. Phase 4 creates the user and dirs to match:
+  read its docroot/files. Phase 4 (Step 2) **marks/hardens** the Phase-3 user and dirs to match (the
+  user is created by Phase 3 `site.create`; the same form applies):
   `useradd -r -s /usr/sbin/nologin -m -c "novapanel-site=<site_ULID>"` (GECOS marker — `:`/`,` are
   forbidden in GECOS, so the sentinel is `novapanel-site=<ULID>`), group = the site name;
   reserved-name list in `internal/validate`.
@@ -494,16 +507,20 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
     orphan sweep needs; see `00` §Panel-owned OS-user provenance): delete the home/log dir **only** when all
     hold — (1) the owning account carries the **`novapanel-site=`** sentinel (never `novapanel-retained=`),
     with no live `sites` row and no live job; (2) the dir is at the **canonical managed path** for that
-    account's name; (3) the dir **and every file under it** are owned by that account's **UID/GID**. By the
+    account's name; (3) the dir **and every file under it** are owned by that account's **UID** (owner UID == account UID;
+    GID not required; `lstat`, never following symlinks, same device; the log dir satisfies this since its owner is
+    the site uid). By the
     create no-adopt invariant above, a marked account's canonical UID-owned tree is panel-created **by
     construction**, so this is sufficient proof without a `sites` row. A file owned by a **different** UID, a
     non-canonical path, or an absent/unparseable marker → **retain + operator** (fail closed). Purge
-    contents-first, then `userdel` (UID-reuse guard, below).
-- **ACME webroot is a SEPARATE root-owned tree (F16, Phase-3), not under docroot** (correcting #120). The
+    contents-first, then `userdel` (UID-reuse guard, below). **Current behavior (#128):** the orphan sweep
+    **retains and surfaces to the operator**; automatic dir/account purge is **deferred, tracked in #128**
+    (pending UID non-reuse allocation + process quiescence). The evidence rules here are the future contract.
+- **ACME webroot is a SEPARATE root-owned tree (F16, Phase-3), not under docroot**. The
   challenge webroot is `/var/www/acme/<site>` (per-site subdir under `acme_webroot=/var/www/acme`,
   world-traversable B-D8), **root-owned** (`root:root`; provider/nginx read; no group/other write) — **not**
   `<docroot>/.well-known/…`. **Step 2 (PHP runtime) does not create, own, provenance-check, or delete this
-  tree** — it is owned/ensured by **Phase-3/`ssl.*`** (resolving the #123 first-issue regression). Concretely:
+  tree** — it is owned/ensured by **Phase-3/`ssl.*`**. Concretely:
   - **Creation is the issuance path's, not `site.create`'s.** **Both `ssl.issue` and `ssl.renew`**
     (`acme.NewWebroot` is called from the shared issue/renew client path, and `NewWebroot` requires the
     per-site root to **pre-exist** — it only creates the `.well-known/acme-challenge` subdirs, not the root)
@@ -512,9 +529,10 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
     checks) **before** `NewWebroot` runs, so the precondition is met without `site.create` providing the dir.
     Creating/ensuring our **own** root-owned empty dir is always safe
     (no foreign-adoption question — it is an ensure-state on a root-owned path we are about to write
-    challenge files into). This un-regresses first issuance after `site.create` correctly stopped touching
-    the tree (#123); **Step 2 code stays entirely out of the ACME tree.**
-  - **The full ULID-bound lifecycle is DEFERRED to a tracked Phase-3/`ssl.*` item, not Step-2's gate.** The
+    challenge files into). `site.create` does not touch the tree, so first issuance relies on this ensure-create;
+    **Step 2 code stays entirely out of the ACME tree.**
+  - **The full ULID-bound lifecycle is DEFERRED to a tracked Phase-3/`ssl.*` item (the #124 handoff — see
+    `phase-3-ssl-integration.md` "Handoff owed from #124"), not Step-2's gate.** The
     **name/path alone does not prove ownership** (the slug is reusable after the row is removed), so a durable
     **site-ULID provenance marker is owed** — a root-owned `.novapanel-owner` file carrying `<site_ULID>`
     inside the tree, keyed on the ULID not the name, with the same create/replay/retain/purge/legacy-migration
@@ -567,7 +585,9 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
     (no UID-reuse risk): remove by its deterministic path or leave for the operator. `userdel` runs **only
     after** every file owned by that UID is gone; if any purge step fails or any ownership is uncertain, **do
     not `userdel`** — retain the account and surface to the operator (the conservative skip is the correct
-    fallback). This completes convergence while guaranteeing a released UID can never inherit surviving files.
+    fallback). This is the **future contract** for automatic orphan purge, which is **deferred (#128)** — until then the
+    sweep retains the account and surfaces it to the operator. The order guarantees a released UID can never
+    inherit surviving files.
 
 ## External refs (gathered — verified, with flags to resolve before coding)
 - **502 cause (verified):** FPM socket default owner = FPM run-user (site user) mode 0660 → nginx
@@ -578,42 +598,44 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
   deprecated.
 - **WordPress (verified):** `wp core verify-checksums` compares against WordPress.org hashes; **never
   `--insecure`**; wp-config perms **440/400**; run as site user not root; check docroot empty first.
-- **Flags to resolve (do not guess):** (a) `wp core install --admin_password` may need a nightly
-  WP-CLI — pin the version or set the admin password via `wp user update` after; (b) whether
-  `wp config create` pulls salts from the WordPress.org secret-key API vs local gen is unstated —
-  requirement is **unique-per-site salts**, inject remote salts explicitly if required; (c) confirm
-  the exact privilege list against the target WordPress version.
+- **Step 3 pre-reading — open WordPress flags (resolve at Step-3 build; do not guess):**
+  1. **Admin password:** `wp core install --admin_password` may need a nightly WP-CLI — pin the version or
+     set the admin password via `wp user update` after.
+  2. **Salts:** `wp config create` may pull salts from the WordPress.org secret-key API; the ruling is
+     **salts = local CSPRNG** (unique per site; never a remote fetch — inject explicitly if WP-CLI would fetch).
+  3. **Grant list:** confirm the exact least-privilege grant list against the target WordPress version.
 
 ## Verification (the gate)
 ```
-1.  Per-site user: non-login, `0751` home + `2750 site:www-data` docroot; a second site's user can
+1.  [Step 2] Per-site user: non-login, `0751` home + `2750 site:www-data` docroot; a second site's user can
       neither list another home nor read its docroot/files (home `0751` is traverse-only for `other`).
-2.  FPM pool: worker runs as the SITE user (asserted), socket owned by the NGINX user mode 0660 →
+2.  [Step 2] FPM pool: worker runs as the SITE user (asserted), socket owned by the NGINX user mode 0660 →
       nginx serves PHP (no 502). A second site's worker cannot read the first site's files.
       The default compatibility profile leaves child-process functions available; a hardened profile is
       opt-in and its warning is tested.
-3.  DB lifecycle: database.create makes a loopback-bound OWNER user with ONLY that db's privileges (a
+3.  [Step 1] DB lifecycle: database.create makes a loopback-bound OWNER user with ONLY that db's privileges (a
       test asserts the user cannot read another db and has no *.* grant); rotate_password{db_id} rotates
       that owner account and publishes a new show-once claim; the agent used unix_socket (no admin
       password exists anywhere in config/DB). (wp-config rewrite on rotate is a Step-3/WordPress check,
       not required for a DB with no WP site.)
-4.  Transport consistency: user host, Go/WP DSN, and wp-config --dbhost all 127.0.0.1; a mismatch
+4.  [Step 1 transport; Step 3 wp-config `--dbhost` leg] Transport consistency: user host, Go/WP DSN, and
+      wp-config --dbhost all 127.0.0.1 (the `--dbhost`/wp-config check is Step 3); a mismatch
       test reproduces "Access denied" and the spec's single-transport rule prevents it.
-5.  WP install: verify-checksums runs and a tampered file FAILS the install; wp-config.php is 440/400
+5.  [Step 3] WP install: verify-checksums runs and a tampered file FAILS the install; wp-config.php is 440/400
       owned by the site user; install over a non-empty docroot is refused; WP-CLI ran as the site user.
-6.  No destructive WP op (update/clone/staging) is callable yet (returns unsupported until Phase 6).
-7.  All **mutating** verbs are jobs (reads are sync per 01); all are audited; passwords are show-once
+6.  [Step 3] No destructive WP op (update/clone/staging) is callable yet (returns unsupported until Phase 6).
+7.  [Steps 1-3] All **mutating** verbs are jobs (reads are sync per 01); all are audited; passwords are show-once
       via the job claim (never returned twice, never in result_json/logs).
 ```
 
 ## Definition of Done
-- [ ] Per-site user + FPM pool with the socket-owner 502 fix; cross-site isolation proven.
-- [ ] Pool hardening: `cgi.fix_pathinfo=0`, per-site error log, and default compatibility profile
+- [x] **[Step 2]** Per-site user + FPM pool with the socket-owner 502 fix; cross-site isolation proven.
+- [x] **[Step 2]** Pool hardening: `cgi.fix_pathinfo=0`, per-site error log, and default compatibility profile
   documented. Hardened PHP is an explicit per-site option with compatibility warning.
-- [ ] MariaDB per-site DB+user, least-privilege (no `*.*`), loopback-bound; admin via unix_socket, no stored admin password.
-- [ ] Single DB transport (127.0.0.1) consistent across user host / DSN / wp-config.
-- [ ] WordPress install verifies checksums (never --insecure), wp-config 440/400, runs as site user, refuses non-empty docroot.
-- [ ] Show-once passwords; all verbs jobs + audited; no destructive WP ops before Phase 6.
+- [x] **[Step 1]** MariaDB per-site DB+user, least-privilege (no `*.*`), loopback-bound; admin via unix_socket, no stored admin password.
+- [ ] **[Step 1 transport ✓; Step 3 wp-config leg]** Single DB transport (127.0.0.1) consistent across user host / DSN / wp-config.
+- [ ] **[Step 3]** WordPress install verifies checksums (never --insecure), wp-config 440/400, runs as site user, refuses non-empty docroot.
+- [ ] **[Steps 1-3; Steps 1-2 done, WP part pending]** Show-once passwords; all verbs jobs + audited; no destructive WP ops before Phase 6.
 
 ## Guardrails (this phase)
 - **The FPM socket is owned by the Nginx user, never the site user.** The worker runs as the site user;

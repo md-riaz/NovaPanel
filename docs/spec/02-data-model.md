@@ -2,11 +2,28 @@
 
 Complete DDL for the control-plane DB (`/var/lib/novapanel/panel.db`, `0700 root`, D9). This is the
 source of truth for every table a phase references. Conventions (F5): WAL; `PRAGMA foreign_keys=ON`;
-**IDs are ULID strings** (`internal/id`, crockford base32); **timestamps are INTEGER unix-millis UTC**;
-money/none. Migrations are forward-only SQL under `internal/store/migrations/NNNN_name.sql`, embedded
+**IDs are ULID strings** (`internal/id`, crockford base32); **timestamps are INTEGER unix-millis UTC**.
+Migrations are forward-only SQL under `internal/store/migrations/NNNN_name.sql`, embedded
 with `go:embed`, applied in a transaction, recorded in `schema_migrations`. A migration is **never
 edited after it ships**; a test hashes each migration file and fails the build if a shipped hash
 changed (integrity) or if applying `0001..N` to a fresh DB errors.
+
+**Migration numbering is late-bound.** New schema arrives as the **next-free `NNNN_*.sql`, assigned at
+merge/reconciliation** and described here by **content**, not by a reserved number. Shipped migrations are
+**frozen**; `internal/store/migrations/hashes.json` is **append-only**; never reserve or pre-claim a
+number during development.
+
+**Migration map (shipped through 0007; later phases append at merge):**
+
+| File | Content |
+|---|---|
+| `0001_init` | Phase-1 core |
+| `0002_schedule_authority` | Phase-1 schedule authority |
+| `0003_mfa` | Phase-2 MFA |
+| `0004_api_tokens` | Phase-2 API tokens |
+| `0005_sites` | Phase-3 sites, domains, certs |
+| `0006_databases` | Phase-4 databases |
+| `0007_session_expiry_indexes` | session-expiry GC indexes (F4 hardening) |
 
 Tables are grouped by the phase that introduces them; a later phase's `ALTER`/new table ships as a new
 migration. `0001_init.sql` creates the Phase-1 core (identity, jobs, audit, secrets, settings).
@@ -220,9 +237,8 @@ ALTER TABLE users ADD COLUMN totp_pending_at INTEGER;  -- enrollment start (ms);
 
 ### Migration `0007_session_expiry_indexes.sql` (session hardening, forward-only)
 
-Main owns shipped 0001–0006 (`0005_sites.sql`, `0006_databases.sql`), immutable. PR85 adds only
-`0007_session_expiry_indexes.sql` and its registered hash (head migration ruling: renumbered from the
-colliding 0006). The sequence is contiguous 0001..0007.
+Shipped through 0007 — `0005_sites`, `0006_databases`, `0007_session_expiry_indexes`; later phases append
+at merge. This migration adds only the two session-expiry indexes below and its registered hash.
 
 ```sql
 CREATE INDEX idx_sessions_idle_deadline_id ON sessions(idle_deadline, id);
@@ -256,6 +272,9 @@ lookup must appear, without a full sessions scan. No loop, scheduler, config key
 logging is added.
 
 ## Phase 3 — sites, domains, certs
+
+**PHP limits (`php.set`):** per-site PHP limits and the computed `pm.max_children` persist in the
+key-value store keyed **`site:php_limits:<id>`** (JSON), **not** a `sites` column (do not add one).
 
 ```sql
 CREATE TABLE sites (

@@ -5,9 +5,15 @@ A versioned, token-scoped **public REST API** (`/v1`) that is a thin authorized 
 verbs, plus the **inbound deploy webhook** (D1). Scripts/CI can drive the panel safely; a compromised
 token inherits only its scopes, and underneath only the fixed agent verbs.
 
+> **OWED — before build.** (1) **Token-scope split:** state what Phase 2 / migration `0004_api_tokens`
+> already landed (token table, `tokens.create/list/revoke`, agent-side scope enforcement) versus what Phase 8
+> adds (the `/v1` router, OpenAPI, scope map surfaced per route). (2) **`deploy.hook` synthetic actor / role /
+> scope:** the webhook is not a user session, so its actor identity, role and scope for audit and dispatcher
+> checks must be ruled (01 keeps `deploy.hook` Internal, web-peer-gated). Neither is specified yet.
+
 ## Depends on
 Phases 1–6, **and Phase 7** for the `dns:*` scopes/resources (gate those routes on a configured DNS
-provider, else `unsupported`). **Required reading (not optional background): `../vpspanel-api.md`** —
+provider, else `unsupported`). **Required reading (not optional background): `../../vpspanel-api.md`** —
 it is the authoritative route table (§5 paths/methods/bodies), scope list (§4) and status-code table
 (§8); every route maps 1:1 to a verb in `01-rpc-and-verbs.md` with the args/reply in `03-verb-shapes.md`.
 Also `00-foundations.md` F2–F4, F6, F11, F13.
@@ -68,16 +74,16 @@ Also `00-foundations.md` F2–F4, F6, F11, F13.
 - **Token identity flow (authoritative):** `panel-web` passes the bare `npat_<id>_<secret>` as the
   RPC `session`; the **agent** resolves it (O(1) by `<id>`, Argon2id-verify `<secret>`) to
   `{scopes, automation}` and **the dispatcher enforces `Verb.Scope` agent-side**. `panel-web` does
-  **not** hold a scope→verb map and makes no authz decision (removes the review's contradiction). A
-  separate `tokens.verify` is unnecessary — the normal session resolution covers it.
+  **not** hold a scope→verb map and makes no authz decision (removes the review's contradiction).
 - **Scopes:** `system:read/write`, `sites:read/write`, `databases:read/write`, `dns:read/write`,
   `backups:read/write`, `deploy`. **Excluded** (need user+MFA or an automation-grant token):
   `backups:restore`, `firewall:write`, `ssh:write`, `tokens:write`, `system:power`. The per-verb scope
   is the `Scope` column in `01-rpc-and-verbs.md`.
 - **Error → HTTP status:** 200 read ok · 202 mutation accepted (+job) · 400 `bad_request`/
-  `invalid_argument` · 401 `unauthenticated` · 403 `forbidden` (scope/role/MFA) · 404 `not_found` ·
-  409 `conflict`/idempotency-mismatch · 412 `precondition_failed` · 423 `locked` · 429 rate-limited
-  (+`Retry-After`) · 504 `deadline_exceeded` · 503 `agent_error`/agent down (`agent_unavailable`).
+  `invalid_argument` · 401 `unauthenticated` · 403 `forbidden` (scope/role/MFA) · 404 `not_found`/
+  `unknown_verb` · 409 `conflict`/`interrupted`/idempotency-mismatch · 412 `precondition_failed` · 423
+  `locked` · 429 `rate_limited` (+`Retry-After`) · 501 `unsupported` · 504 `deadline_exceeded` · 500
+  `agent_error` · 503 agent down (`agent_unavailable`). Identical to the `HTTP` column of the F3 catalog in 00.
 - **Async body:** `202 { "job": {id,status,verb}, "links": {"self","job","events"} }`; `GET /v1/jobs/{id}`
   returns `{status, progress, events[], result}` from `jobs` + `job_events` (02-data-model). A
   show-once secret is fetched via the job `claim`, not the job body.

@@ -68,7 +68,7 @@ panel.backup_config{repo_id}                            → job → {snapshot_id
 site.create{name?, type:'static'|'php'|'wordpress', primary_domain, php_version?} → job → {site_id}
                                                         # name generated from the domain if omitted
 site.update{site_id, primary_domain_id?:string, php_version?, force_https?:bool, hsts_max_age?:int, maintenance?:bool} → job → {}
-site.delete{site_id, purge_files?:bool}                 → job → {}      # MFA; removes user/docroot/certs/DB rows per flags
+site.delete{site_id, purge_files?:bool}                 → job → {}      # MFA; refuses `precondition_failed` while any `databases.site_id` references the site; no cascade flag; `purge_files` controls user/home/docroot only
 site.list{}                                            → {sites:[{id,name,type,primary_domain,status,php_version}]}
 site.get{site_id}                                       → {site:{…}, domains:[…], redirects:[{id,source,target,code}], cert:{state,not_after}}
 domain.add{site_id, fqdn}                               → job → {domain_id}
