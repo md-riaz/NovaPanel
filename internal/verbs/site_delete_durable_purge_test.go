@@ -109,7 +109,8 @@ func TestSiteDeletePurgeDropsManagedDatabaseAndUser(t *testing.T) {
 		if time.Now().After(deadline) {
 			cancel()
 			<-done
-			t.Fatalf("job %+v err %v", j, e)
+			op, oe := st.LoadOperation(ctx, job.ID)
+			t.Fatalf("job %+v err %v op %+v opErr %v statements %v", j, e, op, oe, runner.statements)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
