@@ -55,6 +55,9 @@ func TestDestructiveTeardownSurvivesExpiryAndReplays(t *testing.T) {
 	if err != nil || old.Checkpoint != "expired" {
 		t.Fatalf("unstarted: %+v %v", old, err)
 	}
+	if err = s.FailOperation(ctx, begun.JobID, "agent_error"); !errors.Is(err, ErrOperationLocked) {
+		t.Fatalf("begun teardown terminalized: %v", err)
+	}
 	if err = s.RecoverJobs(ctx, clock.now); err != nil {
 		t.Fatal(err)
 	}
