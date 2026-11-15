@@ -243,14 +243,28 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 		return err
 	}
 	defer release()
+	waitCtx := ctx
+	q.mu.Lock()
+	deadline := q.attemptDeadline
+	q.mu.Unlock()
+	if deadline != nil {
+		if limit := deadline(j.Verb); limit > 0 {
+			var cancel context.CancelFunc
+			waitCtx, cancel = context.WithTimeout(ctx, limit)
+			defer cancel()
+		}
+	}
 	for {
-		worked, err := q.executeEligible(ctx, j)
+		worked, err := q.executeEligible(waitCtx, j)
 		if err != nil || worked {
 			return err
 		}
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-waitCtx.Done():
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return nil
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
