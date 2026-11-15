@@ -82,7 +82,7 @@ func TestQueueDeleteForeignSchemaWithLiveChildren(t *testing.T) {
 		if _, err := tx.Exec(`INSERT INTO databases(id,name,engine,created) VALUES(?,'testdb','mariadb',0)`, db); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`INSERT INTO db_users(id,db_id,username,host,owner,created) VALUES(?,?,'liveuser','127.0.0.1',0,0)`, child, db)
+		_, err := tx.Exec(`INSERT INTO db_users(id,db_id,username,host,owner,created) VALUES(?,?,'liveuser','127.0.0.1',0,0),('01ARZ3NDEKTSV4RRFFQ69G5FAY',?,'owneruser','127.0.0.1',1,0)`, child, db, db)
 		return err
 	})
 	if err != nil {
@@ -170,7 +170,7 @@ func TestQueueDeleteForeignUserMarker(t *testing.T) {
 				if _, err := tx.Exec(`INSERT INTO databases(id,name,engine,created) VALUES(?,'testdb','mariadb',0)`, db); err != nil {
 					return err
 				}
-				_, err := tx.Exec(`INSERT INTO db_users(id,db_id,username,host,owner,created) VALUES(?,?,'staleuser','127.0.0.1',0,0),(?,?,'siblinguser','127.0.0.1',0,1)`, stale, db, sibling, db)
+				_, err := tx.Exec(`INSERT INTO db_users(id,db_id,username,host,owner,created) VALUES(?,?,'staleuser','127.0.0.1',0,0),(?,?,'siblinguser','127.0.0.1',1,1)`, stale, db, sibling, db)
 				return err
 			})
 			if err != nil {
