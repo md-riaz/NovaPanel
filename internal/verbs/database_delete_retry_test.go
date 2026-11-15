@@ -74,7 +74,7 @@ func TestDeleteWorkerRetriesAfterDeletingMarker(t *testing.T) {
 			a.Audit = log
 			a.Exec = r
 			a.Jobs = jobs.NewQueue(s, seal, log)
-			if err := a.Jobs.PrepareOperations(ctx); err != nil {
+			if err := a.Jobs.PrepareStartup(ctx); err != nil {
 				t.Fatal(err)
 			}
 			server := rpc.NewServer(a)
