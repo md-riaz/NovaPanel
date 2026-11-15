@@ -76,6 +76,9 @@ func (s *Store) GetPHPLimits(ctx context.Context, id string) (v php.Limits, err 
 		if e != nil {
 			return e
 		}
+		if limits == nil {
+			return sql.ErrNoRows
+		}
 		v, e = php.MergeLimits(limits, php.LimitsPatch{})
 		return e
 	})
