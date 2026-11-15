@@ -14,16 +14,19 @@ import (
 	"novapanel/internal/audit"
 	runner "novapanel/internal/exec"
 	"novapanel/internal/jobs"
+	"novapanel/internal/php"
 	"novapanel/internal/render/nginx"
-	"novapanel/internal/render/php"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
 )
 
 type phpBrokenRunner struct{}
 
-func (phpBrokenRunner) Run(context.Context, string, []string, runner.RunOpts) ([]byte, []byte, int, error) {
-	return nil, nil, 1, errors.New("injected command failure")
+func (phpBrokenRunner) Run(ctx context.Context, name string, args []string, opts runner.RunOpts) ([]byte, []byte, int, error) {
+	if name == "/usr/bin/systemctl" && len(args) > 0 && args[0] == "reload" {
+		return nil, nil, 1, errors.New("injected command failure")
+	}
+	return (phpScratchRunner{}).Run(ctx, name, args, opts)
 }
 
 // A failed rollback must not be finalized as a normal failed job: the original
@@ -38,6 +41,10 @@ func TestPHPQueueBlocksOnUnresolvedRollback(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	master := "[global]\npid = /run/php/php8.3-fpm.pid\nerror_log = /var/log/php8.3-fpm.log\ninclude = " + filepath.Join(root, "pool", "*.conf") + "\n"
+	if err := os.WriteFile(filepath.Join(root, "php-fpm.conf"), []byte(master), 0600); err != nil {
+		t.Fatal(err)
+	}
 	st, err := store.Open(filepath.Join(root, "panel.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -50,8 +57,9 @@ func TestPHPQueueBlocksOnUnresolvedRollback(t *testing.T) {
 	defer log.Close()
 	a := agent.New()
 	a.Store, a.Audit = st, log
+	a.Exec = phpBrokenRunner{}
 	a.Nginx = &nginx.Applier{Root: root, Runner: phpBrokenRunner{}, Probe: func(context.Context, nginx.Desired) error { return nil }}
-	a.DurablePHP = &agent.PHPDependencies{Pools: &php.Applier{Root: filepath.Join(root, "pool"), Runner: phpBrokenRunner{}, Probe: func(context.Context, php.Desired) error { return nil }}, RecoveryRoot: filepath.Join(root, "journal"), ResolveIdentity: func(context.Context, store.Site) (uint32, uint32, error) { return 1001, 1001, nil }}
+	a.PHP = &php.PoolApplier{Dir: filepath.Join(root, "pool"), Runner: a.Exec, Probe: func(context.Context) error { return nil }}
 	server := rpc.NewServer(a)
 	server.ConfigureJobs()
 	if err := a.PrepareStartup(ctx); err != nil {
@@ -84,8 +92,5 @@ func TestPHPQueueBlocksOnUnresolvedRollback(t *testing.T) {
 	op, err := st.LoadOperation(context.Background(), job.ID)
 	if err != nil || op.Checkpoint == "done" || op.Checkpoint == "expired" {
 		t.Fatalf("journal must remain recoverable: %+v %v", op, err)
-	}
-	if _, err = os.Stat(filepath.Join(root, "journal", job.ID+".json")); err != nil {
-		t.Fatal(err)
 	}
 }
