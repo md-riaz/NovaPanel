@@ -9,6 +9,7 @@ import (
 	"novapanel/internal/exec"
 	"novapanel/internal/jobs"
 	"novapanel/internal/php"
+	"novapanel/internal/phpcapacity"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
 	"strconv"
@@ -57,7 +58,7 @@ func committedPHPCap(limits store.PHPLimits) (int, error) {
 // activePHPLimits commits the one-time legacy cap before any pool recovery.
 func activePHPLimits(ctx context.Context, st *store.Store, siteID string) (store.PHPLimits, error) {
 	return st.BackfillSitePHPCap(ctx, siteID, func(active int) int {
-		return php.ChildrenCap(php.TotalMemoryMB(), active)
+		return phpcapacity.ChildrenCap(phpcapacity.TotalMemoryMB(), active)
 	})
 }
 func legacyPHPSet(ctx context.Context, a *agent.Agent, args any) (any, error) {
@@ -140,7 +141,7 @@ func legacyPHPSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 				active++
 			}
 		}
-		cap = php.ChildrenCap(php.TotalMemoryMB(), active)
+		cap = phpcapacity.ChildrenCap(phpcapacity.TotalMemoryMB(), active)
 		durable.Step = fmt.Sprintf("%s%d", capStep, cap)
 		if err = a.Store.UpdateJob(ctx, durable); err != nil {
 			return errors.Join(err, jobs.ErrRetry)

@@ -3,6 +3,7 @@ package verbs
 import (
 	"context"
 	"encoding/json"
+	"novapanel/internal/phpcapacity"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,7 +92,7 @@ func testPHPSetReplay(t *testing.T, legacy bool) {
 		t.Fatal(err)
 	}
 	limits, err := st.SitePHPLimits(ctx, sid)
-	wantCap := php.ChildrenCap(php.TotalMemoryMB(), 1)
+	wantCap := phpcapacity.ChildrenCap(phpcapacity.TotalMemoryMB(), 1)
 	if err != nil || limits.MaxChildren == nil || *limits.MaxChildren != wantCap || limits.MemoryMB == nil || *limits.MemoryMB != 128 || limits.UploadMB == nil || *limits.UploadMB != 32 {
 		t.Fatalf("limits %+v: %v", limits, err)
 	}

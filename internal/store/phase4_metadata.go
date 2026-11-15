@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"novapanel/internal/phpcapacity"
 	php "novapanel/internal/render/php"
 	"regexp"
 	"strings"
@@ -35,7 +36,7 @@ func readPhase4PHPLimits(ctx context.Context, tx *sql.Tx, id string) (*php.Limit
 	}
 	return &limits, nil
 }
-func writePhase4PHPLimits(ctx context.Context, tx *sql.Tx, id string, limits php.Limits) error {
+func writePhase4PHPLimits(ctx context.Context, tx *sql.Tx, id string, limits php.Limits, capOverride ...int) error {
 	var raw string
 	var saved storedPHPLimits
 	err := tx.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", phpLimitsKey(id)).Scan(&raw)
@@ -46,6 +47,20 @@ func writePhase4PHPLimits(ctx context.Context, tx *sql.Tx, id string, limits php
 		if err := json.Unmarshal([]byte(raw), &saved); err != nil {
 			return err
 		}
+	}
+	if len(capOverride) > 0 {
+		saved.MaxChildren = &capOverride[0]
+	}
+	if saved.MaxChildren == nil {
+		var active int
+		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM sites WHERE status='active'").Scan(&active); err != nil {
+			return err
+		}
+		cap := phpcapacity.ChildrenCap(phpcapacity.TotalMemoryMB(), active)
+		saved.MaxChildren = &cap
+	}
+	if *saved.MaxChildren < 2 || *saved.MaxChildren > 32 {
+		return ErrSiteInvalid
 	}
 	saved.MemoryMB, saved.UploadMB, saved.MaxExecSec = &limits.MemoryMB, &limits.UploadMB, &limits.MaxExecSec
 	encoded, err := json.Marshal(saved)

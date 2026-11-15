@@ -9,6 +9,7 @@ import (
 	"novapanel/internal/id"
 	"novapanel/internal/jobs"
 	"novapanel/internal/php"
+	"novapanel/internal/phpcapacity"
 	"novapanel/internal/render/nginx"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
@@ -92,7 +93,7 @@ func siteCreate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 				active++
 			}
 		}
-		cap := php.ChildrenCap(php.TotalMemoryMB(), active)
+		cap := phpcapacity.ChildrenCap(phpcapacity.TotalMemoryMB(), active)
 		initial = append(initial, store.PHPLimits{MaxChildren: &cap})
 	}
 	result, e := a.Jobs.EnqueueSiteCreate(ctx, &v, "site:"+v.Name, func(ctx context.Context, tx *sql.Tx, j *jobs.Job) error {

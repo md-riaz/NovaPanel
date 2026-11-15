@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"novapanel/internal/id"
+	"novapanel/internal/phpcapacity"
 	"reflect"
 
 	php "novapanel/internal/render/php"
@@ -13,6 +14,8 @@ import (
 
 // PHPOperationIdentity contains only nonsecret, full desired-state snapshots.
 type PHPOperationIdentity struct {
+	OriginalCap           int
+	DesiredCap            int
 	OriginalVersion       string
 	DesiredVersion        string
 	OriginalLimits        php.Limits
@@ -24,6 +27,9 @@ type PHPOperationIdentity struct {
 func validPHPSetIdentity(op Operation) bool {
 	i := op.Identity
 	if op.Owner == "" || !phase4ResourceID.MatchString(op.SiteID) || op.DatabaseID != "" || i.Version != 1 || i.Site == nil || i.Site.ID != op.SiteID || i.Site.Status != "active" || (i.Site.Type != "php" && i.Site.Type != "wordpress") || i.Site.PHPVersion == nil || i.PHP == nil || *i.Site.PHPVersion != i.PHP.OriginalVersion || i.PHP.OriginalVersion != "8.3" || i.PHP.DesiredVersion != "8.3" {
+		return false
+	}
+	if i.PHP.OriginalCap < 2 || i.PHP.OriginalCap > 32 || i.PHP.DesiredCap < 2 || i.PHP.DesiredCap > 32 {
 		return false
 	}
 	if f := i.PHP.FailureEventID; f != "" {
@@ -69,6 +75,25 @@ func (s *Store) preparePHPSet(ctx context.Context, j Job, r OperationRequest, no
 		if e != nil {
 			return e
 		}
+		var active int
+		if e = tx.QueryRowContext(ctx, "SELECT count(*) FROM sites WHERE status='active'").Scan(&active); e != nil {
+			return e
+		}
+		computed := phpcapacity.ChildrenCap(phpcapacity.TotalMemoryMB(), active)
+		var savedRaw sql.NullString
+		if e = tx.QueryRowContext(ctx, "SELECT (SELECT value_json FROM settings WHERE key=?)", phpLimitsKey(r.SiteID)).Scan(&savedRaw); e != nil {
+			return e
+		}
+		originalCap := computed
+		if savedRaw.Valid {
+			var saved storedPHPLimits
+			if e = json.Unmarshal([]byte(savedRaw.String), &saved); e != nil {
+				return e
+			}
+			if saved.MaxChildren != nil {
+				originalCap = *saved.MaxChildren
+			}
+		}
 		desired, e := php.MergeLimits(original, r.PHP.Limits)
 		if e != nil {
 			return e
@@ -77,7 +102,7 @@ func (s *Store) preparePHPSet(ctx context.Context, j Job, r OperationRequest, no
 		if e != nil {
 			return e
 		}
-		identity := OperationIdentity{Version: 1, Site: &site, PHP: &PHPOperationIdentity{OriginalVersion: *site.PHPVersion, DesiredVersion: r.PHP.Version, OriginalLimits: originalTuple, OriginalLimitsPresent: original != nil, DesiredLimits: desired}}
+		identity := OperationIdentity{Version: 1, Site: &site, PHP: &PHPOperationIdentity{OriginalCap: originalCap, DesiredCap: computed, OriginalVersion: *site.PHPVersion, DesiredVersion: r.PHP.Version, OriginalLimits: originalTuple, OriginalLimitsPresent: original != nil, DesiredLimits: desired}}
 		op = Operation{JobID: j.ID, Owner: j.CreatedBy, Kind: PHPSet, SiteID: r.SiteID, Checkpoint: "prepared", Identity: identity}
 		if !validPHPSetIdentity(op) {
 			return ErrSiteInvalid
@@ -125,7 +150,7 @@ func completePHPSet(ctx context.Context, tx *sql.Tx, op Operation, now int64, cl
 	if _, err := tx.ExecContext(ctx, "UPDATE sites SET php_version=?,updated=? WHERE id=?", p.DesiredVersion, now, op.SiteID); err != nil {
 		return err
 	}
-	err := writePhase4PHPLimits(ctx, tx, op.SiteID, p.DesiredLimits)
+	err := writePhase4PHPLimits(ctx, tx, op.SiteID, p.DesiredLimits, p.DesiredCap)
 	if err != nil {
 		return err
 	}

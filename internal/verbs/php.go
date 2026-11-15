@@ -88,10 +88,10 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 		}
 	}
 	p := op.Identity.PHP
-	d.PHP = &php.Desired{Name: s.Name, Type: s.Type, Version: p.DesiredVersion, UID: uid, GID: gid, Limits: &p.DesiredLimits}
+	d.PHP = &php.Desired{Name: s.Name, Type: s.Type, Version: p.DesiredVersion, UID: uid, GID: gid, MaxChildren: p.DesiredCap, Limits: &p.DesiredLimits}
 	old := d
 	oldPHP := *d.PHP
-	oldPHP.Version, oldPHP.Limits = p.OriginalVersion, &p.OriginalLimits
+	oldPHP.Version, oldPHP.Limits, oldPHP.MaxChildren = p.OriginalVersion, &p.OriginalLimits, p.OriginalCap
 	old.PHP = &oldPHP
 	binding := nginx.PHPDurableBinding{Root: a.DurablePHP.RecoveryRoot, JobID: j.ID, SiteID: op.SiteID, Check: check, RecoveryOnly: op.Checkpoint != "prepared"}
 	// Terminal metadata and its audit are owned by Queue.finish, not this callback.

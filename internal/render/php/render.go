@@ -13,6 +13,7 @@ import (
 type Desired struct {
 	Name, Type, Version string
 	UID, GID            uint32
+	MaxChildren         int
 	Limits              *Limits // nil uses creation defaults; non-nil must be a complete valid tuple.
 }
 
@@ -32,6 +33,13 @@ func Render(d Desired) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	cap := d.MaxChildren
+	if cap == 0 {
+		cap = 2
+	}
+	if cap < 2 || cap > 32 {
+		return nil, rpcerr.Errf("invalid_argument", "Invalid PHP concurrency cap")
+	}
 	return []byte(fmt.Sprintf(`[%s]
 user = %d
 group = %d
@@ -40,7 +48,7 @@ listen.owner = www-data
 listen.group = www-data
 listen.mode = 0660
 pm = ondemand
-pm.max_children = 2
+pm.max_children = %d
 pm.process_idle_timeout = 10s
 pm.max_requests = 500
 php_admin_value[cgi.fix_pathinfo] = 0
@@ -50,5 +58,5 @@ php_admin_value[memory_limit] = %dM
 php_admin_value[post_max_size] = %dM
 php_admin_value[upload_max_filesize] = %dM
 php_admin_value[max_execution_time] = %d
-`, d.Name, d.UID, d.GID, d.Name, d.Name, limits.MemoryMB, limits.UploadMB, limits.UploadMB, limits.MaxExecSec)), nil
+`, d.Name, d.UID, d.GID, d.Name, cap, d.Name, limits.MemoryMB, limits.UploadMB, limits.UploadMB, limits.MaxExecSec)), nil
 }
