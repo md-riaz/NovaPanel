@@ -470,7 +470,7 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 		t.Fatal("claim recreated")
 	}
 	deleteJob := store.Job{ID: "review-delete", Verb: "site.delete", CreatedBy: "session", Role: "owner", State: "queued", Args: []byte(`{}`)}
-	if _, err = s.PrepareOperation(ctx, deleteJob, store.JobClaim{}, store.OperationRequest{Kind: store.SiteDelete, SiteID: op.SiteID}, nil, nil); err != nil {
+	if _, err = s.PrepareOperation(ctx, deleteJob, store.JobClaim{}, store.OperationRequest{Kind: store.SiteDelete, SiteID: op.SiteID, PurgeDatabases: true}, nil, nil); err != nil {
 		t.Fatal("canonical delete admission", err)
 	}
 	if _, err = s.StartJob(ctx, deleteJob.ID, time.Now().UnixMilli()); err != nil {

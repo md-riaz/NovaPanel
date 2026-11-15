@@ -46,8 +46,8 @@ func TestConfigPreEffectPanicExpiresOriginalOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 	op, err := s.LoadOperation(ctx, en.Job.ID)
-	if err != nil || op.Checkpoint != "expired" || len(op.Ciphertext) != 0 {
-		t.Fatal("pre-effect panic retained inputs", err)
+	if err != nil || op.Checkpoint != "expired" || len(op.Ciphertext) == 0 {
+		t.Fatal("ambiguous operation lost input", err)
 	}
 	j, err := s.GetJob(ctx, en.Job.ID)
 	if err != nil || j.State != "failed" || j.Code != "agent_error" {
