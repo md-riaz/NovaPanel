@@ -40,9 +40,7 @@ func (q *Queue) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		if !errors.Is(err, ErrRecoveryBlocked) {
-			return err
-		}
+		return err
 	}
 
 	if q.postRecovery != nil {
