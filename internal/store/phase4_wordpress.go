@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	php "novapanel/internal/render/php"
 	"novapanel/internal/wordpress"
 	"strings"
 )
@@ -114,7 +115,7 @@ func completeWordPress(ctx context.Context, tx *sql.Tx, op Operation, now int64,
 	if _, e = tx.ExecContext(ctx, "INSERT INTO wordpress_bindings(site_id,db_id) VALUES(?,?)", op.SiteID, db.ID); e != nil {
 		return e
 	}
-	if _, e = tx.ExecContext(ctx, "INSERT INTO site_php_limits(site_id) VALUES(?)", op.SiteID); e != nil {
+	if e = writePhase4PHPLimits(ctx, tx, op.SiteID, php.Limits{MemoryMB: 256, UploadMB: 64, MaxExecSec: 60}); e != nil {
 		return e
 	}
 	result, e := tx.ExecContext(ctx, "UPDATE job_claims SET nonce=?,ciphertext=?,expires=? WHERE job_id=? AND length(ciphertext)=0 AND claimed=0", claim.Nonce, claim.Ciphertext, now+ClaimTTLMillis, op.JobID)

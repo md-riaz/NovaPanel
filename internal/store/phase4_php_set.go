@@ -56,15 +56,8 @@ func phpSnapshot(ctx context.Context, tx *sql.Tx, siteID string) (Site, *php.Lim
 	if site.Status != "active" || (site.Type != "php" && site.Type != "wordpress") || site.PHPVersion == nil || *site.PHPVersion != "8.3" {
 		return site, nil, ErrSitePrecondition
 	}
-	var limits php.Limits
-	err = tx.QueryRowContext(ctx, "SELECT memory_mb,upload_mb,max_exec_sec FROM site_php_limits WHERE site_id=?", siteID).Scan(&limits.MemoryMB, &limits.UploadMB, &limits.MaxExecSec)
-	if errors.Is(err, sql.ErrNoRows) {
-		return site, nil, nil
-	}
-	if err != nil {
-		return site, nil, err
-	}
-	return site, &limits, nil
+	limits, err := readPhase4PHPLimits(ctx, tx, siteID)
+	return site, limits, err
 }
 
 func (s *Store) preparePHPSet(ctx context.Context, j Job, r OperationRequest, nonce, ciphertext []byte) (op Operation, err error) {
@@ -132,7 +125,7 @@ func completePHPSet(ctx context.Context, tx *sql.Tx, op Operation, now int64, cl
 	if _, err := tx.ExecContext(ctx, "UPDATE sites SET php_version=?,updated=? WHERE id=?", p.DesiredVersion, now, op.SiteID); err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO site_php_limits(site_id,memory_mb,upload_mb,max_exec_sec) VALUES(?,?,?,?) ON CONFLICT(site_id) DO UPDATE SET memory_mb=excluded.memory_mb,upload_mb=excluded.upload_mb,max_exec_sec=excluded.max_exec_sec`, op.SiteID, p.DesiredLimits.MemoryMB, p.DesiredLimits.UploadMB, p.DesiredLimits.MaxExecSec)
+	err := writePhase4PHPLimits(ctx, tx, op.SiteID, p.DesiredLimits)
 	if err != nil {
 		return err
 	}

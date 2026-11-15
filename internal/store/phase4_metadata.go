@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	php "novapanel/internal/render/php"
 	"regexp"
@@ -15,37 +16,74 @@ func (s *Store) WordPressDatabaseID(ctx context.Context, siteID string) (id stri
 	return
 }
 
-// GetPHPLimits reads desired metadata, never a pool file.
-func (s *Store) GetPHPLimits(ctx context.Context, id string) (v php.Limits, err error) {
-	err = s.db.QueryRowContext(ctx, "SELECT memory_mb,upload_mb,max_exec_sec FROM site_php_limits WHERE site_id=?", id).Scan(&v.MemoryMB, &v.UploadMB, &v.MaxExecSec)
-	return
+// readPhase4PHPLimits reads the same settings record used by the PHP runtime.
+func readPhase4PHPLimits(ctx context.Context, tx *sql.Tx, id string) (*php.Limits, error) {
+	var raw string
+	if err := tx.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", phpLimitsKey(id)).Scan(&raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var saved storedPHPLimits
+	if err := json.Unmarshal([]byte(raw), &saved); err != nil {
+		return nil, err
+	}
+	limits, err := php.MergeLimits(nil, php.LimitsPatch{MemoryMB: saved.MemoryMB, UploadMB: saved.UploadMB, MaxExecSec: saved.MaxExecSec})
+	if err != nil {
+		return nil, err
+	}
+	return &limits, nil
 }
-
-// MergePHPLimits is metadata-only. A runtime caller must hold the site lock and
-// publish/probe the pool before committing its verified desired tuple here.
-func (s *Store) MergePHPLimits(ctx context.Context, id string, p php.LimitsPatch) (v php.Limits, err error) {
+func writePhase4PHPLimits(ctx context.Context, tx *sql.Tx, id string, limits php.Limits) error {
+	var raw string
+	var saved storedPHPLimits
+	err := tx.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", phpLimitsKey(id)).Scan(&raw)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err == nil {
+		if err := json.Unmarshal([]byte(raw), &saved); err != nil {
+			return err
+		}
+	}
+	saved.MemoryMB, saved.UploadMB, saved.MaxExecSec = &limits.MemoryMB, &limits.UploadMB, &limits.MaxExecSec
+	encoded, err := json.Marshal(saved)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, "INSERT INTO settings(key,value_json) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", phpLimitsKey(id), string(encoded))
+	return err
+}
+func (s *Store) GetPHPLimits(ctx context.Context, id string) (v php.Limits, err error) {
 	err = s.Tx(ctx, func(tx *sql.Tx) error {
-		var kind string
-		if e := tx.QueryRowContext(ctx, "SELECT type FROM sites WHERE id=?", id).Scan(&kind); e != nil {
-			return e
-		}
-		if kind != "php" && kind != "wordpress" {
-			return ErrSitePrecondition
-		}
-		var current php.Limits
-		e := tx.QueryRowContext(ctx, "SELECT memory_mb,upload_mb,max_exec_sec FROM site_php_limits WHERE site_id=?", id).Scan(&current.MemoryMB, &current.UploadMB, &current.MaxExecSec)
-		var before *php.Limits
-		if e == nil {
-			before = &current
-		} else if !errors.Is(e, sql.ErrNoRows) {
-			return e
-		}
-		v, e = php.MergeLimits(before, p)
+		limits, e := readPhase4PHPLimits(ctx, tx, id)
 		if e != nil {
 			return e
 		}
-		_, e = tx.ExecContext(ctx, "INSERT INTO site_php_limits(site_id,memory_mb,upload_mb,max_exec_sec) VALUES(?,?,?,?) ON CONFLICT(site_id) DO UPDATE SET memory_mb=excluded.memory_mb,upload_mb=excluded.upload_mb,max_exec_sec=excluded.max_exec_sec", id, v.MemoryMB, v.UploadMB, v.MaxExecSec)
+		v, e = php.MergeLimits(limits, php.LimitsPatch{})
 		return e
+	})
+	return
+}
+func (s *Store) MergePHPLimits(ctx context.Context, id string, patch php.LimitsPatch) (v php.Limits, err error) {
+	err = s.Tx(ctx, func(tx *sql.Tx) error {
+		var typ string
+		if e := tx.QueryRowContext(ctx, "SELECT type FROM sites WHERE id=?", id).Scan(&typ); e != nil {
+			return e
+		}
+		if typ != "php" && typ != "wordpress" {
+			return ErrSitePrecondition
+		}
+		old, e := readPhase4PHPLimits(ctx, tx, id)
+		if e != nil {
+			return e
+		}
+		v, e = php.MergeLimits(old, patch)
+		if e != nil {
+			return e
+		}
+		return writePhase4PHPLimits(ctx, tx, id, v)
 	})
 	return
 }

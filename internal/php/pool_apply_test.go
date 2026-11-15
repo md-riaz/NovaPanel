@@ -10,7 +10,6 @@ import (
 
 	"fmt"
 	runner "novapanel/internal/exec"
-	"novapanel/internal/jobs"
 	"novapanel/internal/rpcerr"
 )
 
@@ -333,7 +332,7 @@ func TestPoolRecoveryFailureRetries(t *testing.T) {
 		}
 		return nil
 	}
-	if err := a.ApplyCommitted(ctx, "demo", next, old); !errors.Is(err, jobs.ErrRetry) {
+	if err := a.ApplyCommitted(ctx, "demo", next, old); !errors.Is(err, rpcerr.ErrRetry) {
 		t.Fatalf("expected retry: %v", err)
 	}
 	r.hook = nil

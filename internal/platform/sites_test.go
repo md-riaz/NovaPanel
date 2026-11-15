@@ -24,6 +24,9 @@ func (r *accountRunner) Run(_ context.Context, p string, args []string, _ runner
 	switch p {
 	case "/usr/bin/getent":
 		if args[0] == "group" {
+			if args[1] == "adm" {
+				return []byte("adm:x:33:\n"), nil, 0, nil
+			}
 			r.groupCalls++
 			gid := r.webGroup
 			if r.groupCalls > 1 && r.secondWebGroup != 0 {
@@ -54,7 +57,7 @@ func (r *accountRunner) Run(_ context.Context, p string, args []string, _ runner
 		if gid == 0 {
 			gid = 12345
 		}
-		return []byte(fmt.Sprintf("demo:x:%d:%d::%s:/usr/sbin/nologin\n", uid, gid, r.home)), nil, 0, nil
+		return []byte(fmt.Sprintf("demo:x:%d:%d:novapanel-site="+siteID+":%s:/usr/sbin/nologin\n", uid, gid, r.home)), nil, 0, nil
 	case "/usr/sbin/useradd":
 		r.exists = true
 		if r.createHome {
@@ -79,14 +82,14 @@ func TestEnsureSite(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("scratch ownership test requires root")
 	}
-	e := EnsureSite(context.Background(), r, sites, acme, "demo")
+	e := EnsureSite(context.Background(), r, sites, acme, acme, "demo", siteID)
 	if e != nil {
 		t.Fatal(e)
 	}
 	if len(r.calls) == 0 || r.calls[1] != "/usr/sbin/useradd" {
 		t.Fatal(r.calls)
 	}
-	if e := EnsureSite(context.Background(), r, sites, acme, "demo"); e != nil {
+	if e := EnsureSite(context.Background(), r, sites, acme, acme, "demo", siteID); e != nil {
 		t.Fatal(e)
 	}
 	creates := 0
@@ -122,7 +125,7 @@ func TestEnsureSiteRejectsWebIdentityCollisionBeforeDirectoryCreation(t *testing
 				}
 			}
 			r := &accountRunner{home: filepath.Join(sites, "demo"), exists: true, uid: tc.uid, gid: tc.gid, webUID: tc.webUID, webGID: tc.webGID, webGroup: tc.webGroup}
-			if err := EnsureSite(context.Background(), r, sites, acme, "demo"); err == nil {
+			if err := EnsureSite(context.Background(), r, sites, acme, acme, "demo", siteID); err == nil {
 				t.Fatal("accepted web identity collision")
 			}
 			for _, p := range []string{filepath.Join(sites, "demo"), filepath.Join(acme, "demo")} {
@@ -143,7 +146,7 @@ func TestEnsureSiteFreshCollisionLeavesAccountAndHome(t *testing.T) {
 		}
 	}
 	r := &accountRunner{home: filepath.Join(sites, "demo"), uid: 33, createHome: true}
-	if err := EnsureSite(context.Background(), r, sites, acme, "demo"); err == nil {
+	if err := EnsureSite(context.Background(), r, sites, acme, acme, "demo", siteID); err == nil {
 		t.Fatal("collision accepted")
 	}
 	if !r.exists {
@@ -152,7 +155,7 @@ func TestEnsureSiteFreshCollisionLeavesAccountAndHome(t *testing.T) {
 	if _, err := os.Stat(r.home); err != nil {
 		t.Fatalf("fixture home not created: %v", err)
 	}
-	if err := EnsureSite(context.Background(), r, sites, acme, "demo"); err == nil {
+	if err := EnsureSite(context.Background(), r, sites, acme, acme, "demo", siteID); err == nil {
 		t.Fatal("retry accepted unsafe identity")
 	}
 }
@@ -166,7 +169,7 @@ func TestEnsureSiteRejectsFirstWebGroupCollision(t *testing.T) {
 		}
 	}
 	r := &accountRunner{home: filepath.Join(sites, "demo"), exists: true, gid: 12345, webGroup: 12345, secondWebGroup: 33}
-	if err := EnsureSite(context.Background(), r, sites, acme, "demo"); err == nil {
+	if err := EnsureSite(context.Background(), r, sites, acme, acme, "demo", siteID); err == nil {
 		t.Fatal("accepted colliding group")
 	}
 	if _, err := os.Lstat(r.home); !os.IsNotExist(err) {
@@ -178,14 +181,14 @@ func TestEnsureSiteRejectsHostileSink(t *testing.T) {
 	root := t.TempDir()
 	r := &accountRunner{}
 	for _, name := range []string{"root", "bad;name", "../demo"} {
-		if e := EnsureSite(context.Background(), r, root, root, name); e == nil {
+		if e := EnsureSite(context.Background(), r, root, root, root, name, siteID); e == nil {
 			t.Fatal(name)
 		}
 	}
 	if e := os.Symlink(t.TempDir(), filepath.Join(root, "demo")); e != nil {
 		t.Fatal(e)
 	}
-	if e := EnsureSite(context.Background(), r, root, root, "demo"); e == nil {
+	if e := EnsureSite(context.Background(), r, root, root, root, "demo", siteID); e == nil {
 		t.Fatal("accepted symlink")
 	}
 	if len(r.calls) != 0 {
