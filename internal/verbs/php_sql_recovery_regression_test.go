@@ -68,7 +68,7 @@ func TestPHPStartupRestoresAfterTerminalSQLFailure(t *testing.T) {
 	}
 	job := reply.Data.(jobs.EnqueueResult).Job
 	if err := st.Tx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `CREATE TRIGGER fail_php_terminal BEFORE INSERT ON site_php_limits BEGIN SELECT RAISE(ABORT,'injected'); END`)
+		_, err := tx.ExecContext(ctx, `CREATE TRIGGER fail_php_terminal BEFORE INSERT ON settings WHEN NEW.key LIKE 'site:php_limits:%' BEGIN SELECT RAISE(ABORT,'injected'); END`)
 		return err
 	}); err != nil {
 		t.Fatal(err)
