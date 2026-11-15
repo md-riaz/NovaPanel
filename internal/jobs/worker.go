@@ -234,11 +234,26 @@ func (q *Queue) executeEligible(ctx context.Context, j Job) (bool, error) {
 			}
 		}
 	}
-	return true, q.execute(context.WithValue(ctx, heldLocksKey{}, held), j)
+	return true, q.executeOperation(context.WithValue(ctx, heldLocksKey{}, held), j, false)
 }
 
 func (q *Queue) execute(ctx context.Context, j Job) error {
-	return q.executeOperation(ctx, j, false)
+	ctx, release, err := q.AdmitMutation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	for {
+		worked, err := q.executeEligible(ctx, j)
+		if err != nil || worked {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }
 
 func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP bool) error {
