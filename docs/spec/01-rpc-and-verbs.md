@@ -40,7 +40,7 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 | `site.list` / `site.get` | | RO | ✓ | sites:read | | | | |
 | `site.create` | | A | | sites:write | ✓ | | | `site:<name>`+`osuser:<username>` (F20.7 order; per-site OS user) |
 | `site.update` | | A | | sites:write | ✓ | | | `site:<site_id>` |
-| `site.delete` | | A | | sites:write | ✓ | | ✓ | `site:<name>`+`osuser:<username>` (ensure-absent; F20.7 order); refuses `precondition_failed` while any `databases.site_id` references the site (no cascade flag; `purge_files` controls user/home/docroot only) |
+| `site.delete` | | A | | sites:write | ✓ | | ✓ | `site:<name>`+`osuser:<username>` (ensure-absent; F20.7 order); refuses `precondition_failed` while a database is attached unless `purge_databases=true`; explicit purge removes attached databases and managed users, while `purge_files` controls user/home/docroot |
 | `domain.add` / `domain.remove` | | A | | sites:write | ✓ | | | `site:<site_id>` |
 | `ssl.issue` / `ssl.renew` | | A | | sites:write | ✓ | ✓ | | `site:<site_id>` (ACME, rate-limited) |
 | `ssl.upload` | | A | | sites:write | ✓ | | ✓ | `site:<site_id>` — install a user-supplied cert+key (manual) |
