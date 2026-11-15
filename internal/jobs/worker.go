@@ -386,6 +386,13 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 	}
 	if isOperation {
 		err = operationError(err)
+		if err != nil {
+			if journal, ok := q.store.(operationStore); ok {
+				if op, e := journal.LoadOperation(ctx, j.ID); e == nil && store.TeardownStarted(op) {
+					err = errors.Join(err, ErrRetry)
+				}
+			}
+		}
 	}
 	if errors.Is(err, nginx.ErrPHPOriginalRestored) {
 		if e := q.finish(ctx, j, err); e != nil {

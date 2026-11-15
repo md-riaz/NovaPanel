@@ -435,7 +435,7 @@ func (s *Store) checkOperation(ctx context.Context, jid string, restoration bool
 			if op.Checkpoint == "done" {
 				return nil
 			}
-			if op.Checkpoint == "expired" || s.clock.Now() >= op.Expires {
+			if op.Checkpoint == "expired" || (s.clock.Now() >= op.Expires && !TeardownStarted(op)) {
 				return ErrOperationExpired
 			}
 		}
@@ -559,17 +559,22 @@ func checkOperationMembership(ctx context.Context, tx *sql.Tx, op Operation) err
 	return nil
 }
 
+// TeardownStarted marks the write-ahead point after which deletion must roll forward.
+func TeardownStarted(op Operation) bool {
+	return (op.Kind == SiteDelete || op.Kind == DatabaseDelete || op.Kind == DBUserDelete) && (op.Checkpoint == "teardown_started" || op.Checkpoint == "db_applied")
+}
+
 func (s *Store) CheckpointOperation(ctx context.Context, jid, from, to string) error {
 	return s.Tx(ctx, func(tx *sql.Tx) error {
 		op, e := loadOperation(ctx, tx, jid)
 		if e != nil {
 			return e
 		}
-		allowed := from == "prepared" && to == "db_applied" && op.Kind != PHPSet || from == "prepared" && to == "config_published" && op.Kind == PHPSet || from == "db_applied" && to == "verified" || from == "db_applied" && to == "config_published" || from == "config_published" && to == "verified"
+		allowed := from == "prepared" && to == "teardown_started" && (op.Kind == SiteDelete || op.Kind == DatabaseDelete || op.Kind == DBUserDelete) || from == "teardown_started" && to == "db_applied" && TeardownStarted(op) || from == "prepared" && to == "db_applied" && op.Kind != PHPSet || from == "prepared" && to == "config_published" && op.Kind == PHPSet || from == "db_applied" && to == "verified" || from == "db_applied" && to == "config_published" || from == "config_published" && to == "verified"
 		if !allowed || op.Checkpoint != from {
 			return ErrSiteConflict
 		}
-		if op.Checkpoint == "expired" || s.clock.Now() >= op.Expires {
+		if op.Checkpoint == "expired" || (s.clock.Now() >= op.Expires && !TeardownStarted(op)) {
 			return ErrOperationExpired
 		}
 		r, e := tx.ExecContext(ctx, "UPDATE phase4_operations SET checkpoint=?,updated=? WHERE job_id=? AND checkpoint=?", to, s.clock.Now(), jid, from)
@@ -592,7 +597,7 @@ func (s *Store) CompleteOperation(ctx context.Context, jid string, claim *JobCla
 			return nil
 		}
 		now := s.clock.Now()
-		if op.Checkpoint == "expired" || now >= op.Expires {
+		if op.Checkpoint == "expired" || (now >= op.Expires && !TeardownStarted(op)) {
 			return ErrOperationExpired
 		}
 		if op.Checkpoint != "verified" && !((op.Kind == DatabaseDelete || op.Kind == DBUserDelete || op.Kind == SiteDelete) && op.Checkpoint == "db_applied") {

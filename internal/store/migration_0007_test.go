@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-const shipped0008Hash = "12eccc6ffc3026839cdc5a4810aa8e79935de20f46e360fdf19892819b8f64f7"
+const shipped0008Hash = "3963587f2cc0c4713f3dc2eaeebc416f0630ecb8aaa543fba023f857aadf8def"
 
 func shippedV6(t *testing.T) string {
 	t.Helper()

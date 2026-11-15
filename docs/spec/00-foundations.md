@@ -1123,7 +1123,7 @@ ownership is provable on the far side of the transaction boundary.
    reserves the freed name under *its own* `obj_id`, which a stale delete can never match.
    **Delete ordering & roll-forward (head ruling, 2026-11-06).** The full order is: mark `phase=deleting`
    → `DROP` by `obj_id` → remove the provenance row → **remove the SQLite owning row** → commit the job
-   `done`. A **transient** SQL/lock failure at any step is **not** terminal — the delete **rolls forward**
+   `done`. A write-ahead `teardown_started` checkpoint records the destructive point of no return; begun teardown is exempt from terminal expiry under 02. A **transient** SQL/lock failure at any step is **not** terminal — the delete **rolls forward**
    (it is idempotent ensure-absent, F7), and a canonical `jobs.step` (`delete_started`/`deleting`) keeps
    it in the roll-forward set until **both** the external teardown **and** the SQLite owning-row removal
    have completed. So a delete is **never terminalized with teardown incomplete**, and the "terminalized

@@ -3,7 +3,7 @@ CREATE TABLE phase4_operations_new (
   kind TEXT NOT NULL CHECK(kind IN ('database_create','database_rotate','dbuser_create','wordpress_install','site_delete','database_delete','dbuser_delete','php_set','php_site_create')),
   site_id TEXT,
   db_id TEXT,
-  checkpoint TEXT NOT NULL CHECK(checkpoint IN ('prepared','db_applied','config_published','verified','done','expired')),
+  checkpoint TEXT NOT NULL CHECK(checkpoint IN ('prepared','teardown_started','db_applied','config_published','verified','done','expired')),
   identities_json TEXT NOT NULL,
   reconciled INTEGER NOT NULL DEFAULT 0 CHECK(reconciled IN (0,1)),
   nonce BLOB,

@@ -24,6 +24,9 @@ func (s *Store) failOperation(ctx context.Context, jid, code string, restored bo
 			return e
 		}
 		now := s.clock.Now()
+		if TeardownStarted(op) {
+			return ErrOperationLocked
+		}
 		if restored && (op.Kind != PHPSet || op.Checkpoint == "done" || op.Checkpoint == "expired") {
 			return ErrSitePrecondition
 		}
@@ -67,7 +70,7 @@ func (s *Store) ExpireOperations(ctx context.Context) (count int, err error) {
 		if unresolved != 0 {
 			return ErrOperationLocked
 		}
-		rows, e := tx.QueryContext(ctx, `SELECT job_id FROM phase4_operations INDEXED BY idx_phase4_operations_expiry WHERE expires<=? AND checkpoint NOT IN ('done','expired') ORDER BY expires,job_id LIMIT 100`, now)
+		rows, e := tx.QueryContext(ctx, `SELECT job_id FROM phase4_operations INDEXED BY idx_phase4_operations_expiry WHERE expires<=? AND checkpoint NOT IN ('done','expired') AND NOT(kind IN ('site_delete','database_delete','dbuser_delete') AND checkpoint IN ('teardown_started','db_applied')) ORDER BY expires,job_id LIMIT 100`, now)
 		if e != nil {
 			return e
 		}

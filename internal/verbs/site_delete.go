@@ -134,12 +134,20 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 		}
 		return rpc.Errf("precondition_failed", "Attached databases: %s", strings.Join(attached, ", "))
 	}
+	if journaled {
+		if op.Checkpoint == "prepared" {
+			if e = a.Store.CheckpointOperation(ctx, j.ID, "prepared", "teardown_started"); e != nil {
+				return e
+			}
+			op.Checkpoint = "teardown_started"
+		}
+		purgeStarted = store.TeardownStarted(op)
+	}
 	if v.PurgeDatabases {
 		if !journaled {
 			return rpc.Errf("precondition_failed", "Database purge requires a durable journal")
 		}
-		purgeStarted = op.Checkpoint == "db_applied"
-		if op.Checkpoint == "prepared" {
+		if op.Checkpoint == "teardown_started" {
 			if a.Exec == nil {
 				return rpc.Errf("agent_error", "Database execution unavailable")
 			}
@@ -166,13 +174,10 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 					return errors.Join(e, jobs.ErrRetry)
 				}
 			}
-			if e = a.Store.CheckpointOperation(ctx, j.ID, "prepared", "db_applied"); e != nil {
-				return errors.Join(e, jobs.ErrRetry)
-			}
 		}
 	}
 	wasDeleting := s.Status == "deleting"
-	if !wasDeleting && !journaled {
+	if !wasDeleting {
 		if e = a.Store.SetSiteStatus(ctx, s.ID, "deleting"); e != nil {
 			return e
 		}
@@ -238,6 +243,11 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 	if v.PurgeFiles {
 		if e = platform.RemoveSite(ctx, a.Exec, a.Cfg.SitesRoot, a.Cfg.LogDir, s.Name, s.ID); e != nil {
 			return e
+		}
+	}
+	if journaled && op.Checkpoint == "teardown_started" {
+		if e = a.Store.CheckpointOperation(ctx, j.ID, "teardown_started", "db_applied"); e != nil {
+			return errors.Join(e, jobs.ErrRetry)
 		}
 	}
 	if !journaled {

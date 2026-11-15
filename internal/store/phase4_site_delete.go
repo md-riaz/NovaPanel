@@ -15,7 +15,7 @@ func snapshotSiteDelete(ctx context.Context, tx *sql.Tx, siteID string) (out Ope
 		return out, err
 	}
 	out.Site = &site
-	if site.Status != "active" && site.Status != "failed" {
+	if site.Status != "active" && site.Status != "failed" && site.Status != "deleting" {
 		return out, ErrSitePrecondition
 	}
 	rows, err := tx.QueryContext(ctx, "SELECT id,coalesce(site_id,''),name,engine,(SELECT id FROM db_users WHERE db_id=databases.id AND owner=1),created FROM databases WHERE site_id=? ORDER BY id", siteID)
@@ -93,6 +93,9 @@ func (s *Store) prepareSiteDelete(ctx context.Context, j Job, r OperationRequest
 		if !r.PurgeDatabases && len(ident.Attached) != 0 {
 			return ErrSitePrecondition
 		}
+		if ident.Site.Status == "deleting" {
+			return ErrSitePrecondition
+		}
 		ident.PurgeFiles = r.PurgeFiles
 		ident.PurgeDatabases = r.PurgeDatabases
 		op = Operation{JobID: j.ID, Owner: j.CreatedBy, Kind: SiteDelete, SiteID: r.SiteID, Checkpoint: "prepared", Identity: ident}
@@ -124,6 +127,13 @@ func checkSiteDelete(ctx context.Context, tx *sql.Tx, op Operation) error {
 			return ErrSiteConflict
 		}
 		return e
+	}
+	if TeardownStarted(op) && current.Site.Status == "deleting" {
+		current.Site.Status = op.Identity.Site.Status
+		current.Site.Updated = op.Identity.Site.Updated
+		current.Site.CertSource = op.Identity.Site.CertSource
+		current.Site.ForceHTTPS = op.Identity.Site.ForceHTTPS
+		current.Site.HSTSMaxAge = op.Identity.Site.HSTSMaxAge
 	}
 	current.PurgeFiles = op.Identity.PurgeFiles
 	current.PurgeDatabases = op.Identity.PurgeDatabases
