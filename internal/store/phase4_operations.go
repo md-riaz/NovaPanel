@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	php "novapanel/internal/render/php"
+	"novapanel/internal/validate"
 	"sort"
 	"strings"
 )
@@ -30,6 +31,7 @@ const (
 type OperationRequest struct {
 	Kind                       OperationKind
 	SiteID, DatabaseID, UserID string
+	DatabaseName, Username     string
 	PurgeFiles, PurgeDatabases bool
 	WordPress                  *WordPressReservation
 	PHP                        *php.SetRequest
@@ -153,12 +155,12 @@ func validOperationIdentity(o Operation) bool {
 		return validSiteDeleteIdentity(o)
 	}
 	d := o.Identity.Database
-	if operationVerb(o.Kind) == "" || o.Owner == "" || o.Identity.Version != 1 || !phase4ResourceID.MatchString(d.ID) || d.ID != o.DatabaseID || d.SiteID != o.SiteID || d.Name != "d_"+strings.ToLower(d.ID) || d.Engine != "mariadb" || !phase4ResourceID.MatchString(d.PrimaryUserID) || len(o.Identity.Accounts) == 0 {
+	if operationVerb(o.Kind) == "" || o.Owner == "" || o.Identity.Version != 1 || !phase4ResourceID.MatchString(d.ID) || d.ID != o.DatabaseID || d.SiteID != o.SiteID || (&validate.V{}).DBName(d.Name) != nil || d.Engine != "mariadb" || !phase4ResourceID.MatchString(d.PrimaryUserID) || len(o.Identity.Accounts) == 0 {
 		return false
 	}
 	seen := make(map[string]bool)
 	for _, a := range o.Identity.Accounts {
-		if !phase4ResourceID.MatchString(a.ID) || seen[a.ID] || a.Username != "u_"+strings.ToLower(a.ID) || a.Host != "127.0.0.1" {
+		if !phase4ResourceID.MatchString(a.ID) || seen[a.ID] || (len(a.Username) > 32 || (&validate.V{}).DBName(a.Username) != nil) || a.Host != "127.0.0.1" {
 			return false
 		}
 		seen[a.ID] = true
@@ -238,8 +240,18 @@ func (s *Store) PrepareOperation(ctx context.Context, j Job, c JobClaim, r Opera
 			if !phase4ResourceID.MatchString(r.UserID) {
 				return ErrSiteInvalid
 			}
-			ident.Database = OperationDatabaseRecord{ID: r.DatabaseID, SiteID: r.SiteID, Name: "d_" + strings.ToLower(r.DatabaseID), Engine: "mariadb", PrimaryUserID: r.UserID}
-			ident.Accounts = []OperationAccount{{ID: r.UserID, Username: "u_" + strings.ToLower(r.UserID), Host: "127.0.0.1"}}
+			name, username := r.DatabaseName, r.Username
+			if name == "" {
+				name = "d_" + strings.ToLower(r.DatabaseID)
+			}
+			if username == "" {
+				username = "u_" + strings.ToLower(r.UserID)
+			}
+			if (&validate.V{}).DBName(name) != nil || len(username) > 32 || (&validate.V{}).DBName(username) != nil {
+				return ErrSiteInvalid
+			}
+			ident.Database = OperationDatabaseRecord{ID: r.DatabaseID, SiteID: r.SiteID, Name: name, Engine: "mariadb", PrimaryUserID: r.UserID}
+			ident.Accounts = []OperationAccount{{ID: r.UserID, Username: username, Host: "127.0.0.1"}}
 			var n int
 			if e := tx.QueryRowContext(ctx, "SELECT count(*) FROM databases WHERE id=? OR name=?", r.DatabaseID, ident.Database.Name).Scan(&n); e != nil {
 				return e
@@ -284,7 +296,14 @@ func (s *Store) PrepareOperation(ctx context.Context, j Job, c JobClaim, r Opera
 				if !phase4ResourceID.MatchString(r.UserID) {
 					return ErrSiteInvalid
 				}
-				ident.Accounts = []OperationAccount{{ID: r.UserID, Username: "u_" + strings.ToLower(r.UserID), Host: "127.0.0.1"}}
+				username := r.Username
+				if username == "" {
+					username = "u_" + strings.ToLower(r.UserID)
+				}
+				if len(username) > 32 || (&validate.V{}).DBName(username) != nil {
+					return ErrSiteInvalid
+				}
+				ident.Accounts = []OperationAccount{{ID: r.UserID, Username: username, Host: "127.0.0.1"}}
 			}
 			if r.Kind == DBUserDelete {
 				if r.UserID == ident.Database.PrimaryUserID {
