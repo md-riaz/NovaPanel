@@ -387,16 +387,31 @@ var ErrOperationExpired = errors.New("operation interrupted by expiry")
 
 // CheckOperation must run under the complete lock set before each external mutation.
 func (s *Store) CheckOperation(ctx context.Context, jid string) error {
+	return s.checkOperation(ctx, jid, false)
+}
+
+// CheckExpiredPHPRestoration validates an expired published PHP journal under its locks.
+func (s *Store) CheckExpiredPHPRestoration(ctx context.Context, jid string) error {
+	return s.checkOperation(ctx, jid, true)
+}
+
+func (s *Store) checkOperation(ctx context.Context, jid string, restoration bool) error {
 	return s.Tx(ctx, func(tx *sql.Tx) error {
 		op, e := loadOperation(ctx, tx, jid)
 		if e != nil {
 			return e
 		}
-		if op.Checkpoint == "done" {
-			return nil
-		}
-		if op.Checkpoint == "expired" || s.clock.Now() >= op.Expires {
-			return ErrOperationExpired
+		if restoration {
+			if op.Kind != PHPSet || op.Reconciled || (op.Checkpoint != "config_published" && op.Checkpoint != "verified") || s.clock.Now() < op.Expires || op.Identity.Site == nil || op.Identity.PHP == nil {
+				return ErrSitePrecondition
+			}
+		} else {
+			if op.Checkpoint == "done" {
+				return nil
+			}
+			if op.Checkpoint == "expired" || s.clock.Now() >= op.Expires {
+				return ErrOperationExpired
+			}
 		}
 		if e = operationBlocked(ctx, tx, op); e != nil {
 			return e

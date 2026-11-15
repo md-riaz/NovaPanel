@@ -24,7 +24,7 @@ import (
 // both desired files. A fresh startup must restore the original, not replay it.
 func TestPHPStartupRestorationRecordsFailure(t *testing.T) {
 	requireRootPHPCustody(t)
-	for _, mode := range []string{"restore", "missing snapshot", "expired"} {
+	for _, mode := range []string{"restore", "missing snapshot", "expired", "expired missing snapshot"} {
 		t.Run(mode, func(t *testing.T) { testPHPStartupRestoration(t, mode) })
 	}
 }
@@ -93,7 +93,7 @@ func testPHPStartupRestoration(t *testing.T, mode string) {
 	if err := st.Tx(ctx, func(tx *sql.Tx) error { _, err := tx.ExecContext(ctx, `DROP TRIGGER fail_php_terminal`); return err }); err != nil {
 		t.Fatal(err)
 	}
-	if mode == "expired" {
+	if mode == "expired" || mode == "expired missing snapshot" {
 		if err := st.Tx(ctx, func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(ctx, `UPDATE phase4_operations SET expires=1 WHERE job_id=?`, job.ID)
 			return err
@@ -110,7 +110,7 @@ func testPHPStartupRestoration(t *testing.T, mode string) {
 	st, log, a, _ = open()
 	defer st.Close()
 	defer log.Close()
-	if mode == "missing snapshot" {
+	if mode == "missing snapshot" || mode == "expired missing snapshot" {
 		if err := os.Remove(filepath.Join(root, "journal", job.ID+".json")); err != nil {
 			t.Fatal(err)
 		}

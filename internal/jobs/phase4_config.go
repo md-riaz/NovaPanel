@@ -36,13 +36,14 @@ func GenerateWordPressCredentials() (WordPressCredentials, error) {
 
 type configWorkerKey struct{}
 type configWorkerLease struct {
-	queue  *Queue
-	job    string
-	active atomic.Bool
-	ctx    context.Context
-	cancel context.CancelFunc
-	mu     sync.Mutex
-	runs   sync.WaitGroup
+	queue             *Queue
+	job               string
+	restoreExpiredPHP bool
+	active            atomic.Bool
+	ctx               context.Context
+	cancel            context.CancelFunc
+	mu                sync.Mutex
+	runs              sync.WaitGroup
 }
 
 // Admission and revocation share a lock so no Add can race the drain's Wait.

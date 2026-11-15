@@ -33,5 +33,14 @@ func (q *Queue) CheckPHPEffect(ctx context.Context, jobID, siteID string) error 
 	if op.Kind != store.PHPSet || op.SiteID != siteID || op.Identity.PHP == nil {
 		return refuse
 	}
+	if lease.restoreExpiredPHP {
+		check, ok := q.store.(interface {
+			CheckExpiredPHPRestoration(context.Context, string) error
+		})
+		if !ok {
+			return refuse
+		}
+		return check.CheckExpiredPHPRestoration(call, jobID)
+	}
 	return s.CheckOperation(call, jobID)
 }
