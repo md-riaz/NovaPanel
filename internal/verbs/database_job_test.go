@@ -525,12 +525,15 @@ func TestDatabaseCreateJobAndClaim(t *testing.T) {
 	if e = server.ExecuteJob(ctx, &uj); e != nil {
 		t.Fatal(e)
 	}
+	if e = server.ExecuteJob(ctx, &uj); e != nil {
+		t.Fatalf("dbuser replay: %v", e)
+	}
+	if e = s.CompleteOperation(ctx, uj.ID, nil); e != nil {
+		t.Fatal(e)
+	}
 	_, users, e = s.DatabaseWithUsers(ctx, created["db_id"])
 	if e != nil || len(users) != 1 {
 		t.Fatalf("remaining users: %+v %v", users, e)
-	}
-	if e = server.ExecuteJob(ctx, &uj); e != nil {
-		t.Fatalf("dbuser replay: %v", e)
 	}
 	denied = server.Dispatch(rpc.WithCaller(ctx, rpc.Caller{Kind: "user", Role: "admin", Session: "owner"}), rpc.Request{Verb: "database.delete", Args: rotationArgs})
 	if denied.OK {
@@ -551,11 +554,14 @@ func TestDatabaseCreateJobAndClaim(t *testing.T) {
 	if e = server.ExecuteJob(ctx, &dj); e != nil {
 		t.Fatal(e)
 	}
-	if _, _, e = s.DatabaseWithUsers(ctx, created["db_id"]); e == nil {
-		t.Fatal("database metadata not removed")
-	}
 	if e = server.ExecuteJob(ctx, &dj); e != nil {
 		t.Fatalf("delete replay: %v", e)
+	}
+	if e = s.CompleteOperation(ctx, dj.ID, nil); e != nil {
+		t.Fatal(e)
+	}
+	if _, _, e = s.DatabaseWithUsers(ctx, created["db_id"]); e == nil {
+		t.Fatal("database metadata not removed")
 	}
 	child, e := s.StartJob(ctx, stale.Data.(jobs.EnqueueResult).Job.ID, 5)
 	if e != nil {
