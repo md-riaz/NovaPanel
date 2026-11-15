@@ -27,6 +27,10 @@ func TestDestructiveTeardownSurvivesExpiryAndReplays(t *testing.T) {
 	}
 	makeSite("site1", "domain1", "first")
 	makeSite("site2", "domain2", "second")
+	pair := DatabasePrimary{ID: "01K8WMXZF57CGNZKX1FZ38DZMQ", UserID: "01K8WMXZF57CGNZKX1FZ38DZMR", SiteID: "site1"}
+	if err = s.CreateDatabasePrimary(ctx, pair); err != nil {
+		t.Fatal(err)
+	}
 	makeJob := func(id, site string) Operation {
 		j := Job{ID: id, Verb: "site.delete", CreatedBy: "owner", State: "queued", Args: []byte(`{}`)}
 		op, e := s.PrepareOperation(ctx, j, JobClaim{}, OperationRequest{Kind: SiteDelete, SiteID: site, PurgeDatabases: true}, nil, nil)
@@ -72,6 +76,12 @@ func TestDestructiveTeardownSurvivesExpiryAndReplays(t *testing.T) {
 	}
 	if err = s.CompleteOperation(ctx, "begun", nil); err != nil {
 		t.Fatalf("replay: %v", err)
+	}
+	if _, err = s.GetDatabase(ctx, pair.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("database remains: %v", err)
+	}
+	if _, err = s.DatabaseUserByID(ctx, pair.UserID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("user remains: %v", err)
 	}
 	if _, err = s.SiteByID(ctx, "site1"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("site remains: %v", err)
