@@ -6,6 +6,7 @@ import (
 	"errors"
 	"novapanel/internal/wordpress"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -27,7 +28,7 @@ func TestWordPressReservationBeforeResourceRows(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if len(op.Keys()) != 6 || op.Identity.WordPress.Input.DatabaseID != r.DatabaseID {
+	if !slices.Contains(op.Keys(), "site:"+r.SiteID) || !slices.Contains(op.Keys(), "db:"+r.DatabaseID) || !slices.Contains(op.Keys(), "dbuser:"+op.Identity.Accounts[0].Username) || op.Identity.WordPress.Input.DatabaseID != r.DatabaseID {
 		t.Fatalf("reservation: %+v", op)
 	}
 	if _, e = s.SiteByID(ctx, r.SiteID); !errors.Is(e, sql.ErrNoRows) {
