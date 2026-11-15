@@ -43,7 +43,7 @@ type phpSetRuntime struct{ agent *agent.Agent }
 
 func (r phpSetRuntime) available() bool {
 	a := r.agent
-	return a != nil && a.Store != nil && a.Jobs != nil && a.PHP != nil && a.Exec != nil
+	return a != nil && a.Store != nil && a.Jobs != nil && a.PHP != nil && a.PHP.Runner != nil && a.PHP.Probe != nil && a.Exec != nil
 }
 
 func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
