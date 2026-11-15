@@ -10,6 +10,7 @@ import (
 	"novapanel/internal/id"
 	"novapanel/internal/rpcerr"
 	"novapanel/internal/store"
+	"strings"
 )
 
 func operationError(err error) error {
@@ -110,6 +111,12 @@ func (q *Queue) enqueueOperation(ctx context.Context, r store.OperationRequest, 
 			return out, e
 		}
 	}
+	if r.Kind == store.DatabaseCreate && r.DatabaseName == "" {
+		r.DatabaseName = "d_" + strings.ToLower(r.DatabaseID)
+	}
+	if (r.Kind == store.DatabaseCreate || r.Kind == store.DBUserCreate) && r.Username == "" {
+		r.Username = "u_" + strings.ToLower(r.UserID)
+	}
 	jid, e := id.New()
 	if e != nil {
 		return out, e
@@ -175,7 +182,7 @@ func (q *Queue) enqueueOperation(ctx context.Context, r store.OperationRequest, 
 		if !ok || password == "" {
 			return out, errors.New("jobs: operation password required")
 		}
-		raw, e := json.Marshal(operationInput{Version: 1, JobID: jid, Kind: r.Kind, DatabaseID: r.DatabaseID, Owner: m.CreatedBy, Authority: metadata(j), Credentials: OperationCredentials{Password: password}})
+		raw, e := json.Marshal(operationInput{Version: 1, JobID: jid, Kind: r.Kind, DatabaseID: r.DatabaseID, Owner: m.CreatedBy, Authority: metadata(j), DatabaseName: r.DatabaseName, Username: r.Username, Credentials: OperationCredentials{Password: password}})
 		if e != nil {
 			return out, errors.New("jobs: operation encoding failed")
 		}

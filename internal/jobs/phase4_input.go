@@ -16,13 +16,15 @@ func sameOperationAuthority(a, b Metadata) bool {
 }
 
 type operationInput struct {
-	Version     int                  `json:"version"`
-	JobID       string               `json:"job_id"`
-	Kind        store.OperationKind  `json:"kind"`
-	DatabaseID  string               `json:"db_id"`
-	Owner       string               `json:"owner"`
-	Authority   Metadata             `json:"authority"`
-	Credentials OperationCredentials `json:"credentials"`
+	Version      int                  `json:"version"`
+	JobID        string               `json:"job_id"`
+	Kind         store.OperationKind  `json:"kind"`
+	DatabaseID   string               `json:"db_id"`
+	DatabaseName string               `json:"db_name,omitempty"`
+	Username     string               `json:"username,omitempty"`
+	Owner        string               `json:"owner"`
+	Authority    Metadata             `json:"authority"`
+	Credentials  OperationCredentials `json:"credentials"`
 }
 
 // OpenOperationCredentials opens only this operation's immutable credential.
@@ -61,6 +63,12 @@ func (q *Queue) openOperationCredentials(ctx context.Context, op store.Operation
 	}
 	var extra any
 	if d.Decode(&extra) != io.EOF || input.Version != 1 || input.JobID != jid || input.Kind != op.Kind || input.DatabaseID != op.DatabaseID || input.Owner != op.Owner || input.Credentials.Password == "" {
+		return out, refuse
+	}
+	if op.Kind == store.DatabaseCreate && (input.DatabaseName != op.Identity.Database.Name || len(op.Identity.Accounts) != 1 || input.Username != op.Identity.Accounts[0].Username) {
+		return out, refuse
+	}
+	if op.Kind == store.DBUserCreate && (len(op.Identity.Accounts) != 1 || input.Username != op.Identity.Accounts[0].Username) {
 		return out, refuse
 	}
 	j, err := q.store.GetJob(ctx, jid)
