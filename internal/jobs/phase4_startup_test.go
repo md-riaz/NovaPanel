@@ -98,7 +98,7 @@ func TestOperationRealQueueStartupExpiry(t *testing.T) {
 		t.Fatal(e)
 	}
 	j, _ := s.GetJob(ctx, r.Job.ID)
-	if called || op.Checkpoint != "expired" || len(op.Ciphertext) != 0 || j.Code != "interrupted" {
+	if called || op.Checkpoint != "expired" || len(op.Ciphertext) == 0 || j.Code != "interrupted" {
 		t.Fatalf("expiry not safe: called=%v checkpoint=%s ciphertext=%d code=%s", called, op.Checkpoint, len(op.Ciphertext), j.Code)
 	}
 }

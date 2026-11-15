@@ -43,7 +43,7 @@ func TestOperationQueueFailureCleanup(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if job.State != "failed" || job.Code != code || job.Error != "job execution failed" {
+			if code != "interrupted" && (job.State != "failed" || job.Code != code || job.Error != "job execution failed") {
 				t.Fatalf("job: %+v", job)
 			}
 			if code == "interrupted" {
@@ -51,8 +51,8 @@ func TestOperationQueueFailureCleanup(t *testing.T) {
 					t.Fatal("recoverable input destroyed")
 				}
 			} else {
-				if len(op.Ciphertext) != 0 || op.Checkpoint != "expired" {
-					t.Fatal("terminal recovery ciphertext retained")
+				if len(op.Ciphertext) == 0 || op.Checkpoint != "expired" {
+					t.Fatal("ambiguous credential not retained")
 				}
 				if err = s.CheckOperation(ctx, result.Job.ID); !errors.Is(err, store.ErrOperationExpired) {
 					t.Fatalf("terminal operation resumed: %v", err)

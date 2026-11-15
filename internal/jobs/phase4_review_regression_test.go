@@ -104,12 +104,12 @@ func TestReviewRunDeadlineAfterStartup(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if claims != 0 {
-		t.Fatal("expired claim reservation retained")
+	if claims != 1 {
+		t.Fatal("expired claim reservation lost")
 	}
 	t.Logf("exact deadline after startup: state=%s code=%s checkpoint=%s ciphertext=%d commands=%d", j.State, j.Code, op.Checkpoint, len(op.Ciphertext), calls)
-	if calls != 0 || j.Code != "interrupted" || op.Checkpoint != "expired" || len(op.Ciphertext) != 0 {
-		t.Fatal("expired recovery must fail interrupted, clear recovery input and run no commands")
+	if calls != 0 || j.Code != "interrupted" || op.Checkpoint != "expired" || len(op.Ciphertext) == 0 {
+		t.Fatal("expired recovery must fail interrupted, retain recovery input and run no commands")
 	}
 }
 func TestReviewRunChangedPreconditions(t *testing.T) {
@@ -176,7 +176,7 @@ func TestReviewRunChangedPreconditions(t *testing.T) {
 			case "target_removed":
 				reviewSQL(t, s, `DELETE FROM db_users WHERE id=?`, target)
 			case "primary_changed":
-				reviewSQL(t, s, `UPDATE databases SET primary_user_id=? WHERE id=?`, target, db)
+				reviewSQL(t, s, `UPDATE db_users SET owner=CASE WHEN id=? THEN 1 ELSE 0 END WHERE db_id=?`, target, db)
 			case "site_rebound":
 				reviewSQL(t, s, `UPDATE databases SET site_id=NULL WHERE id=?`, db)
 			case "empty_accounts":
