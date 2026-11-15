@@ -3,7 +3,7 @@ module novapanel/fixture
 go 1.27.0
 
 require (
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 	novapanel v0.0.0
 )
 
