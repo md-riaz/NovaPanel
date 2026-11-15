@@ -110,3 +110,26 @@ func (s *Store) ReconcileOperation(ctx context.Context, jid string) error {
 		return affected(r, e)
 	})
 }
+
+// ExpiredClaimInput authenticates the retained claim reservation before disclosing sealed input.
+func (s *Store) ExpiredClaimInput(ctx context.Context, jid, hash, owner string) (Operation, error) {
+	var exists int
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM job_claims c JOIN jobs j ON j.id=c.job_id JOIN phase4_operations o ON o.job_id=j.id WHERE j.id=? AND j.created_by=? AND j.created_by<>'' AND c.claim_hash=? AND c.claimed=0 AND length(c.ciphertext)=0 AND o.checkpoint='expired' AND o.kind IN ('database_create','database_rotate','dbuser_create') AND length(o.ciphertext)>0`, jid, owner, hash).Scan(&exists)
+	if err != nil {
+		return Operation{}, err
+	}
+	return s.LoadOperation(ctx, jid)
+}
+
+// PublishExpiredClaim atomically publishes a claim before erasing its retained input.
+func (s *Store) PublishExpiredClaim(ctx context.Context, op Operation, hash, owner string, nonce, ciphertext []byte) error {
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		now := s.clock.Now()
+		r, err := tx.ExecContext(ctx, `UPDATE job_claims SET nonce=?,ciphertext=?,expires=? WHERE job_id=? AND claim_hash=? AND claimed=0 AND length(ciphertext)=0 AND EXISTS(SELECT 1 FROM jobs WHERE id=? AND created_by=? AND created_by<>'') AND EXISTS(SELECT 1 FROM phase4_operations WHERE job_id=? AND checkpoint='expired' AND nonce=? AND ciphertext=?)`, nonce, ciphertext, now+ClaimTTLMillis, op.JobID, hash, op.JobID, owner, op.JobID, op.Nonce, op.Ciphertext)
+		if err = affected(r, err); err != nil {
+			return err
+		}
+		r, err = tx.ExecContext(ctx, `UPDATE phase4_operations SET nonce=NULL,ciphertext=NULL,updated=? WHERE job_id=? AND checkpoint='expired' AND nonce=? AND ciphertext=?`, now, op.JobID, op.Nonce, op.Ciphertext)
+		return affected(r, err)
+	})
+}

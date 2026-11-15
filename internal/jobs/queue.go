@@ -350,6 +350,35 @@ func (q *Queue) Claim(ctx context.Context, jid, token string) (map[string]any, e
 		return nil, errors.New("jobs: sealer not configured")
 	}
 	c, e := q.store.ConsumeClaim(ctx, jid, claimHash(token), m.CreatedBy)
+	if errors.Is(e, sql.ErrNoRows) {
+		if recovery, ok := q.store.(interface {
+			ExpiredClaimInput(context.Context, string, string, string) (store.Operation, error)
+			PublishExpiredClaim(context.Context, store.Operation, string, string, []byte, []byte) error
+		}); ok {
+			op, inputErr := recovery.ExpiredClaimInput(ctx, jid, claimHash(token), m.CreatedBy)
+			if inputErr == nil {
+				credentials, inputErr := q.openOperationCredentials(ctx, op)
+				if inputErr != nil {
+					return nil, inputErr
+				}
+				raw, inputErr := json.Marshal(map[string]string{"password": credentials.Password})
+				if inputErr != nil {
+					return nil, inputErr
+				}
+				defer clear(raw)
+				sealed, inputErr := q.sealer.Seal(raw)
+				if inputErr != nil {
+					return nil, inputErr
+				}
+				if inputErr = recovery.PublishExpiredClaim(ctx, op, claimHash(token), m.CreatedBy, sealed.Nonce, sealed.Ciphertext); inputErr != nil {
+					return nil, inputErr
+				}
+				c, e = q.store.ConsumeClaim(ctx, jid, claimHash(token), m.CreatedBy)
+			} else if !errors.Is(inputErr, sql.ErrNoRows) {
+				return nil, inputErr
+			}
+		}
+	}
 	if errors.Is(e, store.ErrPublicationPending) {
 		return nil, rpcerr.Errf("agent_error", "publication audit pending")
 	}

@@ -41,6 +41,13 @@ func (q *Queue) OpenOperationCredentials(ctx context.Context, jid string) (Opera
 	if err != nil {
 		return out, err
 	}
+	return q.openOperationCredentials(ctx, op)
+}
+
+func (q *Queue) openOperationCredentials(ctx context.Context, op store.Operation) (OperationCredentials, error) {
+	var out OperationCredentials
+	refuse := errors.New("jobs: operation credential unavailable")
+	jid := op.JobID
 	raw, err := q.sealer.Open(secret.Sealed{Nonce: op.Nonce, Ciphertext: op.Ciphertext})
 	if err != nil {
 		return out, refuse
