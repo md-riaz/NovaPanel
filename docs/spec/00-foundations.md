@@ -185,9 +185,8 @@ mfa_at}` where `kind ∈ {anon, user, token}`.
   GC uses strict `now > idle_deadline OR now > abs_deadline`: live and exact-boundary rows survive.
   Authentication separately rejects `now >= deadline`; retention must not weaken authentication.
   Do not log credentials or deleted session contents. Revocation remains a row delete.
-  **Release dependency:** PR85's `0006_session_expiry_indexes.sql` must not merge or release before
-  Phase 3 PR81's reserved `0005_sites.sql`. Do not edit shipped 0001–0004 or add a placeholder 0005;
-  merge released Phase-3 main into PR85 normally and rerun gates before release.
+  **Migration slot:** main owns shipped 0001–0006 (`0005_sites.sql`, `0006_databases.sql`); the session
+  expiry indexes ship as `0007_session_expiry_indexes.sql` (head ruling). Do not edit shipped 0001–0006.
 - **Login** (`session.login{user, password, totp?}`): agent verifies (Argon2id; TOTP if enrolled),
   **mints a new session id** (the anon one is deleted — this is the "rotate on login"), stores
   `kind=user`, sets `mfa_at = now` iff a TOTP/backup code was verified, returns the token. `panel-web`

@@ -218,13 +218,11 @@ ALTER TABLE users ADD COLUMN totp_pending_at INTEGER;  -- enrollment start (ms);
 - `mfa_used` rows are pruned beyond the accepted skew window. Both `totp_secret` and `totp_pending` are
   agent-sealed (F12).
 
-### Migration `0006_session_expiry_indexes.sql` (session hardening, forward-only)
+### Migration `0007_session_expiry_indexes.sql` (session hardening, forward-only)
 
-Phase 3 PR81 retains reserved, unshipped `0005_sites.sql`. PR85 adds only 0006 and its hash;
-0001–0004 remain immutable. **Do not merge or release PR85's GC before Phase 3's 0005 releases.**
-No placeholder 0005 or duplicated site DDL belongs in PR85. After Phase 3 merges, merge main normally
-into PR85, reconcile hashes under parent ownership, and rerun all gates. Scratch combined-head tests
-may exercise 0005+0006 before that release gate; they do not authorize out-of-order release.
+Main owns shipped 0001–0006 (`0005_sites.sql`, `0006_databases.sql`), immutable. PR85 adds only
+`0007_session_expiry_indexes.sql` and its registered hash (head migration ruling: renumbered from the
+colliding 0006). The sequence is contiguous 0001..0007.
 
 ```sql
 CREATE INDEX idx_sessions_idle_deadline_id ON sessions(idle_deadline, id);
