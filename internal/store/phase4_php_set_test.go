@@ -71,6 +71,10 @@ func TestPHPSetJournalReopenAndAtomicTerminal(t *testing.T) {
 	if err = s.CompleteOperation(ctx, jid, nil); err != nil {
 		t.Fatal(err)
 	}
+	settings, settingsErr := s.SitePHPLimits(ctx, sid)
+	if settingsErr != nil || settings.MaxChildren == nil || *settings.MaxChildren != op.Identity.PHP.DesiredCap || *settings.MaxChildren < 2 || *settings.MaxChildren > 32 {
+		t.Fatalf("computed cap not persisted: %+v %v", settings, settingsErr)
+	}
 	limits, err := s.GetPHPLimits(ctx, sid)
 	if err != nil || limits.MemoryMB != 512 {
 		t.Fatalf("limits: %+v %v", limits, err)
