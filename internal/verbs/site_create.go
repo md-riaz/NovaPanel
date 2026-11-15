@@ -2,11 +2,13 @@ package verbs
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"novapanel/internal/agent"
 	"novapanel/internal/id"
 	"novapanel/internal/jobs"
+	"novapanel/internal/php"
 	"novapanel/internal/render/nginx"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
@@ -34,11 +36,14 @@ func (v *siteCreateArgs) Validate() error {
 	if e := check.Hostname(v.PrimaryDomain); e != nil {
 		return e
 	}
-	if v.Type != "static" {
-		return rpc.Errf("unsupported", "Only static sites are available")
+	if v.Type != "static" && v.Type != "php" {
+		return rpc.Errf("unsupported", "Site type is not available")
 	}
-	if v.PHPVersion != nil {
+	if v.Type == "static" && v.PHPVersion != nil {
 		return rpc.Errf("invalid_argument", "Static sites cannot select PHP")
+	}
+	if v.PHPVersion != nil && *v.PHPVersion != "8.3" {
+		return rpc.Errf("unsupported", "Unsupported PHP version")
 	}
 	if v.SiteID != "" && !id.Valid(v.SiteID) {
 		return rpc.Errf("invalid_argument", "Invalid site ID")
@@ -61,16 +66,40 @@ func siteCreate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	if v.Name == "" {
 		v.Name = "site-" + strings.ToLower(sid[:20])
 	}
+	if v.Type == "php" {
+		if err := phpAvailable(ctx, a.Exec); err != nil {
+			return nil, err
+		}
+		if v.PHPVersion == nil {
+			version := "8.3"
+			v.PHPVersion = &version
+		}
+	}
 	v.PrimaryDomain = strings.ToLower(v.PrimaryDomain)
 	did, e := id.New()
 	if e != nil {
 		return nil, e
 	}
-	result, e := a.Jobs.EnqueueSiteCreate(ctx, &v, "site:"+v.Name, func(ctx context.Context, j jobs.Job, claim store.JobClaim) (jobs.Job, error) {
-		return a.Store.CreateSiteWithJob(ctx, store.Site{ID: sid, Name: v.Name, Type: v.Type, Docroot: filepath.Join(a.Cfg.SitesRoot, v.Name, "public")}, store.Domain{ID: did, FQDN: v.PrimaryDomain}, j, claim, func(siteID string) (json.RawMessage, error) {
+	var initial []store.PHPLimits
+	if v.Type == "php" {
+		sites, err := a.Store.ListSites(ctx)
+		if err != nil {
+			return nil, err
+		}
+		active := 0
+		for _, s := range sites {
+			if s.Status == "active" {
+				active++
+			}
+		}
+		cap := php.ChildrenCap(php.TotalMemoryMB(), active)
+		initial = append(initial, store.PHPLimits{MaxChildren: &cap})
+	}
+	result, e := a.Jobs.EnqueueSiteCreate(ctx, &v, "site:"+v.Name, func(ctx context.Context, tx *sql.Tx, j *jobs.Job) error {
+		return a.Store.ReserveSiteTx(ctx, tx, store.Site{ID: sid, Name: v.Name, Type: v.Type, PHPVersion: v.PHPVersion, Docroot: filepath.Join(a.Cfg.SitesRoot, v.Name, "public")}, store.Domain{ID: did, FQDN: v.PrimaryDomain}, j, func(siteID string) (json.RawMessage, error) {
 			v.SiteID = siteID
 			return json.Marshal(&v)
-		})
+		}, initial...)
 	})
 	if e != nil {
 		return nil, siteError(e)
@@ -85,18 +114,46 @@ func siteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 	if e := v.Validate(); e != nil {
 		return e
 	}
+	if a.Jobs == nil {
+		return rpc.Errf("agent_error", "Site locking unavailable")
+	}
+	unlock, e := a.Jobs.LockSiteCreateOSUser(ctx, v.Name)
+	if e != nil {
+		return e
+	}
+	defer unlock()
 	site, e := a.Store.SiteByID(ctx, v.SiteID)
 	if e != nil {
 		return siteError(e)
 	}
-	if site.Name != v.Name || site.Type != "static" || site.Docroot != filepath.Join(a.Cfg.SitesRoot, v.Name, "public") || site.Status == "deleting" {
+	if site.Name != v.Name || site.Type != v.Type || (site.Type == "php" && (site.PHPVersion == nil || *site.PHPVersion != "8.3")) || site.Docroot != filepath.Join(a.Cfg.SitesRoot, v.Name, "public") || site.Status == "deleting" {
 		return rpc.Errf("precondition_failed", "Site state changed")
 	}
 	// Active sites already completed creation; later desired state belongs to its own verbs.
 	if site.Status == "active" {
+		if site.Type == "php" && j.Attempts > 1 {
+			if a.PHP == nil || a.Exec == nil {
+				return rpc.Errf("agent_error", "PHP execution unavailable")
+			}
+			if e = php.VerifyUser(ctx, a.Exec, a.Cfg.SitesRoot, site.Name, site.ID); e != nil {
+				return e
+			}
+			limits, err := activePHPLimits(ctx, a.Store, site.ID)
+			if err != nil {
+				return err
+			}
+			cap, err := committedPHPCap(limits)
+			if err != nil {
+				return err
+			}
+			if e = a.PHP.Recover(ctx, site.Name, php.PoolState{SiteID: site.ID, Exists: true, MaxChildren: cap, Limits: limits}); e != nil {
+				return e
+			}
+		}
 		j.Result, e = json.Marshal(map[string]string{"site_id": site.ID})
 		return e
 	}
+	poolApplied := false
 	defer func() {
 		if r := recover(); r != nil {
 			err = rpc.Errf("agent_error", "Site creation failed")
@@ -107,15 +164,52 @@ func siteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 		}
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
+		if err != nil && poolApplied {
+			err = errors.Join(err, a.PHP.Recover(cleanup, site.Name, php.PoolState{SiteID: site.ID}))
+		}
 		if site.Status != state {
-			err = errors.Join(err, a.Store.SetSiteStatus(cleanup, site.ID, state))
+			if statusErr := a.Store.SetSiteStatus(cleanup, site.ID, state); statusErr != nil {
+				if poolApplied && state == "active" {
+					statusErr = errors.Join(statusErr, a.PHP.Recover(cleanup, site.Name, php.PoolState{SiteID: site.ID}), jobs.ErrRetry)
+				}
+				err = errors.Join(err, statusErr)
+			}
 		}
 	}()
 	if a.ProvisionSite == nil || a.Nginx == nil {
 		return rpc.Errf("agent_error", "Site execution unavailable")
 	}
-	if e = a.ProvisionSite(ctx, site.Name); e != nil {
+	if e = a.ProvisionSite(ctx, site.Name, site.ID); e != nil {
 		return e
+	}
+	if site.Type == "php" {
+		if a.PHP == nil || a.Exec == nil {
+			return rpc.Errf("agent_error", "PHP execution unavailable")
+		}
+		if e = php.VerifyUser(ctx, a.Exec, a.Cfg.SitesRoot, site.Name, site.ID); e != nil {
+			return e
+		}
+		if e = phpAvailable(ctx, a.Exec); e != nil {
+			return e
+		}
+		limits, err := a.Store.SitePHPLimits(ctx, site.ID)
+		if err != nil {
+			return err
+		}
+		cap, err := committedPHPCap(limits)
+		if err != nil {
+			return err
+		}
+		committed := php.PoolState{SiteID: site.ID}
+		if j.Attempts > 1 {
+			if e = a.PHP.Recover(ctx, site.Name, committed); e != nil {
+				return e
+			}
+		}
+		if e = a.PHP.ApplyCommitted(ctx, site.Name, php.PoolState{SiteID: site.ID, Exists: true, MaxChildren: cap, Limits: limits}, committed); e != nil {
+			return e
+		}
+		poolApplied = true
 	}
 	domains, e := a.Store.ListDomains(ctx, site.ID)
 	if e != nil {
@@ -141,7 +235,7 @@ func siteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 	if site.CertSource != "none" || site.ForceHTTPS || site.Maintenance || site.HSTSMaxAge != 0 {
 		return rpc.Errf("precondition_failed", "Site requires an unsupported render state")
 	}
-	if e = a.Nginx.Apply(ctx, nginx.Desired{Name: site.Name, Domains: names, Docroot: site.Docroot, ACMERoot: filepath.Join(a.Cfg.ACMEWebroot, site.Name)}); e != nil {
+	if e = a.Nginx.Apply(ctx, nginx.Desired{Name: site.Name, Domains: names, Docroot: site.Docroot, PHPVersion: site.PHPVersion, ACMERoot: filepath.Join(a.Cfg.ACMEWebroot, site.Name)}); e != nil {
 		return e
 	}
 	j.Result, e = json.Marshal(struct {

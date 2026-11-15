@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"novapanel/internal/agent"
+	"novapanel/internal/database"
 	"novapanel/internal/jobs"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
@@ -52,7 +53,12 @@ type reconcileArgs struct {
 	Scope string `json:"scope,omitempty"`
 }
 
-func (*reconcileArgs) Validate() error { return nil }
+func (a *reconcileArgs) Validate() error {
+	if a.Scope != "" && a.Scope != "database" {
+		return rpc.Errf("invalid_argument", "Unsupported reconcile scope")
+	}
+	return nil
+}
 func init() {
 	rpc.Register(rpc.Verb{Name: "job.status", MinRole: rpc.ReadOnly, ReadOnly: true, Scope: "system:read", NewArgs: func() any { return &jobIDArgs{} }, Run: jobStatus})
 	rpc.Register(rpc.Verb{Name: "job.list", MinRole: rpc.ReadOnly, ReadOnly: true, Scope: "system:read", NewArgs: func() any { return &jobListArgs{} }, Run: jobList})
@@ -120,7 +126,31 @@ func jobClaim(ctx context.Context, a *agent.Agent, args any) (any, error) {
 func reconcile(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	return a.Jobs.Enqueue(ctx, "reconcile", args, "system")
 }
-func reconcileExec(_ context.Context, _ *agent.Agent, j *jobs.Job) error {
-	j.Result = json.RawMessage(`{"changed":[]}`)
-	return nil
+func reconcileExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
+	var args reconcileArgs
+	if len(j.Args) != 0 {
+		if err := json.Unmarshal(j.Args, &args); err != nil {
+			return err
+		}
+	}
+	if err := args.Validate(); err != nil {
+		return err
+	}
+	changed, err := database.Reconcile(ctx, a.Exec, a.Store, a.Jobs.LockReconcileDatabase)
+	if args.Scope == "" {
+		phpChanged, phpErr := reconcilePHP(ctx, a.Store, a.Jobs, a.Exec, a.PHP, a.Cfg.SitesRoot, a.Cfg.LogDir)
+		changed = append(changed, phpChanged...)
+		err = errors.Join(err, phpErr)
+	}
+	result, marshalErr := json.Marshal(struct {
+		Changed []string `json:"changed"`
+	}{changed})
+	if marshalErr != nil {
+		return marshalErr
+	}
+	j.Result = result
+	if errors.Is(err, database.ErrConflict) {
+		return rpc.Errf("conflict", "Provenance reconciliation requires operator attention")
+	}
+	return err
 }

@@ -66,7 +66,7 @@ func TestPHPQueueDeathDuringRestore(t *testing.T) {
 	defer cancel()
 	st, log, a := openRestoreCrashFixture(t, root, false)
 	old := nginx.Desired{Name: "demo", Domains: []string{"demo.example.test"}, Docroot: "/srv/sites/demo/public", ACMERoot: "/var/www/acme/demo", PHP: &php.Desired{Name: "demo", Type: "php", Version: "8.3", UID: 1001, GID: 1001}}
-	if err := a.Nginx.ApplyPHP(ctx, a.PHP.Pools, old, func(context.Context) error { return nil }, func(context.Context) error { return nil }); err != nil {
+	if err := a.Nginx.ApplyPHP(ctx, a.DurablePHP.Pools, old, func(context.Context) error { return nil }, func(context.Context) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	paths := []string{"pool/demo.conf", "pool/demo.conf.lkg", "sites-available/demo.conf", "sites-available/demo.conf.lkg"}
@@ -189,7 +189,7 @@ func openRestoreCrashFixture(t *testing.T, root string, kill bool) (*store.Store
 	a.Audit = log
 	r := restoreCrashRunner{kill: kill}
 	a.Nginx = &nginx.Applier{Root: root, Runner: r, Probe: func(context.Context, nginx.Desired) error { return nil }}
-	a.PHP = &agent.PHPDependencies{Pools: &php.Applier{Root: filepath.Join(root, "pool"), Runner: r, Probe: func(context.Context, php.Desired) error { return nil }}, RecoveryRoot: filepath.Join(root, "journal"), ResolveIdentity: func(context.Context, store.Site) (uint32, uint32, error) { return 1001, 1001, nil }}
+	a.DurablePHP = &agent.PHPDependencies{Pools: &php.Applier{Root: filepath.Join(root, "pool"), Runner: r, Probe: func(context.Context, php.Desired) error { return nil }}, RecoveryRoot: filepath.Join(root, "journal"), ResolveIdentity: func(context.Context, store.Site) (uint32, uint32, error) { return 1001, 1001, nil }}
 	rpc.NewServer(a).ConfigureJobs()
 	return st, log, a
 }

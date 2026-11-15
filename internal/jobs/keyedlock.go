@@ -88,3 +88,26 @@ func (k *keyedLock) lockContext(ctx context.Context, key string) (func(), error)
 		return nil, ctx.Err()
 	}
 }
+
+func (k *keyedLock) tryLock(key string) (func(), bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.keys == nil {
+		k.keys = make(map[string]*lockRef)
+	}
+	if _, exists := k.keys[key]; exists {
+		return nil, false
+	}
+	r := &lockRef{gate: make(chan struct{}, 1), refs: 1}
+	r.gate <- struct{}{}
+	k.keys[key] = r
+	return func() {
+		<-r.gate
+		k.mu.Lock()
+		r.refs--
+		if r.refs == 0 {
+			delete(k.keys, key)
+		}
+		k.mu.Unlock()
+	}, true
+}

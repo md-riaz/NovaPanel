@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-const shipped0006Hash = "549740ffa8b38ce925b524ad82013b8df75ff97c0346b6f7b3679ef267639698"
+const shipped0008Hash = "549740ffa8b38ce925b524ad82013b8df75ff97c0346b6f7b3679ef267639698"
 
 func shippedV6(t *testing.T) string {
 	t.Helper()
@@ -38,7 +38,7 @@ func shippedV6(t *testing.T) string {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if !strings.HasSuffix(name, ".sql") || name[:4] > "0006" {
+		if !strings.HasSuffix(name, ".sql") || name[:4] > "0008" {
 			continue
 		}
 		b, e := migrations.ReadFile("migrations/" + name)
@@ -55,15 +55,15 @@ func shippedV6(t *testing.T) string {
 			t.Fatal(e)
 		}
 	}
-	if hashes["0006"] != shipped0006Hash {
-		t.Fatal("shipped 0006 changed")
+	if hashes["0008"] != shipped0008Hash {
+		t.Fatal("shipped 0008 changed")
 	}
 	phase4Job(t, db, "old", "running")
 	phase4Exec(t, db, "INSERT INTO phase4_operations VALUES('old','database_create','site','db','prepared','{}',0,x'01',x'02',42,7)")
 	return path
 }
 
-func TestMigration0007RealOpen(t *testing.T) {
+func TestMigration0009RealOpen(t *testing.T) {
 	for _, upgrade := range []bool{false, true} {
 		t.Run(fmt.Sprint(upgrade), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "fresh.db")
@@ -79,8 +79,8 @@ func TestMigration0007RealOpen(t *testing.T) {
 				t.Fatal("migration count")
 			}
 			var h string
-			if err = s.db.raw.QueryRow("SELECT hash FROM schema_migrations WHERE version='0006'").Scan(&h); err != nil || h != shipped0006Hash {
-				t.Fatalf("0006 hash %s %v", h, err)
+			if err = s.db.raw.QueryRow("SELECT hash FROM schema_migrations WHERE version='0008'").Scan(&h); err != nil || h != shipped0008Hash {
+				t.Fatalf("0008 hash %s %v", h, err)
 			}
 			if upgrade && phase4Count(t, s.db.raw, "SELECT count(*) FROM phase4_operations WHERE job_id='old' AND kind='database_create' AND site_id='site' AND db_id='db' AND checkpoint='prepared' AND identities_json='{}' AND reconciled=0 AND nonce=x'01' AND ciphertext=x'02' AND expires=42 AND updated=7") != 1 {
 				t.Fatal("row changed")
@@ -98,7 +98,7 @@ func TestMigration0007RealOpen(t *testing.T) {
 	}
 }
 
-func TestMigration0007HashAndRollback(t *testing.T) {
+func TestMigration0009HashAndRollback(t *testing.T) {
 	for _, mode := range []string{"hash", "ddl"} {
 		t.Run(mode, func(t *testing.T) {
 			path := shippedV6(t)
@@ -107,7 +107,7 @@ func TestMigration0007HashAndRollback(t *testing.T) {
 				t.Fatal(err)
 			}
 			if mode == "hash" {
-				phase4Exec(t, db, "UPDATE schema_migrations SET hash='tampered' WHERE version='0006'")
+				phase4Exec(t, db, "UPDATE schema_migrations SET hash='tampered' WHERE version='0008'")
 			} else {
 				phase4Exec(t, db, "CREATE TABLE php_create_reservations(collision TEXT)")
 			}
@@ -119,10 +119,10 @@ func TestMigration0007HashAndRollback(t *testing.T) {
 				s.Close()
 				t.Fatal("expected refusal")
 			}
-			if mode == "hash" && !strings.Contains(err.Error(), "migration 0006 database hash mismatch") {
+			if mode == "hash" && !strings.Contains(err.Error(), "migration 0008 database hash mismatch") {
 				t.Fatal(err)
 			}
-			if mode == "ddl" && !strings.Contains(err.Error(), "migration 0007") {
+			if mode == "ddl" && !strings.Contains(err.Error(), "migration 0009") {
 				t.Fatal(err)
 			}
 			db, err = sql.Open("sqlite", path)
@@ -130,7 +130,7 @@ func TestMigration0007HashAndRollback(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer db.Close()
-			if phase4Count(t, db, "SELECT count(*) FROM schema_migrations WHERE version='0007'") != 0 || phase4Count(t, db, "SELECT count(*) FROM phase4_operations WHERE job_id='old' AND nonce=x'01' AND ciphertext=x'02'") != 1 || phase4Count(t, db, "SELECT count(*) FROM sqlite_master WHERE name='phase4_operations_new'") != 0 {
+			if phase4Count(t, db, "SELECT count(*) FROM schema_migrations WHERE version='0009'") != 0 || phase4Count(t, db, "SELECT count(*) FROM phase4_operations WHERE job_id='old' AND nonce=x'01' AND ciphertext=x'02'") != 1 || phase4Count(t, db, "SELECT count(*) FROM sqlite_master WHERE name='phase4_operations_new'") != 0 {
 				t.Fatal("partial migration")
 			}
 			phase4Job(t, db, "refused", "running")

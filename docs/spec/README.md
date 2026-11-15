@@ -79,10 +79,10 @@ reinterpret); the head amends the spec, then work resumes.
 
 ## Contract-completeness check (head: before a phase spec is confirmed for coding)
 
-Phase 2 surfaced six recurring classes of under-specification. The head runs this check over **every**
-phase spec *before* it is opened for implementation, so each gap is closed in the contract instead of
-being rediscovered mid-build (one gap → one stall → one patch). A phase that fails any item is amended
-first.
+Phase 2 surfaced six recurring classes of under-specification; Phase 4 added a seventh. The head runs
+this check over **every** phase spec *before* it is opened for implementation, so each gap is closed in
+the contract instead of being rediscovered mid-build (one gap → one stall → one patch). A phase that
+fails any item is amended first.
 
 1. **Error-code completeness.** Every documented refusal/precondition **names its F3 code** (no
    "refuses until X" without a code). Every code used is in the F3 catalog; the only non-catalog codes
@@ -98,6 +98,13 @@ first.
    (drift risk — the `idle_sec`/`abs_sec` and `firewall_window_min` lesson).
 6. **Authz exceptions.** Every non-standard authz rule (self-scope, automation grant, internal/
    peer-only) spells out **subject-resolution and token-reachability** (the B4 self-service shape).
+7. **Lifecycle & concurrency completeness** (any stateful or two-store resource — OS user, file, DB
+   object, DNS record, repo, …). Beyond the create path, the ruling states: ownership across the
+   boundary (never adopt), a **durable resource-id** identity (not a job id), crash-replay, rotate,
+   **delete by id not name** (orphan / reuse / already-deleted), and concurrency (lock the object's
+   **own** namespace; admission vs execution). A create-only ruling is incomplete — this is the
+   gap-class that cost the Phase-4 rounds. See **`AGENTS.md`** for the checklist and the MariaDB
+   reference.
 
 ## The non-negotiable invariants (every phase, no exceptions)
 
@@ -157,6 +164,7 @@ Guardrails      — the "nevers" specific to this phase (plus the global invaria
 | `phases/phase-7.md` | DNS (external first): `dns.Provider` + Cloudflare | **drafted** |
 | `phases/phase-8.md` | Integrations & API: OpenAPI, scoped tokens, deploy API + webhooks (D1) | **drafted** |
 | `phases/phase-9.md` | Optional modules (after core is boring): OLS perf mode, mail, PowerDNS, FTP, Docker | **drafted** |
+| `PHASE-DRIVER-PROMPT.md` | The reusable **worker + verifier** driver: one prompt that takes a phase/PR from spec-confirmed to merge-ready (build → independent verify → reconcile loop → green PR), encoding this README's precedence, pre-flight check, pre-review checklist, and the 10 invariants | **drafted** |
 
 **All phase specs are drafted** with external references gathered (Nginx/FPM/ACME, Restic/UFW,
 Argon2id/TOTP/MariaDB/WordPress — verified values baked into the specs). Coding of a phase begins only

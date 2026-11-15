@@ -72,7 +72,7 @@ func TestPHPSetProductionDispatch(t *testing.T) {
 		t.Fatalf("refusal created jobs: %v %v", rows, e)
 	}
 	a.Nginx = &nginx.Applier{Runner: phpScratchRunner{}, Probe: func(context.Context, nginx.Desired) error { return nil }}
-	a.PHP = &agent.PHPDependencies{Pools: &php.Applier{Runner: phpScratchRunner{}, Probe: func(context.Context, php.Desired) error { return nil }}, RecoveryRoot: t.TempDir(), ResolveIdentity: func(context.Context, store.Site) (uint32, uint32, error) { return 1001, 1001, nil }}
+	a.DurablePHP = &agent.PHPDependencies{Pools: &php.Applier{Runner: phpScratchRunner{}, Probe: func(context.Context, php.Desired) error { return nil }}, RecoveryRoot: t.TempDir(), ResolveIdentity: func(context.Context, store.Site) (uint32, uint32, error) { return 1001, 1001, nil }}
 	for _, tc := range []struct {
 		name   string
 		remove func() func()
@@ -80,27 +80,31 @@ func TestPHPSetProductionDispatch(t *testing.T) {
 		{"nginx", func() func() { old := a.Nginx; a.Nginx = nil; return func() { a.Nginx = old } }},
 		{"nginx runner", func() func() { old := a.Nginx.Runner; a.Nginx.Runner = nil; return func() { a.Nginx.Runner = old } }},
 		{"nginx probe", func() func() { old := a.Nginx.Probe; a.Nginx.Probe = nil; return func() { a.Nginx.Probe = old } }},
-		{"php", func() func() { old := a.PHP; a.PHP = nil; return func() { a.PHP = old } }},
-		{"pools", func() func() { old := a.PHP.Pools; a.PHP.Pools = nil; return func() { a.PHP.Pools = old } }},
+		{"php", func() func() { old := a.DurablePHP; a.DurablePHP = nil; return func() { a.DurablePHP = old } }},
+		{"pools", func() func() {
+			old := a.DurablePHP.Pools
+			a.DurablePHP.Pools = nil
+			return func() { a.DurablePHP.Pools = old }
+		}},
 		{"pool runner", func() func() {
-			old := a.PHP.Pools.Runner
-			a.PHP.Pools.Runner = nil
-			return func() { a.PHP.Pools.Runner = old }
+			old := a.DurablePHP.Pools.Runner
+			a.DurablePHP.Pools.Runner = nil
+			return func() { a.DurablePHP.Pools.Runner = old }
 		}},
 		{"pool probe", func() func() {
-			old := a.PHP.Pools.Probe
-			a.PHP.Pools.Probe = nil
-			return func() { a.PHP.Pools.Probe = old }
+			old := a.DurablePHP.Pools.Probe
+			a.DurablePHP.Pools.Probe = nil
+			return func() { a.DurablePHP.Pools.Probe = old }
 		}},
 		{"identity", func() func() {
-			old := a.PHP.ResolveIdentity
-			a.PHP.ResolveIdentity = nil
-			return func() { a.PHP.ResolveIdentity = old }
+			old := a.DurablePHP.ResolveIdentity
+			a.DurablePHP.ResolveIdentity = nil
+			return func() { a.DurablePHP.ResolveIdentity = old }
 		}},
 		{"recovery root", func() func() {
-			old := a.PHP.RecoveryRoot
-			a.PHP.RecoveryRoot = ""
-			return func() { a.PHP.RecoveryRoot = old }
+			old := a.DurablePHP.RecoveryRoot
+			a.DurablePHP.RecoveryRoot = ""
+			return func() { a.DurablePHP.RecoveryRoot = old }
 		}},
 	} {
 		t.Run("missing "+tc.name, func(t *testing.T) {
@@ -145,12 +149,12 @@ func TestPHPSetProductionDispatch(t *testing.T) {
 			}
 		})
 	}
-	deps := a.PHP
-	a.PHP = nil
+	deps := a.DurablePHP
+	a.DurablePHP = nil
 	if err = s.ExecuteJob(ctx, &jobs.Job{Verb: "php.set", CreatedBy: "admin-session", Role: "admin", ObjectKey: "site:" + sid, Args: []byte(valid)}); err == nil || err.Error() != "PHP execution unavailable" {
 		t.Fatalf("unfinished executor must fail closed: %v", err)
 	}
-	a.PHP = deps
+	a.DurablePHP = deps
 	for _, raw := range []string{
 		fmt.Sprintf(`{"site_id":%q,"version":"8.3","version":"8.3"}`, sid),
 		fmt.Sprintf(`{"site_id":%q,"version":"8.3","limits":{"upload_mb":1,"upload_mb":2}}`, sid),

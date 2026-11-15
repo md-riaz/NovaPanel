@@ -147,7 +147,7 @@ func TestPHPQueueCrashIndependent(t *testing.T) {
 		a := agent.New()
 		a.Store, a.Audit = st, log
 		a.Nginx = &nginx.Applier{Root: root, Runner: matrixRunner{}, Probe: func(context.Context, nginx.Desired) error { return nil }}
-		a.PHP = &agent.PHPDependencies{Pools: &php.Applier{Root: filepath.Join(root, "pool"), Runner: matrixRunner{}, Probe: func(context.Context, php.Desired) error { return nil }}, RecoveryRoot: filepath.Join(root, "journal"), ResolveIdentity: func(context.Context, store.Site) (uint32, uint32, error) { return 1001, 1001, nil }}
+		a.DurablePHP = &agent.PHPDependencies{Pools: &php.Applier{Root: filepath.Join(root, "pool"), Runner: matrixRunner{}, Probe: func(context.Context, php.Desired) error { return nil }}, RecoveryRoot: filepath.Join(root, "journal"), ResolveIdentity: func(context.Context, store.Site) (uint32, uint32, error) { return 1001, 1001, nil }}
 		server := rpc.NewServer(a)
 		server.ConfigureJobs()
 		if mode == "crash" {
@@ -178,7 +178,7 @@ func TestPHPQueueCrashIndependent(t *testing.T) {
 	paths := []string{"pool/demo.conf", "pool/demo.conf.lkg", "sites-available/demo.conf", "sites-available/demo.conf.lkg"}
 	if mode == "crash" {
 		old := nginx.Desired{Name: "demo", Domains: []string{"old.example.test"}, Docroot: "/srv/sites/demo/public", ACMERoot: "/var/www/acme/demo", PHP: &php.Desired{Name: "demo", Type: "php", Version: "8.3", UID: 1001, GID: 1001}}
-		if err := a.Nginx.ApplyPHP(ctx, a.PHP.Pools, old, func(context.Context) error { return nil }, func(context.Context) error { return nil }); err != nil {
+		if err := a.Nginx.ApplyPHP(ctx, a.DurablePHP.Pools, old, func(context.Context) error { return nil }, func(context.Context) error { return nil }); err != nil {
 			t.Fatal(err)
 		}
 		for i, p := range paths {

@@ -12,7 +12,14 @@ Phases 1–4 (jobs, sites, DB). Reads: `00-foundations.md` F6, F7, F10, F11, F12
 1. **Repo management + restic backups.** `repo.create/list/delete` register a restic repo (local/SFTP/
    S3; **B2 via its S3-compatible endpoint**) — the repo password + object-store/SFTP creds are
    **sealed** (`secrets` name `repo:<id>:*`), the password shown once via the F19 claim; `restic init`
-   runs on create. `backup.create/list/restore/verify` then reference a `repo_id`: per-site path backup
+   runs on create. **Seal-before-init + delete semantics (F20/F12, head ruling):** the repo password is
+   **sealed write-ahead (F20.1) *before* `restic init`**, so a crash after init never leaves an encrypted
+   external repo whose only key was lost; replay re-inits/uses the same sealed password (`restic init` is
+   idempotent / already-init is a no-op). **`repo.delete` removes the NovaPanel `repos` row + sealed
+   creds only — it does NOT destroy the external repository data or its snapshots** (deleting remote
+   backups is catastrophic and needs a separate explicit purge verb with typed confirmation), and it
+   surfaces that the sealed password is being discarded. `backup.create/list/restore/verify` then
+   reference a `repo_id`: per-site path backup
    + per-DB **failure-aware stream** backup; all restic secrets go via env/`*_FILE` written to a
    root-`0600` tmp and removed after, never argv. Recurring backups/verify/retention are driven by the
    **F18 scheduler** (a `schedule` row per repo), not an inline loop.
@@ -49,11 +56,19 @@ Phases 1–4 (jobs, sites, DB). Reads: `00-foundations.md` F6, F7, F10, F11, F12
   ok); `11` = failed to lock repo; `12` = wrong password; unknown code = failure. On `11`: `restic
   unlock` (stale-only) + retry once; `--retry-lock` on normal runs; `unlock --remove-all` only after
   confirming via `list locks` + process check that nothing is live.
+- **Per-attempt timeout is effectful, not transient (F6 per-attempt deadline, head ruling 2026-11-05).**
+  `backup.create`, `backup.restore` and `panel.backup_config` are **effectful** (external object store).
+  A per-attempt `deadline_exceeded` mid-run follows the F6 **`interrupted` + reconcile** path, **not** the
+  idempotent transient re-queue: the next pass reconciles against restic's own crash-safe state (an
+  incomplete snapshot is never referenced; `restore` does **not** auto-reswap — it reports the
+  `interrupted` restore leaving `<db>__old` + the pre-restore dump for the operator). A long restic run
+  that needs more than the default ceiling raises that verb's `MaxDeadlineMs`; the timeout never
+  re-issues the external effect blindly.
 
 ### UFW safe-apply (the deadman — reference)
 ```
 1. snapshot: capture `iptables-save`/`ip6tables-save` (stdout → file via exec, not shell `>`) + `ufw status numbered`
-2. dry-run:  `firewall.apply{rules:[{action,proto,port,source?,comment?}], default_incoming?, window_min?}`
+2. dry-run:  `firewall.apply{rules:[{action,proto,port,source?,comment?}], window_min?}` (canonical `03:164`; the earlier `default_incoming?` field is **not canonical** and is dropped)
       is a **full desired set** (not a delta): the agent computes the target ruleset, renders the ufw
       commands, `ufw --dry-run` each, and asserts the pinned SSH allow is present and ordered first.
       Every field is validated (`validate.Port`/`validate.CIDR`, F9); **raw ufw strings are refused**.
@@ -68,7 +83,12 @@ Phases 1–4 (jobs, sites, DB). Reads: `00-foundations.md` F6, F7, F10, F11, F12
 6. confirm:  cancel the revert (stop the transient unit / `atrm <id>`). No confirmation in N min → auto-revert fires.
 ```
 Model the admin/SSH allow as a **pinned invariant** the engine re-asserts (prepended) on every apply;
-it is never deletable or orderable below a deny. (CSF's `TESTING` cron-flush + pinning the SSH IP is
+it is never deletable or orderable below a deny.
+
+**Ruling — pinned-invariant set.** The full-desired-set apply always re-asserts the pinned set
+**{`ssh_port`, panel listen port, 80, 443}** (ports from `Cfg`; any rule set that omits one is completed with
+it, and a rule that would deny one is refused). **Phase-9 modules register extra pinned ports** through the
+module interface; Phase 6 itself pins only these four. (CSF's `TESTING` cron-flush + pinning the SSH IP is
 the canonical prior art.)
 
 ### Self-backup (reference)
@@ -115,6 +135,11 @@ recoverable out-of-band** — never store the only copy inside the repo they unl
   token) may `firewall.confirm`/`revert` the **single** armed pending — `firewall.apply` returns
   `conflict` if one is already armed, so there is never ambiguity about which; an unknown or expired
   `pending_id` → `not_found`; every confirm/revert is audited with its actor.
+
+> **OWED — scratch-DB provenance.** The restore scratch/old databases (`<db>__old`, `<db>__r<ts>`) are
+> two-store objects owed the F20 treatment: either **register them in `managed_objects`** or adopt a
+> **prefix + reconcile rule** (reconcile drops only objects matching the reserved prefix that no live restore
+> job references). **Ruled at build time**; do not leave scratch DBs unowned.
 
 **MariaDB restore swap (no RENAME DATABASE).** Steps: (1) take a **pre-restore safety dump** of the
 live DB to the panel repo first (so the current state is always recoverable); (2) create a **scratch

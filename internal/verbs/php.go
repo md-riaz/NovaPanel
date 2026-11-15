@@ -42,7 +42,7 @@ type phpSetRuntime struct{ agent *agent.Agent }
 
 func (r phpSetRuntime) available() bool {
 	a := r.agent
-	return a != nil && a.Store != nil && a.Jobs != nil && a.Nginx != nil && a.PHP != nil && a.PHP.Pools != nil && a.PHP.ResolveIdentity != nil && a.PHP.RecoveryRoot != "" && a.Nginx.Runner != nil && a.Nginx.Probe != nil && a.PHP.Pools.Runner != nil && a.PHP.Pools.Probe != nil
+	return a != nil && a.Store != nil && a.Jobs != nil && a.Nginx != nil && a.DurablePHP != nil && a.DurablePHP.Pools != nil && a.DurablePHP.ResolveIdentity != nil && a.DurablePHP.RecoveryRoot != "" && a.Nginx.Runner != nil && a.Nginx.Probe != nil && a.DurablePHP.Pools.Runner != nil && a.DurablePHP.Pools.Probe != nil
 }
 
 func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
@@ -61,7 +61,7 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 		return err
 	}
 	s := *op.Identity.Site
-	uid, gid, err := a.PHP.ResolveIdentity(ctx, s)
+	uid, gid, err := a.DurablePHP.ResolveIdentity(ctx, s)
 	if err != nil {
 		return err
 	}
@@ -93,7 +93,7 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	oldPHP := *d.PHP
 	oldPHP.Version, oldPHP.Limits = p.OriginalVersion, &p.OriginalLimits
 	old.PHP = &oldPHP
-	binding := nginx.PHPDurableBinding{Root: a.PHP.RecoveryRoot, JobID: j.ID, SiteID: op.SiteID, Check: check, RecoveryOnly: op.Checkpoint != "prepared"}
+	binding := nginx.PHPDurableBinding{Root: a.DurablePHP.RecoveryRoot, JobID: j.ID, SiteID: op.SiteID, Check: check, RecoveryOnly: op.Checkpoint != "prepared"}
 	// Terminal metadata and its audit are owned by Queue.finish, not this callback.
 	commit := func(c context.Context) error {
 		if err := check(c); err != nil {
@@ -107,8 +107,8 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 		}
 		return a.Store.CheckpointOperation(c, j.ID, "config_published", "verified")
 	}
-	if err = a.Nginx.ApplyPHPDurable(ctx, a.PHP.Pools, d, binding, commit, func(c context.Context) error {
-		if err := a.PHP.Pools.Probe(c, oldPHP); err != nil {
+	if err = a.Nginx.ApplyPHPDurable(ctx, a.DurablePHP.Pools, d, binding, commit, func(c context.Context) error {
+		if err := a.DurablePHP.Pools.Probe(c, oldPHP); err != nil {
 			return err
 		}
 		return a.Nginx.Probe(c, old)

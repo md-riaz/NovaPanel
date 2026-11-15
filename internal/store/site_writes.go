@@ -212,6 +212,9 @@ func (s *Store) DeleteSite(ctx context.Context, id string) error {
 		if status != "deleting" {
 			return ErrSitePrecondition
 		}
+		if e = deleteSitePHPLimits(ctx, tx, id); e != nil {
+			return e
+		}
 		_, e = tx.ExecContext(ctx, "DELETE FROM sites WHERE id=?", id)
 		return e
 	})
@@ -227,14 +230,14 @@ func siteWriteError(err error) error {
 
 // CreateSite publishes desired state and its primary domain atomically. IDs are
 // assigned by Run before enqueue; matching retries retain the original IDs.
-func (s *Store) CreateSite(ctx context.Context, v Site, d Domain) (out Site, err error) {
+func (s *Store) CreateSite(ctx context.Context, v Site, d Domain, limits ...PHPLimits) (out Site, err error) {
 	if v.ID == "" || v.Name == "" || v.Type == "" || v.Docroot == "" || d.ID == "" || d.FQDN == "" {
 		return out, ErrSiteInvalid
 	}
-	err = s.Tx(ctx, func(tx *sql.Tx) error { var e error; out, e = s.createSiteTx(ctx, tx, v, d); return e })
+	err = s.Tx(ctx, func(tx *sql.Tx) error { var e error; out, e = s.createSiteTx(ctx, tx, v, d, limits...); return e })
 	return
 }
-func (s *Store) createSiteTx(ctx context.Context, tx *sql.Tx, v Site, d Domain) (out Site, err error) {
+func (s *Store) createSiteTx(ctx context.Context, tx *sql.Tx, v Site, d Domain, limits ...PHPLimits) (out Site, err error) {
 	old, e := scanSite(tx.QueryRowContext(ctx, "SELECT "+siteColumns+" FROM sites WHERE name=?", v.Name))
 	if e == nil {
 		if old.Status == "deleting" {
@@ -257,37 +260,31 @@ func (s *Store) createSiteTx(ctx context.Context, tx *sql.Tx, v Site, d Domain) 
 	if _, e = tx.ExecContext(ctx, "INSERT INTO sites(id,name,type,docroot,php_version,created,updated) VALUES(?,?,?,?,?,?,?)", v.ID, v.Name, v.Type, v.Docroot, v.PHPVersion, now, now); e != nil {
 		return out, siteWriteError(e)
 	}
+	if len(limits) == 1 {
+		raw, e := json.Marshal(storedPHPLimits{PHPLimits: limits[0], MaxChildren: limits[0].MaxChildren})
+		if e != nil {
+			return out, e
+		}
+		if _, e = tx.ExecContext(ctx, "INSERT INTO settings(key,value_json) VALUES(?,?)", phpLimitsKey(v.ID), string(raw)); e != nil {
+			return out, e
+		}
+	}
 	if _, e = tx.ExecContext(ctx, "INSERT INTO domains(id,site_id,fqdn,is_primary,created) VALUES(?,?,?,1,?)", d.ID, v.ID, d.FQDN, now); e != nil {
 		return out, siteWriteError(e)
 	}
 	out, e = scanSite(tx.QueryRowContext(ctx, "SELECT "+siteColumns+" FROM sites WHERE id=?", v.ID))
 	return out, e
 }
-func (s *Store) CreateSiteWithJob(ctx context.Context, v Site, d Domain, j Job, c JobClaim, args func(string) (json.RawMessage, error)) (Job, error) {
+func (s *Store) ReserveSiteTx(ctx context.Context, tx *sql.Tx, v Site, d Domain, j *Job, args func(string) (json.RawMessage, error), limits ...PHPLimits) error {
 	if v.ID == "" || v.Name == "" || v.Type == "" || v.Docroot == "" || d.ID == "" || d.FQDN == "" {
-		return Job{}, ErrSiteInvalid
+		return ErrSiteInvalid
 	}
-	if c.JobID != j.ID {
-		return Job{}, errors.New("claim job mismatch")
+	site, err := s.createSiteTx(ctx, tx, v, d, limits...)
+	if err != nil {
+		return err
 	}
-	err := s.Tx(ctx, func(tx *sql.Tx) error {
-		site, e := s.createSiteTx(ctx, tx, v, d)
-		if e != nil {
-			return e
-		}
-		j.Args, e = args(site.ID)
-		if e != nil {
-			return e
-		}
-		if e = insertJob(ctx, tx, j); e != nil {
-			return e
-		}
-		c.Expires = 0
-		c.Nonce = nil
-		c.Ciphertext = nil
-		return insertClaim(ctx, tx, c)
-	})
-	return j, err
+	j.Args, err = args(site.ID)
+	return err
 }
 func (s *Store) SetSiteStatus(ctx context.Context, id, status string) error {
 	switch status {

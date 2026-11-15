@@ -13,6 +13,7 @@ import (
 	"novapanel/internal/store"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -43,6 +44,7 @@ func TestSiteMutations(t *testing.T) {
 	a.Nginx = &nginx.Applier{Root: filepath.Join(root, "nginx"), Runner: commands, Probe: func(context.Context, nginx.Desired) error { return nil }}
 	sid, _ := id.New()
 	did, _ := id.New()
+	a.Exec = &accountRunner{root: a.Cfg.SitesRoot, name: "demo", id: sid, marker: "novapanel-site="}
 	site, err := st.CreateSite(ctx, store.Site{ID: sid, Name: "demo", Type: "static", Docroot: filepath.Join(a.Cfg.SitesRoot, "demo", "public")}, store.Domain{ID: did, FQDN: "demo.test"})
 	if err != nil {
 		t.Fatal(err)
@@ -79,6 +81,19 @@ func TestSiteMutations(t *testing.T) {
 			t.Fatalf("%s retry reloaded", verb)
 		}
 		return store.Job(j)
+	}
+	dbID, _ := id.New()
+	userID, _ := id.New()
+	if err := st.ReserveDatabase(ctx, store.Database{ID: dbID, SiteID: &sid, Name: "attached_db", Engine: "mariadb"}, store.DatabaseUser{ID: userID, DatabaseID: dbID, Username: "attached_user"}); err != nil {
+		t.Fatal(err)
+	}
+	deleteReply := call("site.delete", map[string]any{"site_id": sid})
+	deleteJob := deleteReply.Data.(jobs.EnqueueResult).Job
+	if err := rpc.Registry["site.delete"].Exec(ctx, a, &deleteJob); err == nil || !strings.Contains(err.Error(), dbID) {
+		t.Fatalf("site.delete must identify attached database: %v", err)
+	}
+	if err := st.DeleteDatabase(ctx, dbID, "attached_db"); err != nil {
+		t.Fatal(err)
 	}
 	exec("site.update", map[string]any{"site_id": sid, "maintenance": true})
 	got, _ := st.SiteByID(ctx, sid)

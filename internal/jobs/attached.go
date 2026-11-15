@@ -51,6 +51,36 @@ func (q *Queue) lockAttachedDatabases(ctx context.Context, siteID string) ([]sto
 }
 
 func (q *Queue) lockJob(ctx context.Context, j Job) (func(), error) {
+	if held, ok := ctx.Value(heldLocksKey{}).(map[string]bool); ok {
+		keys, err := q.operationKeys(ctx, j)
+		if err != nil {
+			return nil, err
+		}
+		for _, key := range keys {
+			if !held[key] {
+				return nil, errors.New("jobs: incomplete execution lock set")
+			}
+		}
+		if j.Verb == "site.delete" {
+			if store, ok := q.store.(interface {
+				AttachedDatabases(context.Context, string) ([]store.Database, error)
+			}); ok {
+				if journal, ok := q.store.(operationStore); ok {
+					_, err := journal.LoadOperation(ctx, j.ID)
+					if errors.Is(err, sql.ErrNoRows) {
+						dbs, err := store.AttachedDatabases(ctx, strings.TrimPrefix(j.ObjectKey, "site:"))
+						if err != nil {
+							return nil, err
+						}
+						if len(dbs) > 0 {
+							return nil, rpcerr.Errf("precondition_failed", "Attached databases require durable deletion")
+						}
+					}
+				}
+			}
+		}
+		return func() {}, nil
+	}
 	if s, ok := q.store.(operationStore); ok {
 		op, err := s.LoadOperation(ctx, j.ID)
 		if err == nil {

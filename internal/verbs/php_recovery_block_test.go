@@ -51,7 +51,7 @@ func TestPHPQueueBlocksOnUnresolvedRollback(t *testing.T) {
 	a := agent.New()
 	a.Store, a.Audit = st, log
 	a.Nginx = &nginx.Applier{Root: root, Runner: phpBrokenRunner{}, Probe: func(context.Context, nginx.Desired) error { return nil }}
-	a.PHP = &agent.PHPDependencies{Pools: &php.Applier{Root: filepath.Join(root, "pool"), Runner: phpBrokenRunner{}, Probe: func(context.Context, php.Desired) error { return nil }}, RecoveryRoot: filepath.Join(root, "journal"), ResolveIdentity: func(context.Context, store.Site) (uint32, uint32, error) { return 1001, 1001, nil }}
+	a.DurablePHP = &agent.PHPDependencies{Pools: &php.Applier{Root: filepath.Join(root, "pool"), Runner: phpBrokenRunner{}, Probe: func(context.Context, php.Desired) error { return nil }}, RecoveryRoot: filepath.Join(root, "journal"), ResolveIdentity: func(context.Context, store.Site) (uint32, uint32, error) { return 1001, 1001, nil }}
 	server := rpc.NewServer(a)
 	server.ConfigureJobs()
 	if err := a.PrepareStartup(ctx); err != nil {

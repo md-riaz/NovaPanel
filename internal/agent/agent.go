@@ -8,9 +8,10 @@ import (
 	"novapanel/internal/config"
 	"novapanel/internal/exec"
 	"novapanel/internal/jobs"
+	"novapanel/internal/php"
 	"novapanel/internal/platform"
 	"novapanel/internal/render/nginx"
-	"novapanel/internal/render/php"
+	renderphp "novapanel/internal/render/php"
 	"novapanel/internal/rpcerr"
 	"novapanel/internal/secret"
 	"novapanel/internal/store"
@@ -23,7 +24,7 @@ import (
 // verify the provisioned site's identity. RecoveryRoot requires an owner capable
 // of reconciling snapshots across startup; no default is installed.
 type PHPDependencies struct {
-	Pools           *php.Applier
+	Pools           *renderphp.Applier
 	RecoveryRoot    string
 	ResolveIdentity func(context.Context, store.Site) (uint32, uint32, error)
 }
@@ -34,34 +35,45 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Agent struct {
-	mutationsBlocked atomic.Bool
-	ProvisionSite    func(context.Context, string) error
-	Nginx            *nginx.Applier
-	// PHP publication is opt-in: no production recovery owner exists yet.
-	PHP              *PHPDependencies
-	PasswordFailures auth.FailureBudgets
-	UnknownFailures  auth.FailureBudgets
-	MFAFailures      auth.FailureBudgets
-	Jobs             *jobs.Queue
-	Scheduler        *jobs.Scheduler
-	Store            *store.Store
-	Secret           *secret.Sealer
-	Audit            *audit.Log
-	Cfg              config.Config
-	Exec             exec.Runner
-	Validate         *validate.V
-	Clock            Clock
-	Started          int64
+	mutationsBlocked     atomic.Bool
+	DurablePHP           *PHPDependencies
+	ProvisionSite        func(context.Context, string, string) error
+	DeleteDatabaseForJob func(context.Context, string, string, string) error
+	Nginx                *nginx.Applier
+	PHP                  *php.PoolApplier
+	PasswordFailures     auth.FailureBudgets
+	UnknownFailures      auth.FailureBudgets
+	MFAFailures          auth.FailureBudgets
+	Jobs                 *jobs.Queue
+	Scheduler            *jobs.Scheduler
+	Store                *store.Store
+	Secret               *secret.Sealer
+	Audit                *audit.Log
+	Cfg                  config.Config
+	Exec                 exec.Runner
+	Validate             *validate.V
+	Clock                Clock
+	Started              int64
 }
 
 func New() *Agent { return NewWithDependencies(config.Defaults(), exec.Real{}, &validate.V{}) }
 func NewWithDependencies(cfg config.Config, runner exec.Runner, v *validate.V) *Agent {
 	c := realClock{}
 	a := &Agent{Cfg: cfg, Exec: runner, Validate: v, Clock: c, Started: c.Now(),
-		ProvisionSite: func(ctx context.Context, name string) error {
-			return platform.EnsureSite(ctx, runner, cfg.SitesRoot, cfg.ACMEWebroot, name)
+		ProvisionSite: func(ctx context.Context, name, siteID string) error {
+			return platform.EnsureSite(ctx, runner, cfg.SitesRoot, cfg.ACMEWebroot, cfg.LogDir, name, siteID)
 		},
 		Nginx: &nginx.Applier{Root: platform.NginxRoot, Runner: runner, Probe: nginx.StateProbe("http://127.0.0.1:80", "https://127.0.0.1:443", nil)},
+		PHP: &php.PoolApplier{Dir: "/etc/php/8.3/fpm/pool.d", Runner: runner, Probe: func(ctx context.Context) error {
+			_, _, code, err := runner.Run(ctx, platform.Systemctl, []string{"is-active", "--quiet", "php8.3-fpm.service"}, exec.RunOpts{})
+			if err != nil {
+				return err
+			}
+			if code != 0 {
+				return rpcerr.Errf("agent_error", "FPM health probe failed")
+			}
+			return nil
+		}},
 	}
 	a.Nginx.Guard = func(ctx context.Context) error {
 		if a.Store == nil {

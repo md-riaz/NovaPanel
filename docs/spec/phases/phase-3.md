@@ -153,6 +153,12 @@ post-reload request probe is the real safety net.
   pair appears under a new versioned dir and `current` points at it; a second `ssl.issue` within the
   renewal window is a no-op (does not re-hit ACME) — the effectful-verb test in place of "run twice =
   no change".
+- **Per-attempt timeout is effectful, not transient (F6 per-attempt deadline).** `ssl.issue`/`ssl.renew`
+  are **effectful** (external ACME). A per-attempt `deadline_exceeded` mid-order therefore follows the
+  F6 **`interrupted` + reconcile** path — **not** the transient `running`→`queued` re-queue of an
+  idempotent verb: the next pass re-checks the renewal-window / installed-pair state and reuses the
+  sealed account key + any pending order rather than blindly re-hitting ACME, so a timeout cannot burn
+  the local issuance caps (50/7 d · 5 duplicate-set/7 d · 5 auth-failures/hour → `rate_limited`).
 
 ### Resolved contract details (Phase-3 rulings)
 - **Reads are synchronous (01 wins).** `site.list`/`site.get`/`ssl.status`/`php.list` are sync per 01;
@@ -161,7 +167,7 @@ post-reload request probe is the real safety net.
   `Run` persists `status='creating'`; the worker flips it to `active` on success or **`failed`** on
   error (a `failed` site is retry-able via `site.create` ensure-semantics or removable via `site.delete`);
   `site.delete` sets `deleting`. `site.list`/`get` return `status` (already in the 03 shape).
-- **Lock keys** per F6: `site.create` → `site:<name>`; all other site/domain/redirect/ssl verbs →
+- **Lock keys** per F6: `site.create` **and** `site.delete` → `site:<name>`; all other site/domain/redirect/ssl verbs →
   `site:<site_id>` resolved before enqueue.
 - **`ssl.upload` key handling** per F6 "secret job input": the agent **seals `cert_pem`+`key_pem` before
   the job row is written**; `args_json` holds only the sealed blob; plaintext never lands in
@@ -188,8 +194,16 @@ post-reload request probe is the real safety net.
   serving), (2) remove certs (files + `domains` cert state), (3) if `purge_files` remove the docroot/home
   **and** the site Unix user, else **keep** the files and the user dormant, (4) delete `redirects`/
   `domains`/`sites` rows last. Certs are always removed (regenerable). **Phase-4 DB rows are out of
-  Phase-3 scope** — when Phase 4 lands it extends `site.delete` to handle associated databases (refuse
-  or cascade per a flag); a Phase-3 `site.delete` does not touch DB rows (none exist yet).
+  Phase-3 scope** — a Phase-3 `site.delete` does not touch DB rows (none exist yet). **Phase-4 decision
+  (head ruling): `site.delete` REFUSES, it does not cascade.** When Phase 4 lands, `site.delete` on a
+  site with any attached managed database (a `databases` row whose `site_id` is this site) returns
+  **`precondition_failed`** listing the attached `db_id`s; the operator deletes those databases
+  explicitly via `database.delete` (which drops the MariaDB objects by `obj_id`) first. This is the
+  data-loss-safe default — `site.delete` never silently drops a database. The `databases.site_id
+  ON DELETE SET NULL` FK (02) stays only as a **defensive backstop** (an out-of-band orphan becomes a
+  valid detached DB), not the primary policy. A convenience **cascade-with-typed-confirmation**
+  (`site.delete{cascade_databases:true}`, a 03 flag + typed confirm, à la the Phase-6 destructive verbs)
+  is **owed, not built in Step 1** — 03 has no such flag today and none is added now. See phase-4.
 
 ## External refs (gathered — verified values to honor)
 - **The 502 cause:** FPM socket default owner is the FPM run-user (site user), mode 0660 → nginx
@@ -243,3 +257,13 @@ post-reload request probe is the real safety net.
   first issuance and burns the 5-failures/hour limit. Test against **staging** first.
 - Pin the lego major version here before coding; the FPM pool itself is Phase 4 (this phase renders
   the `fastcgi_pass` to the expected socket path).
+
+### Handoff owed from #124 (tracked follow-up — not necessarily a Phase-3 DoD gate)
+- `ssl.issue` / `ssl.renew` **ensure-create** the root-owned `/var/www/acme/<site>` (idempotent `mkdir`,
+  `root:root 0755`) before the ACME webroot client runs; `site.create` does not create it.
+- A durable **site-ULID `.novapanel-owner` marker** inside that tree is **owed** (name/path alone does not
+  prove ownership — the slug is reusable). Keyed on the ULID, with the same create/replay/retain/purge shape
+  as the OS user (00 §Panel-owned OS-user provenance).
+- `site.delete` teardown removes the ACME tree **only on proven ownership** (matching marker, or empty/our own
+  challenge files); an ambiguous non-empty tree is **retained and surfaced to the operator**, never `rm`-by-name.
+- Phase 4 Step 2 never creates, deletes or adopts this tree (see `phase-4.md`).

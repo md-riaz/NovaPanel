@@ -34,10 +34,10 @@ func TestExpireOperationsPreservesCompletedClaimsAcrossBatches(t *testing.T) {
 	if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM jobs WHERE id LIKE 'expiry-regression-%' AND state='done' AND updated=1"); n != 101 {
 		t.Fatalf("completed jobs changed: %d", n)
 	}
-	if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM job_claims WHERE job_id LIKE 'expiry-regression-%' AND claim_hash='hash' AND nonce=X'03' AND ciphertext=X'04' AND expires=999"); n != 101 {
-		t.Fatalf("completed claims retained: %d", n)
+	if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM job_claims WHERE job_id LIKE 'expiry-regression-%' AND claim_hash='hash' AND nonce=X'03' AND ciphertext=X'04' AND expires=999"); n != 102 {
+		t.Fatalf("claims retained: %d", n)
 	}
-	if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM phase4_operations WHERE job_id LIKE 'expiry-regression-%' AND checkpoint='expired' AND nonce IS NULL AND ciphertext IS NULL"); n != 102 {
+	if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM phase4_operations WHERE job_id LIKE 'expiry-regression-%' AND checkpoint='expired' AND nonce=X'01' AND ciphertext=X'02'"); n != 102 {
 		t.Fatalf("expired journals: %d", n)
 	}
 	if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM jobs WHERE id='expiry-regression-101' AND state='failed' AND code='interrupted'"); n != 1 {

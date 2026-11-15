@@ -74,24 +74,24 @@ func TestPhase4ProductionMigration(t *testing.T) {
 	}
 	phase4JournalKinds(t, s)
 	var recordedHash string
-	if err := s.db.raw.QueryRow("SELECT hash FROM schema_migrations WHERE version='0006'").Scan(&recordedHash); err != nil {
+	if err := s.db.raw.QueryRow("SELECT hash FROM schema_migrations WHERE version='0008'").Scan(&recordedHash); err != nil {
 		t.Fatal(err)
 	}
-	if recordedHash != hashes["0006"] {
+	if recordedHash != hashes["0008"] {
 		t.Fatal("recorded Phase 4 hash differs from manifest")
 	}
 	candidate, err := os.ReadFile("testdata/phase4_candidate.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	production, err := migrations.ReadFile("migrations/0006_phase4.sql")
+	production, err := migrations.ReadFile("migrations/0008_phase4.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := fmt.Sprintf("%x", sha256.Sum256(production)); got != hashes["0006"] {
-		t.Fatalf("Phase 4 migration hash = %s, manifest = %s", got, hashes["0006"])
+	if got := fmt.Sprintf("%x", sha256.Sum256(production)); got != hashes["0008"] {
+		t.Fatalf("Phase 4 migration hash = %s, manifest = %s", got, hashes["0008"])
 	}
-	// The candidate describes the resulting schema; 0006 remains the shipped DDL.
+	// The candidate describes the resulting schema; 0008 remains the shipped DDL.
 	const oldKinds = "'site_delete','database_delete','dbuser_delete'"
 	const newKinds = oldKinds + ",'php_set'"
 	if strings.Count(string(production), oldKinds) != 1 || string(candidate) != strings.Replace(string(production), oldKinds, newKinds, 1) {

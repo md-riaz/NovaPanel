@@ -184,12 +184,36 @@ func insertSession(ctx context.Context, db execer, v Session, now int64) error {
 	_, e := db.ExecContext(ctx, "INSERT INTO sessions("+sessionColumns+") VALUES(?,?,?,?,?,?,?,?,?,?,?)", v.ID, v.TokenHash, v.Kind, v.UserID, v.Role, v.CSRFToken, v.MFAAt, now, now, v.IdleDeadline, v.AbsDeadline)
 	return authWriteError(e)
 }
+
+const sessionExpiryDelete = `WITH idle AS (
+  SELECT id FROM sessions INDEXED BY idx_sessions_idle_deadline_id
+  WHERE idle_deadline < ? ORDER BY idle_deadline, id LIMIT 256
+), absolute AS (
+  SELECT id FROM sessions INDEXED BY idx_sessions_abs_deadline_id
+  WHERE abs_deadline < ? ORDER BY abs_deadline, id LIMIT 256
+), doomed AS (
+  SELECT id FROM (SELECT id FROM idle UNION SELECT id FROM absolute)
+  ORDER BY id LIMIT 256
+)
+DELETE FROM sessions WHERE id IN (SELECT id FROM doomed)
+AND (idle_deadline < ? OR abs_deadline < ?);`
+
 func (s *Store) CreateSession(ctx context.Context, v Session) error {
 	return s.Tx(ctx, func(tx *sql.Tx) error {
+		// Take the write lock before sampling time, including after a pool or SQLite wait.
+		if _, e := tx.ExecContext(ctx, "UPDATE sessions SET last_seen=last_seen WHERE 0"); e != nil {
+			return e
+		}
+		now := s.clock.Now()
 		if e := sessionUser(ctx, tx, v); e != nil {
 			return e
 		}
-		return insertSession(ctx, tx, v, s.clock.Now())
+		if v.Kind == "anon" {
+			if _, e := tx.ExecContext(ctx, sessionExpiryDelete, now, now, now, now); e != nil {
+				return e
+			}
+		}
+		return insertSession(ctx, tx, v, now)
 	})
 }
 func sessionUser(ctx context.Context, tx *sql.Tx, v Session) error {

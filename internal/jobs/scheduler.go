@@ -64,6 +64,10 @@ func scheduleOwner(ctx context.Context) (Metadata, error) {
 	}
 	return m, nil
 }
+func reservedSchedule(id string) bool {
+	return strings.HasPrefix(id, "acme:auto:") || id == "reconcile:auto"
+}
+
 func (s *Scheduler) Set(ctx context.Context, r ScheduleRequest) (store.Schedule, error) {
 	ctx, release, err := s.q.AdmitMutation(ctx)
 	if err != nil {
@@ -73,7 +77,7 @@ func (s *Scheduler) Set(ctx context.Context, r ScheduleRequest) (store.Schedule,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m, e := scheduleOwner(ctx)
-	if strings.HasPrefix(r.ID, "acme:auto:") {
+	if reservedSchedule(r.ID) {
 		return store.Schedule{}, rpcerr.Errf("forbidden", "Automatic schedule is agent owned")
 	}
 	if e != nil {
@@ -140,6 +144,9 @@ func (s *Scheduler) Enable(ctx context.Context, jid string, enabled bool) error 
 	if e != nil {
 		return e
 	}
+	if reservedSchedule(jid) {
+		return rpcerr.Errf("forbidden", "Automatic schedule is agent owned")
+	}
 	row, e := s.q.store.GetSchedule(ctx, jid)
 	if e != nil {
 		return e
@@ -176,6 +183,15 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 	}); ok {
 		if e := automatic.PrepareACMESchedules(ctx, now); e != nil {
 			return e
+		}
+	}
+	if _, enabled := s.policies["reconcile"]; enabled {
+		if automatic, ok := s.q.store.(interface {
+			PrepareReconcileSchedule(context.Context, int64) error
+		}); ok {
+			if e := automatic.PrepareReconcileSchedule(ctx, now); e != nil {
+				return e
+			}
 		}
 	}
 	rows, e := s.q.store.DueSchedules(ctx, now)

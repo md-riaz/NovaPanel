@@ -23,6 +23,9 @@ func (f *fakeRPC) Call(_ context.Context, v string, a any, s string) (rpc.Reply,
 	f.rpcCalls = append(f.rpcCalls, rpcCall{v, s, a})
 	return f.reply(v)
 }
+func (f *fakeRPC) CallWithIdempotency(ctx context.Context, v string, a any, s, key string) (rpc.Reply, error) {
+	return f.Call(ctx, v, a, s)
+}
 func (f *fakeRPC) Close() error { f.closed++; return nil }
 func setup(t *testing.T, f *fakeRPC) http.Handler {
 	t.Helper()

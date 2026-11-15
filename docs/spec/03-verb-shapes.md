@@ -7,7 +7,13 @@ the `NewArgs` struct exactly as listed and validates fields (F9) before `Run`.
 **Conventions (stated once):**
 - **Reads** return `data` = the shape shown. **Slow verbs** return `data:{job:{id,state,verb}}`
   immediately (F6); the real result lands in `jobs.result_json` (shape = the "→result" shown) and is
-  read via `job.status`. **Show-once secrets** ride the `claim` (F19), never the result.
+  read via `job.status`. **Show-once secrets** ride the `claim` (F19), never the result. The slow-verb
+  reply's `claim` is **optional**, accompanied by a `claim_state` reason enum of just **`live` | `none`**:
+  an **idempotent replay** (same `idempotency_key`, F6) returns the **existing** job and includes `claim`
+  only when `claim_state=live`; a gone claim (consumed **or** expired — not durably distinguished) returns
+  the job (`done`) with **no** `claim` and `claim_state=none` (recover via `rotate_password`), **never**
+  `not_found`. `not_found` from the replay surface means only "no such `idempotency_key`"; a gone secret
+  on the **`job.claim`** retrieval verb still returns `410`-style `not_found` (F19, unchanged).
 - All ids are ULIDs (`site_…`, `db_…`, `job_…`, etc. — opaque). Timestamps are unix-ms. Field names
   are snake_case. Unlisted optional fields default as noted. Every string that is a name/path/url/host
   is validated per F9.
@@ -17,7 +23,7 @@ the `NewArgs` struct exactly as listed and validates fields (F9) before `Run`.
 
 ## session / mfa / user (Phase 2)
 ```
-session.start{}                                        → {session, csrf_token}   # public pre-login bootstrap; idempotent get-or-create: live anon in F2 → same session+csrf unchanged (lets web re-fetch anon csrf for the login-POST compare); none/expired → mints (rate-limited per peer; exhausted → forbidden); authed session → precondition_failed (F3; use whoami)
+session.start{}                                        → {session, csrf_token}   # public pre-login bootstrap; idempotent get-or-create: live anon in F2 → same session+csrf unchanged (lets web re-fetch anon csrf for the login-POST compare); none/expired → mints (rate-limited per peer; exhausted → rate_limited); authed session → precondition_failed (F3; use whoami)
 session.login{user, password, totp?:string}            → {session, role, csrf_token, mfa:bool}
 session.reauth{totp}                                    → {session, csrf_token, mfa_at}   # rotates the session id + csrf (F4); web replaces its cookie/header
 session.logout{}                                        → {}
@@ -62,7 +68,7 @@ panel.backup_config{repo_id}                            → job → {snapshot_id
 site.create{name?, type:'static'|'php'|'wordpress', primary_domain, php_version?, wordpress?:{title:string,admin_username:string,admin_email:string}} → job → {site_id}
                                                         # name generated from the domain if omitted
 site.update{site_id, primary_domain_id?:string, php_version?, force_https?:bool, hsts_max_age?:int, maintenance?:bool} → job → {}
-site.delete{site_id, purge_files?:bool=false, purge_databases?:bool=false}                 → job → {}      # MFA; independent file and database purge flags, defaults retain
+site.delete{site_id, purge_files?:bool=false, purge_databases?:bool=false} ? job ? {}  # MFA; attached databases require explicit purge_databases=true
 site.list{}                                            → {sites:[{id,name,type,primary_domain,status,php_version}]}
 site.get{site_id}                                       → {site:{…}, domains:[…], redirects:[{id,source,target,code}], cert:{state,not_after}, wordpress_database_id?:string, php_limits:null|{memory_mb,upload_mb,max_exec_sec}}
 domain.add{site_id, fqdn}                               → job → {domain_id}
@@ -110,8 +116,9 @@ A metadata-only TLS promotion is not an implementation of re-keying. `site.get` 
 database.create{site_id?}                        → job → {db_id, db_name, db_user}  + claim(password)
 database.rotate_password{db_id}                         → job → {}                          + claim(password)
 database.delete{db_id}                                  → job → {}      # MFA
-database.list{}                                         → {databases:[{id,name,site_id,engine,primary_user_id}]}
-dbuser.create{db_id}                         → job → {dbuser_id}                 + claim(password)
+database.list{}                                         → {databases:[{id,name,site_id,engine}]}
+dbuser.create{db_id, username?}                         → job → {dbuser_id, db_user}        + claim(password)   # db_user = the final username (non-secret); only the password rides the claim
+dbuser.list{db_id}                                      → {users:[{id, username}]}           # retrieval path for secondary usernames (non-secret identity)
 dbuser.delete{dbuser_id}                                → job → {}
 ```
 
@@ -215,12 +222,12 @@ Separate calls use separate stdin consumers:
 
 The applicable password plus newline is stdin. Do not use --dbpass, --admin_password=value, --admin_pass, --allow-root, a shell, PHP eval, or a password-update workaround. Suppress raw child output from persistent job/audit logs and sanitize returned failures. Prove the stdin contract in the chosen target runtime before installing a site.
 
-Replace database.create args with `{site_id?}` and dbuser.create args with `{db_id}`. Remove raw optional name/username rather than silently accepting them. Generate the DB name as `d_` plus the lowercase resource ULID and the user as `u_` plus the lowercase user ULID; validate through F9. MariaDB username length must also fit 10.11. Collisions fail conflict without adopting an unmanaged DB/account.
+Database and account names may be supplied by the caller after validation; omitted names are derived deterministically from the resource ULID. Names must satisfy the MariaDB allowlist and length limits, and collisions fail conflict without adopting unmanaged objects.
 
 A database has exactly one primary db_users account, created with it. database.rotate_password targets that persisted primary account, never first-row selection. Additional accounts made by dbuser.create receive the same per-database allowlist and are not primary. There is no secondary-user rotation API in this phase. database.list adds primary_user_id; site.get adds wordpress_database_id when bound, and php_limits for PHP/WordPress, null for static. Do not expose passwords in these projections.
 
-Keep database.delete `{db_id}` and dbuser.delete `{dbuser_id}`. Refuse deletion of a WordPress-bound DB or any primary account with precondition_failed. Delete the DB through site.delete purge_databases or first delete its site with retention to detach it. Additional dbuser deletion remains allowed under the parent DB/site locks. Unknown target is not_found at initial resolution; durable ensure-absent replay is a no-op only for the job's recorded resource identities.
+Keep database.delete `{db_id}` and dbuser.delete `{dbuser_id}`. Refuse deletion of a WordPress-bound DB or any primary account with precondition_failed. Delete a WordPress-bound DB through site.delete with purge_databases=true. Additional dbuser deletion remains allowed under the parent DB/site locks. Unknown target is not_found at initial resolution; durable ensure-absent replay is a no-op only for the job's recorded resource identities.
 
-Extend site.delete to `{site_id,purge_files?:bool=false,purge_databases?:bool=false}`. Keep registry MFA and roles/scopes unchanged. purge_files controls only the existing Phase 3 file/account contract. purge_databases=false drops the WordPress binding and detaches every attached DB with site_id=NULL in the final metadata transaction; DB data/accounts and any retained application files/config remain. Warn that retained wp-config still contains a live credential. purge_databases=true drops every attached MariaDB DB and its managed accounts before removing their SQLite rows, then completes the existing site deletion sequence. This is intentionally all attached databases, not only WordPress. No inferred consent from purge_files. Flags are independent; retaining files while purging DBs is allowed and warns that the retained app will be unusable. Replay uses a durable snapshot of generated DB/account identifiers taken under locks before any deletion. Never delete unmanaged resources or recreate retained accounts on replay.
+Extend site.delete to `{site_id,purge_files?:bool=false,purge_databases?:bool=false}`. Keep registry MFA and roles/scopes unchanged. purge_files controls only the existing Phase 3 file/account contract. purge_databases=false refuses with precondition_failed when any database is attached; no database is detached. purge_databases=true drops every attached MariaDB DB and its managed accounts before removing their SQLite rows, then completes the existing site deletion sequence. This is intentionally all attached databases, not only WordPress. No inferred consent from purge_files. Flags are independent; retaining files while purging DBs is allowed and warns that the retained app will be unusable. Replay uses a durable snapshot of generated DB/account identifiers taken under locks before any deletion. Never delete unmanaged resources or recreate retained accounts on replay.
 
 Defer the owner opt-in hardened PHP profile until a later owner-approved request shape, persistence model and compatibility-warning acceptance contract. Phase 4 exposes no hardened field, toggle or claim of support. Its verification and DoD require the compatibility default, cgi.fix_pathinfo=0, bounded limits, log confinement, UID/filesystem/socket/DB isolation and explicit UI statement that optional hardened PHP is unavailable. The optional feature is outside this phase's amended completion contract, not a silently skipped required test. Home 0751 enables traversal only; docroot site:www-data 2750 and private files/subtrees enforce confidentiality.

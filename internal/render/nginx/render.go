@@ -28,6 +28,7 @@ type Desired struct {
 	Name              string
 	Domains           []string
 	Docroot, ACMERoot string
+	PHPVersion        *string
 }
 
 type serverState struct {
@@ -47,7 +48,7 @@ var httpTemplate = template.Must(template.New("http").Funcs(template.FuncMap{"pa
     listen [::]:80;{{end}}
     server_name {{range .Domains}}{{.}} {{end}};
     root "{{.Docroot}}";
-    index {{if .PHP}}index.php {{end}}index.html;
+    index {{if or .PHP .PHPVersion}}index.php {{end}}index.html;
     {{if not .HTTPS}}location ^~ /.well-known/acme-challenge/ {
         root "{{.ACMERoot}}";
         default_type "text/plain";
@@ -62,37 +63,22 @@ var httpTemplate = template.Must(template.New("http").Funcs(template.FuncMap{"pa
     {{end}}{{range .Redirects}}{{if pathSource .Source}}location = "{{.Source}}" { return {{.Code}} "{{.Target}}"; }
     {{end}}{{end}}location / {
         {{range .Redirects}}{{if not (pathSource .Source)}}if ($host = "{{.Source}}") { return {{.Code}} "{{.Target}}"; }
-        {{end}}{{end}}{{if .Maintenance}}return 503;{{else}}try_files $uri $uri/ =404;{{end}}
+        {{end}}{{end}}{{if .Maintenance}}return 503;{{else}}try_files $uri $uri/ {{if or .PHP .PHPVersion}}/index.php?$query_string{{else}}=404{{end}};{{end}}
     }
     {{end}}location ~ /\. { deny all; }
-    {{if and .PHP (not .Maintenance) (not .RedirectHTTPS)}}location ~* /(?:uploads|files)/.*\.php { return 404; }
-    location ~ \.php$ {
-        try_files $uri =404;
+    location ~* /(?:uploads|files)/.*\.php { return 404; }
+    {{if or .PHP .PHPVersion}}location ~ \.php$ {
+        {{if .RedirectHTTPS}}return 301 https://$host$request_uri;{{else}}{{range .Redirects}}{{if not (pathSource .Source)}}if ($host = "{{.Source}}") { return {{.Code}} "{{.Target}}"; }
+        {{end}}{{end}}{{if .Maintenance}}return 503;{{else}}try_files $uri =404;
+        fastcgi_split_path_info ^(.+?\.php)(/.*)$;
         fastcgi_pass unix:/run/php/novapanel/{{.Name}}.sock;
+        include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-        fastcgi_param SCRIPT_NAME $fastcgi_script_name;
-        fastcgi_param PATH_INFO "";
-        fastcgi_param QUERY_STRING $query_string;
-        fastcgi_param REQUEST_METHOD $request_method;
-        fastcgi_param CONTENT_TYPE $content_type;
-        fastcgi_param CONTENT_LENGTH $content_length;
-        fastcgi_param REQUEST_URI $request_uri;
-        fastcgi_param DOCUMENT_URI $document_uri;
-        fastcgi_param DOCUMENT_ROOT $document_root;
-        fastcgi_param SERVER_PROTOCOL $server_protocol;
-        fastcgi_param REQUEST_SCHEME $scheme;
-        fastcgi_param HTTPS $https if_not_empty;
-        fastcgi_param GATEWAY_INTERFACE CGI/1.1;
-        fastcgi_param SERVER_SOFTWARE nginx;
-        fastcgi_param REMOTE_ADDR $remote_addr;
-        fastcgi_param REMOTE_PORT $remote_port;
-        fastcgi_param SERVER_ADDR $server_addr;
-        fastcgi_param SERVER_PORT $server_port;
-        fastcgi_param SERVER_NAME $server_name;
-        fastcgi_param REDIRECT_STATUS 200;
-        fastcgi_param HTTP_PROXY "";
+        fastcgi_param PATH_INFO $fastcgi_path_info;
+        fastcgi_hide_header X-Powered-By;{{end}}{{end}}
     }
-    {{end}}location ~* \.php { return 404; }
+    {{end}}
+    location ~* \.php { return 404; }
     add_header X-Content-Type-Options nosniff always;
     add_header X-Frame-Options SAMEORIGIN always;
     add_header Referrer-Policy strict-origin-when-cross-origin always;
@@ -109,6 +95,9 @@ func Render(d Desired) ([]byte, error) {
 		if _, err := php.Render(*d.PHP); err != nil {
 			return nil, err
 		}
+	}
+	if d.PHPVersion != nil && *d.PHPVersion != "8.3" {
+		return nil, rpcerr.Errf("invalid_argument", "Unsupported PHP version")
 	}
 	if e := v.SiteName(d.Name); e != nil {
 		return nil, e

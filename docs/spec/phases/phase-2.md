@@ -56,8 +56,7 @@ Phases 0–1 (RPC, store, audit, secret seal). Reads: `00-foundations.md` F4, F1
   `user.create/list/update/delete/set_password` (owner/admin). `session.login` on an unknown user
   does a **dummy Argon2id** to equalize timing (no user enumeration); failures are uniform.
 - **TOTP replay store** = a `mfa_used` set of `(user_id, step_counter)` in the agent DB (not memory),
-  so a code already accepted within its window is rejected across restarts. Enrollment **forces** MFA
-  setup at first owner login is optional; MFA is required only to *call* MFA-gated verbs.
+  so a code already accepted within its window is rejected across restarts. MFA enrollment is optional at first login; MFA is required only to *call* MFA-gated verbs.
 - **QR secret exception (C5):** `mfa.enroll` returns the `otpauth://…` URI **once** for the web tier
   to render a QR; this is the one allowed moment `panel-web` handles the secret (in transit, never
   stored). The Guardrail "never sees a secret in the clear" means never **persists/logs** it — the
@@ -131,6 +130,10 @@ Phases 0–1 (RPC, store, audit, secret seal). Reads: `00-foundations.md` F4, F1
 - [ ] HTMX shell with synchronizer CSRF via header (not cookie) + Sec-Fetch-Site/Origin fallback.
 - [ ] Roles enforced agent-side; read-only dashboard.
 - [ ] Auth events audited.
+
+**Hardening addendum (see 00 F4 + 02 `0007_session_expiry_indexes`).** Anon-mint throttles and bounded
+session GC (one capped sweep per fresh anonymous mint, backed by the `0007` expiry indexes) landed in #85
+(merged). They are part of the Phase-2 session contract: Deliverable 2 sessions, plus the F4 throttle/GC rules.
 
 ## Guardrails (this phase)
 - **`panel-web` never hashes, stores, or sees a password/TOTP secret in the clear** — auth is an agent

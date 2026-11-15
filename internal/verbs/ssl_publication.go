@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"novapanel/internal/agent"
 	"novapanel/internal/jobs"
@@ -44,14 +45,14 @@ func (s sslPublication) publication(ctx context.Context, siteID string, j *jobs.
 	a := s.a
 	defer func() {
 		if recover() != nil {
-			result = rpc.Errf("interrupted", "TLS publication requires recovery")
+			result = errors.Join(jobs.ErrRecoveryRequired, rpc.Errf("interrupted", "TLS publication requires recovery"))
 		}
 		if result != nil {
 			recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 			defer cancel()
 			raw, err := a.Store.TLSIntent(recovery)
 			if err != nil || len(raw) > 0 {
-				result = rpc.Errf("interrupted", "TLS publication requires recovery")
+				result = errors.Join(jobs.ErrRecoveryRequired, rpc.Errf("interrupted", "TLS publication requires recovery"))
 			}
 		}
 	}()
@@ -240,7 +241,7 @@ func (s sslPublication) publication(ctx context.Context, siteID string, j *jobs.
 				site.HSTSMaxAge = *move.Patch.HSTSMaxAge
 			}
 		}
-		d := nginx.Desired{Name: site.Name, Domains: names, Docroot: site.Docroot, ACMERoot: filepath.Join(a.Cfg.ACMEWebroot, site.Name), Maintenance: site.Maintenance, ForceHTTPS: site.ForceHTTPS, HSTSMaxAge: site.HSTSMaxAge, TLS: state, ForceReload: true}
+		d := nginx.Desired{Name: site.Name, Domains: names, Docroot: site.Docroot, ACMERoot: filepath.Join(a.Cfg.ACMEWebroot, site.Name), PHPVersion: site.PHPVersion, Maintenance: site.Maintenance, ForceHTTPS: site.ForceHTTPS, HSTSMaxAge: site.HSTSMaxAge, TLS: state, ForceReload: true}
 		for _, r := range rs {
 			d.Redirects = append(d.Redirects, nginx.Redirect{Source: r.Source, Target: r.Target, Code: r.Code})
 		}

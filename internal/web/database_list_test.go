@@ -14,7 +14,7 @@ func TestDatabaseListPage(t *testing.T) {
 		case "session.whoami":
 			return rpc.Reply{OK: true, Data: map[string]any{"role": "read_only", "csrf_token": "expected"}}, nil
 		case "database.list":
-			return rpc.Reply{OK: true, Data: map[string]any{"databases": []any{map[string]any{"id": "DB", "name": "d_example<script>", "site_id": nil, "engine": "mariadb", "primary_user_id": "USER"}}}}, nil
+			return rpc.Reply{OK: true, Data: map[string]any{"databases": []any{map[string]any{"id": "DB", "name": "d_example<script>", "site_id": nil, "engine": "mariadb"}}}}, nil
 		default:
 			t.Fatalf("unexpected RPC %s", v)
 			return rpc.Reply{}, nil
@@ -25,9 +25,9 @@ func TestDatabaseListPage(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("status=%d %s", w.Code, w.Body.String())
 	}
-	for _, s := range []string{"Databases", "d_example&lt;script&gt;", "mariadb", "USER"} {
-		if !strings.Contains(w.Body.String(), s) {
-			t.Errorf("missing %q", s)
+	for _, text := range []string{"Databases", "d_example&lt;script&gt;", "mariadb"} {
+		if !strings.Contains(w.Body.String(), text) {
+			t.Errorf("missing %q", text)
 		}
 	}
 	if strings.Contains(w.Body.String(), "d_example<script>") {

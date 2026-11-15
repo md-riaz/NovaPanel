@@ -11,7 +11,7 @@ CREATE TABLE phase4_operations_new (
   expires INTEGER NOT NULL,
   updated INTEGER NOT NULL,
   CHECK((nonce IS NULL)=(ciphertext IS NULL)),
-  CHECK(checkpoint NOT IN ('done','expired') OR ciphertext IS NULL)
+  CHECK(checkpoint <> 'done' OR ciphertext IS NULL)
 );
 INSERT INTO phase4_operations_new SELECT * FROM phase4_operations;
 DROP TABLE phase4_operations;

@@ -90,6 +90,9 @@ func (s *Store) prepareSiteDelete(ctx context.Context, j Job, r OperationRequest
 		if e != nil {
 			return e
 		}
+		if !r.PurgeDatabases && len(ident.Attached) != 0 {
+			return ErrSitePrecondition
+		}
 		ident.PurgeFiles = r.PurgeFiles
 		ident.PurgeDatabases = r.PurgeDatabases
 		op = Operation{JobID: j.ID, Owner: j.CreatedBy, Kind: SiteDelete, SiteID: r.SiteID, Checkpoint: "prepared", Identity: ident}
@@ -131,6 +134,9 @@ func checkSiteDelete(ctx context.Context, tx *sql.Tx, op Operation) error {
 }
 
 func completeSiteDelete(ctx context.Context, tx *sql.Tx, op Operation) error {
+	if !op.Identity.PurgeDatabases && len(op.Identity.Attached) != 0 {
+		return ErrSitePrecondition
+	}
 	if _, e := tx.ExecContext(ctx, "DELETE FROM wordpress_bindings WHERE site_id=?", op.SiteID); e != nil {
 		return e
 	}
@@ -141,7 +147,7 @@ func completeSiteDelete(ctx context.Context, tx *sql.Tx, op Operation) error {
 			}
 		}
 	}
-	// ON DELETE SET NULL retains every attached database when purge is false.
+	// An attached database requires explicit purge.
 	_, e := tx.ExecContext(ctx, "DELETE FROM sites WHERE id=?", op.SiteID)
 	return e
 }
