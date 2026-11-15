@@ -127,7 +127,21 @@ func reconcile(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	return a.Jobs.Enqueue(ctx, "reconcile", args, "system")
 }
 func reconcileExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
+	var args reconcileArgs
+	if len(j.Args) != 0 {
+		if err := json.Unmarshal(j.Args, &args); err != nil {
+			return err
+		}
+	}
+	if err := args.Validate(); err != nil {
+		return err
+	}
 	changed, err := database.Reconcile(ctx, a.Exec, a.Store, a.Jobs.LockReconcileDatabase)
+	if args.Scope == "" {
+		phpChanged, phpErr := reconcilePHP(ctx, a.Store, a.Jobs, a.Exec, a.PHP, a.Cfg.SitesRoot, a.Cfg.LogDir)
+		changed = append(changed, phpChanged...)
+		err = errors.Join(err, phpErr)
+	}
 	result, marshalErr := json.Marshal(struct {
 		Changed []string `json:"changed"`
 	}{changed})

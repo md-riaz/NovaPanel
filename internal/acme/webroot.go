@@ -19,6 +19,45 @@ import (
 var opaque = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var errChallenge = errors.New("invalid or unsafe ACME challenge")
 
+// EnsureSiteWebroot creates the per-site root beneath the trusted ACME base.
+// Existing directories must already have safe ownership and permissions; never
+// repair a foreign or unsafe directory by changing its ownership or mode.
+func EnsureSiteWebroot(base, site string) (string, error) {
+	if (&validate.V{}).SiteName(site) != nil {
+		return "", errChallenge
+	}
+	resolved, err := filepath.EvalSymlinks(base)
+	if err != nil || !filepath.IsAbs(base) || filepath.Clean(base) != base || resolved != base {
+		return "", errChallenge
+	}
+	fd, err := unix.Open(base, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return "", errChallenge
+	}
+	defer unix.Close(fd)
+	var st unix.Stat_t
+	if unix.Fstat(fd, &st) != nil || st.Uid != uint32(os.Geteuid()) || st.Mode&0022 != 0 || st.Mode&0005 != 0005 {
+		return "", errChallenge
+	}
+	err = unix.Mkdirat(fd, site, 0755)
+	created := err == nil
+	if err != nil && !errors.Is(err, unix.EEXIST) {
+		return "", errChallenge
+	}
+	child, err := unix.Openat(fd, site, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return "", errChallenge
+	}
+	defer unix.Close(child)
+	if created && unix.Fchmod(child, 0755) != nil {
+		return "", errChallenge
+	}
+	if unix.Fstat(child, &st) != nil || st.Uid != uint32(os.Geteuid()) || st.Gid != uint32(os.Getegid()) || st.Mode&07777 != 0755 {
+		return "", errChallenge
+	}
+	return filepath.Join(base, site), nil
+}
+
 // Webroot holds the challenge directory open. Its root must already exist,
 // be agent-owned, world-traversable, and not writable by group or others.
 // Callers serialize issuance per site and Close after lego has finished.
