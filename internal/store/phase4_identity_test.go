@@ -24,7 +24,7 @@ func TestOperationRejectsCorruptIdentity(t *testing.T) {
 			case "missing_accounts":
 				op.Identity.Accounts = nil
 			case "wrong_name":
-				op.Identity.Database.Name = "d_unmanaged"
+				op.Identity.Database.Name = "invalid`name"
 			case "wrong_host":
 				op.Identity.Accounts[0].Host = "%"
 			case "duplicate_account":

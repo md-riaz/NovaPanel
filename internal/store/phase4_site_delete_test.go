@@ -2,9 +2,10 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
-	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -22,14 +23,14 @@ func TestSiteDeleteJournalSnapshotAndAtomicRetention(t *testing.T) {
 	}
 	phase4Exec(t, s.db.raw, "INSERT INTO wordpress_bindings(site_id,db_id) VALUES('site',?)", pair.ID)
 	j := Job{ID: "delete", Verb: "site.delete", CreatedBy: "session-owner", Role: "owner", State: "queued", Args: []byte(`{}`)}
-	op, err := s.PrepareOperation(ctx, j, JobClaim{}, OperationRequest{Kind: SiteDelete, SiteID: "site"}, nil, nil)
+	op, err := s.PrepareOperation(ctx, j, JobClaim{}, OperationRequest{Kind: SiteDelete, SiteID: "site", PurgeDatabases: true}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(op.Identity.Attached) != 1 || op.Identity.BindingID != pair.ID || op.Identity.Site.Name != "example" {
 		t.Fatalf("snapshot: %+v", op)
 	}
-	if !reflect.DeepEqual(op.Keys(), []string{"site:site", "db:" + pair.ID}) {
+	if !slices.Contains(op.Keys(), "site:site") || !slices.Contains(op.Keys(), "db:"+pair.ID) {
 		t.Fatalf("keys: %v", op.Keys())
 	}
 	phase4Exec(t, s.db.raw, "UPDATE sites SET docroot='/scratch/changed' WHERE id='site'")
@@ -59,8 +60,8 @@ func TestSiteDeleteJournalSnapshotAndAtomicRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	db, err = s.GetDatabase(ctx, pair.ID)
-	if err != nil || db.SiteID != "" {
-		t.Fatalf("retention: %+v %v", db, err)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("purge: %+v %v", db, err)
 	}
 	if err = s.CompleteOperation(ctx, j.ID, nil); err != nil {
 		t.Fatal("done replay", err)

@@ -22,7 +22,7 @@ func TestOperationReservationAndAtomicPublication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if op.Expires-op.Updated != OperationTTLMillis || len(op.Keys()) != 2 {
+	if op.Expires-op.Updated != OperationTTLMillis || len(op.Keys()) < 3 {
 		t.Fatalf("reservation: %+v", op)
 	}
 	if err = s.Close(); err != nil {

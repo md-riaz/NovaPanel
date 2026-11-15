@@ -33,8 +33,8 @@ func TestOperationTerminalFailureCleanup(t *testing.T) {
 				if len(op.Ciphertext) == 0 || op.Checkpoint == "expired" {
 					t.Fatal("interrupted recovery destroyed")
 				}
-			} else if len(op.Ciphertext) != 0 || op.Checkpoint != "expired" {
-				t.Fatal("terminal ciphertext retained")
+			} else if len(op.Ciphertext) == 0 || op.Checkpoint != "expired" {
+				t.Fatal("ambiguous terminal credential not retained")
 			}
 			if e = s.CheckOperation(ctx, j.ID); code != "interrupted" && !errors.Is(e, ErrOperationExpired) {
 				t.Fatalf("terminal resumable %v", e)
