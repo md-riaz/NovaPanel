@@ -151,6 +151,7 @@ func (q *Queue) Run(ctx context.Context) error {
 }
 
 type heldLocksKey struct{}
+type executionParentKey struct{}
 
 func (q *Queue) lockSecondary(ctx context.Context, key string) (func(), error) {
 	if held, ok := ctx.Value(heldLocksKey{}).(map[string]bool); ok && held[key] {
@@ -234,7 +235,11 @@ func (q *Queue) executeEligible(ctx context.Context, j Job) (bool, error) {
 			}
 		}
 	}
-	return true, q.executeOperation(context.WithValue(ctx, heldLocksKey{}, held), j, false)
+	parent := ctx
+	if original, ok := ctx.Value(executionParentKey{}).(context.Context); ok {
+		parent = original
+	}
+	return true, q.executeOperation(context.WithValue(parent, heldLocksKey{}, held), j, false)
 }
 
 func (q *Queue) execute(ctx context.Context, j Job) error {
@@ -254,6 +259,7 @@ func (q *Queue) execute(ctx context.Context, j Job) error {
 			defer cancel()
 		}
 	}
+	waitCtx = context.WithValue(waitCtx, executionParentKey{}, ctx)
 	for {
 		worked, err := q.executeEligible(waitCtx, j)
 		if err != nil {
