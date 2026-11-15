@@ -56,6 +56,13 @@ func (q *Queue) OpenWordPressCredentials(ctx context.Context, jid string) (WordP
 	if e != nil {
 		return zero, e
 	}
+	return q.openWordPressCredentials(ctx, op)
+}
+
+func (q *Queue) openWordPressCredentials(ctx context.Context, op store.Operation) (WordPressCredentials, error) {
+	var zero WordPressCredentials
+	refuse := errors.New("jobs: WordPress recovery input unavailable")
+	jid := op.JobID
 	if op.Kind != store.WordPressInstall {
 		return zero, refuse
 	}

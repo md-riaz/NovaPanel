@@ -357,11 +357,21 @@ func (q *Queue) Claim(ctx context.Context, jid, token string) (map[string]any, e
 		}); ok {
 			op, inputErr := recovery.ExpiredClaimInput(ctx, jid, claimHash(token), m.CreatedBy)
 			if inputErr == nil {
-				credentials, inputErr := q.openOperationCredentials(ctx, op)
-				if inputErr != nil {
-					return nil, inputErr
+				var projection any
+				if op.Kind == store.WordPressInstall {
+					credentials, err := q.openWordPressCredentials(ctx, op)
+					if err != nil {
+						return nil, err
+					}
+					projection = wordPressClaim(op, credentials)
+				} else {
+					credentials, err := q.openOperationCredentials(ctx, op)
+					if err != nil {
+						return nil, err
+					}
+					projection = map[string]string{"password": credentials.Password}
 				}
-				raw, inputErr := json.Marshal(map[string]string{"password": credentials.Password})
+				raw, inputErr := json.Marshal(projection)
 				if inputErr != nil {
 					return nil, inputErr
 				}
