@@ -177,7 +177,7 @@ func TestQueueRunPublicationDoneBeforeFinalAudit(t *testing.T) {
 	ctx := WithMetadata(context.Background(), Metadata{CreatedBy: "local-root", Role: "owner"})
 	stable := &publicationAuditFixture{fakeAudit: a, s: s}
 	q.audit = stable
-	if err := q.PrepareOperations(ctx); err != nil {
+	if err := q.PrepareStartup(ctx); err != nil {
 		t.Fatal(err)
 	}
 	r, err := q.EnqueueOperation(ctx, store.OperationRequest{Kind: store.DatabaseCreate}, map[string]any{"password": "original-secret"})
