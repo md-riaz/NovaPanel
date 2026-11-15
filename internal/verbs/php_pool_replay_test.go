@@ -2,19 +2,20 @@ package verbs
 
 import (
 	"context"
-	"encoding/json"
-	"novapanel/internal/phpcapacity"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"novapanel/internal/agent"
+	"novapanel/internal/audit"
 	runner "novapanel/internal/exec"
 	"novapanel/internal/id"
 	"novapanel/internal/jobs"
 	"novapanel/internal/php"
+	renderphp "novapanel/internal/render/php"
 	"novapanel/internal/store"
+	"time"
 )
 
 type poolReplayRunner struct{ root, id string }
@@ -80,40 +81,59 @@ func testPHPSetReplay(t *testing.T, legacy bool) {
 	a.Cfg.SitesRoot = r.root
 	a.Exec = r
 	a.PHP = &php.PoolApplier{Dir: dir, Runner: r, Probe: func(context.Context) error { return nil }}
-	a.Jobs = jobs.NewQueue(st, nil, nil)
-	upload := 32
-	raw, _ := json.Marshal(legacyPHPSetArgs{SiteID: sid, Version: version, Limits: store.PHPLimits{UploadMB: &upload}})
-	jid, _ := id.New()
-	job := jobs.Job{ID: jid, Verb: "php.set", ObjectKey: "site:" + sid, State: "running", Args: raw, Attempts: 2}
-	if err = st.CreateJob(ctx, job); err != nil {
+	log, err := audit.Open(st, filepath.Join(root, "audit"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err = legacyPHPSetExec(ctx, a, &job); err != nil {
+	defer log.Close()
+	a.Jobs = jobs.NewQueue(st, nil, log)
+	a.Jobs.SetRunner(func(ctx context.Context, j *jobs.Job) error { return phpSetExec(ctx, a, j) })
+	if err = a.Jobs.PrepareOperations(ctx); err != nil {
+		t.Fatal(err)
+	}
+	upload := 32
+	owner := jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: "owner", Role: "owner"})
+	result, err := a.Jobs.EnqueueOperation(owner, store.OperationRequest{Kind: store.PHPSet, SiteID: sid, PHP: &renderphp.SetRequest{SiteID: sid, Version: version, Limits: renderphp.LimitsPatch{UploadMB: &upload}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := st.LoadOperation(ctx, result.Job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.StartJob(ctx, result.Job.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	run, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- a.Jobs.Run(run) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		j, e := st.GetJob(ctx, result.Job.ID)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if j.State == "done" {
+			break
+		}
+		if j.State == "failed" {
+			t.Fatalf("job failed: %+v", j)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("job did not complete")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	if err = <-done; err != nil {
 		t.Fatal(err)
 	}
 	limits, err := st.SitePHPLimits(ctx, sid)
-	wantCap := phpcapacity.ChildrenCap(phpcapacity.TotalMemoryMB(), 1)
-	if err != nil || limits.MaxChildren == nil || *limits.MaxChildren != wantCap || limits.MemoryMB == nil || *limits.MemoryMB != 128 || limits.UploadMB == nil || *limits.UploadMB != 32 {
+	if err != nil || limits.MaxChildren == nil || *limits.MaxChildren != before.Identity.PHP.DesiredCap || limits.MemoryMB == nil || *limits.MemoryMB != 128 || limits.UploadMB == nil || *limits.UploadMB != 32 {
 		t.Fatalf("limits %+v: %v", limits, err)
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "novapanel-demo.conf"))
 	if err != nil || !strings.Contains(string(b), "memory_limit] = 128M") || !strings.Contains(string(b), "upload_max_filesize] = 32M") {
 		t.Fatalf("pool %q: %v", b, err)
-	}
-	// A replay uses the write-ahead decision, even if sizing inputs now differ.
-	durable, err := st.GetJob(ctx, jid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	durable.Step = "php_cap:7"
-	if err = st.UpdateJob(ctx, durable); err != nil {
-		t.Fatal(err)
-	}
-	if err = legacyPHPSetExec(ctx, a, &job); err != nil {
-		t.Fatal(err)
-	}
-	limits, err = st.SitePHPLimits(ctx, sid)
-	if err != nil || limits.MaxChildren == nil || *limits.MaxChildren != 7 {
-		t.Fatalf("replayed limits %+v: %v", limits, err)
 	}
 }

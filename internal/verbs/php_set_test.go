@@ -1,24 +1,23 @@
 package verbs
 
 import (
-	"novapanel/internal/store"
+	"encoding/json"
 	"testing"
 )
 
 func TestPHPSetValidation(t *testing.T) {
-	id := "01ARZ3NDEKTSV4RRFFQ69G5FAV"
-	n := 0
 	for _, tc := range []struct {
-		args  legacyPHPSetArgs
+		raw   string
 		valid bool
 	}{
-		{legacyPHPSetArgs{SiteID: id, Version: "8.3"}, true},
-		{legacyPHPSetArgs{SiteID: id, Version: "8.2"}, false},
-		{legacyPHPSetArgs{SiteID: id}, false},
-		{legacyPHPSetArgs{SiteID: id, Version: "8.3", Limits: store.PHPLimits{MemoryMB: &n}}, false},
+		{`{"site_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","version":"8.3"}`, true},
+		{`{"site_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","version":"8.2"}`, false},
+		{`{"site_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV"}`, false},
+		{`{"site_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","version":"8.3","limits":{"memory_mb":0}}`, false},
 	} {
-		if (tc.args.Validate() == nil) != tc.valid {
-			t.Fatalf("validation %+v", tc.args)
+		var args phpSetArgs
+		if (json.Unmarshal([]byte(tc.raw), &args) == nil) != tc.valid {
+			t.Fatalf("validation %s", tc.raw)
 		}
 	}
 }
