@@ -3,13 +3,14 @@ package verbs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"novapanel/internal/agent"
 	"novapanel/internal/jobs"
+	mainphp "novapanel/internal/php"
 	"novapanel/internal/render/nginx"
 	php "novapanel/internal/render/php"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
-	"path/filepath"
 	"time"
 )
 
@@ -42,7 +43,7 @@ type phpSetRuntime struct{ agent *agent.Agent }
 
 func (r phpSetRuntime) available() bool {
 	a := r.agent
-	return a != nil && a.Store != nil && a.Jobs != nil && a.Nginx != nil && a.DurablePHP != nil && a.DurablePHP.Pools != nil && a.DurablePHP.ResolveIdentity != nil && a.DurablePHP.RecoveryRoot != "" && a.Nginx.Runner != nil && a.Nginx.Probe != nil && a.DurablePHP.Pools.Runner != nil && a.DurablePHP.Pools.Probe != nil
+	return a != nil && a.Store != nil && a.Jobs != nil && a.PHP != nil && a.Exec != nil
 }
 
 func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
@@ -53,67 +54,53 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if err != nil {
 		return err
 	}
-	if op.Kind != store.PHPSet || op.Identity.Site == nil || op.Identity.PHP == nil || j.ObjectKey != "site:"+op.SiteID || (op.Checkpoint != "prepared" && op.Checkpoint != "config_published" && op.Checkpoint != "verified") {
+	if op.Kind != store.PHPSet || op.Identity.Site == nil || op.Identity.PHP == nil || j.ObjectKey != "site:"+op.SiteID {
 		return rpc.Errf("precondition_failed", "Invalid PHP operation")
 	}
 	check := func(c context.Context) error { return a.Jobs.CheckPHPEffect(c, j.ID, op.SiteID) }
 	if err = check(ctx); err != nil {
 		return err
 	}
-	s := *op.Identity.Site
-	uid, gid, err := a.DurablePHP.ResolveIdentity(ctx, s)
-	if err != nil {
+	site, p := op.Identity.Site, op.Identity.PHP
+	if err = mainphp.VerifyUser(ctx, a.Exec, a.Cfg.SitesRoot, site.Name, site.ID); err != nil {
 		return err
 	}
-	domains, err := a.Store.ListDomains(ctx, op.SiteID)
-	if err != nil {
+	if err = phpAvailable(ctx, a.Exec); err != nil {
 		return err
 	}
-	redirects, err := a.Store.ListRedirects(ctx, op.SiteID)
-	if err != nil {
+	toLimits := func(v php.Limits, cap int) store.PHPLimits {
+		return store.PHPLimits{MemoryMB: &v.MemoryMB, UploadMB: &v.UploadMB, MaxExecSec: &v.MaxExecSec, MaxChildren: &cap}
+	}
+	old := mainphp.PoolState{SiteID: site.ID, Exists: true, MaxChildren: p.OriginalCap, Limits: toLimits(p.OriginalLimits, p.OriginalCap)}
+	desired := mainphp.PoolState{SiteID: site.ID, Exists: true, MaxChildren: p.DesiredCap, Limits: toLimits(p.DesiredLimits, p.DesiredCap)}
+	restore := func() error {
+		recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if err := a.PHP.Recover(recovery, site.Name, old); err != nil {
+			return errors.Join(nginx.ErrPHPRecoveryRequired, err)
+		}
+		return nginx.ErrPHPOriginalRestored
+	}
+	if a.Jobs.PHPRecoveryOnly(ctx, j.ID) {
+		return restore()
+	}
+	if op.Checkpoint != "prepared" {
+		return restore()
+	}
+	if err = a.PHP.ApplyCommitted(ctx, site.Name, desired, old); err != nil {
 		return err
 	}
-	d := nginx.Desired{Name: s.Name, Docroot: s.Docroot, ACMERoot: filepath.Join(a.Cfg.ACMEWebroot, s.Name), Maintenance: s.Maintenance, ForceHTTPS: s.ForceHTTPS, HSTSMaxAge: s.HSTSMaxAge}
-	for _, v := range domains {
-		d.Domains = append(d.Domains, v.FQDN)
+	if err = check(ctx); err != nil {
+		return restore()
 	}
-	for _, v := range redirects {
-		d.Redirects = append(d.Redirects, nginx.Redirect{Source: v.Source, Target: v.Target, Code: v.Code})
+	if err = a.Store.CheckpointOperation(ctx, j.ID, "prepared", "config_published"); err != nil {
+		return restore()
 	}
-	if s.CertSource != "none" {
-		_, primary := sslNames(domains)
-		d.TLS, err = nginx.LoadTLS(a.Cfg.TLSDir, primary, tlsStaging(domains), time.UnixMilli(a.Now()))
-		if err != nil {
-			return err
-		}
+	if err = check(ctx); err != nil {
+		return restore()
 	}
-	p := op.Identity.PHP
-	d.PHP = &php.Desired{Name: s.Name, Type: s.Type, Version: p.DesiredVersion, UID: uid, GID: gid, MaxChildren: p.DesiredCap, Limits: &p.DesiredLimits}
-	old := d
-	oldPHP := *d.PHP
-	oldPHP.Version, oldPHP.Limits, oldPHP.MaxChildren = p.OriginalVersion, &p.OriginalLimits, p.OriginalCap
-	old.PHP = &oldPHP
-	binding := nginx.PHPDurableBinding{Root: a.DurablePHP.RecoveryRoot, JobID: j.ID, SiteID: op.SiteID, Check: check, RecoveryOnly: op.Checkpoint != "prepared"}
-	// Terminal metadata and its audit are owned by Queue.finish, not this callback.
-	commit := func(c context.Context) error {
-		if err := check(c); err != nil {
-			return err
-		}
-		if err := a.Store.CheckpointOperation(c, j.ID, "prepared", "config_published"); err != nil {
-			return err
-		}
-		if err := check(c); err != nil {
-			return err
-		}
-		return a.Store.CheckpointOperation(c, j.ID, "config_published", "verified")
-	}
-	if err = a.Nginx.ApplyPHPDurable(ctx, a.DurablePHP.Pools, d, binding, commit, func(c context.Context) error {
-		if err := a.DurablePHP.Pools.Probe(c, oldPHP); err != nil {
-			return err
-		}
-		return a.Nginx.Probe(c, old)
-	}); err != nil {
-		return err
+	if err = a.Store.CheckpointOperation(ctx, j.ID, "config_published", "verified"); err != nil {
+		return restore()
 	}
 	j.Result = json.RawMessage(`{}`)
 	return nil

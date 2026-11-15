@@ -44,3 +44,9 @@ func (q *Queue) CheckPHPEffect(ctx context.Context, jobID, siteID string) error 
 	}
 	return s.CheckOperation(call, jobID)
 }
+
+// PHPRecoveryOnly identifies the original worker's restoration-only lease.
+func (q *Queue) PHPRecoveryOnly(ctx context.Context, jobID string) bool {
+	lease, _ := ctx.Value(configWorkerKey{}).(*configWorkerLease)
+	return lease != nil && lease.queue == q && lease.job == jobID && lease.active.Load() && lease.restoreExpiredPHP
+}
