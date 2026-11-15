@@ -62,7 +62,7 @@ func TestOperationQueueTerminalCommitFailureReopen(t *testing.T) {
 	defer func() { s.Close() }()
 	seal, _ := secret.New(make([]byte, 32))
 	q := NewQueue(s, seal, &fakeAudit{})
-	if err = q.PrepareOperations(ctx); err != nil {
+	if err = q.PrepareStartup(ctx); err != nil {
 		t.Fatal(err)
 	}
 	r, err := q.EnqueueOperation(ctx, store.OperationRequest{Kind: store.DatabaseCreate}, map[string]any{"password": "rollback-password"})
