@@ -52,6 +52,29 @@ func (s *Store) failOperation(ctx context.Context, jid, code string, restored bo
 	})
 }
 
+// FailUnappliedOperation is used only when the first worker attempt rejected its preflight before invoking any effect.
+func (s *Store) FailUnappliedOperation(ctx context.Context, jid, code string) error {
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		op, err := loadOperation(ctx, tx, jid)
+		if err != nil {
+			return err
+		}
+		if op.Checkpoint != "prepared" {
+			return ErrSitePrecondition
+		}
+		now := s.clock.Now()
+		r, err := tx.ExecContext(ctx, `UPDATE jobs SET state='failed',code=?,error='job execution failed',updated=?,finished=? WHERE id=? AND state='running' AND attempts=1`, code, now, now, jid)
+		if err = affected(r, err); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "DELETE FROM job_claims WHERE job_id=?", jid); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, "UPDATE phase4_operations SET checkpoint='expired',nonce=NULL,ciphertext=NULL,updated=? WHERE job_id=? AND checkpoint='prepared'", now, jid)
+		return err
+	})
+}
+
 // ExpireOperations marks at most 100 unfinished journals expired in one commit.
 // Historical identities remain blockers until an authorized verifier reconciles.
 func (s *Store) ExpireOperations(ctx context.Context) (count int, err error) {

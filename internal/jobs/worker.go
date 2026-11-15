@@ -152,6 +152,7 @@ func (q *Queue) Run(ctx context.Context) error {
 
 type heldLocksKey struct{}
 type executionParentKey struct{}
+type operationUnappliedKey struct{}
 
 func (q *Queue) lockSecondary(ctx context.Context, key string) (func(), error) {
 	if held, ok := ctx.Value(heldLocksKey{}).(map[string]bool); ok && held[key] {
@@ -390,6 +391,13 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 		}
 	} else if restoreExpiredPHP {
 		return ErrRecoveryBlocked
+	}
+	if err != nil && isOperation && j.Attempts == 1 && !restoreExpiredPHP {
+		if journal, ok := q.store.(operationStore); ok {
+			if op, e := journal.LoadOperation(ctx, j.ID); e == nil && op.Checkpoint == "prepared" {
+				ctx = context.WithValue(ctx, operationUnappliedKey{}, true)
+			}
+		}
 	}
 	if err == nil {
 		workerCtx, cancel := context.WithCancel(WithMetadata(attemptCtx, metadata(j)))
