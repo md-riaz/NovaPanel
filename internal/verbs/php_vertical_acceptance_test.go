@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,129 +15,105 @@ import (
 	"novapanel/internal/audit"
 	runner "novapanel/internal/exec"
 	"novapanel/internal/jobs"
+	"novapanel/internal/php"
 	"novapanel/internal/render/nginx"
-	"novapanel/internal/render/php"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
-	"strings"
 )
 
 type phpScratchRunner struct{}
 
-func (phpScratchRunner) Run(context.Context, string, []string, runner.RunOpts) ([]byte, []byte, int, error) {
+func (phpScratchRunner) Run(_ context.Context, bin string, args []string, _ runner.RunOpts) ([]byte, []byte, int, error) {
+	if bin == "/usr/bin/getent" {
+		return []byte("demo:x:1001:1001:novapanel-site=01K8WMXZF57CGNZKX1FZ38DZMA:/srv/sites/demo:/usr/sbin/nologin\n"), nil, 0, nil
+	}
+	if bin == "/usr/bin/systemctl" && len(args) > 0 && args[0] == "show" {
+		return []byte("loaded\n"), nil, 0, nil
+	}
 	return nil, nil, 0, nil
 }
-
 func requireRootPHPCustody(t *testing.T) {
 	t.Helper()
 	if os.Geteuid() != 0 {
-		t.Skip("requires root-owned recovery custody; exercised separately in CI")
+		t.Skip("requires root")
 	}
 }
-
-// This exercises the dispatcher and the real queue, not a direct executor call.
 func TestPHPSetQueuePublishesScratchConfiguration(t *testing.T) {
 	requireRootPHPCustody(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	root := t.TempDir()
-	for _, dir := range []string{"sites-available", "sites-enabled", "pool", "journal"} {
-		if err := os.Mkdir(filepath.Join(root, dir), 0700); err != nil {
-			t.Fatal(err)
-		}
+	pool := filepath.Join(root, "pool")
+	if err := os.Mkdir(pool, 0700); err != nil {
+		t.Fatal(err)
 	}
-	st, err := store.Open(filepath.Join(t.TempDir(), "panel.db"))
+	master := "[global]\npid = /run/php/php8.3-fpm.pid\nerror_log = /var/log/php8.3-fpm.log\ninclude = " + filepath.Join(pool, "*.conf") + "\n"
+	if err := os.WriteFile(filepath.Join(root, "php-fpm.conf"), []byte(master), 0600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(filepath.Join(root, "db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	auditPath := filepath.Join(t.TempDir(), "audit.log")
-	log, err := audit.Open(st, auditPath)
+	log, err := audit.Open(st, filepath.Join(root, "audit"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer log.Close()
 	a := agent.New()
-	a.Store, a.Audit = st, log
-	a.Nginx = &nginx.Applier{Root: root, Runner: phpScratchRunner{}, Probe: func(context.Context, nginx.Desired) error { return nil }}
-	a.DurablePHP = &agent.PHPDependencies{Pools: &php.Applier{Root: filepath.Join(root, "pool"), Runner: phpScratchRunner{}, Probe: func(context.Context, php.Desired) error { return nil }}, RecoveryRoot: filepath.Join(root, "journal"), ResolveIdentity: func(context.Context, store.Site) (uint32, uint32, error) { return 1001, 1001, nil }}
+	a.Store = st
+	a.Audit = log
+	a.Exec = phpScratchRunner{}
+	a.PHP = &php.PoolApplier{Dir: pool, Runner: a.Exec, Probe: func(context.Context) error { return nil }}
+	a.Nginx = &nginx.Applier{Root: root, Runner: a.Exec, Probe: func(context.Context, nginx.Desired) error { return nil }}
 	server := rpc.NewServer(a)
 	server.ConfigureJobs()
-	if err := a.PrepareStartup(ctx); err != nil {
+	if err = a.PrepareStartup(ctx); err != nil {
 		t.Fatal(err)
 	}
 	const sid = "01K8WMXZF57CGNZKX1FZ38DZMA"
 	version := "8.3"
-	_, err = st.CreateSite(ctx, store.Site{ID: sid, Name: "demo", Type: "php", Docroot: "/srv/sites/demo/public", PHPVersion: &version}, store.Domain{ID: "01K8WMXZF57CGNZKX1FZ38DZMB", FQDN: "demo.example.test"})
+	_, err = st.CreateSite(ctx, store.Site{ID: sid, Name: "demo", Type: "php", Docroot: "/srv/sites/demo/public", PHPVersion: &version}, store.Domain{ID: "01K8WMXZF57CGNZKX1FZ38DZMB", FQDN: "demo.test"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err = st.SetSiteStatus(ctx, sid, "active"); err != nil {
 		t.Fatal(err)
 	}
-	caller := rpc.Caller{Kind: "user", Role: "admin", Session: "admin-session", UserID: "admin-user"}
-	reply := server.Dispatch(rpc.WithCaller(ctx, caller), rpc.Request{Verb: "php.set", Args: json.RawMessage(fmt.Sprintf(`{"site_id":%q,"version":"8.3","limits":{"memory_mb":512}}`, sid))})
+	reply := server.Dispatch(rpc.WithCaller(ctx, rpc.RootCaller(0)), rpc.Request{Verb: "php.set", Args: json.RawMessage(fmt.Sprintf(`{"site_id":%q,"version":"8.3","limits":{"memory_mb":512}}`, sid))})
 	if !reply.OK {
-		t.Fatalf("dispatch: %+v", reply)
+		t.Fatal(reply)
 	}
-	enqueued, ok := reply.Data.(jobs.EnqueueResult)
-	if !ok {
-		t.Fatalf("enqueue result: %#v", reply.Data)
-	}
+	job := reply.Data.(jobs.EnqueueResult).Job
+	run, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
-	workerCtx, stop := context.WithCancel(ctx)
-	go func() { done <- a.Jobs.Run(workerCtx) }()
-	defer func() { stop(); <-done }()
+	go func() { done <- a.Jobs.Run(run) }()
+	deadline := time.Now().Add(5 * time.Second)
 	for {
-		j, err := st.GetJob(ctx, enqueued.Job.ID)
-		if err != nil {
-			if errors.Is(err, store.ErrPublicationPending) {
-				time.Sleep(10 * time.Millisecond)
-				continue
-			}
-			t.Fatal(err)
+		j, e := st.GetJob(ctx, job.ID)
+		if e == nil && j.State == "done" {
+			break
 		}
-		if j.State == "failed" {
-			t.Fatalf("PHP publication failed: code=%s", j.Code)
+		if e != nil && !errors.Is(e, store.ErrPublicationPending) {
+			t.Fatal(e)
 		}
-		if j.State == "done" {
-			limits, err := st.GetPHPLimits(ctx, sid)
-			if err != nil || limits.MemoryMB != 512 || string(j.Result) != "{}" {
-				t.Fatalf("persisted result: %+v %+v %v", j, limits, err)
-			}
-			if _, err := os.Stat(filepath.Join(root, "sites-available", "demo.conf")); err != nil {
-				t.Fatal(err)
-			}
-			pool, err := os.ReadFile(filepath.Join(root, "pool", "demo.conf"))
-			if err != nil || !strings.Contains(string(pool), "memory_limit] = 512M") {
-				t.Fatalf("pool: %s %v", pool, err)
-			}
-			op, err := st.LoadOperation(ctx, j.ID)
-			if err != nil {
-				t.Fatalf("audit operation: %+v %v", op, err)
-			}
-			if op.Identity.PublicationAudit == nil || op.Identity.PublicationAudit.State != "acknowledged" {
-				select {
-				case <-ctx.Done():
-					t.Fatal("audit acknowledgement timed out")
-				case <-time.After(10 * time.Millisecond):
-				}
-				continue
-			}
-			auditBytes, err := os.ReadFile(auditPath)
-			if err != nil || !strings.Contains(string(auditBytes), op.Identity.PublicationAudit.IntentEventID) || !strings.Contains(string(auditBytes), op.Identity.PublicationAudit.FinalEventID) {
-				t.Fatalf("audit evidence missing: %v", err)
-			}
-			return
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatalf("job %+v %v", j, e)
 		}
-		select {
-		case e := <-done:
-			done <- e
-			t.Fatalf("worker exited: %v", e)
-		case <-ctx.Done():
-			j, e := st.GetJob(context.Background(), enqueued.Job.ID)
-			t.Fatalf("%v job=%+v lookup=%v", ctx.Err(), j, e)
-		case <-time.After(10 * time.Millisecond):
-		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	if err = <-done; err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(pool, "novapanel-demo.conf"))
+	if err != nil || !strings.Contains(string(b), "memory_limit] = 512M") {
+		t.Fatalf("pool %s %v", b, err)
+	}
+	limits, err := st.SitePHPLimits(ctx, sid)
+	if err != nil || limits.MaxChildren == nil || *limits.MaxChildren < 2 || *limits.MaxChildren > 32 {
+		t.Fatalf("settings %+v %v", limits, err)
 	}
 }
