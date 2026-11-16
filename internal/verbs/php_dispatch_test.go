@@ -72,6 +72,10 @@ func TestPHPSetProductionDispatch(t *testing.T) {
 	if r := update("9.9"); r.OK {
 		t.Fatalf("invalid version accepted: %+v", r)
 	}
+	mixed := s.Dispatch(rpc.WithCaller(ctx, admin), rpc.Request{Verb: "site.update", Args: json.RawMessage(fmt.Sprintf(`{"site_id":%q,"php_version":"8.3","maintenance":true}`, sid))})
+	if mixed.OK || mixed.Code != "unsupported" {
+		t.Fatalf("mixed update must be refused with unsupported: %+v", mixed)
+	}
 	if r := request(admin, valid); r.OK || r.Code != "unsupported" {
 		t.Fatalf("missing runtime dependencies must refuse admission: %+v", r)
 	}

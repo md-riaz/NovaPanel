@@ -50,16 +50,9 @@ build it.
 **Ruling — `site.create` types and `php_version`.** The Phase-3 `site.create type=php|wordpress`
 `unsupported` refusal is **lifted for `php` in Step 2** and **for `wordpress` in Step 3**. `php_version` on
 `site.create`/`site.update` is **sugar** that delegates to the `php.set` computed-cap path (one code path;
-no separate version/limit logic).
-
-**Ruling 8 — composite `site.update`.** An update containing `php_version` and other mutable
-fields returns one job. Under its site lock, the durable Phase 4 journal records each sub-effect
-and its write-ahead checkpoint. Apply maintenance on first when requested, then the `php.set`
-effect, then primary-domain and TLS policy changes, then maintenance off when requested. On replay,
-skip recorded completed effects and roll forward effects past their commit point; an unstarted effect
-may report a typed precondition failure, with earlier effects and their status visible. The parent
-job's terminal audit aggregates sub-effect statuses; F11 enqueue and terminal events and PHP
-publication intent and final events remain mandatory. Use one job claim and F19 for any secret.
+no separate version/limit logic). For `site.update`, `php_version` must currently be supplied alone;
+combining it with other mutable fields returns `unsupported`. Use separate updates until composite
+recovery is implemented.
 
 **One PR per step** (steps 1 and 2 may each ship on their own), each small and independently
 mergeable — not one 285-file mega-draft. Drive each with `docs/spec/PHASE-DRIVER-PROMPT.md`
