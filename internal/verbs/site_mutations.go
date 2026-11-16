@@ -9,6 +9,7 @@ import (
 	"novapanel/internal/id"
 	"novapanel/internal/jobs"
 	"novapanel/internal/render/nginx"
+	php "novapanel/internal/render/php"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
 	certs "novapanel/internal/tls"
@@ -35,7 +36,13 @@ func (v *siteUpdateArgs) Validate() error {
 		return rpc.Errf("invalid_argument", "Invalid primary domain ID")
 	}
 	if v.PHPVersion != nil {
-		return rpc.Errf("unsupported", "Only static sites are available")
+		raw, e := json.Marshal(php.SetRequest{SiteID: v.SiteID, Version: *v.PHPVersion})
+		if e != nil {
+			return e
+		}
+		if _, e = php.DecodeSetRequest(raw); e != nil {
+			return e
+		}
 	}
 	if v.HSTSMaxAge != nil && *v.HSTSMaxAge < 0 {
 		return rpc.Errf("invalid_argument", "Invalid HSTS duration")
@@ -213,6 +220,12 @@ func (m siteMutationState) primaryTarget(ctx context.Context, sid string, target
 }
 func siteUpdate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*siteUpdateArgs)
+	if v.PHPVersion != nil && v.PrimaryDomainID == nil && v.ForceHTTPS == nil && v.HSTSMaxAge == nil && v.Maintenance == nil {
+		return phpSet(ctx, a, &phpSetArgs{request: php.SetRequest{SiteID: v.SiteID, Version: *v.PHPVersion}})
+	}
+	if v.PHPVersion != nil {
+		return nil, rpc.Errf("unsupported", "Composite PHP updates unavailable")
+	}
 	if _, e := (siteMutationState{a}).mutableSite(ctx, v.SiteID); e != nil {
 		return nil, e
 	}
