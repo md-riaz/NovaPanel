@@ -56,6 +56,7 @@ func TestWordPressSiteRunnerOriginalQueueReopen(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	provisionWordPressFixture(t, q, &res)
 	en, e := q.EnqueueWordPress(ctx, res, credentials)
 	if e != nil {
 		t.Fatal(e)

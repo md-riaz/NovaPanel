@@ -175,6 +175,7 @@ func TestWordPressStageOfficialLifetime(t *testing.T) {
 					t.Fatal(err)
 				}
 				reservation := store.WordPressReservation{Input: wordpress.InstallInput{SitesRoot: "/scratch/sites", SiteName: "example", PrimaryDomain: "example.test", UID: 23451, GID: 23452, Locale: "en_US", Administrator: wordpress.Administrator{Title: "Example", Username: "Admin", Email: "owner@example.test"}}, Evidence: evidence}
+				provisionWordPressFixture(t, q, &reservation)
 				en, err := q.EnqueueWordPress(ctx, reservation, credentials)
 				if err != nil {
 					t.Fatal(err)

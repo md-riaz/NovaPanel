@@ -28,6 +28,7 @@ func TestWordPressConfigRequiresWorkerAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	provisionWordPressFixture(t, q, &r)
 	en, err := q.EnqueueWordPress(ctx, r, c)
 	if err != nil {
 		t.Fatal(err)

@@ -30,6 +30,7 @@ func TestWordPressQueueRecoveryAndClaim(t *testing.T) {
 	for i := range payload.Salts {
 		payload.Salts[i] = "salt-value"
 	}
+	provisionWordPressFixture(t, q, &reservation)
 	r, e := q.EnqueueWordPress(ctx, reservation, payload)
 	if e != nil {
 		t.Fatal(e)
@@ -125,8 +126,8 @@ func TestWordPressQueueRecoveryAndClaim(t *testing.T) {
 	if e != nil || opBefore.Checkpoint != "verified" || len(opBefore.Ciphertext) == 0 {
 		t.Fatal("terminal rollback lost recovery", e)
 	}
-	if _, e = s.SiteByID(ctx, opBefore.SiteID); e == nil {
-		t.Fatal("metadata escaped rollback")
+	if _, e = s.GetDatabase(ctx, opBefore.DatabaseID); e == nil {
+		t.Fatal("database metadata escaped rollback")
 	}
 	if e = s.Tx(ctx, func(tx *sql.Tx) error { _, err := tx.ExecContext(ctx, "DROP TRIGGER fail_wp_done"); return err }); e != nil {
 		t.Fatal(e)
