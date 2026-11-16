@@ -89,7 +89,7 @@ func run(ctx context.Context, r runner.Runner) error {
 	return nil
 }
 func main() {
-	if run(context.Background(), runner.Real{}) != nil {
+	if denyNetwork() != nil || run(context.Background(), runner.Real{}) != nil {
 		fmt.Fprintln(os.Stderr, "offline runtime FAIL")
 		os.Exit(1)
 	}
