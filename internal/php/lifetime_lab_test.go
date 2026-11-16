@@ -66,6 +66,37 @@ func TestLabRetainedAccountLifetime(t *testing.T) {
 	if err := unix.Lstat(file, &st); err != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || uint64(st.Uid) != uid {
 		t.Fatal("file ownership mismatch")
 	}
+	if err := os.Chmod(file, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(root, name), 0751); err != nil {
+		t.Fatal(err)
+	}
+	other := fmt.Sprintf("npother%d", os.Getpid())
+	otherID := "01ARZ3NDEKTSV4RRFFQ69G5FAW"
+	if err := EnsureUser(ctx, r, root, other, otherID); err != nil {
+		t.Fatal(err)
+	}
+	out, _, code, err := r.Run(ctx, "/usr/bin/getent", []string{"passwd", other}, runner.RunOpts{})
+	if err != nil || code != 0 {
+		t.Fatal("second account lookup")
+	}
+	f2 := strings.Split(strings.TrimSpace(string(out)), ":")
+	if len(f2) != 7 {
+		t.Fatal("invalid second account")
+	}
+	otherUID, e1 := strconv.ParseUint(f2[2], 10, 32)
+	otherGID, e2 := strconv.ParseUint(f2[3], 10, 32)
+	if e1 != nil || e2 != nil || otherUID == uid {
+		t.Fatal("UIDs are not distinct")
+	}
+	_, _, code, err = r.Run(ctx, "/usr/bin/cat", []string{file}, runner.RunOpts{Uid: uint32(otherUID), Gid: uint32(otherGID), Groups: []uint32{}})
+	if err == nil || code == 0 {
+		t.Fatal("second site read private file")
+	}
+	if err := RetainUser(ctx, r, root, other, otherID); err != nil {
+		t.Fatal(err)
+	}
 	if err := RetainUser(ctx, r, root, name, id); err != nil {
 		t.Fatal(err)
 	}

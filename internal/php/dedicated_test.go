@@ -23,3 +23,21 @@ func TestDedicatedMasterSinglePool(t *testing.T) {
 		}
 	}
 }
+
+func TestDedicatedPoolIsolationConfiguration(t *testing.T) {
+	for _, name := range []string{"siteone", "sitetwo"} {
+		pool, err := RenderPool(name, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(pool)
+		for _, line := range []string{"[" + name + "]\n", "user = " + name + "\n", "group = " + name + "\n", "listen = /run/php/novapanel/" + name + ".sock\n", "listen.owner = www-data\n", "listen.group = www-data\n", "listen.mode = 0660\n"} {
+			if !strings.Contains(text, line) {
+				t.Fatalf("%s: missing %q", name, line)
+			}
+		}
+		if strings.Contains(text, "listen.acl_users") || strings.Contains(text, "listen.acl_groups") {
+			t.Fatal("socket ACL directives forbidden")
+		}
+	}
+}
