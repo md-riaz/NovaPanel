@@ -30,6 +30,8 @@ Protected effects additionally require the [managed process lifetime contract](p
 
 ## Offline acquisition boundary remains closed
 
+Ruling 9 selects a lab-only fixture resolver with an exact URL and SHA-256 allowlist, no network fallback, and refusal of unknown or modified fixtures. It is unavailable in builds without the `wordpress_offline_lab` tag. This decision does not by itself connect the resolver to WP-CLI's requests or approve runtime execution; the request-routing integration, cache preload, CLI ini and independent review remain required.
+
 Retained ZIP/checksum bytes alone are not a WP-CLI cache implementation. Before a network-none runtime lab, approve and test the pinned PHAR's download-cache preload format and a fixture response mechanism for the unchanged official checksum request. Fixture routing must be lab-only, pinned to the exact official URL/version/locale and exact retained response bytes, reject all other requests, and leave upstream source and production TLS verification unchanged. No generic HTTP hook, ambient proxy or arbitrary transport override is approved by this document. Until that concrete mechanism and PHP ini are reviewed, artifact validation and static planning may proceed but PHP/WP-CLI must not run.
 
 The retained preparation packet is `/root/.hermes/cache/scratch/phase4-wordpress-execution-contract-20261031/handoff.md`. Complete ordered locks, trusted reserved identities, recovery journal and atomic terminal metadata/job/claim publication remain separate prerequisites. No standalone DB or WordPress consumer is authorized here.

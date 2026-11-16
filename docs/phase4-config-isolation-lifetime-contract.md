@@ -33,6 +33,8 @@ The next consumer must expose one operation-scoped held lifetime, not independen
 
 ## Unavoidable architecture work outside this file scope
 
+Ruling 9 selects dedicated per-site supervised FPM domains, and restricts initial IO support to a fresh, never-executed backend with the minimum surface required by the offline fixture operation. It does not establish that this backend or its launchers exist, or that earlier asynchronous writes have retired. Unsupported or previously executed lifetimes must fail closed until the required protections and independent review are complete.
+
 The current shared `php8.3-fpm.service` master can fork workers for several UIDs from one cgroup. It cannot supply at-birth per-site cgroup membership without another trusted mechanism. Moving discovered workers afterward leaves the fork-before-migration hole.
 
 Recommended minimal per-site solution is a dedicated root-supervised FPM master/service in each site's domain, retaining the canonical PHP 8.3 binary, pool contents and nginx-owned socket. This changes the canonical shared-unit reload assumption and requires explicit parent integration ownership for FPM orchestration and packaging. The alternative is one managed domain for the shared FPM master plus **all** managed site launchers, with server-wide PHP/background-work maintenance for every protected effect. That has a smaller service change but a larger availability consequence; it must not be disguised as per-site quiescence.
