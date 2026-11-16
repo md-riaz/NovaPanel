@@ -45,6 +45,9 @@ func init() {
 }
 
 func wpInstall(ctx context.Context, a *agent.Agent, args any) (any, error) {
+	if !wpLifetimeAvailable() {
+		return nil, rpc.Errf("unsupported", "WordPress installation requires protected lifetime isolation")
+	}
 	v := args.(*wpInstallArgs)
 	site, err := a.Store.SiteByID(ctx, v.SiteID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -96,6 +99,9 @@ func wpInstall(ctx context.Context, a *agent.Agent, args any) (any, error) {
 }
 
 func wpInstallExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
+	if !wpLifetimeAvailable() {
+		return rpc.Errf("unsupported", "WordPress installation requires protected lifetime isolation")
+	}
 	op, err := a.Store.LoadOperation(ctx, j.ID)
 	if err != nil {
 		return jobs.ErrRetry

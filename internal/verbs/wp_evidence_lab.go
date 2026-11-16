@@ -7,6 +7,9 @@ import (
 	"novapanel/internal/wordpress/offline"
 )
 
+// shortcut: lab execution remains disabled until its lifetime spans the whole operation.
+func wpLifetimeAvailable() bool { return false }
+
 func wpEvidence() (wordpress.ArtifactEvidence, error) {
 	m := wordpress.ApprovedArtifacts()
 	for _, url := range []string{m.CLI.URL, m.WordPress.URL, m.ChecksumsURL} {
