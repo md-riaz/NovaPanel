@@ -322,7 +322,7 @@ disk under `tls_dir/<fqdn>/` (versioned dir + symlink swap, B-D9), not in the DB
 
 ## Phase 4 databases, PHP limits and bounded recovery
 
-Reserve `0006_phase4.sql` only if still the next unused migration at authorized implementation time; otherwise allocate the next number without editing 0001 through 0005. Register its actual computed hash in hashes.json. Replace the unimplemented Phase 4 DDL section with this DDL. Existing sites and shipped migrations remain unchanged.
+The shipped migration map above assigns databases to `0006_databases`, session expiry indexes to `0007_session_expiry_indexes`, Phase 4 bindings and operations to `0008_phase4`, and PHP operation kinds and account provenance to `0009_php_first_create`. Shipped migrations remain unchanged.
 
 ```sql
 CREATE TABLE databases (
@@ -350,7 +350,7 @@ CREATE TABLE wordpress_bindings (
 );
 CREATE TABLE phase4_operations (
   job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE RESTRICT,
-  kind TEXT NOT NULL CHECK(kind IN ('database_create','database_rotate','dbuser_create','wordpress_install','site_delete','database_delete','dbuser_delete','php_set')),
+  kind TEXT NOT NULL CHECK(kind IN ('database_create','database_rotate','dbuser_create','wordpress_install','site_delete','database_delete','dbuser_delete','php_set','php_site_create')),
   site_id TEXT,
   db_id TEXT,
   checkpoint TEXT NOT NULL CHECK(checkpoint IN ('prepared','teardown_started','db_applied','config_published','verified','done','expired')),
@@ -369,7 +369,7 @@ CREATE INDEX idx_phase4_operations_expiry ON phase4_operations(expires,job_id);
 
 Each database and its owner account are inserted atomically; the partial unique index enforces at most one owner. WordPress bindings are validated against the site's database in typed transactions. PHP limits and the computed child cap are stored under site:php_limits:<id> as specified above.
 
-**PHP journal amendment (delegated architecture decision):** The PHP settings mutation needs its own durable operation identity to recover the original and desired state under the site lock; a generic job cannot safely establish that recovery. The Phase 4 `0006_phase4.sql` migration is unshipped on main, so its kind CHECK is amended narrowly to add `php_set`, preserving every existing kind and schema. This one amendment supersedes the supported maintenance policy's no-SQL-migration direction for PHP only; it never authorizes editing a shipped migration. If 0006 ships before integration, stop and coordinate an additive migration instead. PR #85 independently proposes a different 0006 and its numbering and hashes must be coordinated before either merge.
+**PHP journal amendment (delegated architecture decision):** The PHP settings mutation needs its own durable operation identity to recover the original and desired state under the site lock; a generic job cannot safely establish that recovery. The shipped `0009_php_first_create` migration extends the Phase 4 operation kind CHECK with `php_set` and `php_site_create`. Shipped migrations are immutable.
 
 For `php_set`, bind immutable `site_id`, original and desired PHP version and the complete original and desired `memory_mb`, `upload_mb`, `max_exec_sec` tuples in strictly validated, secret-free `identities_json`; partial request limits are merged and validated before durable preparation. Do not use this kind for site creation or other lifecycle mutations. Persist the intent at `prepared` before effects, with the existing expiry and original job identity. Under the same ordered site lock and recovery admission, use `config_published` only after atomic configuration publication, `verified` only after F8 validation/reload and probes, then `done`; F8 failure reverts and verifies the original configuration, or retains unresolved recovery and blocks conflicting mutation. Recovery uses the original journal and exact snapshots, never a reconstructed request. In the terminal SQLite transaction atomically commit the desired PHP metadata, job result/state and journal completion, with publication-audit state as required by the supported maintenance policy. F11 audit is file-first and mirrored/replayed with stable IDs: audit file writes and SQLite are not one atomic transaction; intent/final acknowledgement gates and in-doubt recovery remain mandatory. This is a contract for future implementation, not evidence of runtime or security acceptance.
 
