@@ -29,7 +29,10 @@ func inputs(root, name, id string) error {
 	return nil
 }
 
-type account struct{ gecos string }
+type account struct {
+	gecos    string
+	uid, gid uint32
+}
 
 func lookup(ctx context.Context, r runner.Runner, root, name string) (*account, error) {
 	out, _, code, err := r.Run(ctx, "/usr/bin/getent", []string{"passwd", name}, runner.RunOpts{})
@@ -46,12 +49,27 @@ func lookup(ctx context.Context, r runner.Runner, root, name string) (*account, 
 	if len(f) != 7 || f[0] != name || f[5] != filepath.Join(root, name) || f[6] != "/usr/sbin/nologin" {
 		return nil, rpcerr.Errf("conflict", "site account differs")
 	}
-	uid, e1 := strconv.Atoi(f[2])
-	gid, e2 := strconv.Atoi(f[3])
-	if e1 != nil || e2 != nil || uid <= 0 || gid <= 0 {
+	uid, e1 := strconv.ParseUint(f[2], 10, 32)
+	gid, e2 := strconv.ParseUint(f[3], 10, 32)
+	if e1 != nil || e2 != nil || uid == 0 || gid == 0 || uid == 1<<32-1 || gid == 1<<32-1 {
 		return nil, rpcerr.Errf("conflict", "invalid site account")
 	}
-	return &account{gecos: f[4]}, nil
+	return &account{gecos: f[4], uid: uint32(uid), gid: uint32(gid)}, nil
+}
+
+// ResolveUser returns the numeric identity of the account owned by this site.
+func ResolveUser(ctx context.Context, r runner.Runner, root, name, id string) (uint32, uint32, error) {
+	if err := inputs(root, name, id); err != nil {
+		return 0, 0, err
+	}
+	a, err := lookup(ctx, r, root, name)
+	if err != nil {
+		return 0, 0, err
+	}
+	if a == nil || a.gecos != marker+id {
+		return 0, 0, rpcerr.Errf("precondition_failed", "site account unavailable")
+	}
+	return a.uid, a.gid, nil
 }
 func run(ctx context.Context, r runner.Runner, prog string, args ...string) error {
 	_, _, code, err := r.Run(ctx, prog, args, runner.RunOpts{})

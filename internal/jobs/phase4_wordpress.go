@@ -40,7 +40,7 @@ type wordPressInput struct {
 }
 
 func (q *Queue) EnqueueWordPress(ctx context.Context, r store.WordPressReservation, c WordPressCredentials) (EnqueueResult, error) {
-	return q.enqueueOperation(ctx, store.OperationRequest{Kind: store.WordPressInstall, WordPress: &r}, nil, &c)
+	return q.enqueueOperation(ctx, store.OperationRequest{Kind: store.WordPressInstall, SiteID: r.SiteID, WordPress: &r}, nil, &c)
 }
 func (q *Queue) OpenWordPressCredentials(ctx context.Context, jid string) (WordPressCredentials, error) {
 	var zero WordPressCredentials

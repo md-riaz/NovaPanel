@@ -10,6 +10,7 @@ import (
 	"novapanel/internal/jobs"
 	"novapanel/internal/php"
 	"novapanel/internal/rpc"
+	"novapanel/internal/store"
 	"novapanel/internal/wordpress"
 )
 
@@ -53,10 +54,33 @@ func wpInstall(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	if a.Exec == nil {
 		return nil, rpc.Errf("precondition_failed", "Site account is unavailable")
 	}
-	if err = php.VerifyUser(ctx, a.Exec, a.Cfg.SitesRoot, site.Name, site.ID); err != nil {
+	uid, gid, err := php.ResolveUser(ctx, a.Exec, a.Cfg.SitesRoot, site.Name, site.ID)
+	if err != nil {
 		return nil, rpc.Errf("precondition_failed", "Site account is unavailable")
 	}
-	return nil, rpc.Errf("unsupported", "WordPress installation is unavailable")
+	domains, err := a.Store.ListDomains(ctx, site.ID)
+	if err != nil {
+		return nil, err
+	}
+	var domain store.Domain
+	for _, d := range domains {
+		if d.IsPrimary {
+			domain = d
+			break
+		}
+	}
+	if domain.ID == "" {
+		return nil, rpc.Errf("precondition_failed", "Primary domain unavailable")
+	}
+	evidence, err := wpEvidence()
+	if err != nil {
+		return nil, err
+	}
+	credentials, err := jobs.GenerateWordPressCredentials()
+	if err != nil {
+		return nil, err
+	}
+	return a.Jobs.EnqueueWordPress(ctx, store.WordPressReservation{SiteID: site.ID, DomainID: domain.ID, Input: wordpress.InstallInput{SitesRoot: a.Cfg.SitesRoot, SiteName: site.Name, PrimaryDomain: domain.FQDN, UID: uid, GID: gid, Locale: wordpress.ApprovedArtifacts().Locale, Administrator: wordpress.Administrator{Title: v.Title, Username: v.AdminUsername, Email: v.AdminEmail}}, Evidence: evidence}, credentials)
 }
 
 func wpInstallExec(context.Context, *agent.Agent, *jobs.Job) error {
