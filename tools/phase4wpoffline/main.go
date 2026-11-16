@@ -1,3 +1,5 @@
+//go:build wordpress_offline_lab
+
 // phase4wpoffline is a confined dependency lab, never a production installer.
 package main
 

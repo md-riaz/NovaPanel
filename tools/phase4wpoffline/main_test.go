@@ -1,3 +1,5 @@
+//go:build wordpress_offline_lab
+
 package main
 
 import (
