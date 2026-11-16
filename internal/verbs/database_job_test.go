@@ -169,6 +169,9 @@ func TestDatabaseCreateReservedPresentDoesNotAdoptOrDrop(t *testing.T) {
 	}
 	a := agent.New()
 	a.Store, a.Audit, a.Jobs = s, log, jobs.NewQueue(s, seal, log)
+	if err := a.Jobs.PrepareOperations(ctx); err != nil {
+		t.Fatal(err)
+	}
 	runner := &recordingDatabaseRunner{databaseRunner: &databaseRunner{objects: make(map[string]string)}}
 	a.Exec = runner
 	server := rpc.NewServer(a)
@@ -228,6 +231,9 @@ func TestDatabaseCreateUnknownSiteHasNoExternalEffects(t *testing.T) {
 	a.Store = s
 	a.Audit = log
 	a.Jobs = jobs.NewQueue(s, seal, log)
+	if err := a.Jobs.PrepareOperations(ctx); err != nil {
+		t.Fatal(err)
+	}
 	runner := &databaseRunner{}
 	a.Exec = runner
 	server := rpc.NewServer(a)
@@ -266,6 +272,9 @@ func TestDatabaseCreateJobAndClaim(t *testing.T) {
 	a.Store = s
 	a.Audit = l
 	a.Jobs = jobs.NewQueue(s, seal, l)
+	if err := a.Jobs.PrepareOperations(ctx); err != nil {
+		t.Fatal(err)
+	}
 	runner := &databaseRunner{}
 	if testingLive := os.Getenv("NOVAPANEL_MARIADB_TEST") == "1"; testingLive {
 		a.Exec = exec.Real{}
@@ -516,12 +525,15 @@ func TestDatabaseCreateJobAndClaim(t *testing.T) {
 	if e = server.ExecuteJob(ctx, &uj); e != nil {
 		t.Fatal(e)
 	}
+	if e = server.ExecuteJob(ctx, &uj); e != nil {
+		t.Fatalf("dbuser replay: %v", e)
+	}
+	if e = s.CompleteOperation(ctx, uj.ID, nil); e != nil {
+		t.Fatal(e)
+	}
 	_, users, e = s.DatabaseWithUsers(ctx, created["db_id"])
 	if e != nil || len(users) != 1 {
 		t.Fatalf("remaining users: %+v %v", users, e)
-	}
-	if e = server.ExecuteJob(ctx, &uj); e != nil {
-		t.Fatalf("dbuser replay: %v", e)
 	}
 	denied = server.Dispatch(rpc.WithCaller(ctx, rpc.Caller{Kind: "user", Role: "admin", Session: "owner"}), rpc.Request{Verb: "database.delete", Args: rotationArgs})
 	if denied.OK {
@@ -542,11 +554,14 @@ func TestDatabaseCreateJobAndClaim(t *testing.T) {
 	if e = server.ExecuteJob(ctx, &dj); e != nil {
 		t.Fatal(e)
 	}
-	if _, _, e = s.DatabaseWithUsers(ctx, created["db_id"]); e == nil {
-		t.Fatal("database metadata not removed")
-	}
 	if e = server.ExecuteJob(ctx, &dj); e != nil {
 		t.Fatalf("delete replay: %v", e)
+	}
+	if e = s.CompleteOperation(ctx, dj.ID, nil); e != nil {
+		t.Fatal(e)
+	}
+	if _, _, e = s.DatabaseWithUsers(ctx, created["db_id"]); e == nil {
+		t.Fatal("database metadata not removed")
 	}
 	child, e := s.StartJob(ctx, stale.Data.(jobs.EnqueueResult).Job.ID, 5)
 	if e != nil {

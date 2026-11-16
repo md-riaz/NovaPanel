@@ -62,7 +62,7 @@ func TestDeleteWorkerRetriesAfterDeletingMarker(t *testing.T) {
 				if _, e := tx.Exec(`INSERT INTO databases(id,name,engine,created) VALUES(?, 'testdb','mariadb',0)`, db); e != nil {
 					return e
 				}
-				_, e := tx.Exec(`INSERT INTO db_users(id,db_id,username,host,owner,created) VALUES(?,?,'testuser','127.0.0.1',0,0)`, user, db)
+				_, e := tx.Exec(`INSERT INTO db_users(id,db_id,username,host,owner,created) VALUES(?,?,'testuser','127.0.0.1',0,0),('01ARZ3NDEKTSV4RRFFQ69G5FAX',?,'owneruser','127.0.0.1',1,0)`, user, db, db)
 				return e
 			})
 			if e != nil {
@@ -74,6 +74,9 @@ func TestDeleteWorkerRetriesAfterDeletingMarker(t *testing.T) {
 			a.Audit = log
 			a.Exec = r
 			a.Jobs = jobs.NewQueue(s, seal, log)
+			if err := a.Jobs.PrepareStartup(ctx); err != nil {
+				t.Fatal(err)
+			}
 			server := rpc.NewServer(a)
 			arg := map[string]string{"dbuser_id": user}
 			if verb == "database.delete" {

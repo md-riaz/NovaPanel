@@ -169,6 +169,7 @@ func AuthorizeSchedule(ctx context.Context, name string) error {
 func (s *Server) ConfigureJobs() {
 	a := s.Agent
 	a.Jobs = jobs.NewQueue(a.Store, a.Secret, a.Audit)
+	a.Jobs.SetMutationAdmission(a.CheckMutationAdmission)
 	a.Jobs.SetRunner(s.ExecuteJob)
 	a.Jobs.SetAttemptDeadline(func(name string) time.Duration {
 		ms := s.Registry[name].MaxDeadlineMs

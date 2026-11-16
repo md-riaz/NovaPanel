@@ -3,6 +3,7 @@ package nginx
 
 import (
 	"bytes"
+	"novapanel/internal/render/php"
 	"novapanel/internal/rpcerr"
 	"novapanel/internal/validate"
 	"path/filepath"
@@ -15,6 +16,8 @@ type Redirect struct {
 	Code           int
 }
 type Desired struct {
+	// PHP is resolved from persisted site state, never caller-provided socket paths.
+	PHP               *php.Desired
 	ForceReload       bool
 	TLS               *TLSState
 	ForceHTTPS        bool
@@ -45,7 +48,7 @@ var httpTemplate = template.Must(template.New("http").Funcs(template.FuncMap{"pa
     listen [::]:80;{{end}}
     server_name {{range .Domains}}{{.}} {{end}};
     root "{{.Docroot}}";
-    index {{if .PHPVersion}}index.php {{end}}index.html;
+    index {{if or .PHP .PHPVersion}}index.php {{end}}index.html;
     {{if not .HTTPS}}location ^~ /.well-known/acme-challenge/ {
         root "{{.ACMERoot}}";
         default_type "text/plain";
@@ -60,10 +63,11 @@ var httpTemplate = template.Must(template.New("http").Funcs(template.FuncMap{"pa
     {{end}}{{range .Redirects}}{{if pathSource .Source}}location = "{{.Source}}" { return {{.Code}} "{{.Target}}"; }
     {{end}}{{end}}location / {
         {{range .Redirects}}{{if not (pathSource .Source)}}if ($host = "{{.Source}}") { return {{.Code}} "{{.Target}}"; }
-        {{end}}{{end}}{{if .Maintenance}}return 503;{{else}}try_files $uri $uri/ {{if .PHPVersion}}/index.php?$query_string{{else}}=404{{end}};{{end}}
+        {{end}}{{end}}{{if .Maintenance}}return 503;{{else}}try_files $uri $uri/ {{if or .PHP .PHPVersion}}/index.php?$query_string{{else}}=404{{end}};{{end}}
     }
     {{end}}location ~ /\. { deny all; }
-    {{if .PHPVersion}}location ~ \.php$ {
+    location ~* /(?:uploads|files)/.*\.php { return 404; }
+    {{if or .PHP .PHPVersion}}location ~ \.php$ {
         {{if .RedirectHTTPS}}return 301 https://$host$request_uri;{{else}}{{range .Redirects}}{{if not (pathSource .Source)}}if ($host = "{{.Source}}") { return {{.Code}} "{{.Target}}"; }
         {{end}}{{end}}{{if .Maintenance}}return 503;{{else}}try_files $uri =404;
         fastcgi_split_path_info ^(.+?\.php)(/.*)$;
@@ -74,6 +78,7 @@ var httpTemplate = template.Must(template.New("http").Funcs(template.FuncMap{"pa
         fastcgi_hide_header X-Powered-By;{{end}}{{end}}
     }
     {{end}}
+    location ~* \.php { return 404; }
     add_header X-Content-Type-Options nosniff always;
     add_header X-Frame-Options SAMEORIGIN always;
     add_header Referrer-Policy strict-origin-when-cross-origin always;
@@ -83,6 +88,14 @@ var httpTemplate = template.Must(template.New("http").Funcs(template.FuncMap{"pa
 
 func Render(d Desired) ([]byte, error) {
 	v := &validate.V{}
+	if d.PHP != nil {
+		if d.PHP.Name != d.Name {
+			return nil, rpcerr.Errf("invalid_argument", "PHP site identity mismatch")
+		}
+		if _, err := php.Render(*d.PHP); err != nil {
+			return nil, err
+		}
+	}
 	if d.PHPVersion != nil && *d.PHPVersion != "8.3" {
 		return nil, rpcerr.Errf("invalid_argument", "Unsupported PHP version")
 	}

@@ -131,6 +131,13 @@ func serve(ctx context.Context, a *agent.Agent) (err error) {
 	if err != nil {
 		return fmt.Errorf("startup PHP recovery: %w", err)
 	}
+	startupErr := a.PrepareStartup(ctx)
+	if ctx.Err() != nil {
+		return nil
+	}
+	if startupErr != nil && !errors.Is(startupErr, jobs.ErrRecoveryBlocked) {
+		return startupErr
+	}
 	l, err := listenSocket(a.Cfg.SocketPath, a.Cfg.WebGID)
 	if err != nil {
 		return err
@@ -142,8 +149,20 @@ func serve(ctx context.Context, a *agent.Agent) (err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	results := make(chan error, 2)
-	go func() { results <- a.Jobs.Run(ctx) }()
-	go func() { results <- a.Scheduler.Run(ctx) }()
+	go func() {
+		if startupErr != nil {
+			results <- startupErr
+			return
+		}
+		results <- a.Jobs.Run(ctx)
+	}()
+	go func() {
+		if startupErr != nil {
+			results <- startupErr
+			return
+		}
+		results <- a.Scheduler.Run(ctx)
+	}()
 	serving := make(chan error, 1)
 	go func() { serving <- s.ServeContext(ctx, l) }()
 	served := false

@@ -82,23 +82,33 @@ func TestPHPSitePurgeCrashReplay(t *testing.T) {
 			if err = os.WriteFile(filepath.Join(root, "pool", "demo.conf"), []byte("pool"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err = st.CreateSite(ctx, store.Site{ID: sid, Name: "demo", Type: "php", Docroot: filepath.Join(a.Cfg.SitesRoot, "demo", "public")}, store.Domain{ID: did, FQDN: "demo.test"}); err != nil {
+			version := "8.3"
+			if _, err = st.CreateSite(ctx, store.Site{ID: sid, Name: "demo", Type: "php", PHPVersion: &version, Docroot: filepath.Join(a.Cfg.SitesRoot, "demo", "public")}, store.Domain{ID: did, FQDN: "demo.test"}); err != nil {
+				t.Fatal(err)
+			}
+			if err = st.SetSiteStatus(ctx, sid, "active"); err != nil {
 				t.Fatal(err)
 			}
 			server := rpc.NewServer(a)
 			server.ConfigureJobs()
+			if err := a.Jobs.PrepareStartup(ctx); err != nil {
+				t.Fatal(err)
+			}
 			reply := server.Dispatch(rpc.WithCaller(ctx, rpc.RootCaller(0)), rpc.Request{Verb: "site.delete", Args: json.RawMessage(`{"site_id":"` + sid + `","purge_files":true}`)})
 			if !reply.OK {
 				t.Fatal(reply)
 			}
-			j := jobs.Job(reply.Data.(jobs.EnqueueResult).Job)
+			j, err := st.StartJob(ctx, reply.Data.(jobs.EnqueueResult).Job.ID, a.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
 			if err = st.Tx(ctx, func(tx *sql.Tx) error {
 				_, e := tx.ExecContext(ctx, `CREATE TRIGGER fail_delete BEFORE DELETE ON sites BEGIN SELECT RAISE(FAIL, 'injected'); END`)
 				return e
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if err = server.ExecuteJob(ctx, &j); err == nil || errors.Is(err, jobs.ErrRetry) || r.missing {
+			if err = server.ExecuteJob(ctx, &j); !errors.Is(err, jobs.ErrRetry) || r.missing {
 				t.Fatalf("expected fail-closed purge with account retained: %v missing=%v", err, r.missing)
 			}
 			// Model an earlier completed removal for crash-replay compatibility.
@@ -126,6 +136,9 @@ func TestPHPSitePurgeCrashReplay(t *testing.T) {
 			if variant == "replay" {
 				if err != nil {
 					t.Fatalf("replay: %v", err)
+				}
+				if err = st.CompleteOperation(ctx, j.ID, nil); err != nil {
+					t.Fatal(err)
 				}
 				if _, err = st.SiteByID(ctx, sid); err != sql.ErrNoRows {
 					t.Fatalf("row remains: %v", err)

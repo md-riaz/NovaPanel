@@ -50,7 +50,7 @@ func (s *Store) replayJob(ctx context.Context, tx *sql.Tx, owner, key, payload s
 }
 
 // AdmitJob serializes deduplication with job, claim, and optional sealed database intent.
-func (s *Store) AdmitJob(ctx context.Context, j Job, c JobClaim, key, payload string, sealedToken []byte, nonce, ciphertext []byte) (existing Job, token []byte, replay bool, err error) {
+func (s *Store) AdmitJob(ctx context.Context, j Job, c JobClaim, key, payload string, sealedToken []byte, nonce, ciphertext []byte, reserve ...func(context.Context, *sql.Tx, *Job) error) (existing Job, token []byte, replay bool, err error) {
 	err = s.Tx(ctx, func(tx *sql.Tx) error {
 		// Take a write lock before lookup, including on an absent key.
 		if _, e := tx.ExecContext(ctx, "UPDATE idempotency SET created=created WHERE 0"); e != nil {
@@ -69,6 +69,11 @@ func (s *Store) AdmitJob(ctx context.Context, j Job, c JobClaim, key, payload st
 		if c.JobID != j.ID {
 			return errors.New("claim job mismatch")
 		}
+		if len(reserve) > 0 && reserve[0] != nil {
+			if e := reserve[0](ctx, tx, &j); e != nil {
+				return e
+			}
+		}
 		if e := insertJob(ctx, tx, j); e != nil {
 			return e
 		}
@@ -83,6 +88,7 @@ func (s *Store) AdmitJob(ctx context.Context, j Job, c JobClaim, key, payload st
 				return e
 			}
 		}
+		existing = j
 		if key != "" {
 			_, e := tx.ExecContext(ctx, "INSERT INTO idempotency(id,job_id,result_json,payload_hash,created) VALUES(?,?,?,?,?)", key, j.ID, string(sealedToken), payload, s.clock.Now())
 			return e

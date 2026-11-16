@@ -31,23 +31,32 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Queue struct {
+	publicationErr  error  // sticky publication storage/audit failure
+	configCustody   string // trusted startup dependency, immutable while running
+	admission       func() error
+	startupReady    bool
+	startupGate     chan struct{}
 	store           Persistence
 	sealer          Sealer
 	audit           Auditor
 	clock           Clock
+	operationMu     operationGuard
+	operationsReady bool
+	recoveryBlocked bool
+	startupBlocked  bool
 	mu              sync.Mutex
 	runner          func(context.Context, *Job) error
-	attemptDeadline func(string) time.Duration
 	running         bool
 	startup         func(context.Context) (*Job, error)
 	resume          func(context.Context, *Job) error
+	attemptDeadline func(string) time.Duration
 	postRecovery    func(context.Context) error
 	wake            chan struct{}
 	locks           keyedLock
 }
 
 func NewQueue(s Persistence, sealer Sealer, log Auditor) *Queue {
-	return &Queue{store: s, sealer: sealer, audit: log, clock: realClock{}, wake: make(chan struct{}, 1)}
+	return &Queue{store: s, sealer: sealer, audit: log, clock: realClock{}, wake: make(chan struct{}, 1), startupGate: make(chan struct{}, 1)}
 }
 func (q *Queue) SetClock(c Clock) { q.clock = c }
 func (q *Queue) SetRunner(run func(context.Context, *Job) error) {
@@ -71,6 +80,11 @@ func (q *Queue) record(j Job, outcome, code, stage string) error {
 }
 func (q *Queue) Enqueue(ctx context.Context, verb string, args any, objectKey string) (EnqueueResult, error) {
 	return q.enqueue(ctx, verb, args, objectKey, false, nil)
+}
+
+// EnqueueSiteCreate reserves site metadata and the idempotency record with its job.
+func (q *Queue) EnqueueSiteCreate(ctx context.Context, args any, objectKey string, reserve func(context.Context, *sql.Tx, *store.Job) error) (EnqueueResult, error) {
+	return q.enqueue(ctx, "site.create", args, objectKey, false, nil, reserve)
 }
 
 type databaseIntent struct {
@@ -107,7 +121,7 @@ func (q *Queue) LockIdempotency(ctx context.Context) (func(), error) {
 	if !ok || m.CreatedBy == "" || r.key == "" {
 		return nil, rpcerr.Errf("forbidden", "trusted job identity required")
 	}
-	return q.locks.lock(ctx, "idempotency:"+claimHash(m.CreatedBy+"\x00"+r.key))
+	return q.locks.lockContext(ctx, "idempotency:"+claimHash(m.CreatedBy+"\x00"+r.key))
 }
 
 func (q *Queue) Replay(ctx context.Context) (EnqueueResult, bool, error) {
@@ -159,8 +173,25 @@ func (q *Queue) replayResult(j Job, saved []byte) (EnqueueResult, error) {
 	return EnqueueResult{Job: j, ClaimToken: binding.Token, ClaimState: "live"}, nil
 }
 
-func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey string, sealed bool, intent *databaseIntent) (EnqueueResult, error) {
+func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey string, sealed bool, intent *databaseIntent, reserve ...func(context.Context, *sql.Tx, *store.Job) error) (EnqueueResult, error) {
 	var result EnqueueResult
+	// Fail fast while agent startup is closed; recheck under the lease below
+	// so a concurrent close cannot admit work after this initial check.
+	if q.admission != nil {
+		if err := q.admission(); err != nil {
+			return result, err
+		}
+	}
+	ctx, release, err := q.AdmitMutation(ctx)
+	if err != nil {
+		return result, err
+	}
+	defer release()
+	if q.admission != nil {
+		if err := q.admission(); err != nil {
+			return result, err
+		}
+	}
 	m, ok := MetadataFrom(ctx)
 	if !ok || m.CreatedBy == "" {
 		return result, rpcerr.Errf("forbidden", "trusted job identity required")
@@ -224,7 +255,7 @@ func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey st
 	}
 	request, _ := ctx.Value(idempotencyKey{}).(idempotencyRequest)
 	p, ok := q.store.(interface {
-		AdmitJob(context.Context, store.Job, store.JobClaim, string, string, []byte, []byte, []byte) (store.Job, []byte, bool, error)
+		AdmitJob(context.Context, store.Job, store.JobClaim, string, string, []byte, []byte, []byte, ...func(context.Context, *sql.Tx, *store.Job) error) (store.Job, []byte, bool, error)
 	})
 	if !ok {
 		return result, errors.New("jobs: atomic admission unavailable")
@@ -250,7 +281,7 @@ func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey st
 			return result, e
 		}
 	}
-	existing, saved, replay, e := p.AdmitJob(ctx, j, claim, key, request.hash, sealedToken, nonce, ciphertext)
+	existing, saved, replay, e := p.AdmitJob(ctx, j, claim, key, request.hash, sealedToken, nonce, ciphertext, reserve...)
 	if errors.Is(e, store.ErrIdempotencyConflict) {
 		return result, rpcerr.Errf("conflict", "Idempotency key reused")
 	}
@@ -263,6 +294,7 @@ func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey st
 	if replay {
 		return q.replayResult(existing, saved)
 	}
+	j = existing
 	select {
 	case q.wake <- struct{}{}:
 	default:
@@ -272,12 +304,23 @@ func (q *Queue) enqueue(ctx context.Context, verb string, args any, objectKey st
 	}
 	return EnqueueResult{Job: j, ClaimToken: text, ClaimState: "live"}, nil
 }
-func claimHash(s string) string                                      { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
-func (q *Queue) Status(ctx context.Context, jid string) (Job, error) { return q.store.GetJob(ctx, jid) }
+func claimHash(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
+func (q *Queue) Status(ctx context.Context, jid string) (Job, error) {
+	j, err := q.store.GetJob(ctx, jid)
+	if errors.Is(err, store.ErrPublicationPending) {
+		return Job{}, rpcerr.Errf("agent_error", "publication audit pending")
+	}
+	return j, err
+}
 func (q *Queue) List(ctx context.Context, f store.JobFilter) ([]Job, error) {
 	return q.store.ListJobs(ctx, f)
 }
 func (q *Queue) PublishClaim(ctx context.Context, jid string, fields map[string]any) error {
+	ctx, release, err := q.AdmitMutation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if e := q.healthy(); e != nil {
 		return e
 	}
@@ -307,6 +350,48 @@ func (q *Queue) Claim(ctx context.Context, jid, token string) (map[string]any, e
 		return nil, errors.New("jobs: sealer not configured")
 	}
 	c, e := q.store.ConsumeClaim(ctx, jid, claimHash(token), m.CreatedBy)
+	if errors.Is(e, sql.ErrNoRows) {
+		if recovery, ok := q.store.(interface {
+			ExpiredClaimInput(context.Context, string, string, string) (store.Operation, error)
+			PublishExpiredClaim(context.Context, store.Operation, string, string, []byte, []byte) error
+		}); ok {
+			op, inputErr := recovery.ExpiredClaimInput(ctx, jid, claimHash(token), m.CreatedBy)
+			if inputErr == nil {
+				var projection any
+				if op.Kind == store.WordPressInstall {
+					credentials, err := q.openWordPressCredentials(ctx, op)
+					if err != nil {
+						return nil, err
+					}
+					projection = wordPressClaim(op, credentials)
+				} else {
+					credentials, err := q.openOperationCredentials(ctx, op)
+					if err != nil {
+						return nil, err
+					}
+					projection = map[string]string{"password": credentials.Password}
+				}
+				raw, inputErr := json.Marshal(projection)
+				if inputErr != nil {
+					return nil, inputErr
+				}
+				defer clear(raw)
+				sealed, inputErr := q.sealer.Seal(raw)
+				if inputErr != nil {
+					return nil, inputErr
+				}
+				if inputErr = recovery.PublishExpiredClaim(ctx, op, claimHash(token), m.CreatedBy, sealed.Nonce, sealed.Ciphertext); inputErr != nil {
+					return nil, inputErr
+				}
+				c, e = q.store.ConsumeClaim(ctx, jid, claimHash(token), m.CreatedBy)
+			} else if !errors.Is(inputErr, sql.ErrNoRows) {
+				return nil, inputErr
+			}
+		}
+	}
+	if errors.Is(e, store.ErrPublicationPending) {
+		return nil, rpcerr.Errf("agent_error", "publication audit pending")
+	}
 	if e != nil {
 		return nil, e
 	}
@@ -321,6 +406,12 @@ func (q *Queue) Claim(ctx context.Context, jid, token string) (map[string]any, e
 }
 
 func (q *Queue) healthy() error {
+	q.mu.Lock()
+	err := q.publicationErr
+	q.mu.Unlock()
+	if err != nil {
+		return err
+	}
 	if q.audit == nil {
 		return errors.New("jobs: audit not configured")
 	}

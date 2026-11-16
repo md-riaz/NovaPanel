@@ -71,6 +71,9 @@ func TestSiteDeleteDatabaseCreateOrders(t *testing.T) {
 			}
 			server := rpc.NewServer(a)
 			server.ConfigureJobs()
+			if err := a.Jobs.PrepareStartup(ctx); err != nil {
+				t.Fatal(err)
+			}
 			call := func(verb string) jobs.EnqueueResult {
 				t.Helper()
 				b, _ := json.Marshal(map[string]string{"site_id": sid})

@@ -15,7 +15,6 @@ import (
 
 	"golang.org/x/sys/unix"
 	runner "novapanel/internal/exec"
-	"novapanel/internal/jobs"
 	"novapanel/internal/rpcerr"
 	"novapanel/internal/store"
 	"novapanel/internal/validate"
@@ -377,7 +376,7 @@ func (a *PoolApplier) apply(ctx context.Context, name, siteID string, b, committ
 		if err = a.testCandidate(ctx, root, "", nil); err != nil {
 			err = a.baselineError(root, err)
 			if rerr := restore(); rerr != nil {
-				return errors.Join(err, rerr, jobs.ErrRetry)
+				return errors.Join(err, rerr, rpcerr.ErrRetry)
 			}
 			return err
 		}
@@ -403,10 +402,10 @@ func (a *PoolApplier) apply(ctx context.Context, name, siteID string, b, committ
 		return nil
 	}
 	if recovery {
-		return errors.Join(err, jobs.ErrRetry)
+		return errors.Join(err, rpcerr.ErrRetry)
 	}
 	if rerr := restore(); rerr != nil {
-		return errors.Join(err, rerr, jobs.ErrRetry)
+		return errors.Join(err, rerr, rpcerr.ErrRetry)
 	}
 	return err
 }

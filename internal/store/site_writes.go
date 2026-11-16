@@ -234,47 +234,58 @@ func (s *Store) CreateSite(ctx context.Context, v Site, d Domain, limits ...PHPL
 	if v.ID == "" || v.Name == "" || v.Type == "" || v.Docroot == "" || d.ID == "" || d.FQDN == "" {
 		return out, ErrSiteInvalid
 	}
-	err = s.Tx(ctx, func(tx *sql.Tx) error {
-		old, e := scanSite(tx.QueryRowContext(ctx, "SELECT "+siteColumns+" FROM sites WHERE name=?", v.Name))
-		if e == nil {
-			if old.Status == "deleting" {
-				return ErrSitePrecondition
-			}
-			var primary string
-			if e = tx.QueryRowContext(ctx, "SELECT fqdn FROM domains WHERE site_id=? AND is_primary=1", old.ID).Scan(&primary); e != nil {
-				return e
-			}
-			if old.Type != v.Type || old.Docroot != v.Docroot || primary != d.FQDN || (old.PHPVersion == nil) != (v.PHPVersion == nil) || (old.PHPVersion != nil && v.PHPVersion != nil && *old.PHPVersion != *v.PHPVersion) {
-				return ErrSiteConflict
-			}
-			out = old
-			return nil
-		}
-		if !errors.Is(e, sql.ErrNoRows) {
-			return e
-		}
-		now := s.clock.Now()
-		if _, e = tx.ExecContext(ctx, "INSERT INTO sites(id,name,type,docroot,php_version,created,updated) VALUES(?,?,?,?,?,?,?)", v.ID, v.Name, v.Type, v.Docroot, v.PHPVersion, now, now); e != nil {
-			return siteWriteError(e)
-		}
-		if len(limits) == 1 {
-			raw, err := json.Marshal(storedPHPLimits{PHPLimits: limits[0], MaxChildren: limits[0].MaxChildren})
-			if err != nil {
-				return err
-			}
-			if _, err = tx.ExecContext(ctx, "INSERT INTO settings(key,value_json) VALUES(?,?)", phpLimitsKey(v.ID), string(raw)); err != nil {
-				return err
-			}
-		}
-		if _, e = tx.ExecContext(ctx, "INSERT INTO domains(id,site_id,fqdn,is_primary,created) VALUES(?,?,?,1,?)", d.ID, v.ID, d.FQDN, now); e != nil {
-			return siteWriteError(e)
-		}
-		out, e = scanSite(tx.QueryRowContext(ctx, "SELECT "+siteColumns+" FROM sites WHERE id=?", v.ID))
-		return e
-	})
+	err = s.Tx(ctx, func(tx *sql.Tx) error { var e error; out, e = s.createSiteTx(ctx, tx, v, d, limits...); return e })
 	return
 }
-
+func (s *Store) createSiteTx(ctx context.Context, tx *sql.Tx, v Site, d Domain, limits ...PHPLimits) (out Site, err error) {
+	old, e := scanSite(tx.QueryRowContext(ctx, "SELECT "+siteColumns+" FROM sites WHERE name=?", v.Name))
+	if e == nil {
+		if old.Status == "deleting" {
+			return out, ErrSitePrecondition
+		}
+		var primary string
+		if e = tx.QueryRowContext(ctx, "SELECT fqdn FROM domains WHERE site_id=? AND is_primary=1", old.ID).Scan(&primary); e != nil {
+			return out, e
+		}
+		if old.Type != v.Type || old.Docroot != v.Docroot || primary != d.FQDN || (old.PHPVersion == nil) != (v.PHPVersion == nil) || (old.PHPVersion != nil && v.PHPVersion != nil && *old.PHPVersion != *v.PHPVersion) {
+			return out, ErrSiteConflict
+		}
+		out = old
+		return out, nil
+	}
+	if !errors.Is(e, sql.ErrNoRows) {
+		return out, e
+	}
+	now := s.clock.Now()
+	if _, e = tx.ExecContext(ctx, "INSERT INTO sites(id,name,type,docroot,php_version,created,updated) VALUES(?,?,?,?,?,?,?)", v.ID, v.Name, v.Type, v.Docroot, v.PHPVersion, now, now); e != nil {
+		return out, siteWriteError(e)
+	}
+	if len(limits) == 1 {
+		raw, e := json.Marshal(storedPHPLimits{PHPLimits: limits[0], MaxChildren: limits[0].MaxChildren})
+		if e != nil {
+			return out, e
+		}
+		if _, e = tx.ExecContext(ctx, "INSERT INTO settings(key,value_json) VALUES(?,?)", phpLimitsKey(v.ID), string(raw)); e != nil {
+			return out, e
+		}
+	}
+	if _, e = tx.ExecContext(ctx, "INSERT INTO domains(id,site_id,fqdn,is_primary,created) VALUES(?,?,?,1,?)", d.ID, v.ID, d.FQDN, now); e != nil {
+		return out, siteWriteError(e)
+	}
+	out, e = scanSite(tx.QueryRowContext(ctx, "SELECT "+siteColumns+" FROM sites WHERE id=?", v.ID))
+	return out, e
+}
+func (s *Store) ReserveSiteTx(ctx context.Context, tx *sql.Tx, v Site, d Domain, j *Job, args func(string) (json.RawMessage, error), limits ...PHPLimits) error {
+	if v.ID == "" || v.Name == "" || v.Type == "" || v.Docroot == "" || d.ID == "" || d.FQDN == "" {
+		return ErrSiteInvalid
+	}
+	site, err := s.createSiteTx(ctx, tx, v, d, limits...)
+	if err != nil {
+		return err
+	}
+	j.Args, err = args(site.ID)
+	return err
+}
 func (s *Store) SetSiteStatus(ctx context.Context, id, status string) error {
 	switch status {
 	case "creating", "active", "failed", "deleting":

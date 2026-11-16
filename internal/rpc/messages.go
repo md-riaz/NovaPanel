@@ -110,6 +110,12 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 	caller := CallerFrom(ctx)
 	event := AuditEvent{Principal: callerPrincipal(caller), Actor: req.Actor, Role: caller.Role, Verb: req.Verb, Detail: map[string]any{"stage": "authz"}}
 	mutation := false
+	var releaseMutation func()
+	defer func() {
+		if releaseMutation != nil {
+			releaseMutation()
+		}
+	}()
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("rpc: dispatch panic: %v", r)
@@ -310,11 +316,23 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 		event.ObjectKey = key
 		event.Detail["stage"] = "authz"
 	}
+	if mutation && s.Agent.Jobs != nil {
+		var err error
+		ctx, releaseMutation, err = s.Agent.Jobs.AdmitMutation(ctx)
+		if err != nil {
+			return errorReply(err)
+		}
+	}
 	if mutation && s.DurableAudit != nil {
 		pre := event
 		pre.Outcome = "ok"
 		if err := s.DurableAudit(pre); err != nil {
 			return Err("agent_error", "Durable audit unavailable")
+		}
+	}
+	if mutation {
+		if err := s.Agent.CheckMutationAdmission(); err != nil {
+			return errorReply(err)
 		}
 	}
 	if mutation && s.Agent.Store != nil {
@@ -342,6 +360,9 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (reply Reply) {
 func errorReply(err error) Reply {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return Err("deadline_exceeded", "Deadline exceeded")
+	}
+	if errors.Is(err, jobs.ErrRecoveryBlocked) {
+		return Err("precondition_failed", "Startup recovery unresolved")
 	}
 	var ce *CodedError
 	if errors.As(err, &ce) && validCode(ce.Code) {

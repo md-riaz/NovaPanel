@@ -13,7 +13,6 @@ import (
 	"novapanel/internal/store"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -54,6 +53,9 @@ func TestSiteMutations(t *testing.T) {
 	}
 	s := rpc.NewServer(a)
 	s.ConfigureJobs()
+	if err := a.Jobs.PrepareStartup(ctx); err != nil {
+		t.Fatal(err)
+	}
 	call := func(verb string, args any) rpc.Reply {
 		b, _ := json.Marshal(args)
 		return s.Dispatch(rpc.WithCaller(ctx, rpc.RootCaller(0)), rpc.Request{Verb: verb, Args: b})
@@ -88,9 +90,8 @@ func TestSiteMutations(t *testing.T) {
 		t.Fatal(err)
 	}
 	deleteReply := call("site.delete", map[string]any{"site_id": sid})
-	deleteJob := deleteReply.Data.(jobs.EnqueueResult).Job
-	if err := rpc.Registry["site.delete"].Exec(ctx, a, &deleteJob); err == nil || !strings.Contains(err.Error(), dbID) {
-		t.Fatalf("site.delete must identify attached database: %v", err)
+	if deleteReply.Code != "precondition_failed" {
+		t.Fatalf("site.delete must refuse attached database: %+v", deleteReply)
 	}
 	if err := st.DeleteDatabase(ctx, dbID, "attached_db"); err != nil {
 		t.Fatal(err)
@@ -196,14 +197,17 @@ func TestSiteMutations(t *testing.T) {
 		t.Fatalf("delete admission %+v", r)
 	}
 	en := r.Data.(jobs.EnqueueResult)
-	dj := jobs.Job(en.Job)
-	// Cleanup failure must retain deleting metadata for a retry.
+	dj, err := st.StartJob(ctx, en.Job.ID, a.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Cleanup failure must retain site metadata for a retry.
 	a.Nginx = nil
 	if err = rpc.Registry["site.delete"].Exec(ctx, a, &dj); err == nil {
 		t.Fatal("cleanup unexpectedly succeeded")
 	}
 	got, err = st.SiteByID(ctx, sid)
-	if err != nil || got.Status != "deleting" {
+	if err != nil || got.Status != "failed" {
 		t.Fatalf("delete lifecycle %+v %v", got, err)
 	}
 	a.Nginx = &nginx.Applier{Root: filepath.Join(root, "nginx"), Runner: commands, Probe: func(context.Context, nginx.Desired) error { return nil }}
@@ -214,11 +218,14 @@ func TestSiteMutations(t *testing.T) {
 	if err = rpc.Registry["site.delete"].Exec(ctx, a, &dj); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = st.SiteByID(ctx, sid); err == nil {
-		t.Fatal("site remains")
-	}
 	if err = rpc.Registry["site.delete"].Exec(ctx, a, &dj); err != nil {
 		t.Fatalf("delete retry %v", err)
+	}
+	if err = st.CompleteOperation(ctx, dj.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.SiteByID(ctx, sid); err == nil {
+		t.Fatal("site remains")
 	}
 	_ = site
 }

@@ -25,7 +25,7 @@ func (q *Queue) LockReconcileDatabase(ctx context.Context, dbID, kind, name stri
 		}
 		return func() { child(); parent() }, nil
 	}
-	parent, err := q.locks.lock(ctx, "db:"+dbID)
+	parent, err := q.locks.lockContext(ctx, "db:"+dbID)
 	if err != nil {
 		return nil, err
 	}

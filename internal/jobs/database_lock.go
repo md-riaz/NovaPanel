@@ -11,5 +11,5 @@ func (q *Queue) SetPostRecovery(fn func(context.Context) error) {
 // LockDatabase acquires the same parent lock used by queued database jobs.
 // Acquire this before LockDatabaseName or LockDatabaseUser.
 func (q *Queue) LockDatabase(ctx context.Context, databaseID string) (func(), error) {
-	return q.locks.lock(ctx, "db:"+databaseID)
+	return q.locks.lockContext(ctx, "db:"+databaseID)
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"novapanel/internal/agent"
+	"novapanel/internal/database"
 	"novapanel/internal/id"
 	"novapanel/internal/jobs"
 	"novapanel/internal/php"
@@ -19,8 +20,9 @@ import (
 )
 
 type siteDeleteArgs struct {
-	SiteID     string `json:"site_id"`
-	PurgeFiles bool   `json:"purge_files,omitempty"`
+	SiteID         string `json:"site_id"`
+	PurgeFiles     bool   `json:"purge_files,omitempty"`
+	PurgeDatabases bool   `json:"purge_databases,omitempty"`
 }
 
 func (v *siteDeleteArgs) Validate() error { return (&siteIDArgs{v.SiteID}).Validate() }
@@ -29,15 +31,20 @@ func init() {
 }
 func siteDelete(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*siteDeleteArgs)
-	if _, e := a.Store.SiteByID(ctx, v.SiteID); e != nil {
-		return nil, siteError(e)
+	if _, err := a.Store.SiteByID(ctx, v.SiteID); err != nil {
+		return nil, siteError(err)
 	}
-	return a.Jobs.Enqueue(ctx, "site.delete", v, "site:"+v.SiteID)
+	return a.Jobs.EnqueueOperation(ctx, store.OperationRequest{Kind: store.SiteDelete, SiteID: v.SiteID, PurgeFiles: v.PurgeFiles, PurgeDatabases: v.PurgeDatabases}, nil)
 }
 func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error) {
 	poolRemoved := false
+	purgeStarted := false
 	defer func() {
 		var coded *rpc.CodedError
+		if purgeStarted && err != nil {
+			err = errors.Join(err, jobs.ErrRetry)
+			return
+		}
 		if poolRemoved && err != nil && !(errors.As(err, &coded) && (coded.Code == "conflict" || coded.Code == "not_found" || coded.Code == "invalid_argument" || coded.Code == "precondition_failed")) {
 			err = errors.Join(err, jobs.ErrRetry)
 		}
@@ -53,6 +60,14 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 	}
 	if e := v.Validate(); e != nil {
 		return e
+	}
+	op, opErr := a.Store.LoadOperation(ctx, j.ID)
+	journaled := opErr == nil && op.Kind == store.SiteDelete
+	if opErr != nil && !errors.Is(opErr, sql.ErrNoRows) {
+		return opErr
+	}
+	if journaled && (op.SiteID != v.SiteID || op.Identity.PurgeFiles != v.PurgeFiles || op.Identity.PurgeDatabases != v.PurgeDatabases) {
+		return rpc.Errf("precondition_failed", "Invalid deletion binding")
 	}
 	var durable jobs.Job
 	if v.PurgeFiles {
@@ -110,7 +125,7 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 			attached = append(attached, db.ID)
 		}
 	}
-	if len(attached) != 0 {
+	if len(attached) != 0 && !v.PurgeDatabases {
 		j.Result, e = json.Marshal(struct {
 			IDs []string `json:"attached_database_ids"`
 		}{attached})
@@ -118,6 +133,54 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 			return e
 		}
 		return rpc.Errf("precondition_failed", "Attached databases: %s", strings.Join(attached, ", "))
+	}
+	if !journaled && s.Type != "static" {
+		return rpc.Errf("unsupported", "Legacy deletion supports static sites only")
+	}
+	if journaled && (a.Nginx == nil || a.Exec == nil) {
+		return rpc.Errf("agent_error", "Site deletion dependencies unavailable")
+	}
+	if journaled {
+		if op.Checkpoint == "prepared" {
+			if e = a.Store.CheckpointOperation(ctx, j.ID, "prepared", "teardown_started"); e != nil {
+				return e
+			}
+			op.Checkpoint = "teardown_started"
+		}
+		purgeStarted = store.TeardownStarted(op)
+	}
+	if v.PurgeDatabases {
+		if !journaled {
+			return rpc.Errf("precondition_failed", "Database purge requires a durable journal")
+		}
+		if op.Checkpoint == "teardown_started" {
+			if a.Exec == nil {
+				return rpc.Errf("agent_error", "Database execution unavailable")
+			}
+			for _, db := range op.Identity.Attached {
+				purgeStarted = true
+				if e = a.Store.CheckOperation(ctx, j.ID); e != nil {
+					return errors.Join(e, jobs.ErrRetry)
+				}
+				if e = database.CheckSchemaDelete(ctx, a.Exec, db.Database.Name, db.Database.ID); e != nil {
+					return errors.Join(e, jobs.ErrRetry)
+				}
+				for _, account := range db.Accounts {
+					if e = a.Store.CheckOperation(ctx, j.ID); e != nil {
+						return errors.Join(e, jobs.ErrRetry)
+					}
+					if e = database.ManagedDeleteUser(ctx, a.Exec, account.Username, account.ID); e != nil {
+						return errors.Join(e, jobs.ErrRetry)
+					}
+				}
+				if e = a.Store.CheckOperation(ctx, j.ID); e != nil {
+					return errors.Join(e, jobs.ErrRetry)
+				}
+				if e = database.ManagedDelete(ctx, a.Exec, db.Database.Name, db.Database.ID, nil); e != nil {
+					return errors.Join(e, jobs.ErrRetry)
+				}
+			}
+		}
 	}
 	wasDeleting := s.Status == "deleting"
 	if !wasDeleting {
@@ -188,12 +251,20 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 			return e
 		}
 	}
-	if e = a.Store.DeleteSite(ctx, s.ID); e != nil {
-		return siteError(e)
+	if journaled && op.Checkpoint == "teardown_started" {
+		if e = a.Store.CheckpointOperation(ctx, j.ID, "teardown_started", "db_applied"); e != nil {
+			return errors.Join(e, jobs.ErrRetry)
+		}
+	}
+	if !journaled {
+		if e = a.Store.DeleteSite(ctx, s.ID); e != nil {
+			return siteError(e)
+		}
 	}
 	j.Result = json.RawMessage(`{}`)
 	return nil
 }
+
 func removeSiteCertificates(path string, domains []store.Domain) error {
 	resolved, e := filepath.EvalSymlinks(path)
 	if os.IsNotExist(e) {

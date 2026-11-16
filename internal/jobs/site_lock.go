@@ -49,7 +49,7 @@ func (q *Queue) lockSiteOSUser(ctx context.Context, siteKey, username string) (f
 				err = ErrRetry
 			}
 		} else {
-			release, err = q.locks.lock(ctx, key)
+			release, err = q.locks.lockContext(ctx, key)
 		}
 		if err == nil {
 			err = ctx.Err()

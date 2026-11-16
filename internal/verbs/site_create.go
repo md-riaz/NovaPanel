@@ -2,12 +2,14 @@ package verbs
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"novapanel/internal/agent"
 	"novapanel/internal/id"
 	"novapanel/internal/jobs"
 	"novapanel/internal/php"
+	"novapanel/internal/phpcapacity"
 	"novapanel/internal/render/nginx"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
@@ -91,15 +93,19 @@ func siteCreate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 				active++
 			}
 		}
-		cap := php.ChildrenCap(php.TotalMemoryMB(), active)
+		cap := phpcapacity.ChildrenCap(phpcapacity.TotalMemoryMB(), active)
 		initial = append(initial, store.PHPLimits{MaxChildren: &cap})
 	}
-	site, e := a.Store.CreateSite(ctx, store.Site{ID: sid, Name: v.Name, Type: v.Type, PHPVersion: v.PHPVersion, Docroot: filepath.Join(a.Cfg.SitesRoot, v.Name, "public")}, store.Domain{ID: did, FQDN: v.PrimaryDomain}, initial...)
+	result, e := a.Jobs.EnqueueSiteCreate(ctx, &v, "site:"+v.Name, func(ctx context.Context, tx *sql.Tx, j *jobs.Job) error {
+		return a.Store.ReserveSiteTx(ctx, tx, store.Site{ID: sid, Name: v.Name, Type: v.Type, PHPVersion: v.PHPVersion, Docroot: filepath.Join(a.Cfg.SitesRoot, v.Name, "public")}, store.Domain{ID: did, FQDN: v.PrimaryDomain}, j, func(siteID string) (json.RawMessage, error) {
+			v.SiteID = siteID
+			return json.Marshal(&v)
+		}, initial...)
+	})
 	if e != nil {
 		return nil, siteError(e)
 	}
-	v.SiteID = site.ID
-	return a.Jobs.Enqueue(ctx, "site.create", &v, "site:"+v.Name)
+	return result, nil
 }
 func siteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error) {
 	var v siteCreateArgs

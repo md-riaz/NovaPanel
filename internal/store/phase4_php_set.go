@@ -1,0 +1,171 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"novapanel/internal/id"
+	"novapanel/internal/phpcapacity"
+	"reflect"
+
+	php "novapanel/internal/render/php"
+)
+
+// PHPOperationIdentity contains only nonsecret, full desired-state snapshots.
+type PHPOperationIdentity struct {
+	OriginalCap           int
+	DesiredCap            int
+	OriginalVersion       string
+	DesiredVersion        string
+	OriginalLimits        php.Limits
+	OriginalLimitsPresent bool
+	DesiredLimits         php.Limits
+	FailureEventID        string `json:",omitempty"`
+}
+
+func validPHPSetIdentity(op Operation) bool {
+	i := op.Identity
+	if op.Owner == "" || !phase4ResourceID.MatchString(op.SiteID) || op.DatabaseID != "" || i.Version != 1 || i.Site == nil || i.Site.ID != op.SiteID || i.Site.Status != "active" || (i.Site.Type != "php" && i.Site.Type != "wordpress") || i.Site.PHPVersion == nil || i.PHP == nil || *i.Site.PHPVersion != i.PHP.OriginalVersion || i.PHP.OriginalVersion != "8.3" || i.PHP.DesiredVersion != "8.3" {
+		return false
+	}
+	if i.PHP.OriginalCap < 2 || i.PHP.OriginalCap > 32 || i.PHP.DesiredCap < 2 || i.PHP.DesiredCap > 32 {
+		return false
+	}
+	if f := i.PHP.FailureEventID; f != "" {
+		if !id.Valid(f) || i.PublicationAudit != nil && (f == i.PublicationAudit.IntentEventID || f == i.PublicationAudit.FinalEventID || f == i.PublicationAudit.FailureEventID) {
+			return false
+		}
+	}
+	// Reject fields belonging to another operation kind.
+	expected := OperationIdentity{Version: 1, Site: i.Site, PHP: i.PHP, PublicationAudit: i.PublicationAudit}
+	if !reflect.DeepEqual(i, expected) || len(op.Nonce) != 0 || len(op.Ciphertext) != 0 {
+		return false
+	}
+	if _, err := php.MergeLimits(&i.PHP.DesiredLimits, php.LimitsPatch{}); err != nil {
+		return false
+	}
+	if _, err := php.MergeLimits(&i.PHP.OriginalLimits, php.LimitsPatch{}); err != nil {
+		return false
+	}
+	if !i.PHP.OriginalLimitsPresent && i.PHP.OriginalLimits != (php.Limits{MemoryMB: 256, UploadMB: 64, MaxExecSec: 60}) {
+		return false
+	}
+	return true
+}
+
+func phpSnapshot(ctx context.Context, tx *sql.Tx, siteID string) (Site, *php.Limits, error) {
+	site, err := scanSite(tx.QueryRowContext(ctx, "SELECT "+siteColumns+" FROM sites WHERE id=?", siteID))
+	if err != nil {
+		return site, nil, err
+	}
+	if site.Status != "active" || (site.Type != "php" && site.Type != "wordpress") || site.PHPVersion == nil || *site.PHPVersion != "8.3" {
+		return site, nil, ErrSitePrecondition
+	}
+	limits, err := readPhase4PHPLimits(ctx, tx, siteID)
+	return site, limits, err
+}
+
+func (s *Store) preparePHPSet(ctx context.Context, j Job, r OperationRequest, nonce, ciphertext []byte) (op Operation, err error) {
+	err = s.Tx(ctx, func(tx *sql.Tx) error {
+		if j.Verb != "php.set" || j.ObjectKey != "site:"+r.SiteID || j.CreatedBy == "" || j.State != "queued" || r.PHP == nil || r.PHP.SiteID != r.SiteID || r.PHP.Version != "8.3" || r.DatabaseID != "" || r.UserID != "" || r.WordPress != nil || r.PurgeFiles || r.PurgeDatabases || len(nonce) != 0 || len(ciphertext) != 0 {
+			return ErrSiteInvalid
+		}
+		site, original, e := phpSnapshot(ctx, tx, r.SiteID)
+		if e != nil {
+			return e
+		}
+		var active int
+		if e = tx.QueryRowContext(ctx, "SELECT count(*) FROM sites WHERE status='active'").Scan(&active); e != nil {
+			return e
+		}
+		computed := phpcapacity.ChildrenCap(phpcapacity.TotalMemoryMB(), active)
+		var savedRaw sql.NullString
+		if e = tx.QueryRowContext(ctx, "SELECT (SELECT value_json FROM settings WHERE key=?)", phpLimitsKey(r.SiteID)).Scan(&savedRaw); e != nil {
+			return e
+		}
+		originalCap := computed
+		if savedRaw.Valid {
+			var saved storedPHPLimits
+			if e = json.Unmarshal([]byte(savedRaw.String), &saved); e != nil {
+				return e
+			}
+			if saved.MaxChildren != nil {
+				originalCap = *saved.MaxChildren
+			}
+		}
+		desired, e := php.MergeLimits(original, r.PHP.Limits)
+		if e != nil {
+			return e
+		}
+		originalTuple, e := php.MergeLimits(original, php.LimitsPatch{})
+		if e != nil {
+			return e
+		}
+		identity := OperationIdentity{Version: 1, Site: &site, PHP: &PHPOperationIdentity{OriginalCap: originalCap, DesiredCap: computed, OriginalVersion: *site.PHPVersion, DesiredVersion: r.PHP.Version, OriginalLimits: originalTuple, OriginalLimitsPresent: original != nil, DesiredLimits: desired}}
+		op = Operation{JobID: j.ID, Owner: j.CreatedBy, Kind: PHPSet, SiteID: r.SiteID, Checkpoint: "prepared", Identity: identity}
+		if !validPHPSetIdentity(op) {
+			return ErrSiteInvalid
+		}
+		if e = operationBlocked(ctx, tx, op); e != nil {
+			return e
+		}
+		if e = insertJob(ctx, tx, j); e != nil {
+			return e
+		}
+		op.Updated = s.clock.Now()
+		op.Expires = op.Updated + OperationTTLMillis
+		raw, e := json.Marshal(identity)
+		if e != nil {
+			return e
+		}
+		_, e = tx.ExecContext(ctx, `INSERT INTO phase4_operations(job_id,kind,site_id,checkpoint,identities_json,expires,updated) VALUES(?,?,?,'prepared',?,?,?)`, j.ID, PHPSet, r.SiteID, string(raw), op.Expires, op.Updated)
+		return e
+	})
+	return
+}
+
+func checkPHPSet(ctx context.Context, tx *sql.Tx, op Operation) error {
+	site, limits, err := phpSnapshot(ctx, tx, op.SiteID)
+	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrSitePrecondition) {
+		return ErrSiteConflict
+	}
+	if err != nil {
+		return err
+	}
+	var raw sql.NullString
+	if err = tx.QueryRowContext(ctx, "SELECT (SELECT value_json FROM settings WHERE key=?)", phpLimitsKey(op.SiteID)).Scan(&raw); err != nil {
+		return err
+	}
+	if raw.Valid {
+		var saved storedPHPLimits
+		if err = json.Unmarshal([]byte(raw.String), &saved); err != nil {
+			return err
+		}
+		if saved.MaxChildren != nil && *saved.MaxChildren != op.Identity.PHP.OriginalCap {
+			return ErrSiteConflict
+		}
+	}
+	if !reflect.DeepEqual(site, *op.Identity.Site) || (limits != nil) != op.Identity.PHP.OriginalLimitsPresent || (limits != nil && *limits != op.Identity.PHP.OriginalLimits) {
+		return ErrSiteConflict
+	}
+	return nil
+}
+
+func completePHPSet(ctx context.Context, tx *sql.Tx, op Operation, now int64, claim *JobClaim) error {
+	if claim != nil {
+		return ErrSiteInvalid
+	}
+	if err := checkPHPSet(ctx, tx, op); err != nil {
+		return err
+	}
+	p := op.Identity.PHP
+	if _, err := tx.ExecContext(ctx, "UPDATE sites SET php_version=?,updated=? WHERE id=?", p.DesiredVersion, now, op.SiteID); err != nil {
+		return err
+	}
+	err := writePhase4PHPLimits(ctx, tx, op.SiteID, p.DesiredLimits, p.DesiredCap)
+	if err != nil {
+		return err
+	}
+	return finishOperation(ctx, tx, op, now, []byte(`{}`))
+}

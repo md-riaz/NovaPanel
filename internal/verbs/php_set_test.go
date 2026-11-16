@@ -1,24 +1,28 @@
 package verbs
 
 import (
-	"novapanel/internal/store"
+	"encoding/json"
+	php "novapanel/internal/render/php"
 	"testing"
 )
 
 func TestPHPSetValidation(t *testing.T) {
-	id := "01ARZ3NDEKTSV4RRFFQ69G5FAV"
-	n := 0
 	for _, tc := range []struct {
-		args  phpSetArgs
+		raw   string
 		valid bool
 	}{
-		{phpSetArgs{SiteID: id, Version: "8.3"}, true},
-		{phpSetArgs{SiteID: id, Version: "8.2"}, false},
-		{phpSetArgs{SiteID: id}, false},
-		{phpSetArgs{SiteID: id, Version: "8.3", Limits: store.PHPLimits{MemoryMB: &n}}, false},
+		{`{"site_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","version":"8.3"}`, true},
+		{`{"site_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","version":"8.2"}`, false},
+		{`{"site_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV"}`, false},
+		{`{"site_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","version":"8.3","limits":{"memory_mb":0}}`, false},
 	} {
-		if (tc.args.Validate() == nil) != tc.valid {
-			t.Fatalf("validation %+v", tc.args)
+		var args phpSetArgs
+		err := json.Unmarshal([]byte(tc.raw), &args)
+		if err == nil {
+			_, err = php.MergeLimits(nil, args.request.Limits)
+		}
+		if (err == nil) != tc.valid {
+			t.Fatalf("validation %s", tc.raw)
 		}
 	}
 }

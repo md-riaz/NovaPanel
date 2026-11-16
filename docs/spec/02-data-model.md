@@ -24,6 +24,8 @@ number during development.
 | `0005_sites` | Phase-3 sites, domains, certs |
 | `0006_databases` | Phase-4 databases |
 | `0007_session_expiry_indexes` | session-expiry GC indexes (F4 hardening) |
+| `0008_phase4` | durable operations and WordPress bindings |
+| `0009_php_first_create` | PHP operation kinds and account provenance |
 
 Tables are grouped by the phase that introduces them; a later phase's `ALTER`/new table ships as a new
 migration. `0001_init.sql` creates the Phase-1 core (identity, jobs, audit, secrets, settings).
@@ -318,12 +320,14 @@ CREATE TABLE redirects (
 ACME account key + registration are stored in `secrets` (name `acme:account`). TLS cert/key live on
 disk under `tls_dir/<fqdn>/` (versioned dir + symlink swap, B-D9), not in the DB.
 
-## Phase 4 — databases
+## Phase 4 databases, PHP limits and bounded recovery
+
+Reserve `0006_phase4.sql` only if still the next unused migration at authorized implementation time; otherwise allocate the next number without editing 0001 through 0005. Register its actual computed hash in hashes.json. Replace the unimplemented Phase 4 DDL section with this DDL. Existing sites and shipped migrations remain unchanged.
 
 ```sql
 CREATE TABLE databases (
   id        TEXT PRIMARY KEY,
-  site_id   TEXT REFERENCES sites(id) ON DELETE SET NULL, -- NULL = detached DB (valid). Verb policy: site.delete REFUSES while a DB is attached (phase-4); SET NULL is a defensive backstop only. site-bound create/delete also lock site:<site_id> (F20.7).
+  site_id   TEXT REFERENCES sites(id) ON DELETE SET NULL, -- NULL = detached DB (valid). Verb policy: site.delete refuses attached databases unless explicit purge_databases=true; SET NULL is a defensive backstop only. site-bound create/delete also lock site:<site_id> (F20.7).
   name      TEXT NOT NULL UNIQUE,    -- ^[a-z][a-z0-9_]{1,46}$ (generated)
   engine    TEXT NOT NULL DEFAULT 'mariadb',
   created   INTEGER NOT NULL
@@ -339,9 +343,53 @@ CREATE TABLE db_users (
 -- Exactly one owner per database: database.create inserts owner=1, dbuser.create owner=0, dbuser.delete
 -- refuses the owner (delete the database to remove it). rotate_password{db_id} rotates the owner.
 CREATE UNIQUE INDEX idx_db_users_owner ON db_users(db_id) WHERE owner=1;
+CREATE TABLE wordpress_bindings (
+  site_id TEXT PRIMARY KEY REFERENCES sites(id) ON DELETE CASCADE,
+  db_id TEXT NOT NULL UNIQUE,
+  FOREIGN KEY(db_id) REFERENCES databases(id)
+);
+CREATE TABLE phase4_operations (
+  job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE RESTRICT,
+  kind TEXT NOT NULL CHECK(kind IN ('database_create','database_rotate','dbuser_create','wordpress_install','site_delete','database_delete','dbuser_delete','php_set')),
+  site_id TEXT,
+  db_id TEXT,
+  checkpoint TEXT NOT NULL CHECK(checkpoint IN ('prepared','teardown_started','db_applied','config_published','verified','done','expired')),
+  identities_json TEXT NOT NULL,
+  reconciled INTEGER NOT NULL DEFAULT 0 CHECK(reconciled IN (0,1)),
+  nonce BLOB,
+  ciphertext BLOB,
+  expires INTEGER NOT NULL,
+  updated INTEGER NOT NULL,
+  CHECK((nonce IS NULL)=(ciphertext IS NULL)),
+  CHECK(checkpoint <> 'done' OR ciphertext IS NULL)
+);
+CREATE INDEX idx_phase4_operations_expiry ON phase4_operations(expires,job_id);
+
 ```
-DB-user passwords are **not** stored (show-once via the F6 claim; the app keeps them in its own
-`wp-config.php`). The MariaDB admin path uses `unix_socket` (no stored admin password).
+
+Each database and its owner account are inserted atomically; the partial unique index enforces at most one owner. WordPress bindings are validated against the site's database in typed transactions. PHP limits and the computed child cap are stored under site:php_limits:<id> as specified above.
+
+**PHP journal amendment (delegated architecture decision):** The PHP settings mutation needs its own durable operation identity to recover the original and desired state under the site lock; a generic job cannot safely establish that recovery. The Phase 4 `0006_phase4.sql` migration is unshipped on main, so its kind CHECK is amended narrowly to add `php_set`, preserving every existing kind and schema. This one amendment supersedes the supported maintenance policy's no-SQL-migration direction for PHP only; it never authorizes editing a shipped migration. If 0006 ships before integration, stop and coordinate an additive migration instead. PR #85 independently proposes a different 0006 and its numbering and hashes must be coordinated before either merge.
+
+For `php_set`, bind immutable `site_id`, original and desired PHP version and the complete original and desired `memory_mb`, `upload_mb`, `max_exec_sec` tuples in strictly validated, secret-free `identities_json`; partial request limits are merged and validated before durable preparation. Do not use this kind for site creation or other lifecycle mutations. Persist the intent at `prepared` before effects, with the existing expiry and original job identity. Under the same ordered site lock and recovery admission, use `config_published` only after atomic configuration publication, `verified` only after F8 validation/reload and probes, then `done`; F8 failure reverts and verifies the original configuration, or retains unresolved recovery and blocks conflicting mutation. Recovery uses the original journal and exact snapshots, never a reconstructed request. In the terminal SQLite transaction atomically commit the desired PHP metadata, job result/state and journal completion, with publication-audit state as required by the supported maintenance policy. F11 audit is file-first and mirrored/replayed with stable IDs: audit file writes and SQLite are not one atomic transaction; intent/final acknowledgement gates and in-doubt recovery remain mandatory. This is a contract for future implementation, not evidence of runtime or security acceptance.
+
+No plaintext password column is added. The operation payload is F12-sealed and contains generated credentials, salts, bound identities and desired protected-config bytes or equivalent typed fields. site_id/db_id are historical operation identifiers, deliberately not cascading FKs. The journal cannot disappear when its resource is removed. Nonsecret checkpoints are `prepared`, `db_applied`, `config_published`, `verified`, `done`, `expired`; delete uses `prepared`, `db_applied`, `done`. There is no separately committed claim_published state. Each mutation first ensures the recorded postcondition, then records its checkpoint, so a crash between effect and checkpoint reuses the same credential and identifiers. A DB transaction is not held during external IO. Commit verified metadata, completed job state/result, F19 sealed claim, journal done and recovery nonce/ciphertext removal in one SQLite transaction. For deletes the same transaction omits the claim. Rollback exposes none of these changes. Integrate this typed terminal method with the existing completion-audit boundary and preserve its consumed-claim exception. A done operation never republishes a consumed/expired claim. This requires a typed atomic store method, not separate best-effort writes.
+
+Set operation expiry at preparation +24 hours, not extended by retries. Destructive teardown records `teardown_started` before its first irreversible effect; once recorded, the journal remains in the roll-forward set and is exempt from terminal expiry until all external objects and SQLite rows are removed. Unstarted deletion may expire normally. Before each external mutation/restart, check expiry using the injected clock. Active operation records block conflicting mutation admission even while a crashed/failed job awaits recovery. Do not permit jobs retention deletion while a journal references it. Clear nonce/ciphertext at successful claim publication, or at verified terminal cleanup for jobs without claims. On startup before mutation admission opens, and once per minute thereafter, select at most 100 expired unfinished operations with the SQL below. In one transaction per bounded batch, set checkpoint=expired and fail only their still-unfinished jobs with code=interrupted and a sanitized expiry message. Preserve sealed credentials if application may have occurred, until a claim is published or non-application is proven. Never alter a done operation or completed job. Expired, unreconciled operations block only their conflicting resources until an authorized reconcile verifies a consistent or explicitly failed non-serving disposition and sets reconciled=1. Done and reconciled expired tombstones do not block admission. Use precondition_failed for bound-DB/primary-user refusals, not_found for unknown initial targets, conflict for ownership/membership/collision changes, locked for active conflicting operation, interrupted for expired recovery, and agent_error for integrity/custody failures. Ciphertext removal is logical erasure; WAL/backups may retain old encrypted bytes, never plaintext. Keep bounded nonsecret tombstones until normal job retention removes them via explicit deletion ordering, after reconciliation where needed. Expiry during inconsistent DB/config state leaves the site failed and non-serving; a fresh authorized rotation with a new sealed password must reconcile DB/config before reactivation. Do not delete the last recoverable ciphertext early while continuing the old operation. No permanent credential vault, automatic renewed expiry or rollback to guessed credentials.
+
+`identities_json` is canonical, validated nonsecret JSON bound immutably to job_id and kind. It contains the resource IDs, validated MariaDB names and exact account username/host pairs, original optional site ID and deletion flags. Do not include credentials. `database_delete` snapshots its DB and every managed account; `dbuser_delete` snapshots its parent DB, target account and primary/binding refusal checks. `site_delete` snapshots all attached managed DB/accounts under its site lock before effects. Retain this same journal after deleting resource rows. A restart may ensure absence only of these recorded identities; never re-resolve an unknown name to adopt another resource. No second scheduler or permanent secret store. Delete checkpoints commit after each ensure-absent effect, and final resource-row cleanup, job done and journal done commit atomically. No claim is created for deletion.
+
+Expiry query, bound now is injected unix-ms, with the terminal filter applied before the limit:
+
+```sql
+SELECT job_id FROM phase4_operations INDEXED BY idx_phase4_operations_expiry
+WHERE expires <= ? AND checkpoint NOT IN ('done','expired')
+  AND NOT (kind IN ('site_delete','database_delete','dbuser_delete')
+           AND checkpoint IN ('teardown_started','db_applied'))
+ORDER BY expires,job_id LIMIT 100;
+```
+
+Preparation expiry is exactly now + 86400000 ms. Claim delivery TTL starts at actual atomic publication per F19, not preparation. An expired operation cannot continue old external mutations; begun destructive teardown remains unexpired and rolls forward. A fresh authorized operation may reconcile only after resolving the old blocker under the complete lock set.
 
 ## Phase 5 — deploys, cron, ssh
 

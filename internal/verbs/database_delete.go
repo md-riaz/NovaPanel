@@ -9,7 +9,10 @@ import (
 	"novapanel/internal/database"
 	"novapanel/internal/jobs"
 	"novapanel/internal/rpc"
+	"novapanel/internal/store"
 )
+
+type databaseTeardownRuntime struct{ agent *agent.Agent }
 
 type databaseDeleteJob struct {
 	DBID   string  `json:"db_id"`
@@ -33,9 +36,18 @@ func databaseDelete(ctx context.Context, a *agent.Agent, args any) (any, error) 
 	if e != nil {
 		return nil, e
 	}
-	return a.Jobs.Enqueue(ctx, "database.delete", databaseDeleteJob{DBID: d.ID, Name: d.Name, SiteID: d.SiteID}, "db:"+d.ID)
+	site := ""
+	if d.SiteID != nil {
+		site = *d.SiteID
+	}
+	return a.Jobs.EnqueueOperation(ctx, store.OperationRequest{Kind: store.DatabaseDelete, DatabaseID: d.ID, DatabaseName: d.Name, SiteID: site}, nil)
 }
 func databaseDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error) {
+	if op, e := a.Store.LoadOperation(ctx, j.ID); e == nil {
+		return (databaseTeardownRuntime{a}).databaseDeleteDurable(ctx, j, op)
+	} else if !errors.Is(e, sql.ErrNoRows) {
+		return e
+	}
 	durable, err := a.Store.GetJob(ctx, j.ID)
 	if err != nil {
 		return jobs.ErrRetry
@@ -138,6 +150,47 @@ func databaseDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err e
 	}
 	if mismatch {
 		return rpc.Errf("conflict", "Database provenance owner mismatch")
+	}
+	j.Result = json.RawMessage(`{}`)
+	return nil
+}
+
+func (r databaseTeardownRuntime) databaseDeleteDurable(ctx context.Context, j *jobs.Job, op store.Operation) error {
+	a := r.agent
+	if op.Kind != store.DatabaseDelete || op.DatabaseID == "" || j.ObjectKey != "db:"+op.DatabaseID {
+		return rpc.Errf("precondition_failed", "Invalid deletion journal")
+	}
+	if op.Checkpoint == "db_applied" {
+		return nil
+	}
+	if err := databaseReady(ctx, a.Exec); err != nil {
+		return err
+	}
+	if err := database.CheckSchemaDelete(ctx, a.Exec, op.Identity.Database.Name, op.DatabaseID); err != nil {
+		if errors.Is(err, database.ErrConflict) {
+			return rpc.Errf("conflict", "Database provenance conflict")
+		}
+		return err
+	}
+	if op.Checkpoint == "prepared" {
+		if err := a.Store.CheckpointOperation(ctx, j.ID, "prepared", "teardown_started"); err != nil {
+			return err
+		}
+		op.Checkpoint = "teardown_started"
+	}
+	if op.Checkpoint != "teardown_started" {
+		return rpc.Errf("precondition_failed", "Invalid deletion checkpoint")
+	}
+	for _, u := range op.Identity.Accounts {
+		if err := database.ManagedDeleteUser(ctx, a.Exec, u.Username, u.ID); err != nil {
+			return errors.Join(err, jobs.ErrRetry)
+		}
+	}
+	if err := database.ManagedDelete(ctx, a.Exec, op.Identity.Database.Name, op.DatabaseID, nil); err != nil {
+		return errors.Join(err, jobs.ErrRetry)
+	}
+	if err := a.Store.CheckpointOperation(ctx, j.ID, "teardown_started", "db_applied"); err != nil {
+		return errors.Join(err, jobs.ErrRetry)
 	}
 	j.Result = json.RawMessage(`{}`)
 	return nil

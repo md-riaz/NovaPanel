@@ -126,18 +126,15 @@ func EnsureSite(ctx context.Context, r runner.Runner, sites, _ /* ACME is owned 
 	if e != nil || gid <= 0 {
 		return rpcerr.Errf("precondition_failed", "Invalid site group")
 	}
-	out, code, e = run("/usr/bin/getent", "group", "www-data")
+	// Use the same validated nginx group for ownership and execution policy.
+	if uint64(uid) > uint64(^uint32(0)) || uint64(gid) > uint64(^uint32(0)) {
+		return rpcerr.Errf("precondition_failed", "Invalid site account")
+	}
+	_, webGID, e := newSiteRunner(ctx, r, sites, name, uint32(uid), uint32(gid))
 	if e != nil {
 		return e
 	}
-	fields = strings.Split(strings.TrimSpace(string(out)), ":")
-	if code != 0 || len(fields) != 4 || fields[0] != "www-data" {
-		return rpcerr.Errf("agent_error", "Cannot resolve nginx group")
-	}
-	webgid, e := strconv.Atoi(fields[2])
-	if e != nil || webgid <= 0 {
-		return rpcerr.Errf("agent_error", "Invalid nginx group")
-	}
+	webgid := int(webGID)
 	out, code, e = run("/usr/bin/getent", "group", "adm")
 	if e != nil {
 		return e

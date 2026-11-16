@@ -9,6 +9,11 @@ import (
 // AddDomain publishes automatic follow-up without taking the parent's site lock
 // again. SQL commits the domain and child before audit/wakeup or external apply.
 func (q *Queue) AddDomain(ctx context.Context, d store.Domain, parentID string) (store.Domain, error) {
+	ctx, release, err := q.AdmitMutation(ctx)
+	if err != nil {
+		return store.Domain{}, err
+	}
+	defer release()
 	if err := q.healthy(); err != nil {
 		return store.Domain{}, err
 	}

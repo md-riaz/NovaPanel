@@ -986,6 +986,16 @@ For the public API, the `202` body includes the `claim` so a token caller can re
   reports the job done. If the page is lost before claiming, the secret is recovered only by re-running
   the verb (rotate/recreate) — never re-read. This is the single browser-side claim path for **every**
   `+ claim(…)` verb.
+
+### Phase 4 ordered lock and recovery amendment
+
+Canonical existing-resource keys are site:<persisted_site_id> and db:<persisted_db_id>; create reservation keys are site:<validated_name> or db:<generated_name>. php.set uses site:<site_id>. Every DB operation resolves its parent database and optional persisted site after authorization, never from client-provided guessed bindings. For dbuser operations resolve dbuser_id to parent database first.
+
+Keep the existing jobs.object_key as the canonical primary/audit key. Add one narrow shared lock-set helper used by DB operations, WordPress install, PHP/site mutations and site.delete: collect all required keys, deduplicate, acquire site keys first in bytewise order, then DB keys in bytewise order, release in reverse order. Hold them from post-resolution revalidation through effect, checkpoint and final metadata publication. Never wait for a site lock while holding a DB lock. Do not recursively acquire the queue's already-held primary lock; extend keyedlock admission to acquire the full approved set once, rather than layering incompatible helper locks. Non-Phase-4 jobs retain a singleton set.
+
+For a DB attached to a site the set includes site:<id> and db:<id>. Detached DBs need only db:<id>. Before locks, reserve all generated ULIDs and names in trusted durable job identity metadata. WordPress creation acquires site:<name>, site:<reserved_id>, db:<generated_name> and db:<reserved_id> together, site category first and bytewise within each category, before any resource creation. Never add an earlier site key while holding a reservation/DB lock. If row allocation requires an initial reservation lock, release it, acquire the full ordered set and revalidate durable creating ownership before any external effect. DB create uses its generated name and persisted-ID alias together with its optional site key. Later operations share persisted-ID keys. Admission must persist resolved IDs/names in trusted durable arguments, and worker execution rechecks parent membership under locks. For site.delete enumerate attached DBs only after holding its site lock; attachment/create also requires that site lock. Acquire the resulting DB set in order and revalidate before any effect. If a plan's pre-resolved memberships changed, release all and fail conflict rather than acquire an out-of-order lock. This is a bounded lock-set extension, not a new workflow scheduler. Recovery obtains exactly the same protection from the journal identities.
+
+F19 is unchanged. Phase 4 terminal publication uses one SQLite transaction for metadata, job done/result, sealed claim, journal done and recovery ciphertext removal. Consumed or expired claims never regenerate. See 02 for the fixed operation lifetime; it is not the claim TTL.
 - **An applied secret is never lost before its claim is published (head ruling, 2026-11-05; corrected
   2026-11-06).** A rotate (`database.rotate_password`) mints a new password sealed (F12), applies it with
   `ALTER USER`, and publishes the F19 claim. The `ALTER` can land and then lose its reply; the bug to
@@ -1058,8 +1068,7 @@ ownership is provable on the far side of the transaction boundary.
    roll-forward set) — this is the **replay trigger**. **Ownership, however, is keyed to the durable
    resource id, not the job id** (rule 2): the create job, its replay, and the later *delete* job are
    three different `jobs.id` but share the one resource id, so that id — never the name, never a job id —
-   is what proves far-side ownership across the whole lifecycle. No `prepared` state or operation table
-   is added to 02.
+   is what proves far-side ownership across the whole lifecycle. The durable `phase4_operations` journal and `prepared` state supplement job authority under 02, superseding the former prohibition on an operation table.
 2. **Provenance-before-object, under the per-name lock.** Record a durable provenance row **in the
    external store** — `(kind, name, obj_id, phase)`, where **`obj_id` is the owning SQLite resource's
    stable id** (not the job id) — **before** creating the object, and create the object only after a
@@ -1114,7 +1123,7 @@ ownership is provable on the far side of the transaction boundary.
    reserves the freed name under *its own* `obj_id`, which a stale delete can never match.
    **Delete ordering & roll-forward (head ruling, 2026-11-06).** The full order is: mark `phase=deleting`
    → `DROP` by `obj_id` → remove the provenance row → **remove the SQLite owning row** → commit the job
-   `done`. A **transient** SQL/lock failure at any step is **not** terminal — the delete **rolls forward**
+   `done`. A write-ahead `teardown_started` checkpoint records the destructive point of no return; begun teardown is exempt from terminal expiry under 02. A **transient** SQL/lock failure at any step is **not** terminal — the delete **rolls forward**
    (it is idempotent ensure-absent, F7), and a canonical `jobs.step` (`delete_started`/`deleting`) keeps
    it in the roll-forward set until **both** the external teardown **and** the SQLite owning-row removal
    have completed. So a delete is **never terminalized with teardown incomplete**, and the "terminalized
@@ -1255,3 +1264,4 @@ fresh ruling — it is covered here, with power-loss/VM acceptance of the residu
 Phases instantiate this: Phase 4 with a MariaDB control schema (see `phases/phase-4.md`), Phase 7 with
 the provider's own record keyed by the resource `obj_id`. Power-loss/VM acceptance of the window stays deferred (#90);
 the contract itself is verified by the crash-safety replay test (F7) against a simulated mid-op stop.
+

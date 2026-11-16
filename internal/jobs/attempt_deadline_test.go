@@ -52,7 +52,7 @@ func TestAttemptDeadlineBoundsLockWait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unlock, err := q.locks.lock(ctx, "object")
+	unlock, err := q.locks.lockContext(ctx, "object")
 	if err != nil {
 		t.Fatal(err)
 	}

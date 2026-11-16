@@ -16,7 +16,7 @@ func TestDatabaseLockSharesWorkerKeyAndHonorsContext(t *testing.T) {
 	defer unlock()
 	wait, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
-	if release, err := q.locks.lock(wait, "db:example"); !errors.Is(err, context.DeadlineExceeded) {
+	if release, err := q.locks.lockContext(wait, "db:example"); !errors.Is(err, context.DeadlineExceeded) {
 		if release != nil {
 			release()
 		}
