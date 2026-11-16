@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"novapanel/internal/agent"
+	"novapanel/internal/database"
 	"novapanel/internal/id"
 	"novapanel/internal/jobs"
 	"novapanel/internal/php"
@@ -21,6 +22,17 @@ type wpInstallArgs struct {
 	AdminEmail    string `json:"admin_email"`
 }
 
+type wpInstallJobArgs struct {
+	SiteID string `json:"site_id"`
+}
+
+func (v *wpInstallJobArgs) Validate() error {
+	if !id.Valid(v.SiteID) {
+		return rpc.Errf("invalid_argument", "Invalid site ID")
+	}
+	return nil
+}
+
 func (v *wpInstallArgs) Validate() error {
 	if !id.Valid(v.SiteID) {
 		return rpc.Errf("invalid_argument", "Invalid site ID")
@@ -29,7 +41,7 @@ func (v *wpInstallArgs) Validate() error {
 }
 
 func init() {
-	rpc.Register(rpc.Verb{Name: "wp.install", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, NewArgs: func() any { return &wpInstallArgs{} }, ObjectKey: func(args any) string { return "site:" + args.(*wpInstallArgs).SiteID }, Run: wpInstall, Exec: wpInstallExec})
+	rpc.Register(rpc.Verb{Name: "wp.install", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, NewArgs: func() any { return &wpInstallArgs{} }, NewJobArgs: func() any { return &wpInstallJobArgs{} }, JobObjectKey: func(args any) string { return "site:" + args.(*wpInstallJobArgs).SiteID }, ObjectKey: func(args any) string { return "site:" + args.(*wpInstallArgs).SiteID }, Run: wpInstall, Exec: wpInstallExec})
 }
 
 func wpInstall(ctx context.Context, a *agent.Agent, args any) (any, error) {
@@ -83,6 +95,36 @@ func wpInstall(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	return a.Jobs.EnqueueWordPress(ctx, store.WordPressReservation{SiteID: site.ID, DomainID: domain.ID, Input: wordpress.InstallInput{SitesRoot: a.Cfg.SitesRoot, SiteName: site.Name, PrimaryDomain: domain.FQDN, UID: uid, GID: gid, Locale: wordpress.ApprovedArtifacts().Locale, Administrator: wordpress.Administrator{Title: v.Title, Username: v.AdminUsername, Email: v.AdminEmail}}, Evidence: evidence}, credentials)
 }
 
-func wpInstallExec(context.Context, *agent.Agent, *jobs.Job) error {
-	return rpc.Errf("unsupported", "WordPress installation is unavailable")
+func wpInstallExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
+	op, err := a.Store.LoadOperation(ctx, j.ID)
+	if err != nil {
+		return jobs.ErrRetry
+	}
+	if op.Kind != store.WordPressInstall || j.ObjectKey != "site:"+op.SiteID {
+		return rpc.Errf("forbidden", "Job binding mismatch")
+	}
+	if err = a.Store.CheckOperation(ctx, j.ID); err != nil {
+		return err
+	}
+	credentials, err := a.Jobs.OpenWordPressCredentials(ctx, j.ID)
+	if err != nil {
+		return jobs.ErrRetry
+	}
+	if op.Checkpoint == "prepared" {
+		if err = php.VerifyUser(ctx, a.Exec, a.Cfg.SitesRoot, op.Identity.WordPress.Input.SiteName, op.SiteID); err != nil {
+			return err
+		}
+		if err = databaseReady(ctx, a.Exec); err != nil {
+			return err
+		}
+		account := op.Identity.Accounts[0]
+		if err = database.ManagedCreate(ctx, a.Exec, op.DatabaseID, account.ID, op.Identity.Database.Name, account.Username, credentials.DatabasePassword); err != nil {
+			return jobs.ErrRetry
+		}
+		if err = a.Store.CheckpointOperation(ctx, j.ID, "prepared", "db_applied"); err != nil {
+			return jobs.ErrRetry
+		}
+	}
+	// The operation-scoped isolation lifetime is not available until #90.
+	return jobs.ErrRetry
 }

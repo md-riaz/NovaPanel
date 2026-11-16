@@ -171,6 +171,10 @@ func (q *Queue) enqueueOperation(ctx context.Context, r store.OperationRequest, 
 	}
 	if r.Kind == store.WordPressInstall {
 		j.ObjectKey = "site:" + r.SiteID
+		j.Args, e = json.Marshal(map[string]string{"site_id": r.SiteID})
+		if e != nil {
+			return out, e
+		}
 		r.WordPress.Input.DatabaseID = r.DatabaseID
 		r.WordPress.Input.DatabaseUserID = r.UserID
 	}
