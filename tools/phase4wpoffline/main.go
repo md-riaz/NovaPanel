@@ -48,6 +48,11 @@ func run(ctx context.Context, r runner.Runner) error {
 	if os.Getuid() != 23041 || os.Getgid() != 23041 {
 		return errRuntimeRefused
 	}
+	lock, err := lockLab("/lab")
+	if err != nil {
+		return errRuntimeRefused
+	}
+	defer lock.Close()
 	if labConfig("/lab") != nil || labArtifacts("/lab") != nil {
 		return errRuntimeRefused
 	}

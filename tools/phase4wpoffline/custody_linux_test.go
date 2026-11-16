@@ -121,3 +121,26 @@ func TestLabConfigCustody(t *testing.T) {
 		t.Fatal("accepted symlink")
 	}
 }
+
+func TestLabMaintenanceExclusion(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("root-owned fixture required")
+	}
+	d := t.TempDir()
+	first, err := lockLab(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second, err := lockLab(d); err == nil {
+		second.Close()
+		t.Fatal("concurrent maintenance admitted")
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := lockLab(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second.Close()
+}

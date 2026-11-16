@@ -11,6 +11,21 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// lockLab coordinates with trusted maintenance tooling; raw root can bypass it.
+func lockLab(dir string) (*os.File, error) {
+	fd, err := unix.Open(dir, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, errRuntimeRefused
+	}
+	f := os.NewFile(uintptr(fd), "lab maintenance lock")
+	var st unix.Stat_t
+	if unix.Fstat(fd, &st) != nil || st.Uid != 0 || st.Mode&0022 != 0 || unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB) != nil {
+		f.Close()
+		return nil, errRuntimeRefused
+	}
+	return f, nil
+}
+
 // labConfig verifies custody before PHP can interpret the ini at its fixed path.
 // Root is trusted to exclude replacement while the lab runs.
 func labConfig(dir string) error {
