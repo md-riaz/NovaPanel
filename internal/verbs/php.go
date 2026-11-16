@@ -57,8 +57,13 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if op.Kind != store.PHPSet || op.Identity.Site == nil || op.Identity.PHP == nil || j.ObjectKey != "site:"+op.SiteID {
 		return rpc.Errf("precondition_failed", "Invalid PHP operation")
 	}
+	return phpSetEffect(ctx, a, j, op)
+}
+
+func phpSetEffect(ctx context.Context, a *agent.Agent, j *jobs.Job, op store.Operation) error {
+	var err error
 	check := func(c context.Context) error { return a.Jobs.CheckPHPEffect(c, j.ID, op.SiteID) }
-	if err = check(ctx); err != nil {
+	if err := check(ctx); err != nil {
 		return err
 	}
 	site, p := op.Identity.Site, op.Identity.PHP

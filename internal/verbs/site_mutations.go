@@ -248,6 +248,10 @@ func siteUpdateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if e := v.Validate(); e != nil {
 		return e
 	}
+	return siteUpdateEffect(ctx, a, j, v)
+}
+
+func siteUpdateEffect(ctx context.Context, a *agent.Agent, j *jobs.Job, v siteUpdateArgs) error {
 	if v.PrimaryDomainID != nil {
 		durable, e := a.Store.GetJob(ctx, j.ID)
 		if e != nil {
