@@ -66,6 +66,16 @@ func TestPHPSetProductionDispatch(t *testing.T) {
 	}
 	admin := rpc.Caller{Kind: "user", Role: "admin", Session: "admin-session", UserID: "admin-user"}
 	valid := fmt.Sprintf(`{"site_id":%q,"version":"8.3","limits":{"memory_mb":512}}`, sid)
+	update := func(version string) rpc.Reply {
+		return s.Dispatch(rpc.WithCaller(ctx, admin), rpc.Request{Verb: "site.update", Args: json.RawMessage(fmt.Sprintf(`{"site_id":%q,"php_version":%q}`, sid, version))})
+	}
+	if r := update("9.9"); r.OK {
+		t.Fatalf("invalid version accepted: %+v", r)
+	}
+	mixed := s.Dispatch(rpc.WithCaller(ctx, admin), rpc.Request{Verb: "site.update", Args: json.RawMessage(fmt.Sprintf(`{"site_id":%q,"php_version":"8.3","maintenance":true}`, sid))})
+	if mixed.OK || mixed.Code != "unsupported" {
+		t.Fatalf("mixed update must be refused with unsupported: %+v", mixed)
+	}
 	if r := request(admin, valid); r.OK || r.Code != "unsupported" {
 		t.Fatalf("missing runtime dependencies must refuse admission: %+v", r)
 	}
@@ -179,5 +189,22 @@ func TestPHPSetProductionDispatch(t *testing.T) {
 	var obj map[string]any
 	if err = json.Unmarshal(raw, &obj); err != nil || obj["id"] != j.ID || obj["state"] != "queued" {
 		t.Fatalf("status %s %v", raw, err)
+	}
+	// Use a second eligible site so the existing PHP operation cannot lock it.
+	second := "01K8WMXZF57CGNZKX1FZ38DZME"
+	_, err = st.CreateSite(ctx, store.Site{ID: second, Name: "second", Type: "php", Docroot: filepath.Join(t.TempDir(), "second"), PHPVersion: &version}, store.Domain{ID: "01K8WMXZF57CGNZKX1FZ38DZMF", FQDN: "second.example.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = st.SetSiteStatus(ctx, second, "active"); err != nil {
+		t.Fatal(err)
+	}
+	delegated := s.Dispatch(rpc.WithCaller(ctx, admin), rpc.Request{Verb: "site.update", Args: json.RawMessage(fmt.Sprintf(`{"site_id":%q,"php_version":"8.3"}`, second))})
+	result, ok := delegated.Data.(jobs.EnqueueResult)
+	if !delegated.OK || !ok || result.Job.Verb != "php.set" || result.Job.ObjectKey != "site:"+second {
+		t.Fatalf("delegation: %+v", delegated)
+	}
+	if op, err := st.LoadOperation(ctx, result.Job.ID); err != nil || op.Kind != store.PHPSet {
+		t.Fatalf("delegated operation: %+v %v", op, err)
 	}
 }

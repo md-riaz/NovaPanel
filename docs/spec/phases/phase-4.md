@@ -50,7 +50,9 @@ build it.
 **Ruling — `site.create` types and `php_version`.** The Phase-3 `site.create type=php|wordpress`
 `unsupported` refusal is **lifted for `php` in Step 2** and **for `wordpress` in Step 3**. `php_version` on
 `site.create`/`site.update` is **sugar** that delegates to the `php.set` computed-cap path (one code path;
-no separate version/limit logic).
+no separate version/limit logic). For `site.update`, `php_version` must currently be supplied alone;
+combining it with other mutable fields returns `unsupported`. Use separate updates until composite
+recovery is implemented.
 
 **One PR per step** (steps 1 and 2 may each ship on their own), each small and independently
 mergeable — not one 285-file mega-draft. Drive each with `docs/spec/PHASE-DRIVER-PROMPT.md`
@@ -640,7 +642,7 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
 
 ## PHP journal scope amendment
 
-The delegated narrow `php_set` journal-kind decision and lifecycle in [02-data-model](../02-data-model.md) supersede the supported maintenance policy's no-migration direction only for the unshipped Phase 4 kind CHECK. This is not permission to edit shipped migrations. Preserve the existing `php.set{site_id, version, limits?} → job → {}` API; use the original and desired full version/limit snapshots, original job and site lock through F8 publication/probe/revert and recovery, and F11 intent/final audit plus atomic terminal SQLite metadata/job/journal publication. No runtime wiring or acceptance is implied. PR #85 has a competing 0006; coordinate migration numbering and hashes before integration.
+The `php_set` journal-kind decision and lifecycle in [02-data-model](../02-data-model.md) shipped in `0009_php_first_create`, following `0008_phase4`. Preserve the existing `php.set{site_id, version, limits?} → job → {}` API; use the original and desired full version/limit snapshots, original job and site lock through F8 publication/probe/revert and recovery, and F11 intent/final audit plus atomic terminal SQLite metadata/job/journal publication. Shipped migrations remain immutable.
 
 ## Canonical Phase 4 amendment and entry gate
 

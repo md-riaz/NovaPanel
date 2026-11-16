@@ -68,6 +68,7 @@ panel.backup_config{repo_id}                            → job → {snapshot_id
 site.create{name?, type:'static'|'php'|'wordpress', primary_domain, php_version?, wordpress?:{title:string,admin_username:string,admin_email:string}} → job → {site_id}
                                                         # name generated from the domain if omitted
 site.update{site_id, primary_domain_id?:string, php_version?, force_https?:bool, hsts_max_age?:int, maintenance?:bool} → job → {}
+                                                        # php_version alone delegates to php.set; combining it with other mutable fields returns unsupported; use separate updates
 site.delete{site_id, purge_files?:bool=false, purge_databases?:bool=false} → job → {}  # MFA; attached databases require explicit purge_databases=true
 site.list{}                                            → {sites:[{id,name,type,primary_domain,status,php_version}]}
 site.get{site_id}                                       → {site:{…}, domains:[…], redirects:[{id,source,target,code}], cert:{state,not_after}, wordpress_database_id?:string, php_limits:null|{memory_mb,upload_mb,max_exec_sec}}
