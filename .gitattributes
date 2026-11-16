@@ -1,1 +1,2 @@
 internal/wordpress/offline/testdata/* -text
+tools/phase4wpoffline/php.ini -text

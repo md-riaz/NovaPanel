@@ -22,7 +22,7 @@ var errRuntimeRefused = errors.New("offline WordPress runtime refused")
 func verify(ctx context.Context, r runner.Runner) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, errout, code, err := r.Run(ctx, "/usr/local/bin/php", []string{"-n", "-d", "auto_prepend_file=", "-d", "auto_append_file=", "-d", "user_ini.filename=", "-d", "memory_limit=256M", "-d", "display_errors=0", "-d", "log_errors=0", "/lab/bootstrap.php", "core", "verify-checksums", "--version=7.1.4", "--locale=en_US", "--path=/scratch/public", "--skip-plugins", "--skip-themes", "--skip-packages"}, runner.RunOpts{Dir: "/lab/cwd", Env: []string{"LANG=C", "PATH=/usr/local/bin:/usr/bin:/bin", "HOME=/lab/home", "WP_CLI_CONFIG_PATH=/dev/null", "WP_CLI_CACHE_DIR=/scratch/cache", "WP_CLI_PACKAGES_DIR=/lab/packages", "PHP_INI_SCAN_DIR=/lab/empty-ini"}, Groups: []uint32{}, MaxOutput: 16384})
+	out, errout, code, err := r.Run(ctx, "/usr/local/bin/php", []string{"-c", "/lab/php.ini", "/lab/bootstrap.php", "core", "verify-checksums", "--version=7.1.4", "--locale=en_US", "--path=/scratch/public", "--skip-plugins", "--skip-themes", "--skip-packages"}, runner.RunOpts{Dir: "/lab/cwd", Env: []string{"LANG=C", "PATH=/usr/local/bin:/usr/bin:/bin", "HOME=/lab/home", "WP_CLI_CONFIG_PATH=/dev/null", "WP_CLI_CACHE_DIR=/scratch/cache", "WP_CLI_PACKAGES_DIR=/lab/packages", "PHP_INI_SCAN_DIR=/lab/empty-ini"}, Groups: []uint32{}, MaxOutput: 16384})
 	defer clear(out)
 	defer clear(errout)
 	if err != nil || code != 0 || len(out) >= 16384 || len(errout) >= 16384 || !bytes.Contains(out, []byte("Success: WordPress installation verifies against checksums.")) {
@@ -46,6 +46,9 @@ func localConfig() ([]byte, error) {
 
 func run(ctx context.Context, r runner.Runner) error {
 	if os.Getuid() != 23041 || os.Getgid() != 23041 {
+		return errRuntimeRefused
+	}
+	if labConfig("/lab") != nil {
 		return errRuntimeRefused
 	}
 	if err := verify(ctx, r); err != nil {
