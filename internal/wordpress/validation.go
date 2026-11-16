@@ -39,7 +39,12 @@ func validateInput(in InstallInput) error {
 	if in.Locale != ApprovedArtifacts().Locale {
 		return invalid("locale")
 	}
-	a := in.Administrator
+	return ValidateAdministrator(in.Administrator)
+}
+
+// ValidateAdministrator validates the public administrator fields at admission.
+func ValidateAdministrator(a Administrator) error {
+	invalid := func(field string) error { return rpcerr.Errf("invalid_argument", "invalid WordPress %s", field) }
 	if a.Title == "" || len(a.Title) > 200 || !utf8.ValidString(a.Title) || strings.IndexFunc(a.Title, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
 		return invalid("title")
 	}

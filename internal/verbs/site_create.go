@@ -14,17 +14,25 @@ import (
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
 	"novapanel/internal/validate"
+	"novapanel/internal/wordpress"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
+type siteWordPressArgs struct {
+	Title         string `json:"title"`
+	AdminUsername string `json:"admin_username"`
+	AdminEmail    string `json:"admin_email"`
+}
+
 type siteCreateArgs struct {
-	Name          string  `json:"name,omitempty"`
-	Type          string  `json:"type"`
-	PrimaryDomain string  `json:"primary_domain"`
-	PHPVersion    *string `json:"php_version,omitempty"`
-	SiteID        string  `json:"site_id,omitempty"`
+	Name          string             `json:"name,omitempty"`
+	Type          string             `json:"type"`
+	PrimaryDomain string             `json:"primary_domain"`
+	PHPVersion    *string            `json:"php_version,omitempty"`
+	SiteID        string             `json:"site_id,omitempty"`
+	WordPress     *siteWordPressArgs `json:"wordpress,omitempty"`
 }
 
 func (v *siteCreateArgs) Validate() error {
@@ -36,6 +44,14 @@ func (v *siteCreateArgs) Validate() error {
 	}
 	if e := check.Hostname(v.PrimaryDomain); e != nil {
 		return e
+	}
+	if (v.Type == "wordpress") != (v.WordPress != nil) {
+		return rpc.Errf("invalid_argument", "WordPress settings are required only for WordPress sites")
+	}
+	if v.WordPress != nil {
+		if err := wordpress.ValidateAdministrator(wordpress.Administrator{Title: v.WordPress.Title, Username: v.WordPress.AdminUsername, Email: v.WordPress.AdminEmail}); err != nil {
+			return err
+		}
 	}
 	if v.Type != "static" && v.Type != "php" {
 		return rpc.Errf("unsupported", "Site type is not available")
