@@ -4,6 +4,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"os"
 
@@ -13,6 +14,19 @@ import (
 // labConfig verifies custody before PHP can interpret the ini at its fixed path.
 // Root is trusted to exclude replacement while the lab runs.
 func labConfig(dir string) error {
+	return checkLabFiles(dir, map[string]string{"php.ini": "4209f7a922bcc9fe45f4508345fd61313f4ce15e496c6f851a0d69aeae942b42"})
+}
+
+func labArtifacts(dir string) error {
+	return checkLabFiles(dir, map[string]string{
+		"bootstrap.php":  "eafb987a50715504cb89e845e3bc31f296a8e367d5d2ae6c03ca027dd20108cc",
+		"transport.php":  "57b4a7e536323aad601df40bee0ef356c3e2208f12d7292c5a57bbc8a449e91b",
+		"cli.phar":       "ce34ddd838f7351d6759068d09793f26755463b4a4610a5a5c0a97b68220d85c",
+		"checksums.json": "bb718bddf197e0098f05395dd9b228fad70b394926ee9d70a8c6a67cf20781e7",
+	})
+}
+
+func checkLabFiles(dir string, files map[string]string) error {
 	d, err := unix.Open(dir, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return errRuntimeRefused
@@ -22,18 +36,27 @@ func labConfig(dir string) error {
 	if unix.Fstat(d, &ds) != nil || ds.Uid != 0 || ds.Mode&0022 != 0 {
 		return errRuntimeRefused
 	}
-	f, err := unix.Openat(d, "php.ini", unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	for name, want := range files {
+		if err := checkLabFile(d, name, want); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func checkLabFile(d int, name, want string) error {
+	f, err := unix.Openat(d, name, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return errRuntimeRefused
 	}
-	file := os.NewFile(uintptr(f), "php.ini")
+	file := os.NewFile(uintptr(f), name)
 	defer file.Close()
 	var st unix.Stat_t
-	if unix.Fstat(f, &st) != nil || st.Uid != 0 || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Mode&0022 != 0 || st.Nlink != 1 || st.Size > 4096 {
+	if unix.Fstat(f, &st) != nil || st.Uid != 0 || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Mode&0022 != 0 || st.Nlink != 1 || st.Size <= 0 || st.Size > 8<<20 {
 		return errRuntimeRefused
 	}
-	b, err := io.ReadAll(io.LimitReader(file, 4097))
-	if err != nil || sha256.Sum256(b) != [32]byte{0x42, 0x09, 0xf7, 0xa9, 0x22, 0xbc, 0xc9, 0xfe, 0x45, 0xf4, 0x50, 0x83, 0x45, 0xfd, 0x61, 0x31, 0x3f, 0x4c, 0xe1, 0x5e, 0x49, 0x6c, 0x6f, 0x85, 0x1a, 0x0d, 0x69, 0xae, 0xae, 0x94, 0x2b, 0x42} {
+	h := sha256.New()
+	if _, err := io.Copy(h, io.LimitReader(file, (8<<20)+1)); err != nil || hex.EncodeToString(h.Sum(nil)) != want {
 		return errRuntimeRefused
 	}
 	return nil

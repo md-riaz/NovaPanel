@@ -2,4 +2,5 @@
 
 package main
 
-func labConfig(string) error { return errRuntimeRefused }
+func labConfig(string) error    { return errRuntimeRefused }
+func labArtifacts(string) error { return errRuntimeRefused }

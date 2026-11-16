@@ -48,7 +48,7 @@ func run(ctx context.Context, r runner.Runner) error {
 	if os.Getuid() != 23041 || os.Getgid() != 23041 {
 		return errRuntimeRefused
 	}
-	if labConfig("/lab") != nil {
+	if labConfig("/lab") != nil || labArtifacts("/lab") != nil {
 		return errRuntimeRefused
 	}
 	if err := verify(ctx, r); err != nil {

@@ -1,2 +1,4 @@
 internal/wordpress/offline/testdata/* -text
 tools/phase4wpoffline/php.ini -text
+tools/phase4wpoffline/bootstrap.php -text
+tools/phase4wpoffline/transport.php -text
