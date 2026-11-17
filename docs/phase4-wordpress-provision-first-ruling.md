@@ -10,15 +10,15 @@ The durable foundation (#87) seals the WordPress install operation's reservation
 
 ### Phase 1 — `site.create{type:'wordpress', wordpress:{title,admin_username,admin_email}, primary_domain, name?}`
 
-Provisions the site exactly as a `php` site does today (Step 2, merged): create the OS account and FPM pool, which allocates the numeric UID/GID through `useradd`, and persist the site row with `type='wordpress'` and an install state of `pending`. Validate the `wordpress` object shape here (already committed: `138b889`) and persist the administrator identity (title, username, email) with the site so Phase 2 does not re-accept it from the client.
+Provisions the site exactly as a `php` site does today (Step 2, merged): create the OS account and FPM pool, which allocates the numeric UID/GID through `useradd`, and persist the site row with `type='wordpress'` and an install state of `pending`. Validate the `wordpress` object shape here (already committed: `138b889`) so a malformed administrator (bad email, reserved username) is rejected before any account is provisioned. The validated administrator identity is not yet given a queryable site column, so Phase 2 re-accepts it on the `wp.install` call rather than reading it back; both verbs are `MinRole: Admin`, so this is not a trust downgrade. Persisting the administrator identity in Phase 1 and reducing `wp.install` to `{site_id}` alone is a tracked hardening (needs a schema column), not a correctness gap.
 
 Result: `{site_id}`. No F19 claim is produced in Phase 1 (amends `03-verb-shapes.md`, which previously folded the claim into `site.create`). A `wordpress` site in `pending` install state is a provisioned account with no WordPress files.
 
-### Phase 2 — `wp.install{site_id}`
+### Phase 2 — `wp.install{site_id, title, admin_username, admin_email}`
 
 Admits and runs the WordPress install operation against the already-provisioned account. Steps:
 
-1. Resolve the provisioned account's real UID/GID (from the account, the same lookup `php` uses) and the persisted administrator identity. Refuse with `precondition_failed` if the site is not a `wordpress` site in `pending` install state, or if the account is missing.
+1. Resolve the provisioned account's real UID/GID (from the account, the same lookup `php` uses) and accept the administrator identity on the call (same shape Phase 1 validated). Refuse with `precondition_failed` if the site is not a `wordpress` site in `pending` install state, or if the account is missing.
 2. Obtain verified `ArtifactEvidence` by staging and verifying the pinned artifacts (`wordpress.VerifyStaged`). The staging source is contract-selected:
    - Lab/offline builds (`wordpress_offline_lab`): the pinned fixtures via `internal/wordpress/offline` (`Resolve`), so Phase 2 admission and the full checkpoint machine are buildable and testable now with zero network.
    - Production: a download-then-verify staging step. This production staging path is deferred to the privileged-VM finish (#90); until it exists, `wp.install` in a production build returns `unsupported` for the staging step, never a fabricated evidence struct.
@@ -38,6 +38,6 @@ The sealed-reservation, claim, recovery, conflict, and locking machinery (`Enque
 ## Build order
 
 1. Phase 1 `site.create type=wordpress` provisioning (reuse the php path) and the `pending` install state.
-2. `wp.install{site_id}` Phase 2: lab artifact staging/verify, reservation build with resolved UID+evidence, `EnqueueWordPress`, checkpoint drive with live WP-CLI gated.
+2. `wp.install{site_id, title, admin_username, admin_email}` Phase 2: lab artifact staging/verify, reservation build with resolved UID+evidence, `EnqueueWordPress`, checkpoint drive with live WP-CLI gated.
 3. rotate↔wp-config leg (gated existing-site write), destructive-op guard.
 4. Tests with the fake runner and the offline fixtures closing Verification rows 5-6, plus checkpoint recovery and the rotate two-store test. Production download-staging and live WP-CLI execution deferred to #90.
