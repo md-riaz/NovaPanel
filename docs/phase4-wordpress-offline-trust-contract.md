@@ -30,6 +30,16 @@ Protected effects additionally require the [managed process lifetime contract](p
 
 ## Offline acquisition boundary remains closed
 
+Ruling 9 selects a lab-only fixture resolver with an exact URL and SHA-256 allowlist, no network fallback, and refusal of unknown or modified fixtures. It is unavailable in builds without the `wordpress_offline_lab` tag. This decision does not by itself connect the resolver to WP-CLI's requests or approve runtime execution; the request-routing integration, cache preload, CLI ini and independent review remain required.
+
+The tagged dependency lab uses a Linux amd64 seccomp filter that synchronizes across its threads before launch and is inherited by PHP. It refuses socket creation, network operations, io_uring creation and descriptor duplication through pidfd; an unavailable filter or unsupported platform refuses the lab. The checksum transport rechecks the pinned response on each request. This does not attest filesystem custody or authorize the runtime consumer, and production execution is not enabled by this lab.
+
+The lab has a candidate fixed `php.ini`, checked for root ownership, no symlink, non-writable group/other modes and exact bytes before lab execution. Trusted root must exclude replacement during that execution. This candidate has not received independent review or PHP compatibility acceptance and is not the production ini; fixture and bootstrap custody are still separate prerequisites.
+
+The lab also checks the fixed PHAR, checksum response, bootstrap and transport as root-owned regular files under the same no-follow directory and against fixed hashes before launch. Trusted root must exclude replacement across the subsequent PHP opens. This is not a held-descriptor execution path, signature acceptance, ZIP extraction custody, or a production authorization.
+
+The lab takes an exclusive nonblocking flock on the root-owned `/lab` directory before custody checks and holds it until its work ends. Cooperative trusted maintenance must acquire that same directory lock before changing files or relocating the lab; independent privileged operators remain trusted to honor the exclusion, including against mount or directory replacement. The lock does not constrain hostile root and does not substitute for the production managed lifetime owner.
+
 Retained ZIP/checksum bytes alone are not a WP-CLI cache implementation. Before a network-none runtime lab, approve and test the pinned PHAR's download-cache preload format and a fixture response mechanism for the unchanged official checksum request. Fixture routing must be lab-only, pinned to the exact official URL/version/locale and exact retained response bytes, reject all other requests, and leave upstream source and production TLS verification unchanged. No generic HTTP hook, ambient proxy or arbitrary transport override is approved by this document. Until that concrete mechanism and PHP ini are reviewed, artifact validation and static planning may proceed but PHP/WP-CLI must not run.
 
 The retained preparation packet is `/root/.hermes/cache/scratch/phase4-wordpress-execution-contract-20261031/handoff.md`. Complete ordered locks, trusted reserved identities, recovery journal and atomic terminal metadata/job/claim publication remain separate prerequisites. No standalone DB or WordPress consumer is authorized here.

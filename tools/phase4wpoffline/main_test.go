@@ -1,3 +1,5 @@
+//go:build wordpress_offline_lab
+
 package main
 
 import (
@@ -37,7 +39,7 @@ func TestChecksumRuntimeFixedInvocation(t *testing.T) {
 	if err := verify(context.Background(), r); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"-n", "-d", "auto_prepend_file=", "-d", "auto_append_file=", "-d", "user_ini.filename=", "-d", "memory_limit=256M", "-d", "display_errors=0", "-d", "log_errors=0", "/lab/bootstrap.php", "core", "verify-checksums", "--version=7.1.4", "--locale=en_US", "--path=/scratch/public", "--skip-plugins", "--skip-themes", "--skip-packages"}
+	want := []string{"-c", "/lab/php.ini", "/lab/bootstrap.php", "core", "verify-checksums", "--version=7.1.4", "--locale=en_US", "--path=/scratch/public", "--skip-plugins", "--skip-themes", "--skip-packages"}
 	if !reflect.DeepEqual(r.args, want) {
 		t.Fatalf("argv %q", r.args)
 	}

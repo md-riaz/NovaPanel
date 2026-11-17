@@ -9,6 +9,9 @@ final class LabChecksums implements \WpOrg\Requests\Transport {
             throw new RuntimeException('offline request refused');
         }
         $body = file_get_contents('/lab/checksums.json');
+        if ($body === false || hash('sha256', $body) !== 'bb718bddf197e0098f05395dd9b228fad70b394926ee9d70a8c6a67cf20781e7') {
+            throw new RuntimeException('offline fixture invalid');
+        }
         return "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " . strlen($body) . "\r\n\r\n" . $body;
     }
     public function request_multiple($requests, $options) {
