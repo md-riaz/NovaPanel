@@ -87,9 +87,9 @@ func wpInstall(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	if domain.ID == "" {
 		return nil, rpc.Errf("precondition_failed", "Primary domain unavailable")
 	}
-	evidence, err := wpEvidence()
-	if err != nil {
-		return nil, err
+	evidence, ok := wpEvidence()
+	if !ok {
+		return nil, rpc.Errf("unsupported", "WordPress artifact staging is unavailable")
 	}
 	credentials, err := jobs.GenerateWordPressCredentials()
 	if err != nil {
