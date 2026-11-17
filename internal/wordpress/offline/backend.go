@@ -63,7 +63,7 @@ func InstallWordPress(lt ProtectedLifetime, wpConfig []byte) error {
 
 	// 4. Fstat the fd; require dir, uid match; record dev.
 	var ds unix.Stat_t
-	if unix.Fstat(dfd, &ds) != nil || ds.Mode&unix.S_IFMT != unix.S_IFDIR || ds.Uid != lt.uid {
+	if unix.Fstat(dfd, &ds) != nil || ds.Mode&unix.S_IFMT != unix.S_IFDIR || ds.Uid != lt.uid || ds.Mode&0022 != 0 {
 		return errRefused
 	}
 	dev := ds.Dev
@@ -142,14 +142,14 @@ func extract(dfd int, zr *zip.Reader, uid, gid uint32, dev uint64) error {
 
 		if mode.IsDir() {
 			// Create directory chain.
-			if err := mkdirChain(dfd, clean, uid, gid); err != nil {
+			if err := mkdirChain(dfd, clean, uid, gid, dev); err != nil {
 				return err
 			}
 		} else if mode.IsRegular() {
 			// Ensure parent dirs, then write file.
 			parentDir := path.Dir(clean)
 			if parentDir != "." && parentDir != "" {
-				if err := mkdirChain(dfd, parentDir, uid, gid); err != nil {
+				if err := mkdirChain(dfd, parentDir, uid, gid, dev); err != nil {
 					return err
 				}
 			}
@@ -168,7 +168,7 @@ func extract(dfd int, zr *zip.Reader, uid, gid uint32, dev uint64) error {
 // no-follow directory opens so a symlink component can never be traversed, and
 // setting owner and mode on the opened descriptor (robust across kernels,
 // unlike fchmodat with AT_SYMLINK_NOFOLLOW).
-func mkdirChain(dfd int, rel string, uid, gid uint32) error {
+func mkdirChain(dfd int, rel string, uid, gid uint32, dev uint64) error {
 	if rel == "." || rel == "" {
 		return nil
 	}
@@ -193,8 +193,11 @@ func mkdirChain(dfd int, rel string, uid, gid uint32) error {
 		if err != nil {
 			return errRefused
 		}
+		// Reject a component on a different device (e.g. a pre-existing mount)
+		// so directory ownership never crosses a filesystem boundary, matching
+		// the same-device guarantee writeFile enforces for file contents.
 		var st unix.Stat_t
-		if unix.Fstat(nfd, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFDIR {
+		if unix.Fstat(nfd, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFDIR || st.Dev != dev {
 			unix.Close(nfd)
 			return errRefused
 		}
