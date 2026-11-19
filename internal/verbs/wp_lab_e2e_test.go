@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	_ "unsafe"
 
 	"golang.org/x/sys/unix"
 	"testing"
@@ -173,7 +174,7 @@ func TestWordPressLabFakeInstallCheckpoints(t *testing.T) {
 	}
 	var configs []string
 	for _, checkpoint := range []string{"prepared", "db_applied", "config_published"} {
-		t.Run(checkpoint, func(t *testing.T) { configs = append(configs, runWordPressLab(t, checkpoint, false, false)) })
+		t.Run(checkpoint, func(t *testing.T) { configs = append(configs, runWordPressLab(t, checkpoint, false, false, false)) })
 	}
 	if len(configs) == 3 {
 		for i := 1; i < len(configs); i++ {
@@ -190,17 +191,27 @@ func TestWordPressLabReplayAlreadyInstalled(t *testing.T) {
 	if os.Geteuid() != 0 || os.Getenv("NOVAPANEL_DISPOSABLE_UID_LAB") != "1" {
 		t.Skip("requires disposable root container")
 	}
-	runWordPressLab(t, "config_published", true, false)
+	runWordPressLab(t, "config_published", true, false, false)
+}
+
+//go:linkname offlineAllowed novapanel/internal/wordpress/offline.allowed
+var offlineAllowed map[string]struct{ path, hash string }
+
+func TestWordPressLabTamperedFixtureFailsClosed(t *testing.T) {
+	if os.Geteuid() != 0 || os.Getenv("NOVAPANEL_DISPOSABLE_UID_LAB") != "1" {
+		t.Skip("requires disposable root container")
+	}
+	runWordPressLab(t, "db_applied", false, false, true)
 }
 
 func TestWordPressLabBackendRefusalFailsClosed(t *testing.T) {
 	if os.Geteuid() != 0 || os.Getenv("NOVAPANEL_DISPOSABLE_UID_LAB") != "1" {
 		t.Skip("requires disposable root container")
 	}
-	runWordPressLab(t, "db_applied", false, true)
+	runWordPressLab(t, "db_applied", false, true, false)
 }
 
-func runWordPressLab(t *testing.T, checkpoint string, alreadyInstalled, refuseBackend bool) string {
+func runWordPressLab(t *testing.T, checkpoint string, alreadyInstalled, refuseBackend, tampered bool) string {
 	t.Helper()
 	ctx := context.Background()
 	root := t.TempDir()
@@ -285,6 +296,17 @@ func runWordPressLab(t *testing.T, checkpoint string, alreadyInstalled, refuseBa
 			t.Fatal(err)
 		}
 	}
+	if tampered {
+		const url = "https://downloads.wordpress.org/release/wordpress-7.1.4.zip"
+		original := offlineAllowed[url]
+		bad := original
+		bad.hash = strings.Repeat("0", 64)
+		offlineAllowed[url] = bad
+		defer func() { offlineAllowed[url] = original }()
+		if _, err := offline.Resolve(url); err == nil {
+			t.Fatal("tampered fixture accepted")
+		}
+	}
 	dbCallsBefore := fake.db.calls
 	run, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
@@ -312,7 +334,7 @@ func runWordPressLab(t *testing.T, checkpoint string, alreadyInstalled, refuseBa
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if refuseBackend {
+	if refuseBackend || tampered {
 		if j.State != "failed" || j.Code != "agent_error" {
 			t.Fatalf("backend refusal: %+v", j)
 		}
