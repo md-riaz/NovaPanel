@@ -111,7 +111,9 @@ func TestWordPressLabInstall(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("timeout: %+v", j)
+			op, e := st.LoadOperation(ctx, en.Job.ID)
+			_, ce := a.Jobs.OpenWordPressCredentials(ctx, en.Job.ID)
+			t.Fatalf("timeout: state=%s attempts=%d checkpoint=%s opErr=%v credentialErr=%v dbCalls=%d", j.State, j.Attempts, op.Checkpoint, e, ce, fake.db.calls)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
