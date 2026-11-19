@@ -95,7 +95,7 @@ func TestSSHKeyConcurrentAdds(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	res, err := sshkeyRun(a, ctx, sid, "list", "")
+	res, err := (sshkeyService{a}).run(ctx, sid, "list", "")
 	if err != nil || len(res.Keys) != 2 {
 		t.Fatalf("lost key: %+v %v", res, err)
 	}

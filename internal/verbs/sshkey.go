@@ -65,7 +65,7 @@ func init() {
 }
 func sshkeyAdd(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*sshkeyAddArgs)
-	res, err := sshkeyRun(a, ctx, v.SiteID, "add", v.PublicKey)
+	res, err := (sshkeyService{a}).run(ctx, v.SiteID, "add", v.PublicKey)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +78,7 @@ func sshkeyRemove(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	res, err := sshkeyRun(a, ctx, site, "remove", fp)
+	res, err := (sshkeyService{a}).run(ctx, site, "remove", fp)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +88,7 @@ func sshkeyRemove(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	return struct{}{}, nil
 }
 func sshkeyList(ctx context.Context, a *agent.Agent, args any) (any, error) {
-	res, err := sshkeyRun(a, ctx, args.(*sshkeyListArgs).SiteID, "list", "")
+	res, err := (sshkeyService{a}).run(ctx, args.(*sshkeyListArgs).SiteID, "list", "")
 	if err != nil {
 		return nil, err
 	}
@@ -96,8 +96,12 @@ func sshkeyList(ctx context.Context, a *agent.Agent, args any) (any, error) {
 		Keys []sshkey.Key `json:"keys"`
 	}{res.Keys}, nil
 }
-func sshkeyRun(a *agent.Agent, ctx context.Context, siteID, op, value string) (sshkey.Response, error) {
+
+type sshkeyService struct{ a *agent.Agent }
+
+func (s sshkeyService) run(ctx context.Context, siteID, op, value string) (sshkey.Response, error) {
 	var res sshkey.Response
+	a := s.a
 	if a.Jobs == nil || a.Exec == nil || a.Store == nil {
 		return res, rpc.Errf("precondition_failed", "Site account unavailable")
 	}
