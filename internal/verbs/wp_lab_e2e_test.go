@@ -20,6 +20,8 @@ import (
 	"novapanel/internal/audit"
 	runner "novapanel/internal/exec"
 	"novapanel/internal/jobs"
+	"novapanel/internal/php"
+	"novapanel/internal/render/nginx"
 	"novapanel/internal/rpc"
 	"novapanel/internal/secret"
 	"novapanel/internal/store"
@@ -38,12 +40,124 @@ func (r *wpLabRunner) Run(ctx context.Context, prog string, args []string, opts 
 	if prog == "/usr/bin/getent" {
 		return r.account.Run(ctx, prog, args, opts)
 	}
+	if prog == "/usr/bin/systemctl" {
+		return []byte("loaded\n"), nil, 0, nil
+	}
 	if prog == "/usr/bin/php8.3" {
+		if len(args) == 1 && args[0] == "-v" {
+			return nil, nil, 0, nil
+		}
 		r.installs++
 		return nil, nil, 0, nil
 	}
-	r.programs = append(r.programs, prog)
-	return r.db.Run(ctx, prog, args, opts)
+	if prog == "/usr/bin/mariadb" {
+		r.programs = append(r.programs, prog)
+		return r.db.Run(ctx, prog, args, opts)
+	}
+	return nil, nil, 0, nil
+}
+
+func TestWordPressLabProvisionAndInstall(t *testing.T) {
+	if os.Geteuid() != 0 || os.Getenv("NOVAPANEL_DISPOSABLE_UID_LAB") != "1" {
+		t.Skip("requires disposable root container")
+	}
+	ctx := context.Background()
+	root := t.TempDir()
+	st, err := store.Open(filepath.Join(root, "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	log, err := audit.Open(st, filepath.Join(root, "audit"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	a := agent.New()
+	a.Store = st
+	a.Audit = log
+	a.Secret, err = secret.New(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Cfg.SitesRoot = filepath.Join(root, "sites")
+	a.Cfg.ACMEWebroot = filepath.Join(root, "acme")
+	pool := filepath.Join(root, "php", "pool")
+	for _, dir := range []string{a.Cfg.SitesRoot, a.Cfg.ACMEWebroot, pool, filepath.Join(root, "nginx", "sites-available"), filepath.Join(root, "nginx", "sites-enabled")} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	master := "[global]\npid = /run/php/php8.3-fpm.pid\nerror_log = /var/log/php8.3-fpm.log\ninclude = " + filepath.Join(pool, "*.conf") + "\n"
+	if err := os.WriteFile(filepath.Join(root, "php", "php-fpm.conf"), []byte(master), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fake := &wpLabRunner{account: &accountRunner{root: a.Cfg.SitesRoot, name: "demo", marker: "novapanel-site="}, db: &databaseRunner{}}
+	a.Exec = fake
+	a.ProvisionSite = func(_ context.Context, name, siteID string) error {
+		fake.account.id = siteID
+		dir := filepath.Join(a.Cfg.SitesRoot, name, "public")
+		if err := os.MkdirAll(dir, 0750); err != nil {
+			return err
+		}
+		return os.Chown(dir, 1001, 1001)
+	}
+	a.PHP = &php.PoolApplier{Dir: pool, Runner: fake, Probe: func(context.Context) error { return nil }}
+	a.Nginx = &nginx.Applier{Root: filepath.Join(root, "nginx"), Runner: fake, Probe: func(context.Context, nginx.Desired) error { return nil }}
+	server := rpc.NewServer(a)
+	server.ConfigureJobs()
+	a.Jobs.SetPostRecovery(nil)
+	if err := a.Jobs.PrepareStartup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	worker, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- a.Jobs.Run(worker) }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}()
+	wait := func(jid string) store.Job {
+		t.Helper()
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			j, e := st.GetJob(ctx, jid)
+			if e == nil && (j.State == "done" || j.State == "failed") {
+				return j
+			}
+			if e != nil && !errors.Is(e, store.ErrPublicationPending) {
+				t.Fatal(e)
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("job timed out")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	caller := rpc.WithCaller(ctx, rpc.RootCaller(0))
+	created := server.Dispatch(caller, rpc.Request{Verb: "site.create", Args: json.RawMessage(`{"name":"demo","type":"wordpress","primary_domain":"demo.test","wordpress":{"title":"Example","admin_username":"admin","admin_email":"admin@example.test"}}`)})
+	if !created.OK {
+		t.Fatalf("site admission: %+v", created)
+	}
+	if j := wait(created.Data.(jobs.EnqueueResult).Job.ID); j.State != "done" {
+		t.Fatalf("site provisioning: %+v", j)
+	}
+	site, err := st.SiteByName(ctx, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed := server.Dispatch(caller, rpc.Request{Verb: "wp.install", Args: json.RawMessage(fmt.Sprintf(`{"site_id":%q,"title":"Example","admin_username":"admin","admin_email":"admin@example.test"}`, site.ID))})
+	if !installed.OK {
+		t.Fatalf("install admission: %+v", installed)
+	}
+	if j := wait(installed.Data.(jobs.EnqueueResult).Job.ID); j.State != "done" || string(j.Result) != fmt.Sprintf(`{"site_id":%q}`, site.ID) {
+		t.Fatalf("install: %+v", j)
+	}
+	if _, err := st.WordPressDatabaseID(ctx, site.ID); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestWordPressLabInstall(t *testing.T) {
