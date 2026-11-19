@@ -131,6 +131,8 @@ func wpInstallExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 			return jobs.ErrRetry
 		}
 	}
-	// The operation-scoped isolation lifetime is not available until #90.
-	return jobs.ErrRetry
+	if op.Checkpoint == "prepared" {
+		op.Checkpoint = "db_applied"
+	}
+	return wpInstallTail(ctx, a, j, op, credentials)
 }
