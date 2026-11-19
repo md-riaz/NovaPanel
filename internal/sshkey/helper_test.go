@@ -78,6 +78,10 @@ func TestLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	replaced, err := os.Stat(path)
+	if err != nil || os.SameFile(current, replaced) {
+		t.Fatal("add did not atomically replace file")
+	}
 	_, fp, _ := strings.Cut(first.KeyID, ".")
 	_, err = Apply(Request{Home: home, SiteID: site, Operation: "remove", Value: fp})
 	if err != nil {
