@@ -64,7 +64,7 @@ func (r *wpLabRunner) Run(ctx context.Context, prog string, args []string, opts 
 	return nil, nil, 0, nil
 }
 
-func TestWordPressLabProvisionAndInstall(t *testing.T) {
+func TestWordPressLabFakeProvisionAndInstall(t *testing.T) {
 	if os.Geteuid() != 0 || os.Getenv("NOVAPANEL_DISPOSABLE_UID_LAB") != "1" {
 		t.Skip("requires disposable root container")
 	}
@@ -167,7 +167,7 @@ func TestWordPressLabProvisionAndInstall(t *testing.T) {
 	}
 }
 
-func TestWordPressLabInstall(t *testing.T) {
+func TestWordPressLabFakeInstallCheckpoints(t *testing.T) {
 	if os.Geteuid() != 0 || os.Getenv("NOVAPANEL_DISPOSABLE_UID_LAB") != "1" {
 		t.Skip("requires root and NOVAPANEL_DISPOSABLE_UID_LAB=1")
 	}
