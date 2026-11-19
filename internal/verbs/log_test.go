@@ -56,6 +56,15 @@ func TestLogFileTail(t *testing.T) {
 	if err != nil || len(lines) != 2 || len(lines[0]) != logLineBytes || lines[1] != "last" {
 		t.Fatalf("%v %v", len(lines), err)
 	}
+	hardlink := filepath.Join(dir, "hardlink")
+	if err = os.Link(path, hardlink); err != nil {
+		t.Fatal(err)
+	}
+	_, err = tailLogFile(hardlink, 2)
+	var hardlinkErr *rpc.CodedError
+	if !errors.As(err, &hardlinkErr) || hardlinkErr.Code != "invalid_argument" {
+		t.Fatal(err)
+	}
 	link := filepath.Join(dir, "link")
 	if err = os.Symlink(path, link); err != nil {
 		t.Fatal(err)

@@ -113,6 +113,13 @@ func tailLogFile(path string, count int) ([]string, error) {
 	if !info.Mode().IsRegular() {
 		return nil, rpc.Errf("invalid_argument", "Invalid log file")
 	}
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		return nil, err
+	}
+	if stat.Nlink != 1 {
+		return nil, rpc.Errf("invalid_argument", "Invalid log file")
+	}
 	offset := info.Size() - logBytes
 	if offset < 0 {
 		offset = 0
