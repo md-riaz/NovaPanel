@@ -61,7 +61,11 @@ func TestDroppedWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Sys().(*unix.Stat_t).Uid != uid || info.Mode().Perm() != 0600 {
+	var stat unix.Stat_t
+	if err := unix.Stat(filepath.Join(home, ".ssh", "authorized_keys"), &stat); err != nil {
+		t.Fatal(err)
+	}
+	if stat.Uid != uid || info.Mode().Perm() != 0600 {
 		t.Fatalf("incorrect ownership or mode: %v", info)
 	}
 }
