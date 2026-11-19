@@ -6,10 +6,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"golang.org/x/sys/unix"
 	"io"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 
 	runner "novapanel/internal/exec"
@@ -61,7 +61,7 @@ func TestDroppedWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Sys().(*syscall.Stat_t).Uid != uid || info.Mode().Perm() != 0600 {
+	if info.Sys().(*unix.Stat_t).Uid != uid || info.Mode().Perm() != 0600 {
 		t.Fatalf("incorrect ownership or mode: %v", info)
 	}
 }
