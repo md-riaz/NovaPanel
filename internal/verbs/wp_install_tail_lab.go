@@ -4,7 +4,6 @@ package verbs
 
 import (
 	"context"
-	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,10 +18,6 @@ import (
 	"novapanel/internal/wordpress/configcustody"
 	"novapanel/internal/wordpress/offline"
 )
-
-func wpPrepareCredentials(c *jobs.WordPressCredentials) {
-	c.DatabasePassword = hex.EncodeToString([]byte(c.DatabasePassword))
-}
 
 func wpInstallTail(ctx context.Context, a *agent.Agent, j *jobs.Job, op store.Operation, credentials jobs.WordPressCredentials) error {
 	in := op.Identity.WordPress.Input

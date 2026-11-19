@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -19,7 +20,13 @@ import (
 // Every password and salt has independent local entropy. No remote salt service.
 func GenerateWordPressCredentials() (WordPressCredentials, error) {
 	var c WordPressCredentials
-	fields := []*string{&c.DatabasePassword, &c.AdminPassword}
+	var dbRaw [24]byte
+	if _, err := rand.Read(dbRaw[:]); err != nil {
+		return WordPressCredentials{}, errors.New("jobs: WordPress credential generation failed")
+	}
+	c.DatabasePassword = hex.EncodeToString(dbRaw[:])
+	clear(dbRaw[:])
+	fields := []*string{&c.AdminPassword}
 	for i := range c.Salts {
 		fields = append(fields, &c.Salts[i])
 	}

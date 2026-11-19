@@ -16,14 +16,6 @@ import (
 	"novapanel/internal/wordpress"
 )
 
-func TestWordPressLabDatabasePasswordEncoding(t *testing.T) {
-	c := jobs.WordPressCredentials{DatabasePassword: "abc-_"}
-	wpPrepareCredentials(&c)
-	if c.DatabasePassword != "6162632d5f" {
-		t.Fatal("database password lost entropy")
-	}
-}
-
 func TestWordPressLabNonemptyDocrootRequiresReconciliation(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "demo", "public")

@@ -9,8 +9,6 @@ import (
 	"novapanel/internal/store"
 )
 
-func wpPrepareCredentials(_ *jobs.WordPressCredentials) {}
-
 func wpInstallTail(_ context.Context, _ *agent.Agent, _ *jobs.Job, _ store.Operation, _ jobs.WordPressCredentials) error {
 	return jobs.ErrRetry
 }
