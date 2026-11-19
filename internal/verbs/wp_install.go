@@ -95,6 +95,7 @@ func wpInstall(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	wpPrepareCredentials(&credentials)
 	return a.Jobs.EnqueueWordPress(ctx, store.WordPressReservation{SiteID: site.ID, DomainID: domain.ID, Input: wordpress.InstallInput{SitesRoot: a.Cfg.SitesRoot, SiteName: site.Name, PrimaryDomain: domain.FQDN, UID: uid, GID: gid, Locale: wordpress.ApprovedArtifacts().Locale, Administrator: wordpress.Administrator{Title: v.Title, Username: v.AdminUsername, Email: v.AdminEmail}}, Evidence: evidence}, credentials)
 }
 
