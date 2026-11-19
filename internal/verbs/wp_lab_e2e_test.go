@@ -21,6 +21,8 @@ import (
 	"novapanel/internal/rpc"
 	"novapanel/internal/secret"
 	"novapanel/internal/store"
+	"novapanel/internal/wordpress/configcustody"
+	"novapanel/internal/wordpress/offline"
 )
 
 type wpLabRunner struct {
@@ -44,6 +46,23 @@ func TestWordPressLabInstall(t *testing.T) {
 	if os.Geteuid() != 0 || os.Getenv("NOVAPANEL_DISPOSABLE_UID_LAB") != "1" {
 		t.Skip("requires root and NOVAPANEL_DISPOSABLE_UID_LAB=1")
 	}
+	var configs []string
+	for _, checkpoint := range []string{"prepared", "db_applied", "config_published"} {
+		t.Run(checkpoint, func(t *testing.T) { configs = append(configs, runWordPressLab(t, checkpoint)) })
+	}
+	if len(configs) == 3 {
+		for i := 1; i < len(configs); i++ {
+			for _, line := range strings.Split(configs[0], "\n") {
+				if (strings.Contains(line, "_KEY'") || strings.Contains(line, "_SALT'")) && strings.Contains(configs[i], line) {
+					t.Error("salt repeated between operations")
+				}
+			}
+		}
+	}
+}
+
+func runWordPressLab(t *testing.T, checkpoint string) string {
+	t.Helper()
 	ctx := context.Background()
 	root := t.TempDir()
 	st, err := store.Open(filepath.Join(root, "db"))
@@ -64,7 +83,7 @@ func TestWordPressLabInstall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const sid = "01K8WMXZF57CGNZKX1FZ38DZMA"
+	sid := map[string]string{"prepared": "01K8WMXZF57CGNZKX1FZ38DZMA", "db_applied": "01K8WMXZF57CGNZKX1FZ38DZMC", "config_published": "01K8WMXZF57CGNZKX1FZ38DZMD"}[checkpoint]
 	docroot := filepath.Join(a.Cfg.SitesRoot, "demo", "public")
 	if err = os.MkdirAll(docroot, 0750); err != nil {
 		t.Fatal(err)
@@ -92,6 +111,34 @@ func TestWordPressLabInstall(t *testing.T) {
 		t.Fatalf("admission: %+v", reply)
 	}
 	en := reply.Data.(jobs.EnqueueResult)
+	if checkpoint != "prepared" {
+		if err := st.CheckpointOperation(ctx, en.Job.ID, "prepared", "db_applied"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var existingConfig []byte
+	if checkpoint == "config_published" {
+		op, err := st.LoadOperation(ctx, en.Job.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		credentials, err := a.Jobs.OpenWordPressCredentials(ctx, en.Job.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		in := op.Identity.WordPress.Input
+		cfg, err := configcustody.ComposeConfig("d_"+strings.ToLower(in.DatabaseID), "u_"+strings.ToLower(in.DatabaseUserID), credentials.DatabasePassword, credentials.Salts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = offline.InstallWordPress(offline.NewLabLifetime(in.UID, in.GID, in.SiteName, sid, docroot), cfg); err != nil {
+			t.Fatal(err)
+		}
+		existingConfig = cfg
+		if err = st.CheckpointOperation(ctx, en.Job.ID, "db_applied", "config_published"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	run, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() { done <- a.Jobs.Run(run) }()
@@ -121,12 +168,18 @@ func TestWordPressLabInstall(t *testing.T) {
 	if j.State != "done" || string(j.Result) != fmt.Sprintf(`{"site_id":%q}`, sid) || fake.installs != 1 {
 		t.Fatalf("install: %+v calls=%d", j, fake.installs)
 	}
+	if checkpoint != "prepared" && fake.db.calls != 0 {
+		t.Fatal("replayed database creation")
+	}
 	if _, err = st.WordPressDatabaseID(ctx, sid); err != nil {
 		t.Fatal(err)
 	}
 	config, err := os.ReadFile(filepath.Join(docroot, "wp-config.php"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if existingConfig != nil && string(config) != string(existingConfig) {
+		t.Fatal("replayed config publication")
 	}
 	info, err := os.Stat(filepath.Join(docroot, "wp-config.php"))
 	if err != nil {
@@ -183,4 +236,5 @@ func TestWordPressLabInstall(t *testing.T) {
 	if _, err := a.Jobs.Claim(jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: "local-root"}), en.Job.ID, en.ClaimToken); err == nil {
 		t.Fatal("claim was delivered twice")
 	}
+	return string(config)
 }
