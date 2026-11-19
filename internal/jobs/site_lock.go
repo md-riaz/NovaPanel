@@ -7,6 +7,13 @@ import (
 	"novapanel/internal/validate"
 )
 
+func (q *Queue) LockSite(ctx context.Context, siteID string) (func(), error) {
+	if !id.Valid(siteID) {
+		return nil, errors.New("jobs: invalid site ID")
+	}
+	return q.locks.lockContext(ctx, "site:"+siteID)
+}
+
 // LockSiteOSUser serializes site OS-user operations with the worker and
 // reconcile. Call before inspecting mutable site/account state and hold until
 // the operation finishes. The order is always site ID, then OS username.

@@ -13,6 +13,7 @@ import (
 	"novapanel/internal/exec"
 	"novapanel/internal/jobs"
 	"novapanel/internal/rpc"
+	"novapanel/internal/sshkey"
 	"novapanel/internal/validate"
 	"novapanel/internal/verbs"
 	"os"
@@ -210,6 +211,13 @@ running:
 	return err
 }
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "__sshkey" {
+		if err := sshkey.Helper(os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "sshkey helper failed")
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
