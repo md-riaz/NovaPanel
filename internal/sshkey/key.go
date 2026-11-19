@@ -26,10 +26,8 @@ func Parse(s string) (ssh.PublicKey, string, error) {
 	}
 	words := strings.Fields(comment)
 	for i := range words {
-		if words[i] == ssh.KeyAlgoED25519 || words[i] == ssh.KeyAlgoRSA {
-			if _, _, _, _, err := ssh.ParseAuthorizedKey([]byte(strings.Join(words[i:], " "))); err == nil {
-				return nil, "", errors.New("multiple keys")
-			}
+		if _, _, _, rest, err := ssh.ParseAuthorizedKey([]byte(strings.Join(words[i:], " "))); err == nil && len(bytes.TrimSpace(rest)) == 0 {
+			return nil, "", errors.New("multiple keys")
 		}
 	}
 	switch k.Type() {

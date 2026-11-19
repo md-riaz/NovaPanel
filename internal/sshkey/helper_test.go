@@ -1,8 +1,11 @@
 package sshkey
 
 import (
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +25,30 @@ func testKey(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(k))) + " test-comment"
+}
+
+func TestEmbeddedKeys(t *testing.T) {
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecdsaKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pub := range []any{rsaKey.Public(), ecdsaKey.Public()} {
+		k, err := ssh.NewPublicKey(pub)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = Parse(testKey(t) + " " + strings.TrimSpace(string(ssh.MarshalAuthorizedKey(k))))
+		if err == nil || err.Error() != "multiple keys" {
+			t.Fatalf("embedded %s: %v", k.Type(), err)
+		}
+	}
+	if _, comment, err := Parse(testKey(t) + " ordinary words"); err != nil || comment != "test-comment ordinary words" {
+		t.Fatalf("plain comment: %q %v", comment, err)
+	}
 }
 
 func TestLifecycle(t *testing.T) {
