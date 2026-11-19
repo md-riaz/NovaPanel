@@ -30,10 +30,11 @@ import (
 )
 
 type wpLabRunner struct {
-	account  *accountRunner
-	db       *databaseRunner
-	installs int
-	programs []string
+	account   *accountRunner
+	db        *databaseRunner
+	installed bool
+	installs  int
+	programs  []string
 }
 
 func (r *wpLabRunner) Run(ctx context.Context, prog string, args []string, opts runner.RunOpts) ([]byte, []byte, int, error) {
@@ -46,6 +47,12 @@ func (r *wpLabRunner) Run(ctx context.Context, prog string, args []string, opts 
 	if prog == "/usr/bin/php8.3" {
 		if len(args) == 1 && args[0] == "-v" {
 			return nil, nil, 0, nil
+		}
+		if strings.Contains(strings.Join(args, " "), "core is-installed") {
+			if r.installed {
+				return nil, nil, 0, nil
+			}
+			return nil, nil, 1, nil
 		}
 		r.installs++
 		return nil, nil, 0, nil
@@ -166,7 +173,7 @@ func TestWordPressLabInstall(t *testing.T) {
 	}
 	var configs []string
 	for _, checkpoint := range []string{"prepared", "db_applied", "config_published"} {
-		t.Run(checkpoint, func(t *testing.T) { configs = append(configs, runWordPressLab(t, checkpoint)) })
+		t.Run(checkpoint, func(t *testing.T) { configs = append(configs, runWordPressLab(t, checkpoint, false)) })
 	}
 	if len(configs) == 3 {
 		for i := 1; i < len(configs); i++ {
@@ -179,7 +186,14 @@ func TestWordPressLabInstall(t *testing.T) {
 	}
 }
 
-func runWordPressLab(t *testing.T, checkpoint string) string {
+func TestWordPressLabReplayAlreadyInstalled(t *testing.T) {
+	if os.Geteuid() != 0 || os.Getenv("NOVAPANEL_DISPOSABLE_UID_LAB") != "1" {
+		t.Skip("requires disposable root container")
+	}
+	runWordPressLab(t, "config_published", true)
+}
+
+func runWordPressLab(t *testing.T, checkpoint string, alreadyInstalled bool) string {
 	t.Helper()
 	ctx := context.Background()
 	root := t.TempDir()
@@ -218,6 +232,7 @@ func runWordPressLab(t *testing.T, checkpoint string) string {
 		t.Fatal(err)
 	}
 	fake := &wpLabRunner{account: &accountRunner{root: a.Cfg.SitesRoot, name: "demo", id: sid, marker: "novapanel-site="}, db: &databaseRunner{}}
+	fake.installed = alreadyInstalled
 	a.Exec = fake
 	server := rpc.NewServer(a)
 	server.ConfigureJobs()
@@ -285,7 +300,7 @@ func runWordPressLab(t *testing.T, checkpoint string) string {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if j.State != "done" || string(j.Result) != fmt.Sprintf(`{"site_id":%q}`, sid) || fake.installs != 1 {
+	if j.State != "done" || string(j.Result) != fmt.Sprintf(`{"site_id":%q}`, sid) || fake.installs != map[bool]int{false: 1, true: 0}[alreadyInstalled] {
 		t.Fatalf("install: %+v calls=%d", j, fake.installs)
 	}
 	if checkpoint != "prepared" && fake.db.calls != dbCallsBefore {

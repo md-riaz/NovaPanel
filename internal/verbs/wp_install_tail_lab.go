@@ -52,8 +52,17 @@ func wpInstallTail(ctx context.Context, st *store.Store, exec runner.Runner, roo
 		if err != nil {
 			return rpc.Errf("agent_error", "WordPress install plan failed")
 		}
+		installed := false
 		for _, step := range plan.Steps {
-			if step.Kind != wordpress.InstallCore {
+			if step.Kind == wordpress.IsInstalled {
+				_, _, code, err := exec.Run(ctx, step.Program, step.Args, runner.RunOpts{Dir: plan.Dir, Env: plan.Env, Uid: plan.UID, Gid: plan.GID, Groups: plan.Groups})
+				if err != nil {
+					return rpc.Errf("agent_error", "WordPress installation check failed")
+				}
+				installed = code == 0
+				continue
+			}
+			if step.Kind != wordpress.InstallCore || installed {
 				continue
 			}
 			_, _, code, err := exec.Run(ctx, step.Program, step.Args, runner.RunOpts{Dir: plan.Dir, Env: plan.Env, Uid: plan.UID, Gid: plan.GID, Groups: plan.Groups, Stdin: strings.NewReader(credentials.AdminPassword + "\n")})
