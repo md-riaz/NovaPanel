@@ -83,7 +83,7 @@ func TestWordPressLabInstall(t *testing.T) {
 	a.Exec = fake
 	server := rpc.NewServer(a)
 	server.ConfigureJobs()
-	if err = a.Jobs.PrepareOperations(ctx); err != nil {
+	if err = a.Jobs.PrepareStartup(ctx); err != nil {
 		t.Fatal(err)
 	}
 	reply := server.Dispatch(rpc.WithCaller(ctx, rpc.RootCaller(0)), rpc.Request{Verb: "wp.install", Args: json.RawMessage(fmt.Sprintf(`{"site_id":%q,"title":"Example","admin_username":"admin","admin_email":"admin@example.test"}`, sid))})
