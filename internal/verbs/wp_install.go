@@ -109,6 +109,9 @@ func wpInstallExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if op.Kind != store.WordPressInstall || j.ObjectKey != "site:"+op.SiteID {
 		return rpc.Errf("forbidden", "Job binding mismatch")
 	}
+	if op.Checkpoint == "done" {
+		return nil
+	}
 	if err = a.Store.CheckOperation(ctx, j.ID); err != nil {
 		return err
 	}
@@ -131,6 +134,8 @@ func wpInstallExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 			return jobs.ErrRetry
 		}
 	}
-	// The operation-scoped isolation lifetime is not available until #90.
-	return jobs.ErrRetry
+	if op.Checkpoint == "prepared" {
+		op.Checkpoint = "db_applied"
+	}
+	return wpInstallTail(ctx, a.Store, a.Exec, a.Cfg.SitesRoot, j, op, credentials)
 }

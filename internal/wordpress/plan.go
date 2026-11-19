@@ -28,6 +28,7 @@ const (
 	VerifyChecksums        StepKind = "verify_checksums"
 	CreateConfig           StepKind = "create_config"
 	PublishProtectedConfig StepKind = "publish_protected_config"
+	IsInstalled            StepKind = "is_installed"
 	InstallCore            StepKind = "install_core"
 )
 
@@ -80,6 +81,7 @@ func BuildInstall(in InstallInput, evidence ArtifactEvidence) (Plan, error) {
 		command(VerifyChecksums, "", "core", "verify-checksums", "--version=7.1.4", "--locale=en_US"),
 		command(CreateConfig, DatabasePassword, "config", "create", "--dbname=d_"+strings.ToLower(in.DatabaseID), "--dbuser=u_"+strings.ToLower(in.DatabaseUserID), "--dbhost=127.0.0.1", "--dbprefix=wp_", "--dbcharset=utf8mb4", "--skip-salts", "--prompt=dbpass"),
 		{Kind: PublishProtectedConfig},
+		command(IsInstalled, "", "core", "is-installed"),
 		command(InstallCore, AdministratorPassword, "core", "install", "--url=https://"+in.PrimaryDomain, "--title="+in.Administrator.Title, "--admin_user="+in.Administrator.Username, "--admin_email="+in.Administrator.Email, "--skip-email", "--prompt=admin_password"),
 	}
 	return p, nil
