@@ -11,7 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
+
+	"golang.org/x/sys/unix"
 	"testing"
 	"time"
 
@@ -30,6 +31,7 @@ type wpLabRunner struct {
 	account  *accountRunner
 	db       *databaseRunner
 	installs int
+	programs []string
 }
 
 func (r *wpLabRunner) Run(ctx context.Context, prog string, args []string, opts runner.RunOpts) ([]byte, []byte, int, error) {
@@ -40,6 +42,7 @@ func (r *wpLabRunner) Run(ctx context.Context, prog string, args []string, opts 
 		r.installs++
 		return nil, nil, 0, nil
 	}
+	r.programs = append(r.programs, prog)
 	return r.db.Run(ctx, prog, args, opts)
 }
 
@@ -104,6 +107,7 @@ func runWordPressLab(t *testing.T, checkpoint string) string {
 	a.Exec = fake
 	server := rpc.NewServer(a)
 	server.ConfigureJobs()
+	a.Jobs.SetPostRecovery(nil)
 	if err = a.Jobs.PrepareStartup(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -140,6 +144,7 @@ func runWordPressLab(t *testing.T, checkpoint string) string {
 			t.Fatal(err)
 		}
 	}
+	dbCallsBefore := fake.db.calls
 	run, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() { done <- a.Jobs.Run(run) }()
@@ -169,8 +174,8 @@ func runWordPressLab(t *testing.T, checkpoint string) string {
 	if j.State != "done" || string(j.Result) != fmt.Sprintf(`{"site_id":%q}`, sid) || fake.installs != 1 {
 		t.Fatalf("install: %+v calls=%d", j, fake.installs)
 	}
-	if checkpoint != "prepared" && fake.db.calls != 0 {
-		t.Fatal("replayed database creation")
+	if checkpoint != "prepared" && fake.db.calls != dbCallsBefore {
+		t.Fatalf("replayed database creation: %v", fake.programs)
 	}
 	if _, err = st.WordPressDatabaseID(ctx, sid); err != nil {
 		t.Fatal(err)
@@ -186,7 +191,10 @@ func runWordPressLab(t *testing.T, checkpoint string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stat := info.Sys().(*syscall.Stat_t)
+	var stat unix.Stat_t
+	if err = unix.Stat(filepath.Join(docroot, "wp-config.php"), &stat); err != nil {
+		t.Fatal(err)
+	}
 	if info.Mode().Perm() != 0400 || stat.Uid != 1001 || stat.Gid != 1001 {
 		t.Fatalf("config mode/owner: %v %d:%d", info.Mode(), stat.Uid, stat.Gid)
 	}
