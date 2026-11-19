@@ -3,6 +3,7 @@ package verbs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -84,7 +85,7 @@ type logRunner struct {
 func (r logRunner) Run(_ context.Context, program string, args []string, opts exec.RunOpts) ([]byte, []byte, int, error) {
 	r.t.Helper()
 	want := []string{"--unit=" + r.unit, "--no-pager", "-n", "3", "--output=cat"}
-	if program != "/usr/bin/journalctl" || !reflect.DeepEqual(args, want) || opts.MaxOutput != logBytes {
+	if program != "/usr/bin/journalctl" || !reflect.DeepEqual(args, want) || opts.MaxOutput != 4*(logLineBytes+128) {
 		r.t.Fatalf("%q %q %+v", program, args, opts)
 	}
 	return []byte("first\nsecond\n"), nil, 0, nil
@@ -98,6 +99,38 @@ func TestLogJournal(t *testing.T) {
 		}
 	}
 }
+
+type largeJournalRunner struct{}
+
+func (largeJournalRunner) Run(_ context.Context, _ string, _ []string, opts exec.RunOpts) ([]byte, []byte, int, error) {
+	var output strings.Builder
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&output, "%03d%s\n", i, strings.Repeat("x", logLineBytes))
+	}
+	data := []byte(output.String())
+	if len(data) > opts.MaxOutput {
+		data = data[:opts.MaxOutput]
+	}
+	return data, nil, 0, nil
+}
+
+func TestLogJournalLargeTail(t *testing.T) {
+	a := &agent.Agent{Exec: largeJournalRunner{}}
+	got, err := logTail(context.Background(), a, &logTailArgs{Target: "nginx", Lines: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := got.(logTailReply).Lines
+	if len(lines) != 200 {
+		t.Fatalf("got %d lines", len(lines))
+	}
+	for i, line := range lines {
+		if len(line) != logLineBytes || !strings.HasPrefix(line, fmt.Sprintf("%03d", i)) {
+			t.Fatalf("line %d: length %d, prefix %.3q", i, len(line), line)
+		}
+	}
+}
+
 func TestPHPLogSiteIdentity(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(":memory:")

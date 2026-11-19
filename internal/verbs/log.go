@@ -84,7 +84,8 @@ func logTail(ctx context.Context, a *agent.Agent, args any) (any, error) {
 		}
 		return logTailReply{lines}, nil
 	}
-	out, _, code, err := a.Exec.Run(ctx, "/usr/bin/journalctl", []string{"--unit=" + source.unit, "--no-pager", "-n", strconv.Itoa(v.Lines), "--output=cat"}, exec.RunOpts{MaxOutput: logBytes})
+	maxOutput := min((v.Lines+1)*(logLineBytes+128), 16<<20)
+	out, _, code, err := a.Exec.Run(ctx, "/usr/bin/journalctl", []string{"--unit=" + source.unit, "--no-pager", "-n", strconv.Itoa(v.Lines), "--output=cat"}, exec.RunOpts{MaxOutput: maxOutput})
 	if err != nil {
 		return nil, err
 	}
