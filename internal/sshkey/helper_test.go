@@ -37,6 +37,9 @@ func TestLifecycle(t *testing.T) {
 	if _, _, err := Parse(key + "\n" + key); err == nil {
 		t.Fatal("accepted multiple keys")
 	}
+	if _, _, err := Parse(key + " " + key); err == nil {
+		t.Fatal("accepted multiple keys on one line")
+	}
 	add := Request{Home: home, SiteID: site, Operation: "add", Value: "command=\"bad\" " + key}
 	first, err := Apply(add)
 	if err != nil {

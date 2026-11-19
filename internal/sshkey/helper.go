@@ -140,6 +140,9 @@ func Apply(req Request) (Response, error) {
 	} else if req.Operation != "remove" {
 		return result, errors.New("invalid operation")
 	}
+	if lines.Len() > 1<<20 {
+		return result, errors.New("authorized_keys too large")
+	}
 	f, err := os.CreateTemp(fmt.Sprintf("/proc/self/fd/%d", dir), ".authorized_keys-")
 	if err != nil {
 		return result, err

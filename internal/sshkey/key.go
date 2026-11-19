@@ -24,6 +24,14 @@ func Parse(s string) (ssh.PublicKey, string, error) {
 	if err != nil || len(bytes.TrimSpace(rest)) != 0 {
 		return nil, "", errors.New("invalid key")
 	}
+	words := strings.Fields(comment)
+	for i := range words {
+		if words[i] == ssh.KeyAlgoED25519 || words[i] == ssh.KeyAlgoRSA {
+			if _, _, _, _, err := ssh.ParseAuthorizedKey([]byte(strings.Join(words[i:], " "))); err == nil {
+				return nil, "", errors.New("multiple keys")
+			}
+		}
+	}
 	switch k.Type() {
 	case ssh.KeyAlgoED25519:
 	case ssh.KeyAlgoRSA:
