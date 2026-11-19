@@ -14,17 +14,25 @@ import (
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
 	"novapanel/internal/validate"
+	"novapanel/internal/wordpress"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
+type siteWordPressArgs struct {
+	Title         string `json:"title"`
+	AdminUsername string `json:"admin_username"`
+	AdminEmail    string `json:"admin_email"`
+}
+
 type siteCreateArgs struct {
-	Name          string  `json:"name,omitempty"`
-	Type          string  `json:"type"`
-	PrimaryDomain string  `json:"primary_domain"`
-	PHPVersion    *string `json:"php_version,omitempty"`
-	SiteID        string  `json:"site_id,omitempty"`
+	Name          string             `json:"name,omitempty"`
+	Type          string             `json:"type"`
+	PrimaryDomain string             `json:"primary_domain"`
+	PHPVersion    *string            `json:"php_version,omitempty"`
+	SiteID        string             `json:"site_id,omitempty"`
+	WordPress     *siteWordPressArgs `json:"wordpress,omitempty"`
 }
 
 func (v *siteCreateArgs) Validate() error {
@@ -37,7 +45,15 @@ func (v *siteCreateArgs) Validate() error {
 	if e := check.Hostname(v.PrimaryDomain); e != nil {
 		return e
 	}
-	if v.Type != "static" && v.Type != "php" {
+	if (v.Type == "wordpress") != (v.WordPress != nil) {
+		return rpc.Errf("invalid_argument", "WordPress settings are required only for WordPress sites")
+	}
+	if v.WordPress != nil {
+		if err := wordpress.ValidateAdministrator(wordpress.Administrator{Title: v.WordPress.Title, Username: v.WordPress.AdminUsername, Email: v.WordPress.AdminEmail}); err != nil {
+			return err
+		}
+	}
+	if v.Type != "static" && v.Type != "php" && v.Type != "wordpress" {
 		return rpc.Errf("unsupported", "Site type is not available")
 	}
 	if v.Type == "static" && v.PHPVersion != nil {
@@ -67,7 +83,7 @@ func siteCreate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	if v.Name == "" {
 		v.Name = "site-" + strings.ToLower(sid[:20])
 	}
-	if v.Type == "php" {
+	if v.Type == "php" || v.Type == "wordpress" {
 		if err := phpAvailable(ctx, a.Exec); err != nil {
 			return nil, err
 		}
@@ -82,7 +98,7 @@ func siteCreate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 		return nil, e
 	}
 	var initial []store.PHPLimits
-	if v.Type == "php" {
+	if v.Type == "php" || v.Type == "wordpress" {
 		sites, err := a.Store.ListSites(ctx)
 		if err != nil {
 			return nil, err
@@ -127,12 +143,12 @@ func siteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 	if e != nil {
 		return siteError(e)
 	}
-	if site.Name != v.Name || site.Type != v.Type || (site.Type == "php" && (site.PHPVersion == nil || *site.PHPVersion != "8.3")) || site.Docroot != filepath.Join(a.Cfg.SitesRoot, v.Name, "public") || site.Status == "deleting" {
+	if site.Name != v.Name || site.Type != v.Type || ((site.Type == "php" || site.Type == "wordpress") && (site.PHPVersion == nil || *site.PHPVersion != "8.3")) || site.Docroot != filepath.Join(a.Cfg.SitesRoot, v.Name, "public") || site.Status == "deleting" {
 		return rpc.Errf("precondition_failed", "Site state changed")
 	}
 	// Active sites already completed creation; later desired state belongs to its own verbs.
 	if site.Status == "active" {
-		if site.Type == "php" && j.Attempts > 1 {
+		if (site.Type == "php" || site.Type == "wordpress") && j.Attempts > 1 {
 			if a.PHP == nil || a.Exec == nil {
 				return rpc.Errf("agent_error", "PHP execution unavailable")
 			}
@@ -183,7 +199,7 @@ func siteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 	if e = a.ProvisionSite(ctx, site.Name, site.ID); e != nil {
 		return e
 	}
-	if site.Type == "php" {
+	if site.Type == "php" || site.Type == "wordpress" {
 		if a.PHP == nil || a.Exec == nil {
 			return rpc.Errf("agent_error", "PHP execution unavailable")
 		}

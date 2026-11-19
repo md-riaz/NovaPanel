@@ -4,14 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	php "novapanel/internal/render/php"
 	"novapanel/internal/wordpress"
+	"path/filepath"
 	"strings"
 )
 
 // WordPressReservation contains only trusted nonsecret identity. Evidence is a
 // pure validation input, never a replacement for runtime artifact custody.
 type WordPressReservation struct {
+	SiteID   string
 	DomainID string
 	Input    wordpress.InstallInput
 	Evidence wordpress.ArtifactEvidence
@@ -20,7 +21,7 @@ type WordPressReservation struct {
 func validWordPressIdentity(op Operation) bool {
 	id := op.Identity
 	w := id.WordPress
-	if id.Version != 1 || op.Owner == "" || !phase4ResourceID.MatchString(op.SiteID) || w == nil || !phase4ResourceID.MatchString(w.DomainID) || w.Input.DatabaseID != op.DatabaseID || w.Input.DatabaseUserID != id.Database.PrimaryUserID || id.Site != nil || len(id.Attached) != 0 || id.BindingID != "" || id.TargetUserID != "" || id.PurgeFiles || id.PurgeDatabases {
+	if id.Version != 1 || op.Owner == "" || !phase4ResourceID.MatchString(op.SiteID) || w == nil || w.SiteID != op.SiteID || !phase4ResourceID.MatchString(w.DomainID) || w.Input.DatabaseID != op.DatabaseID || w.Input.DatabaseUserID != id.Database.PrimaryUserID || id.Site != nil || len(id.Attached) != 0 || id.BindingID != "" || id.TargetUserID != "" || id.PurgeFiles || id.PurgeDatabases {
 		return false
 	}
 	nested := op
@@ -37,7 +38,13 @@ func validWordPressIdentity(op Operation) bool {
 func checkWordPress(ctx context.Context, tx *sql.Tx, op Operation) error {
 	w := op.Identity.WordPress
 	var n int
-	if e := tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM sites WHERE id=? OR name=?)+(SELECT count(*) FROM domains WHERE id=? OR fqdn=?)+(SELECT count(*) FROM databases WHERE id=? OR name=?)+(SELECT count(*) FROM db_users WHERE id=? OR username=?)`, op.SiteID, w.Input.SiteName, w.DomainID, w.Input.PrimaryDomain, op.DatabaseID, op.Identity.Database.Name, op.Identity.Database.PrimaryUserID, op.Identity.Accounts[0].Username).Scan(&n); e != nil {
+	if e := tx.QueryRowContext(ctx, `SELECT count(*) FROM sites s JOIN domains d ON d.site_id=s.id WHERE s.id=? AND s.name=? AND s.type='wordpress' AND s.status='active' AND s.docroot=? AND d.id=? AND d.fqdn=? AND d.is_primary=1`, op.SiteID, w.Input.SiteName, filepath.Join(w.Input.SitesRoot, w.Input.SiteName, "public"), w.DomainID, w.Input.PrimaryDomain).Scan(&n); e != nil {
+		return e
+	}
+	if n != 1 {
+		return ErrSitePrecondition
+	}
+	if e := tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM wordpress_bindings WHERE site_id=?)+(SELECT count(*) FROM databases WHERE id=? OR name=?)+(SELECT count(*) FROM db_users WHERE id=? OR username=?)`, op.SiteID, op.DatabaseID, op.Identity.Database.Name, op.Identity.Database.PrimaryUserID, op.Identity.Accounts[0].Username).Scan(&n); e != nil {
 		return e
 	}
 	if n != 0 {
@@ -48,7 +55,7 @@ func checkWordPress(ctx context.Context, tx *sql.Tx, op Operation) error {
 
 func (s *Store) prepareWordPress(ctx context.Context, j Job, c JobClaim, r OperationRequest, nonce, ciphertext []byte) (op Operation, err error) {
 	err = s.Tx(ctx, func(tx *sql.Tx) error {
-		if j.Verb != "site.create" || j.CreatedBy == "" || j.State != "queued" || r.WordPress == nil || len(nonce) == 0 || len(ciphertext) == 0 || c.JobID != j.ID || c.ClaimHash == "" || r.PurgeFiles || r.PurgeDatabases {
+		if j.Verb != "wp.install" || j.CreatedBy == "" || j.State != "queued" || r.WordPress == nil || len(nonce) == 0 || len(ciphertext) == 0 || c.JobID != j.ID || c.ClaimHash == "" || r.PurgeFiles || r.PurgeDatabases {
 			return ErrSiteInvalid
 		}
 		w := *r.WordPress
@@ -93,17 +100,7 @@ func completeWordPress(ctx context.Context, tx *sql.Tx, op Operation, now int64,
 	if e := checkWordPress(ctx, tx, op); e != nil {
 		return e
 	}
-	w := op.Identity.WordPress
-	plan, e := wordpress.BuildInstall(w.Input, w.Evidence)
-	if e != nil {
-		return e
-	}
-	if _, e = tx.ExecContext(ctx, `INSERT INTO sites(id,name,type,docroot,php_version,status,created,updated) VALUES(?,?,'wordpress',?,'8.3','active',?,?)`, op.SiteID, w.Input.SiteName, plan.Docroot, now, now); e != nil {
-		return e
-	}
-	if _, e = tx.ExecContext(ctx, "INSERT INTO domains(id,site_id,fqdn,is_primary,created) VALUES(?,?,?,1,?)", w.DomainID, op.SiteID, w.Input.PrimaryDomain, now); e != nil {
-		return e
-	}
+	var e error
 	db := op.Identity.Database
 	a := op.Identity.Accounts[0]
 	if _, e = tx.ExecContext(ctx, "INSERT INTO databases(id,site_id,name,created) VALUES(?,?,?,?)", db.ID, op.SiteID, db.Name, now); e != nil {
@@ -113,9 +110,6 @@ func completeWordPress(ctx context.Context, tx *sql.Tx, op Operation, now int64,
 		return e
 	}
 	if _, e = tx.ExecContext(ctx, "INSERT INTO wordpress_bindings(site_id,db_id) VALUES(?,?)", op.SiteID, db.ID); e != nil {
-		return e
-	}
-	if e = writePhase4PHPLimits(ctx, tx, op.SiteID, php.Limits{MemoryMB: 256, UploadMB: 64, MaxExecSec: 60}); e != nil {
 		return e
 	}
 	result, e := tx.ExecContext(ctx, "UPDATE job_claims SET nonce=?,ciphertext=?,expires=? WHERE job_id=? AND length(ciphertext)=0 AND claimed=0", claim.Nonce, claim.Ciphertext, now+ClaimTTLMillis, op.JobID)

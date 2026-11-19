@@ -127,6 +127,19 @@ func databaseRotateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 		}
 		return rpc.Errf("precondition_failed", "Database state changed")
 	}
+	if d.SiteID != nil {
+		bound, err := a.Store.WordPressDatabaseID(ctx, *d.SiteID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return jobs.ErrRetry
+		}
+		if err == nil && bound == d.ID {
+			// shortcut: existing-site isolation is unavailable, upgrade when #90 supplies the lifetime.
+			if durable.Step == "rotation_started" {
+				return jobs.ErrRetry
+			}
+			return rpc.Errf("unsupported", "WordPress password rotation requires protected config isolation")
+		}
+	}
 	unlock, e := a.Jobs.LockDatabaseUser(ctx, v.Username)
 	if e != nil {
 		return e

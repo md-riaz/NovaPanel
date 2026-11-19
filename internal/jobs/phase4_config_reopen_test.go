@@ -132,6 +132,7 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	provisionWordPressFixture(t, q, &r)
 	en, err := q.EnqueueWordPress(ctx, r, c)
 	if err != nil {
 		t.Fatal(err)
@@ -349,7 +350,7 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 		t.Fatal("record removed without audit", e)
 	}
 	if err = s.Tx(ctx, func(tx *sql.Tx) error {
-		_, e := tx.ExecContext(ctx, `UPDATE events SET detail_json=? WHERE detail_json='{}' AND verb='site.create' AND outcome='ok'`, saved)
+		_, e := tx.ExecContext(ctx, `UPDATE events SET detail_json=? WHERE detail_json='{}' AND verb='wp.install' AND outcome='ok'`, saved)
 		return e
 	}); err != nil {
 		t.Fatal(err)
@@ -516,7 +517,7 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 	}
 	stopAudit()
 	if err = s.Tx(ctx, func(tx *sql.Tx) error {
-		_, e := tx.ExecContext(ctx, `UPDATE events SET detail_json=? WHERE detail_json='{}' AND verb='site.create' AND outcome='ok'`, saved)
+		_, e := tx.ExecContext(ctx, `UPDATE events SET detail_json=? WHERE detail_json='{}' AND verb='wp.install' AND outcome='ok'`, saved)
 		return e
 	}); err != nil {
 		t.Fatal(err)

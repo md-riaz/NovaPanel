@@ -58,6 +58,7 @@ func TestWordPressStageWorkerLifetime(t *testing.T) {
 			m := wordpress.ApprovedArtifacts()
 			reservation := store.WordPressReservation{Input: wordpress.InstallInput{SitesRoot: "/scratch/sites", SiteName: "example", PrimaryDomain: "example.test", UID: 23451, GID: 23452, Locale: "en_US", Administrator: wordpress.Administrator{Title: "Example", Username: "Admin", Email: "owner@example.test"}}, Evidence: wordpress.ArtifactEvidence{CLISHA256: m.CLI.SHA256, WordPressSHA256: m.WordPress.SHA256, ChecksumsSHA256: m.ChecksumsSHA256, SignatureVerified: true, SignerFingerprint: m.CLISignerFingerprint}}
 			credentials, _ := GenerateWordPressCredentials()
+			provisionWordPressFixture(t, q, &reservation)
 			en, err := q.EnqueueWordPress(ctx, reservation, credentials)
 			if err != nil {
 				t.Fatal(err)

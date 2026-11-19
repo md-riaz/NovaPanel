@@ -78,7 +78,7 @@ func (q *Queue) enqueueOperation(ctx context.Context, r store.OperationRequest, 
 	if e := q.healthy(); e != nil {
 		return out, e
 	}
-	verbs := map[store.OperationKind]string{store.PHPSet: "php.set", store.WordPressInstall: "site.create", store.SiteDelete: "site.delete", store.DatabaseCreate: "database.create", store.DatabaseRotate: "database.rotate_password", store.DBUserCreate: "dbuser.create", store.DatabaseDelete: "database.delete", store.DBUserDelete: "dbuser.delete"}
+	verbs := map[store.OperationKind]string{store.PHPSet: "php.set", store.WordPressInstall: "wp.install", store.SiteDelete: "site.delete", store.DatabaseCreate: "database.create", store.DatabaseRotate: "database.rotate_password", store.DBUserCreate: "dbuser.create", store.DatabaseDelete: "database.delete", store.DBUserDelete: "dbuser.delete"}
 	verb := verbs[r.Kind]
 	if verb == "" {
 		return out, rpcerr.Errf("invalid_argument", "operation kind unavailable")
@@ -88,16 +88,6 @@ func (q *Queue) enqueueOperation(ctx context.Context, r store.OperationRequest, 
 		if r.WordPress == nil || wp == nil {
 			return out, errors.New("jobs: WordPress recovery input required")
 		}
-		r.SiteID, e = id.New()
-		if e != nil {
-			return out, e
-		}
-		w := *r.WordPress
-		w.DomainID, e = id.New()
-		if e != nil {
-			return out, e
-		}
-		r.WordPress = &w
 	}
 	if r.Kind == store.DatabaseCreate || r.Kind == store.WordPressInstall {
 		r.DatabaseID, e = id.New()
@@ -180,7 +170,11 @@ func (q *Queue) enqueueOperation(ctx context.Context, r store.OperationRequest, 
 		}
 	}
 	if r.Kind == store.WordPressInstall {
-		j.ObjectKey = "site:" + r.WordPress.Input.SiteName
+		j.ObjectKey = "site:" + r.SiteID
+		j.Args, e = json.Marshal(map[string]string{"site_id": r.SiteID})
+		if e != nil {
+			return out, e
+		}
 		r.WordPress.Input.DatabaseID = r.DatabaseID
 		r.WordPress.Input.DatabaseUserID = r.UserID
 	}

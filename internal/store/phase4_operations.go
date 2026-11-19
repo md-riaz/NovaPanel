@@ -188,7 +188,7 @@ func loadOperation(ctx context.Context, tx *sql.Tx, jid string) (Operation, erro
 func operationVerb(k OperationKind) string {
 	switch k {
 	case WordPressInstall:
-		return "site.create"
+		return "wp.install"
 	case SiteDelete:
 		return "site.delete"
 	case PHPSet:

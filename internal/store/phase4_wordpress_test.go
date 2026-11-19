@@ -19,11 +19,13 @@ func TestWordPressReservationBeforeResourceRows(t *testing.T) {
 	defer s.Close()
 	manifest := wordpress.ApprovedArtifacts()
 	r := OperationRequest{Kind: WordPressInstall, SiteID: "01K8WMXZF57CGNZKX1FZ38DZMA", DatabaseID: "01K8WMXZF57CGNZKX1FZ38DZMQ", UserID: "01K8WMXZF57CGNZKX1FZ38DZMR", WordPress: &WordPressReservation{
-		DomainID: "01K8WMXZF57CGNZKX1FZ38DZMB",
+		SiteID: "01K8WMXZF57CGNZKX1FZ38DZMA", DomainID: "01K8WMXZF57CGNZKX1FZ38DZMB",
 		Input:    wordpress.InstallInput{SitesRoot: "/scratch/sites", SiteName: "example", PrimaryDomain: "example.test", UID: 1001, GID: 1001, Locale: "en_US", Administrator: wordpress.Administrator{Title: "Example", Username: "Admin", Email: "owner@example.test"}},
 		Evidence: wordpress.ArtifactEvidence{CLISHA256: manifest.CLI.SHA256, WordPressSHA256: manifest.WordPress.SHA256, ChecksumsSHA256: manifest.ChecksumsSHA256, SignatureVerified: true, SignerFingerprint: manifest.CLISignerFingerprint},
 	}}
-	j := Job{ID: "wp-job", Verb: "site.create", CreatedBy: "session", Role: "owner", State: "queued", Args: []byte(`{}`)}
+	phase4Exec(t, s.db.raw, `INSERT INTO sites(id,name,type,docroot,php_version,status,created,updated) VALUES(?,?,'wordpress',?,'8.3','active',0,0)`, r.SiteID, r.WordPress.Input.SiteName, filepath.Join(r.WordPress.Input.SitesRoot, r.WordPress.Input.SiteName, "public"))
+	phase4Exec(t, s.db.raw, `INSERT INTO domains(id,site_id,fqdn,is_primary,created) VALUES(?,?,?,1,0)`, r.WordPress.DomainID, r.SiteID, r.WordPress.Input.PrimaryDomain)
+	j := Job{ID: "wp-job", Verb: "wp.install", CreatedBy: "session", Role: "owner", State: "queued", Args: []byte(`{}`)}
 	op, e := s.PrepareOperation(ctx, j, JobClaim{JobID: j.ID, ClaimHash: "hash"}, r, []byte{1}, []byte{2})
 	if e != nil {
 		t.Fatal(e)
@@ -31,8 +33,8 @@ func TestWordPressReservationBeforeResourceRows(t *testing.T) {
 	if !slices.Contains(op.Keys(), "site:"+r.SiteID) || !slices.Contains(op.Keys(), "db:"+r.DatabaseID) || !slices.Contains(op.Keys(), "dbuser:"+op.Identity.Accounts[0].Username) || op.Identity.WordPress.Input.DatabaseID != r.DatabaseID {
 		t.Fatalf("reservation: %+v", op)
 	}
-	if _, e = s.SiteByID(ctx, r.SiteID); !errors.Is(e, sql.ErrNoRows) {
-		t.Fatal("site created before runner", e)
+	if _, e = s.SiteByID(ctx, r.SiteID); e != nil {
+		t.Fatal("provisioned site missing", e)
 	}
 	if _, e = s.GetDatabase(ctx, r.DatabaseID); !errors.Is(e, sql.ErrNoRows) {
 		t.Fatal("DB created before runner", e)
@@ -42,6 +44,7 @@ func TestWordPressReservationBeforeResourceRows(t *testing.T) {
 	}
 	j.ID = "collision"
 	r.SiteID = "01K8WMXZF57CGNZKX1FZ38DZMC"
+	r.WordPress.SiteID = r.SiteID
 	r.DatabaseID = "01K8WMXZF57CGNZKX1FZ38DZMD"
 	r.UserID = "01K8WMXZF57CGNZKX1FZ38DZME"
 	_, e = s.PrepareOperation(ctx, j, JobClaim{JobID: j.ID, ClaimHash: "other"}, r, []byte{1}, []byte{2})
@@ -65,6 +68,7 @@ func TestWordPressReservationBeforeResourceRows(t *testing.T) {
 		t.Fatalf("rejected reservation published a job: %v", e)
 	}
 	r.SiteID = op.SiteID
+	r.WordPress.SiteID = r.SiteID
 	r.DatabaseID = op.DatabaseID
 	if _, e = s.StartJob(ctx, "wp-job", 1); e != nil {
 		t.Fatal(e)
