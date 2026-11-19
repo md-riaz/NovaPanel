@@ -45,11 +45,19 @@ func TestLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	path := filepath.Join(home, ".ssh", "authorized_keys")
+	original, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	second, err := Apply(add)
 	if err != nil || first.KeyID != second.KeyID {
 		t.Fatalf("idempotence: %+v %v", second, err)
 	}
-	path := filepath.Join(home, ".ssh", "authorized_keys")
+	current, err := os.Stat(path)
+	if err != nil || !os.SameFile(original, current) {
+		t.Fatal("duplicate add replaced file")
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

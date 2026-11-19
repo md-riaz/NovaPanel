@@ -66,6 +66,7 @@ func Apply(req Request) (Response, error) {
 	}
 	fd, err := unix.Openat(dir, "authorized_keys", unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	var data []byte
+	var existingMode os.FileMode
 	if err == nil {
 		f := os.NewFile(uintptr(fd), "authorized_keys")
 		info, e := f.Stat()
@@ -77,6 +78,7 @@ func Apply(req Request) (Response, error) {
 			f.Close()
 			return result, errors.New("authorized_keys is not a regular file")
 		}
+		existingMode = info.Mode().Perm()
 		data, err = io.ReadAll(io.LimitReader(f, (1<<20)+1))
 		f.Close()
 		if err != nil {
@@ -129,6 +131,9 @@ func Apply(req Request) (Response, error) {
 		return result, nil
 	}
 	if req.Operation == "add" {
+		if found && existingMode == 0600 {
+			return result, nil
+		}
 		if !found {
 			lines.Write(bytes.TrimSpace(ssh.MarshalAuthorizedKey(target)))
 			if comment != "" {
