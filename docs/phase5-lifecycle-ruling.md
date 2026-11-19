@@ -46,22 +46,41 @@ The file API is rooted at the site docroot `/srv/sites/<name>/public`, not the h
 (`phase-5.md:70`). This keeps `~/.ssh/authorized_keys`, cron units, and deploy config out of reach of
 `files.*`, so the only path to SSH keys stays the MFA-gated `sshkey.*` verb.
 
-Resolution must be race-safe, not validate-then-open-by-pathname. A `Clean`+`EvalSymlinks`+prefix
-check followed by an `open(path)` is a TOCTOU hole: the site user owns the tree, so it can swap an
-intermediate directory for a symlink between the check and the open and escape the docroot (for
-example into its own `~/.ssh`). `O_NOFOLLOW` on the final component alone does not close this, because
-the escape is through an intermediate component.
+Resolution must be race-safe, and the docroot handle itself must be opened without trusting a
+site-controlled path component. A `Clean`+`EvalSymlinks`+prefix check followed by `open(path)` is a
+TOCTOU hole: the site user owns the tree, so it can swap an intermediate directory for a symlink
+between the check and the open and escape. And `os.OpenRoot("/srv/sites/<name>/public")` is itself
+unsafe, because `os.Root` follows a symlink at the path you open as the root: the site user owns both
+its home (`/srv/sites/<name>`, mode 0751, `sites.go:150-156`) and the `public` directory, so replacing
+`public` with a symlink to `~/.ssh` would make that external directory the confined root. Opening the
+root by an untrusted pathname defeats the confinement before any op runs.
 
-So the dropped helper opens the docroot once with `os.OpenRoot(docroot)` and performs every operation
-through that anchored `*os.Root` handle (`Root.Open`, `Root.OpenFile`, `Root.Mkdir`, `Root.Remove`,
-`Root.Stat`, and the rename/move equivalents). An `os.Root` refuses any path that escapes the root and
-refuses to traverse a symlink out of it, evaluated against the kernel handle rather than a string, so
-the swap-an-intermediate-directory race cannot escape. This is the established pattern in the repo:
-`internal/platform/site_remove.go:26`, `internal/render/nginx/apply.go:76`, and
-`internal/php/pool_apply.go:121` all operate through `os.OpenRoot`. The Go 1.27 toolchain has it. The
-same anchored handle is used for archive extraction: each entry is created through the `*os.Root`, so
-a `../` or symlink entry cannot escape even mid-stream. `files.list{path:""}` on the root itself is
-allowed (the root handle opened on `.`).
+So the helper opens the docroot fd the way `internal/php/pool_apply.go:113-123` already does: start
+from the root-owned, trusted base `/srv/sites`, then `openat` each subsequent component (`<name>`, then
+`public`) with `O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC`, closing each parent fd as it descends. `O_NOFOLLOW`
+on every component means a symlink anywhere on the path to the docroot (including `public` itself) is
+refused, not followed. The resulting trusted directory fd is wrapped as an `os.Root` via
+`os.OpenRoot("/proc/self/fd/<fd>")`, and every file operation runs through that anchored handle
+(`Root.Open`, `Root.OpenFile`, `Root.Mkdir`, `Root.Remove`, `Root.Rename`, `Root.Stat`,
+`Root.Chmod`). An `os.Root` evaluates each op against the kernel handle, so the swap-an-intermediate-
+directory race cannot escape once the root is trusted. This is the repo pattern:
+`internal/php/pool_apply.go:121` and `internal/render/nginx/apply.go:76` already operate through
+`os.OpenRoot`, and `poolRead` opens files with `O_NOFOLLOW` on top of the root. The Go 1.27 toolchain
+has `os.Root`.
+
+Two further requirements that `os.Root` alone does not give, because it still follows symlinks that
+stay within the root:
+
+- Final-component symlink refusal (`phase-5.md:75-79`): for a write, mkdir, move-destination, or
+  extract target, the final component is opened with `O_NOFOLLOW` (`Root.OpenFile(..., O_NOFOLLOW)` or
+  an `Lstat` check through the root), and a pre-planted symlink there is refused with
+  `invalid_argument`, never followed or blindly replaced. A symlink that stays inside the root would
+  otherwise still let a write land on a link the site user planted.
+- Archive extraction creates each entry through the same `os.Root` with `O_NOFOLLOW` on the leaf, so a
+  `../`, absolute, or symlink entry cannot escape even mid-stream; entries are also pre-screened by
+  `validate.ArchiveEntry`.
+
+`files.list{path:""}` on the root itself is allowed (the root handle opened on `.`).
 
 Archive entries (`files.extract`) run through `validate.ArchiveEntry` (F9/F15): reject absolute
 paths, `..`, backslashes, null, symlink/hardlink/device entries, and enforce a per-archive entry
@@ -90,10 +109,16 @@ deletion does not reclaim them, and the DB `ON DELETE CASCADE` only drops the ro
 daemon state; they must be torn down explicitly on every delete, independent of `purge_files`, or a
 deleted site leaves live timers, a live sftp rule, and a sealed secret behind:
 
-- Cron: remove the site's timers both by enumerating `cron_jobs` rows and by globbing
-  `novapanel-cron-<site>-*.{service,timer}` in `/etc/systemd/system` (the glob catches a unit whose row
-  never committed, see section 4). For each, `systemctl disable --now` then remove both unit files then
-  `daemon-reload`. Ensure-state: a missing unit is not an error.
+- Cron: remove the site's timers both by enumerating `cron_jobs` rows and by matching units whose name
+  begins `novapanel-cron-<site_id>-` in `/etc/systemd/system` (the match catches a unit whose row never
+  committed, see section 4). The unit name uses the site **id** (a 26-character fixed-length ULID with
+  no hyphen), not the site name, precisely because site names allow hyphens
+  (`internal/validate/validate.go`, `^[a-z][a-z0-9-]{1,30}$`): a raw name prefix like
+  `novapanel-cron-ab-*` would also match site `ab-cd`'s units and delete another site's timers. With
+  the fixed-length ULID segment terminated by `-`, no site id is a prefix of another, so the match is
+  unambiguous; the matcher asserts the full `<site_id>-` boundary rather than a bare `HasPrefix`. For
+  each, `systemctl disable --now` then remove both unit files then `daemon-reload`. Ensure-state: a
+  missing unit is not an error.
 - SFTP-only: remove the managed sshd drop-in `sshd_config.d/novapanel-<site>.conf` if present,
   `sshd -t`, reload sshd. Ensure-state, under the global sshd lock (section 7).
 - Deploy: remove the sealed deploy key secret `deploy:<site_id>` and any per-site `GIT_SSH_COMMAND`
@@ -108,17 +133,21 @@ retain the OS user (gecos `novapanel-retained=<ULID>`, `:245`) when not purging 
 (`site_remove.go:49-62`). That retain-or-manual posture is unchanged by this ruling; the Phase 5 group
 above runs before it regardless.
 
-To make the cron glob reliable, `cron.create` uses write-ahead identity: it allocates the `cron_id`
-and writes the `cron_jobs` row as `state=creating` before it renders any unit, then flips the row to
-enabled only after enable and start succeed (section 4). A permanently failed or never-finished create
-therefore always leaves a discoverable row, and the glob is a second net for a row that truly never
+To make the unit match reliable, `cron.create` uses write-ahead identity with the columns that exist:
+the `cron_jobs` table has `enabled` but no `state` column (`02-data-model.md`), so create allocates the
+`cron_id`, computes `unit_name` as `novapanel-cron-<site_id>-<cron_id>`, and writes the row with
+`enabled=0` before it renders any unit, then sets `enabled=1` only after enable and start succeed
+(section 4). A permanently failed or never-finished create therefore always leaves a discoverable row
+(shown truthfully as not enabled), and the name match is a second net for a row that truly never
 landed.
 
 ## 4. `cron.*` is systemd timers, ensure-state, bootstrap-window safe
 
 Per-site scheduled jobs are systemd timer plus service units, never root crontab and never
-`@reboot`. Names are agent-owned: `novapanel-cron-<site>-<id>.service` and `.timer` in
-`/etc/systemd/system`, matching the `cron_jobs.unit_name` column (`02-data-model.md`).
+`@reboot`. Names are agent-owned and use the site **id**, not the site name:
+`novapanel-cron-<site_id>-<cron_id>.service` and `.timer` in `/etc/systemd/system`, stored in the
+`cron_jobs.unit_name` column (`02-data-model.md`; its `<site>` comment is illustrative, the id is used
+so the name parses and matches unambiguously, section 3).
 
 - The `.service` runs the validated fixed argv with `User=<site-user>`, `Group=<site-group>`, and
   `WorkingDirectory=` the docroot, so systemd performs the privilege drop and there is no shell. The
@@ -128,9 +157,10 @@ Per-site scheduled jobs are systemd timer plus service units, never root crontab
   (`03-verb-shapes.md:141`, `00-foundations.md`); convenience aliases like `hourly`/`daily` are
   accepted because systemd itself accepts them, not as the whole accepted set, so a valid calendar
   expression is never rejected.
-- Write-ahead identity: `cron.create` allocates the `cron_id` and writes the `cron_jobs` row as
-  `state=creating` before rendering any unit, so a failed or interrupted create is always discoverable
-  by `site.delete` (section 3). The row flips to enabled only after enable and start succeed.
+- Write-ahead identity: `cron.create` allocates the `cron_id`, writes the `cron_jobs` row with
+  `enabled=0` (there is no `state` column, section 3) before rendering any unit, so a failed or
+  interrupted create is always discoverable by `site.delete`. The row is set `enabled=1` only after
+  enable and start succeed.
 - Ensure-state (Rule B bootstrap window): writing `.service`, writing `.timer`, `daemon-reload`,
   enable, and start is non-transactional. `cron.create` and `cron.enable` re-render both files,
   `daemon-reload`, and `enable --now` idempotently; they complete their own partial install (a
@@ -138,14 +168,19 @@ Per-site scheduled jobs are systemd timer plus service units, never root crontab
   of one file. The `<site>-<id>` name is agent-owned, so completing a partial install never adopts a
   foreign unit. `cron.disable` and `cron.delete` are the ensure-state inverse: `disable --now`, and for
   delete remove both files and `daemon-reload`.
-- F8 validate and revert, including the enabled/active state, not just the files: keep a `.lkg` pair
-  per unit. Validate the rendered pair with `systemd-analyze verify` before `daemon-reload`. On any
-  validate, enable, or start failure the rollback first runs `disable --now` on both units (so a
-  partially-enabled or started timer does not survive), then restores the `.lkg` pair (or removes the
-  pair when this was a first create), then `daemon-reload`, then returns a coded `agent_error`.
-  Removing the files without first disabling would leave systemd holding an enabled-but-fileless unit,
-  so the disable is mandatory. The row stays `state=creating` (not enabled) on failure, so the next
-  `cron.create`/`enable` replay ensure-states it forward or `site.delete` reclaims it.
+- F8 validate and revert must restore the exact prior systemd state, not just the files. Before
+  mutating, snapshot the prior state of the unit pair: `is-enabled` and `is-active` (for a first create
+  the prior state is "absent"). Keep a `.lkg` pair per unit. Validate the rendered pair with
+  `systemd-analyze verify` before `daemon-reload`. On any validate, enable, or start failure the
+  rollback restores the snapshot exactly:
+  - restore the `.lkg` files (or remove the pair when the prior state was absent), `daemon-reload`;
+  - if the unit was previously enabled and active, `enable --now` it back to that state; if it was
+    previously absent, `disable --now` first so no partially-enabled or started timer survives
+    (removing files without disabling would leave systemd holding an enabled-but-fileless unit).
+  If any rollback step itself fails, fail closed: return a coded error that names the divergence rather
+  than reporting success, so an operator reconciles a job left stopped or half-restored. The row keeps
+  `enabled=0` on failure, so the next `cron.create`/`enable` replay ensure-states it forward or
+  `site.delete` reclaims it. The row is never set `enabled=1` for a job that did not actually start.
 
 ## 5. `sshkey` `key_id` resolution: content-addressed fingerprint
 
@@ -189,9 +224,14 @@ global `sshd` lock, not just the site lock, so two concurrent sftp toggles canno
 validate/reload. It follows the F8 pattern already used by nginx (`internal/render/nginx/apply.go:62-187`)
 and FPM (`internal/php/pool_apply.go:272-411`): keep a `.lkg`, write temp, atomic rename, validate with
 `sshd -t`, reload sshd, and on validate or reload failure restore the `.lkg` and reload again. If the
-revert itself fails, fail closed: return a coded error that names the divergence rather than reporting
-success, so an operator reconciles rather than the API silently leaving disk and daemon out of sync.
-The drop-in is removed by the `site.delete` teardown group (section 3), under the same global lock.
+revert itself fails, fail closed durably, not just for the one call: write a persistent divergence
+marker (a sentinel file under the agent state dir keyed on sshd, checked under the global sshd lock),
+return a coded error that names the divergence, and make every subsequent `sshkey.sftp_only` refuse
+with `precondition_failed` while the marker is present, so a second mutation cannot stack on top of a
+daemon whose on-disk config is already out of sync. The marker clears only when a reconcile re-validates
+and reloads sshd cleanly. A returned error alone is not enough, because it does not stop the next call;
+the durable marker is what actually prevents a conflicting mutation. The drop-in is removed by the
+`site.delete` teardown group (section 3), under the same global lock.
 
 ## 8. Build order
 
