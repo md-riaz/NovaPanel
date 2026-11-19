@@ -72,16 +72,22 @@ Two further requirements that `os.Root` alone does not give, because it still fo
 stay within the root:
 
 - Final-component symlink refusal (`phase-5.md:75-79`), enforced atomically by the kernel, never as a
-  separate `Lstat`-then-act (which is itself a TOCTOU). The final component is opened with `O_NOFOLLOW`
-  in the same syscall that would use it (`Root.OpenFile(name, O_NOFOLLOW|...)`, plus `O_CREAT|O_EXCL`
-  for a fresh file): a pre-planted symlink makes the open fail with `ELOOP`, which maps to
-  `invalid_argument`. There is no check-then-mutate window. For the temp-plus-rename write the temp
-  file is created with `O_CREAT|O_EXCL|O_NOFOLLOW` in the docroot and `Root.Rename`d onto the target;
-  `rename` does not follow a symlink at the final component, so even if the target is swapped for a
-  symlink in a race, the rename replaces the link in place and never writes through it to an external
-  path. So the confinement property holds unconditionally, and the spec's "refused, not blindly
-  replaced" is enforced by the `O_NOFOLLOW` open that precedes the rename returning `invalid_argument`
-  when the target is already a symlink.
+  separate `Lstat`-then-act (which is itself a TOCTOU). The spec scopes this to the not-yet-existing
+  targets it names (`write` of a new file, `mkdir`, `move`-destination, `extract` entries), so the
+  destination is required to not pre-exist and the atomic replace is race-free:
+  - The temp file is created with `O_CREAT|O_EXCL|O_NOFOLLOW` under the trusted docroot handle, then
+    placed with `renameat2` using `RENAME_NOREPLACE`. Because `RENAME_NOREPLACE` fails with `EEXIST`
+    if anything, a symlink or a regular file, is present at the destination, a symlink raced in after
+    any check still makes the placement fail rather than replace it: the op returns `invalid_argument`
+    (or `conflict` for an existing regular file), never follows the link, never blindly replaces it.
+    This is race-free, not check-then-act. `mkdir` uses `Root.Mkdir` (which is `O_EXCL`-like: it fails
+    if the name exists); move-destination and each extract entry use the same `RENAME_NOREPLACE`.
+  - `files.write` overwriting an existing regular file is a different operation (the target exists on
+    purpose) and is outside the not-yet-existing contract above. It opens the existing target through
+    the trusted parent handle with `O_NOFOLLOW`; a symlink there fails with `ELOOP` -> `invalid_argument`.
+    The atomic replace of the confirmed regular file cannot escape the docroot: `rename` does not
+    follow a symlink at the final component, so even a symlink raced in replaces the link in place
+    within the docroot and never writes through it to an external path.
 - Archive extraction creates each entry through the same `os.Root` with `O_NOFOLLOW` on the leaf, so a
   `../`, absolute, or symlink entry cannot escape even mid-stream; entries are also pre-screened by
   `validate.ArchiveEntry`.
@@ -185,9 +191,11 @@ so the name parses and matches unambiguously, section 3).
      failed attempt (removing files first would leave systemd holding an enabled-but-fileless unit);
   2. restore the `.lkg` files, or when the prior state was absent remove both files;
   3. `daemon-reload`;
-  4. restore the prior snapshot: if the unit was previously enabled and active, `enable --now`; if it
-     was previously enabled but inactive, `enable` without start; if previously present but disabled,
-     leave disabled; if previously absent, it is already gone from steps 1-2.
+  4. restore the exact prior snapshot across all four `enabled` x `active` combinations: previously
+     enabled and active -> `enable --now`; enabled and inactive -> `enable` (no start); disabled and
+     active -> `start` (no enable), so a running-but-unenabled timer is put back to active rather than
+     left stopped by step 1's `--now`; disabled and inactive -> leave disabled and stopped; previously
+     absent -> already gone from steps 1-2.
   If any rollback step itself fails, fail closed: return a coded error that names the divergence rather
   than reporting success, so an operator reconciles a job left stopped or half-restored. The row keeps
   `enabled=0` on failure, so the next `cron.create`/`enable` replay ensure-states it forward or
