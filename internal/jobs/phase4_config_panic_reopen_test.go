@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,7 +29,12 @@ func TestConfigPanicRecoveryEntropy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		fields := append([]string{c.DatabasePassword, c.AdminPassword}, c.Salts[:]...)
+		db, err := hex.DecodeString(c.DatabasePassword)
+		if err != nil || len(db) != 24 || seen[c.DatabasePassword] {
+			t.Fatal("invalid or repeated database entropy")
+		}
+		seen[c.DatabasePassword] = true
+		fields := append([]string{c.AdminPassword}, c.Salts[:]...)
 		for _, v := range fields {
 			raw, err := base64.RawURLEncoding.DecodeString(v)
 			if err != nil || len(raw) != 32 || seen[v] {

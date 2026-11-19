@@ -29,7 +29,7 @@ func TestWordPressLabNonemptyDocrootRequiresReconciliation(t *testing.T) {
 	a := agent.New()
 	a.Cfg.SitesRoot = root
 	op := store.Operation{Checkpoint: "db_applied", Identity: store.OperationIdentity{WordPress: &store.WordPressReservation{Input: wordpress.InstallInput{SiteName: "demo"}}}}
-	err := wpInstallTail(context.Background(), a, &jobs.Job{}, op, jobs.WordPressCredentials{})
+	err := wpInstallTail(context.Background(), a.Store, a.Exec, a.Cfg.SitesRoot, &jobs.Job{}, op, jobs.WordPressCredentials{})
 	coded, ok := err.(*rpcerr.CodedError)
 	if !ok || coded.Code != "precondition_failed" || !strings.Contains(coded.Msg, "reconciliation") {
 		t.Fatalf("unexpected error: %v", err)

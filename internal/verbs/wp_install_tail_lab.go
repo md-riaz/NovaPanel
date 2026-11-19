@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"novapanel/internal/agent"
 	runner "novapanel/internal/exec"
 	"novapanel/internal/jobs"
 	"novapanel/internal/php"
@@ -19,10 +18,10 @@ import (
 	"novapanel/internal/wordpress/offline"
 )
 
-func wpInstallTail(ctx context.Context, a *agent.Agent, j *jobs.Job, op store.Operation, credentials jobs.WordPressCredentials) error {
+func wpInstallTail(ctx context.Context, st *store.Store, exec runner.Runner, root string, j *jobs.Job, op store.Operation, credentials jobs.WordPressCredentials) error {
 	in := op.Identity.WordPress.Input
 	if op.Checkpoint == "db_applied" {
-		docroot := filepath.Join(a.Cfg.SitesRoot, in.SiteName, "public")
+		docroot := filepath.Join(root, in.SiteName, "public")
 		entries, err := os.ReadDir(docroot)
 		if err != nil {
 			return rpc.Errf("agent_error", "WordPress docroot unavailable")
@@ -30,7 +29,7 @@ func wpInstallTail(ctx context.Context, a *agent.Agent, j *jobs.Job, op store.Op
 		if len(entries) != 0 {
 			return rpc.Errf("precondition_failed", "WordPress docroot requires operator reconciliation")
 		}
-		uid, gid, err := php.ResolveUser(ctx, a.Exec, a.Cfg.SitesRoot, in.SiteName, op.SiteID)
+		uid, gid, err := php.ResolveUser(ctx, exec, root, in.SiteName, op.SiteID)
 		if err != nil || uid != in.UID || gid != in.GID {
 			return rpc.Errf("agent_error", "Site account is unavailable")
 		}
@@ -39,11 +38,11 @@ func wpInstallTail(ctx context.Context, a *agent.Agent, j *jobs.Job, op store.Op
 			return rpc.Errf("agent_error", "WordPress configuration failed")
 		}
 		defer clear(cfg)
-		lt := offline.NewLabLifetime(uid, gid, in.SiteName, op.SiteID, filepath.Join(a.Cfg.SitesRoot, in.SiteName, "public"))
+		lt := offline.NewLabLifetime(uid, gid, in.SiteName, op.SiteID, filepath.Join(root, in.SiteName, "public"))
 		if err = offline.InstallWordPress(lt, cfg); err != nil {
 			return rpc.Errf("agent_error", "WordPress artifact installation failed")
 		}
-		if err = a.Store.CheckpointOperation(ctx, j.ID, "db_applied", "config_published"); err != nil {
+		if err = st.CheckpointOperation(ctx, j.ID, "db_applied", "config_published"); err != nil {
 			return jobs.ErrRetry
 		}
 		op.Checkpoint = "config_published"
@@ -57,12 +56,12 @@ func wpInstallTail(ctx context.Context, a *agent.Agent, j *jobs.Job, op store.Op
 			if step.Kind != wordpress.InstallCore {
 				continue
 			}
-			_, _, code, err := a.Exec.Run(ctx, step.Program, step.Args, runner.RunOpts{Dir: plan.Dir, Env: plan.Env, Uid: plan.UID, Gid: plan.GID, Groups: plan.Groups, Stdin: strings.NewReader(credentials.AdminPassword + "\n")})
+			_, _, code, err := exec.Run(ctx, step.Program, step.Args, runner.RunOpts{Dir: plan.Dir, Env: plan.Env, Uid: plan.UID, Gid: plan.GID, Groups: plan.Groups, Stdin: strings.NewReader(credentials.AdminPassword + "\n")})
 			if err != nil || code != 0 {
 				return rpc.Errf("agent_error", "WordPress core installation failed")
 			}
 		}
-		if err = a.Store.CheckpointOperation(ctx, j.ID, "config_published", "verified"); err != nil {
+		if err = st.CheckpointOperation(ctx, j.ID, "config_published", "verified"); err != nil {
 			return jobs.ErrRetry
 		}
 	}

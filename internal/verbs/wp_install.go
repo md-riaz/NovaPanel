@@ -137,5 +137,5 @@ func wpInstallExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if op.Checkpoint == "prepared" {
 		op.Checkpoint = "db_applied"
 	}
-	return wpInstallTail(ctx, a, j, op, credentials)
+	return wpInstallTail(ctx, a.Store, a.Exec, a.Cfg.SitesRoot, j, op, credentials)
 }
