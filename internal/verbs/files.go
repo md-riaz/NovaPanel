@@ -47,7 +47,7 @@ func init() {
 }
 func filesList(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*filesListArgs)
-	res, err := runFileop(ctx, a, v.SiteID, fileop.Request{Operation: "list", Path: v.Path})
+	res, err := (fileopService{a}).run(ctx, v.SiteID, fileop.Request{Operation: "list", Path: v.Path})
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +60,7 @@ func filesList(ctx context.Context, a *agent.Agent, args any) (any, error) {
 }
 func filesRead(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*filesReadArgs)
-	res, err := runFileop(ctx, a, v.SiteID, fileop.Request{Operation: "read", Path: v.Path, Offset: v.Offset, Length: v.Length})
+	res, err := (fileopService{a}).run(ctx, v.SiteID, fileop.Request{Operation: "read", Path: v.Path, Offset: v.Offset, Length: v.Length})
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +73,11 @@ func filesRead(ctx context.Context, a *agent.Agent, args any) (any, error) {
 		EOF     bool   `json:"eof"`
 	}{res.Content, res.Size, res.EOF}, nil
 }
-func runFileop(ctx context.Context, a *agent.Agent, siteID string, req fileop.Request) (fileop.Response, error) {
+
+type fileopService struct{ a *agent.Agent }
+
+func (s fileopService) run(ctx context.Context, siteID string, req fileop.Request) (fileop.Response, error) {
+	a := s.a
 	var res fileop.Response
 	if a.Jobs == nil || a.Exec == nil || a.Store == nil {
 		return res, rpc.Errf("precondition_failed", "Site account unavailable")

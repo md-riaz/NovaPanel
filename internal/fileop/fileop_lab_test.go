@@ -4,12 +4,13 @@ package fileop
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"syscall"
 	"testing"
+
+	runner "novapanel/internal/exec"
 )
 
 func TestDroppedHelper(t *testing.T) {
@@ -53,13 +54,9 @@ func TestDroppedHelper(t *testing.T) {
 	}
 	for _, tc := range []struct{ path, content, code string }{{"allowed", "site-only", ""}, {"denied", "", "agent_error"}} {
 		input, _ := json.Marshal(Request{Base: base, Name: "site", Operation: "read", Path: tc.path})
-		cmd := exec.Command(binaryPath, "-test.run=^TestDroppedHelper$")
-		cmd.Env = append(os.Environ(), "NOVAPANEL_FILEOP_CHILD=1")
-		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: 65534, Gid: 65534, Groups: []uint32{}}}
-		cmd.Stdin = bytes.NewReader(input)
-		out, err := cmd.Output()
-		if err != nil {
-			t.Fatal(err)
+		out, _, code, err := (runner.Real{}).Run(context.Background(), binaryPath, []string{"-test.run=^TestDroppedHelper$"}, runner.RunOpts{Uid: 65534, Gid: 65534, Groups: []uint32{}, Env: []string{"NOVAPANEL_FILEOP_CHILD=1"}, Stdin: bytes.NewReader(input)})
+		if err != nil || code != 0 {
+			t.Fatalf("helper: %d %v", code, err)
 		}
 		var r Response
 		if err = json.Unmarshal(out, &r); err != nil || string(r.Content) != tc.content || r.Code != tc.code {
