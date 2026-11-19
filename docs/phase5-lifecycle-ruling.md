@@ -71,11 +71,17 @@ has `os.Root`.
 Two further requirements that `os.Root` alone does not give, because it still follows symlinks that
 stay within the root:
 
-- Final-component symlink refusal (`phase-5.md:75-79`): for a write, mkdir, move-destination, or
-  extract target, the final component is opened with `O_NOFOLLOW` (`Root.OpenFile(..., O_NOFOLLOW)` or
-  an `Lstat` check through the root), and a pre-planted symlink there is refused with
-  `invalid_argument`, never followed or blindly replaced. A symlink that stays inside the root would
-  otherwise still let a write land on a link the site user planted.
+- Final-component symlink refusal (`phase-5.md:75-79`), enforced atomically by the kernel, never as a
+  separate `Lstat`-then-act (which is itself a TOCTOU). The final component is opened with `O_NOFOLLOW`
+  in the same syscall that would use it (`Root.OpenFile(name, O_NOFOLLOW|...)`, plus `O_CREAT|O_EXCL`
+  for a fresh file): a pre-planted symlink makes the open fail with `ELOOP`, which maps to
+  `invalid_argument`. There is no check-then-mutate window. For the temp-plus-rename write the temp
+  file is created with `O_CREAT|O_EXCL|O_NOFOLLOW` in the docroot and `Root.Rename`d onto the target;
+  `rename` does not follow a symlink at the final component, so even if the target is swapped for a
+  symlink in a race, the rename replaces the link in place and never writes through it to an external
+  path. So the confinement property holds unconditionally, and the spec's "refused, not blindly
+  replaced" is enforced by the `O_NOFOLLOW` open that precedes the rename returning `invalid_argument`
+  when the target is already a symlink.
 - Archive extraction creates each entry through the same `os.Root` with `O_NOFOLLOW` on the leaf, so a
   `../`, absolute, or symlink entry cannot escape even mid-stream; entries are also pre-screened by
   `validate.ArchiveEntry`.
@@ -119,8 +125,10 @@ deleted site leaves live timers, a live sftp rule, and a sealed secret behind:
   unambiguous; the matcher asserts the full `<site_id>-` boundary rather than a bare `HasPrefix`. For
   each, `systemctl disable --now` then remove both unit files then `daemon-reload`. Ensure-state: a
   missing unit is not an error.
-- SFTP-only: remove the managed sshd drop-in `sshd_config.d/novapanel-<site>.conf` if present,
-  `sshd -t`, reload sshd. Ensure-state, under the global sshd lock (section 7).
+- SFTP-only: remove the managed sshd drop-in `sshd_config.d/novapanel-<site>.conf` if present through
+  the one shared sshd apply function (section 7), which takes the global sshd lock, honors the
+  divergence marker, validates with `sshd -t`, and reloads. Ensure-state; `site.delete` never edits
+  sshd directly, so it cannot bypass the marker.
 - Deploy: remove the sealed deploy key secret `deploy:<site_id>` and any per-site `GIT_SSH_COMMAND`
   identity file.
 
@@ -172,11 +180,14 @@ so the name parses and matches unambiguously, section 3).
   mutating, snapshot the prior state of the unit pair: `is-enabled` and `is-active` (for a first create
   the prior state is "absent"). Keep a `.lkg` pair per unit. Validate the rendered pair with
   `systemd-analyze verify` before `daemon-reload`. On any validate, enable, or start failure the
-  rollback restores the snapshot exactly:
-  - restore the `.lkg` files (or remove the pair when the prior state was absent), `daemon-reload`;
-  - if the unit was previously enabled and active, `enable --now` it back to that state; if it was
-    previously absent, `disable --now` first so no partially-enabled or started timer survives
-    (removing files without disabling would leave systemd holding an enabled-but-fileless unit).
+  rollback runs these steps in this exact order, so there is no contradiction about when to disable:
+  1. `disable --now` both units unconditionally, so no partially-enabled or started timer survives the
+     failed attempt (removing files first would leave systemd holding an enabled-but-fileless unit);
+  2. restore the `.lkg` files, or when the prior state was absent remove both files;
+  3. `daemon-reload`;
+  4. restore the prior snapshot: if the unit was previously enabled and active, `enable --now`; if it
+     was previously enabled but inactive, `enable` without start; if previously present but disabled,
+     leave disabled; if previously absent, it is already gone from steps 1-2.
   If any rollback step itself fails, fail closed: return a coded error that names the divergence rather
   than reporting success, so an operator reconciles a job left stopped or half-restored. The row keeps
   `enabled=0` on failure, so the next `cron.create`/`enable` replay ensure-states it forward or
@@ -223,15 +234,21 @@ Because sshd config is global (one daemon for the host), `sshkey.sftp_only` seri
 global `sshd` lock, not just the site lock, so two concurrent sftp toggles cannot interleave their
 validate/reload. It follows the F8 pattern already used by nginx (`internal/render/nginx/apply.go:62-187`)
 and FPM (`internal/php/pool_apply.go:272-411`): keep a `.lkg`, write temp, atomic rename, validate with
-`sshd -t`, reload sshd, and on validate or reload failure restore the `.lkg` and reload again. If the
-revert itself fails, fail closed durably, not just for the one call: write a persistent divergence
-marker (a sentinel file under the agent state dir keyed on sshd, checked under the global sshd lock),
-return a coded error that names the divergence, and make every subsequent `sshkey.sftp_only` refuse
-with `precondition_failed` while the marker is present, so a second mutation cannot stack on top of a
-daemon whose on-disk config is already out of sync. The marker clears only when a reconcile re-validates
-and reloads sshd cleanly. A returned error alone is not enough, because it does not stop the next call;
-the durable marker is what actually prevents a conflicting mutation. The drop-in is removed by the
-`site.delete` teardown group (section 3), under the same global lock.
+`sshd -t`, reload sshd, and on validate or reload failure restore the `.lkg` and reload again.
+
+Every sshd mutation goes through one shared apply function, which is the only code that edits a
+drop-in and reloads sshd. Both `sshkey.sftp_only` and the `site.delete` sftp teardown (section 3) call
+it; neither touches sshd directly. That function takes the global sshd lock, checks the durable
+divergence marker, applies the F8 render-validate-reload-revert, and updates the marker. If a revert
+fails, it fails closed durably, not just for the one call: it writes a persistent divergence marker (a
+sentinel file under the agent state dir keyed on sshd), returns a coded error that names the
+divergence, and thereafter refuses every sshd mutation (both `sshkey.sftp_only` and the `site.delete`
+drop-in removal) with `precondition_failed` while the marker is present, so no second mutation can
+stack on a daemon whose on-disk config is already out of sync. Because `site.delete` routes through the
+same guarded function, a delete cannot bypass the marker and reload a diverged config. The marker
+clears only when a reconcile re-validates and reloads sshd cleanly. A returned error alone is not
+enough, because it does not stop the next call; the single guarded entry point plus the durable marker
+is what actually prevents a conflicting mutation.
 
 ## 8. Build order
 
