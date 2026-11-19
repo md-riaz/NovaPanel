@@ -140,7 +140,7 @@ func TestWordPressLabInstall(t *testing.T) {
 			t.Errorf("missing %s", name)
 		}
 	}
-	claim, err := a.Jobs.Claim(rpc.WithCaller(ctx, rpc.RootCaller(0)), en.Job.ID, en.ClaimToken)
+	claim, err := a.Jobs.Claim(jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: "local-root"}), en.Job.ID, en.ClaimToken)
 	if err != nil {
 		t.Fatal(err)
 	}
