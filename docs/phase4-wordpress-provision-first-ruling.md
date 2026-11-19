@@ -27,6 +27,10 @@ Admits and runs the WordPress install operation against the already-provisioned 
 5. The live WP-CLI execution and the protected `wp-config` publication require the deferred operation-scoped lifetime handle and stay gated/dormant exactly as in PR #139; admission, sealing, DB create, config composition, and the F19 claim are live and buildable now.
 6. Result `{site_id}`; one F19 claim with `{database:{db_id,name,username,host,password}, wordpress:{admin_username,admin_email,admin_password}}` (`wordPressClaim`). No secret in result/events/audit/plaintext.
 
+### Offline lab checkpoint recovery
+
+The lab guarantees replay at committed checkpoints: `db_applied` with an empty docroot publishes the pinned payload and config, then immediately records `config_published`; `config_published` runs `install_core` and completes; `done` is a no-op. A nonempty docroot at `db_applied` requires operator reconciliation and returns `precondition_failed` without changing it. A crash or failed checkpoint write after publication but before `config_published` commits is a deferred power-loss recovery case; the lab does not infer completion or overwrite the docroot.
+
 ## What is unchanged
 
 The sealed-reservation, claim, recovery, conflict, and locking machinery (`EnqueueWordPress`, `prepareWordPress`, `OpenWordPressCredentials`, `wordPressClaim`, the checkpoints, `Operation.Keys()`) is reused as-is. The reservation still requires UID + evidence at admission; this ruling only guarantees both exist before admission, so no crash-safety machinery changes. The MariaDB lifecycle (Step 1) and the php-site provisioning (Step 2) are frozen and reused.

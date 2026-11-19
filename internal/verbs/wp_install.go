@@ -109,6 +109,9 @@ func wpInstallExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if op.Kind != store.WordPressInstall || j.ObjectKey != "site:"+op.SiteID {
 		return rpc.Errf("forbidden", "Job binding mismatch")
 	}
+	if op.Checkpoint == "done" {
+		return nil
+	}
 	if err = a.Store.CheckOperation(ctx, j.ID); err != nil {
 		return err
 	}

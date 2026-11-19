@@ -4,6 +4,7 @@ package verbs
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -21,6 +22,14 @@ import (
 func wpInstallTail(ctx context.Context, a *agent.Agent, j *jobs.Job, op store.Operation, credentials jobs.WordPressCredentials) error {
 	in := op.Identity.WordPress.Input
 	if op.Checkpoint == "db_applied" {
+		docroot := filepath.Join(a.Cfg.SitesRoot, in.SiteName, "public")
+		entries, err := os.ReadDir(docroot)
+		if err != nil {
+			return rpc.Errf("agent_error", "WordPress docroot unavailable")
+		}
+		if len(entries) != 0 {
+			return rpc.Errf("precondition_failed", "WordPress docroot requires operator reconciliation")
+		}
 		uid, gid, err := php.ResolveUser(ctx, a.Exec, a.Cfg.SitesRoot, in.SiteName, op.SiteID)
 		if err != nil || uid != in.UID || gid != in.GID {
 			return rpc.Errf("agent_error", "Site account is unavailable")
