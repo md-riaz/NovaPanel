@@ -58,6 +58,24 @@ func emptyDocroot(t *testing.T, root, leaf string, uid, gid uint32) string {
 	return dir
 }
 
+func TestLabTamperedFixtureDoesNotPublishConfig(t *testing.T) {
+	if os.Geteuid() != 0 || os.Getenv("NOVAPANEL_DISPOSABLE_UID_LAB") != "1" {
+		t.Skip("requires an explicitly disposable root container")
+	}
+	docroot := emptyDocroot(t, t.TempDir(), "docroot", 1001, 1001)
+	original := allowed[wpURL]
+	tampered := original
+	tampered.hash = strings.Repeat("0", 64)
+	allowed[wpURL] = tampered
+	defer func() { allowed[wpURL] = original }()
+	if err := InstallWordPress(NewLabLifetime(1001, 1001, "demo", "01ARZ3NDEKTSV4RRFFQ69G5FAV", docroot), []byte("config")); err == nil {
+		t.Fatal("tampered fixture accepted")
+	}
+	if _, err := os.Stat(filepath.Join(docroot, "wp-config.php")); !os.IsNotExist(err) {
+		t.Fatalf("config published: %v", err)
+	}
+}
+
 // TestLabRestrictedInstall exercises a full offline install into a fresh,
 // site-UID-owned docroot and the retain-and-quarantine teardown.
 func TestLabRestrictedInstall(t *testing.T) {

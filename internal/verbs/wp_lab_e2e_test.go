@@ -4,6 +4,7 @@ package verbs_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -146,7 +147,40 @@ func TestWordPressLabInstall(t *testing.T) {
 	}
 	db := claim["database"].(map[string]any)
 	admin := claim["wordpress"].(map[string]any)
-	if !strings.Contains(string(config), db["password"].(string)) || admin["admin_password"] == "" {
+	dbPass := db["password"].(string)
+	adminPass := admin["admin_password"].(string)
+	if !strings.Contains(string(config), dbPass) || adminPass == "" {
 		t.Fatal("missing claim credentials")
+	}
+	claimJSON, err := json.Marshal(claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(config), "\n") {
+		if strings.Contains(line, "_KEY'") || strings.Contains(line, "_SALT'") {
+			parts := strings.Split(line, "'")
+			if len(parts) < 4 || len(parts[3]) == 0 || strings.Contains(string(claimJSON), parts[3]) {
+				t.Fatal("salt missing or leaked into claim")
+			}
+		}
+	}
+	var public string
+	err = st.Tx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT coalesce((SELECT group_concat(msg, ' ') FROM job_events WHERE job_id=?),'') || coalesce((SELECT group_concat(coalesce(detail_json,''), ' ') FROM events),'')`, j.ID).Scan(&public)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditBytes, err := os.ReadFile(filepath.Join(root, "audit"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{dbPass, adminPass} {
+		if strings.Contains(public, value) || strings.Contains(string(auditBytes), value) || strings.Contains(string(j.Result), value) {
+			t.Fatal("password leaked to public output")
+		}
+	}
+	if _, err := a.Jobs.Claim(jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: "local-root"}), en.Job.ID, en.ClaimToken); err == nil {
+		t.Fatal("claim was delivered twice")
 	}
 }
