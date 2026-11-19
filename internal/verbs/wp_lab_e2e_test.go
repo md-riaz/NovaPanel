@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -152,10 +153,10 @@ func runWordPressLab(t *testing.T, checkpoint string) string {
 	var j store.Job
 	for {
 		j, err = st.GetJob(ctx, en.Job.ID)
-		if err != nil {
+		if err != nil && !errors.Is(err, store.ErrPublicationPending) {
 			t.Fatal(err)
 		}
-		if j.State == "done" || j.State == "failed" {
+		if err == nil && (j.State == "done" || j.State == "failed") {
 			break
 		}
 		if time.Now().After(deadline) {
