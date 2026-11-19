@@ -30,6 +30,9 @@ func Parse(s string) (ssh.PublicKey, string, error) {
 			return nil, "", errors.New("multiple keys")
 		}
 	}
+	if len(comment) > 255 {
+		return nil, "", errors.New("key comment too long")
+	}
 	switch k.Type() {
 	case ssh.KeyAlgoED25519:
 	case ssh.KeyAlgoRSA:

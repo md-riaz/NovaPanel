@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	runner "novapanel/internal/exec"
@@ -49,11 +50,14 @@ func TestDroppedWrite(t *testing.T) {
 	if err = copyFile.Close(); err != nil {
 		t.Fatal(err)
 	}
-	request, err := json.Marshal(Request{Home: home, SiteID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Operation: "add", Value: testKey(t)})
-	if err != nil {
+	key := strings.TrimSuffix(testKey(t), " test-comment") + " " + strings.Repeat("<>&", 85)
+	var request bytes.Buffer
+	encoder := json.NewEncoder(&request)
+	encoder.SetEscapeHTML(false)
+	if err = encoder.Encode(Request{Home: home, SiteID: "01ARZ3NDEKTSV4RRFFQ69G5FAV", Operation: "add", Value: key}); err != nil {
 		t.Fatal(err)
 	}
-	out, stderr, code, err := (runner.Real{}).Run(context.Background(), copyPath, []string{"-test.run=^TestDroppedChild$"}, runner.RunOpts{Uid: uid, Gid: gid, Groups: []uint32{}, Env: []string{"SSHKEY_TEST_CHILD=1"}, Stdin: bytes.NewReader(request)})
+	out, stderr, code, err := (runner.Real{}).Run(context.Background(), copyPath, []string{"-test.run=^TestDroppedChild$"}, runner.RunOpts{Uid: uid, Gid: gid, Groups: []uint32{}, Env: []string{"SSHKEY_TEST_CHILD=1"}, Stdin: &request})
 	if err != nil || code != 0 {
 		t.Fatalf("child failed %d %v %s %s", code, err, out, stderr)
 	}
@@ -67,6 +71,10 @@ func TestDroppedWrite(t *testing.T) {
 	}
 	if stat.Uid != uid || info.Mode().Perm() != 0600 {
 		t.Fatalf("incorrect ownership or mode: %v", info)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".ssh", "authorized_keys"))
+	if err != nil || strings.TrimSpace(string(data)) != key {
+		t.Fatalf("key not preserved: %v", err)
 	}
 }
 func TestDroppedChild(t *testing.T) {

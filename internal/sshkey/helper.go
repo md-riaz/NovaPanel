@@ -27,7 +27,7 @@ func Helper(in io.Reader, out io.Writer) error {
 		return errors.New("refusing root helper")
 	}
 	var req Request
-	if err := json.NewDecoder(io.LimitReader(in, 32768)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(in, 131072)).Decode(&req); err != nil {
 		return err
 	}
 	res, err := Apply(req)

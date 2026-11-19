@@ -128,11 +128,13 @@ func (s sshkeyService) run(ctx context.Context, siteID, op, value string) (sshke
 	if err != nil {
 		return res, err
 	}
-	body, err := json.Marshal(sshkey.Request{Home: filepath.Join(a.Cfg.SitesRoot, site.Name), SiteID: siteID, Operation: op, Value: value})
-	if err != nil {
+	var body bytes.Buffer
+	encoder := json.NewEncoder(&body)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(sshkey.Request{Home: filepath.Join(a.Cfg.SitesRoot, site.Name), SiteID: siteID, Operation: op, Value: value}); err != nil {
 		return res, err
 	}
-	out, _, code, err := a.Exec.Run(ctx, program, []string{"__sshkey"}, runner.RunOpts{Uid: uid, Gid: gid, Groups: []uint32{}, Stdin: bytes.NewReader(body), MaxOutput: 2 << 20})
+	out, _, code, err := a.Exec.Run(ctx, program, []string{"__sshkey"}, runner.RunOpts{Uid: uid, Gid: gid, Groups: []uint32{}, Stdin: &body, MaxOutput: 2 << 20})
 	if err != nil || code != 0 {
 		return res, rpc.Errf("agent_error", "SSH key operation failed")
 	}
