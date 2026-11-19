@@ -173,7 +173,7 @@ func TestWordPressLabInstall(t *testing.T) {
 	}
 	var configs []string
 	for _, checkpoint := range []string{"prepared", "db_applied", "config_published"} {
-		t.Run(checkpoint, func(t *testing.T) { configs = append(configs, runWordPressLab(t, checkpoint, false)) })
+		t.Run(checkpoint, func(t *testing.T) { configs = append(configs, runWordPressLab(t, checkpoint, false, false)) })
 	}
 	if len(configs) == 3 {
 		for i := 1; i < len(configs); i++ {
@@ -190,10 +190,17 @@ func TestWordPressLabReplayAlreadyInstalled(t *testing.T) {
 	if os.Geteuid() != 0 || os.Getenv("NOVAPANEL_DISPOSABLE_UID_LAB") != "1" {
 		t.Skip("requires disposable root container")
 	}
-	runWordPressLab(t, "config_published", true)
+	runWordPressLab(t, "config_published", true, false)
 }
 
-func runWordPressLab(t *testing.T, checkpoint string, alreadyInstalled bool) string {
+func TestWordPressLabBackendRefusalFailsClosed(t *testing.T) {
+	if os.Geteuid() != 0 || os.Getenv("NOVAPANEL_DISPOSABLE_UID_LAB") != "1" {
+		t.Skip("requires disposable root container")
+	}
+	runWordPressLab(t, "db_applied", false, true)
+}
+
+func runWordPressLab(t *testing.T, checkpoint string, alreadyInstalled, refuseBackend bool) string {
 	t.Helper()
 	ctx := context.Background()
 	root := t.TempDir()
@@ -273,6 +280,11 @@ func runWordPressLab(t *testing.T, checkpoint string, alreadyInstalled bool) str
 			t.Fatal(err)
 		}
 	}
+	if refuseBackend {
+		if err := os.Chmod(docroot, 0770); err != nil {
+			t.Fatal(err)
+		}
+	}
 	dbCallsBefore := fake.db.calls
 	run, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
@@ -299,6 +311,15 @@ func runWordPressLab(t *testing.T, checkpoint string, alreadyInstalled bool) str
 			t.Fatalf("timeout: state=%s attempts=%d checkpoint=%s opErr=%v credentialErr=%v dbCalls=%d", j.State, j.Attempts, op.Checkpoint, e, ce, fake.db.calls)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	if refuseBackend {
+		if j.State != "failed" || j.Code != "agent_error" {
+			t.Fatalf("backend refusal: %+v", j)
+		}
+		if _, err := os.Stat(filepath.Join(docroot, "wp-config.php")); !os.IsNotExist(err) {
+			t.Fatalf("config published: %v", err)
+		}
+		return ""
 	}
 	if j.State != "done" || string(j.Result) != fmt.Sprintf(`{"site_id":%q}`, sid) || fake.installs != map[bool]int{false: 1, true: 0}[alreadyInstalled] {
 		t.Fatalf("install: %+v calls=%d", j, fake.installs)
