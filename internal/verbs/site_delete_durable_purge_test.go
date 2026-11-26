@@ -81,6 +81,8 @@ func TestSiteDeletePurgeDropsManagedDatabaseAndUser(t *testing.T) {
 	}
 	runner := &sitePurgeRunner{db: db, user: uid, site: sid, root: sites}
 	a := agent.New()
+	a.Cfg.DBPath = filepath.Join(root, "panel.db")
+	a.SSHD.Root = filepath.Join(root, "missing-ssh")
 	a.Store = st
 	a.Audit = log
 	a.Exec = runner

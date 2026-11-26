@@ -11,6 +11,7 @@ import (
 	"novapanel/internal/jobs"
 	"novapanel/internal/php"
 	"novapanel/internal/platform"
+	"novapanel/internal/render/sshd"
 	"novapanel/internal/rpc"
 	"novapanel/internal/store"
 	"novapanel/internal/validate"
@@ -240,6 +241,9 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 	}
 	if e = (cronState{a}).teardown(ctx, cronUnitsDir, s.ID); e != nil {
 		return e
+	}
+	if e = (sshdState{a: a}).apply(ctx, sshd.Desired{Site: s.Name, User: s.Name}, true); e != nil {
+		return errors.Join(e, jobs.ErrRetry)
 	}
 	if e = a.Store.DeleteDeployKey(ctx, s.ID); e != nil {
 		return e

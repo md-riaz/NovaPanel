@@ -1,0 +1,250 @@
+// Package sshd renders and applies per-site SSH configuration.
+package sshd
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"golang.org/x/sys/unix"
+	runner "novapanel/internal/exec"
+	"novapanel/internal/platform"
+	"novapanel/internal/rpcerr"
+	"novapanel/internal/validate"
+)
+
+const DefaultRoot = "/etc/ssh/sshd_config.d"
+const Binary = "/usr/sbin/sshd"
+
+type Desired struct {
+	Site, User string
+	Enabled    bool
+	Offline    bool // teardown when ssh is not managed by a running systemd
+}
+type Applier struct {
+	Root   string
+	Runner runner.Runner
+	Guard  func(context.Context) error
+	mu     sync.Mutex
+}
+
+// ErrDiverged reports that the previous configuration could not be restored and reloaded.
+var ErrDiverged = errors.New("sshd configuration diverged")
+
+func (a *Applier) command(ctx context.Context, prog string, args ...string) error {
+	if a.Runner == nil {
+		return rpcerr.Errf("agent_error", "SSH execution unavailable")
+	}
+	_, _, code, err := a.Runner.Run(ctx, prog, args, runner.RunOpts{})
+	if err != nil || code != 0 {
+		return rpcerr.Errf("agent_error", "SSH command failed: %s", prog)
+	}
+	return nil
+}
+
+// Heal validates and reloads the currently effective configuration.
+func (a *Applier) Heal(ctx context.Context) error {
+	if err := a.command(ctx, Binary, "-t"); err != nil {
+		return err
+	}
+	return a.command(ctx, platform.Systemctl, "reload", "ssh.service")
+}
+
+func content(d Desired) []byte {
+	return []byte(fmt.Sprintf("Match User %s\n    ForceCommand internal-sftp\n    AllowTcpForwarding no\n    X11Forwarding no\n    PermitTTY no\n", d.User))
+}
+
+// Unchanged checks whether a requested state needs a filesystem mutation.
+func (a *Applier) Unchanged(d Desired) (bool, error) {
+	if err := (&validate.V{}).SiteName(d.Site); err != nil {
+		return false, err
+	}
+	if d.User != d.Site {
+		return false, rpcerr.Errf("invalid_argument", "Invalid SSH user binding")
+	}
+	dir := a.Root
+	if dir == "" {
+		dir = DefaultRoot
+	}
+	if !filepath.IsAbs(dir) {
+		return false, rpcerr.Errf("invalid_argument", "Invalid SSH config directory")
+	}
+	resolved, err := filepath.EvalSymlinks(dir)
+	if os.IsNotExist(err) && !d.Enabled {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !filepath.IsAbs(dir) || resolved != dir {
+		return false, rpcerr.Errf("invalid_argument", "Invalid SSH config directory")
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return false, err
+	}
+	defer root.Close()
+	name := "novapanel-" + d.Site + ".conf"
+	good, err := readRegular(root, name+".lkg")
+	goodAbsent := os.IsNotExist(err)
+	if err != nil && !goodAbsent {
+		return false, err
+	}
+	live, liveErr := readRegular(root, name)
+	if !d.Enabled {
+		return goodAbsent && os.IsNotExist(liveErr), nil
+	}
+	return !goodAbsent && liveErr == nil && bytes.Equal(good, content(d)) && bytes.Equal(live, content(d)), nil
+}
+
+func (a *Applier) Apply(ctx context.Context, d Desired) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.Guard != nil {
+		if err := a.Guard(ctx); err != nil {
+			return err
+		}
+	}
+	unchanged, err := a.Unchanged(d)
+	if err != nil {
+		return err
+	}
+	if unchanged {
+		return nil
+	}
+	if d.Offline && d.Enabled {
+		return rpcerr.Errf("invalid_argument", "Offline SSH enable is forbidden")
+	}
+	if d.User != d.Site {
+		return rpcerr.Errf("invalid_argument", "Invalid SSH user binding")
+	}
+	dir := a.Root
+	if dir == "" {
+		dir = DefaultRoot
+	}
+	resolved, err := filepath.EvalSymlinks(dir)
+	if d.Offline && os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !filepath.IsAbs(dir) || resolved != dir {
+		return rpcerr.Errf("invalid_argument", "Invalid SSH config directory")
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	name := "novapanel-" + d.Site + ".conf"
+	old, err := readRegular(root, name+".lkg")
+	exists := err == nil
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	var desired []byte
+	if d.Enabled {
+		desired = content(d)
+		err = writeAtomic(root, name, desired)
+	} else {
+		err = remove(root, name)
+	}
+	if err == nil && d.Offline {
+		return nil
+	}
+	if err == nil {
+		err = a.Heal(ctx)
+	}
+	if err != nil {
+		recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		var restore error
+		if exists {
+			restore = writeAtomic(root, name, old)
+		} else {
+			restore = remove(root, name)
+		}
+		if restore == nil && !d.Offline {
+			restore = a.command(recovery, platform.Systemctl, "reload", "ssh.service")
+		}
+		if restore != nil {
+			return errors.Join(err, ErrDiverged, restore)
+		}
+		return err
+	}
+	if d.Enabled {
+		return writeAtomic(root, name+".lkg", desired)
+	}
+	return remove(root, name+".lkg")
+}
+
+func readRegular(root *os.Root, name string) ([]byte, error) {
+	f, err := root.OpenFile(name, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0444 == 0 {
+		return nil, rpcerr.Errf("invalid_argument", "Invalid SSH config file")
+	}
+	return io.ReadAll(f)
+}
+func syncDir(root *os.Root) error {
+	f, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
+}
+func remove(root *os.Root, name string) error {
+	err := root.Remove(name)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return syncDir(root)
+}
+func writeAtomic(root *os.Root, name string, data []byte) error {
+	tmp := name + ".tmp"
+	if info, err := root.Lstat(tmp); err == nil {
+		if !info.Mode().IsRegular() {
+			return rpcerr.Errf("invalid_argument", "Invalid SSH temporary file")
+		}
+		if err = root.Remove(tmp); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0644)
+	if err != nil {
+		return err
+	}
+	defer root.Remove(tmp)
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	err = errors.Join(err, f.Close())
+	if err != nil {
+		return err
+	}
+	if err = root.Rename(tmp, name); err != nil {
+		return err
+	}
+	return syncDir(root)
+}

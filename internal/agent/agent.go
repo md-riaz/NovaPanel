@@ -12,6 +12,7 @@ import (
 	"novapanel/internal/platform"
 	"novapanel/internal/render/nginx"
 	renderphp "novapanel/internal/render/php"
+	"novapanel/internal/render/sshd"
 	"novapanel/internal/rpcerr"
 	"novapanel/internal/secret"
 	"novapanel/internal/store"
@@ -39,6 +40,7 @@ type Agent struct {
 	DurablePHP           *PHPDependencies
 	ProvisionSite        func(context.Context, string, string) error
 	DeleteDatabaseForJob func(context.Context, string, string, string) error
+	SSHD                 *sshd.Applier
 	Nginx                *nginx.Applier
 	PHP                  *php.PoolApplier
 	PasswordFailures     auth.FailureBudgets
@@ -63,6 +65,7 @@ func NewWithDependencies(cfg config.Config, runner exec.Runner, v *validate.V) *
 		ProvisionSite: func(ctx context.Context, name, siteID string) error {
 			return platform.EnsureSite(ctx, runner, cfg.SitesRoot, cfg.ACMEWebroot, cfg.LogDir, name, siteID)
 		},
+		SSHD:  &sshd.Applier{Runner: runner},
 		Nginx: &nginx.Applier{Root: platform.NginxRoot, Runner: runner, Probe: nginx.StateProbe("http://127.0.0.1:80", "https://127.0.0.1:443", nil)},
 		PHP: &php.PoolApplier{Dir: "/etc/php/8.3/fpm/pool.d", Runner: runner, Probe: func(ctx context.Context) error {
 			_, _, code, err := runner.Run(ctx, platform.Systemctl, []string{"is-active", "--quiet", "php8.3-fpm.service"}, exec.RunOpts{})
