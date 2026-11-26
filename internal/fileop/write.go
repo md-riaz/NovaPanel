@@ -77,11 +77,13 @@ func applyWrite(root *os.Root, req Request, content []byte) error {
 		name := path.Base(p)
 		f, info, err := leaf(parent, name)
 		exists := err == nil
+		mode := os.FileMode(0644)
 		if exists {
 			f.Close()
 			if !info.Mode().IsRegular() {
 				return unix.EINVAL
 			}
+			mode = info.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -90,13 +92,13 @@ func applyWrite(root *os.Root, req Request, content []byte) error {
 			return err
 		}
 		tmp := ".novapanel-" + hex.EncodeToString(random[:])
-		f, err = parent.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0644)
+		f, err = parent.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
 		if err != nil {
 			return err
 		}
 		defer parent.Remove(tmp)
-		if err = f.Chmod(0644); err == nil {
-			_, err = f.Write(content)
+		if _, err = f.Write(content); err == nil {
+			err = f.Chmod(mode)
 		}
 		if e := f.Close(); err == nil {
 			err = e

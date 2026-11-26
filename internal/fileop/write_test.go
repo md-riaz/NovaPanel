@@ -30,6 +30,17 @@ func TestWriteOperations(t *testing.T) {
 	if err != nil || string(got) != "second" || os.SameFile(before, after) || after.Mode().Perm() != 0644 {
 		t.Fatalf("overwrite: %q %v", got, err)
 	}
+	for _, mode := range []os.FileMode{0600, 0640} {
+		if err := os.Chmod(filepath.Join(dir, "file"), mode); err != nil {
+			t.Fatal(err)
+		}
+		run("write", "file", "", 0, []byte("private"), "")
+		info, err := os.Stat(filepath.Join(dir, "file"))
+		got, readErr := os.ReadFile(filepath.Join(dir, "file"))
+		if err != nil || readErr != nil || info.Mode().Perm() != mode || string(got) != "private" {
+			t.Fatalf("overwrite mode %o: %v, %v", mode, info, err)
+		}
+	}
 	run("write", "max", "", 0, bytes.Repeat([]byte{'x'}, MaxWrite), "")
 	run("write", "too-large", "", 0, make([]byte, MaxWrite+1), "invalid_argument")
 	run("mkdir", "sub", "", 0, nil, "")

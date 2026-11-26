@@ -6,8 +6,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -113,5 +115,65 @@ func TestDroppedHelper(t *testing.T) {
 	info, err = os.Stat(filepath.Join(dir, "written"))
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatalf("chmod: %v %v", info, err)
+	}
+	stop := make(chan struct{})
+	type observation struct {
+		count int
+		err   error
+	}
+	observed := make(chan observation, 1)
+	go func() {
+		var result observation
+		defer func() { observed <- result }()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				result.err = err
+				return
+			}
+			for _, e := range entries {
+				if !strings.HasPrefix(e.Name(), ".novapanel-") {
+					continue
+				}
+				i, err := os.Lstat(filepath.Join(dir, e.Name()))
+				if os.IsNotExist(err) {
+					continue
+				}
+				if err != nil {
+					result.err = err
+					return
+				}
+				result.count++
+				if i.Mode().Perm()&0077 != 0 {
+					result.err = fmt.Errorf("temporary file mode %o", i.Mode().Perm())
+					return
+				}
+			}
+		}
+	}()
+	large := bytes.Repeat([]byte{'x'}, MaxWrite)
+	header, _ = json.Marshal(Request{Base: base, Name: "site", Operation: "write", Path: "written", Length: len(large)})
+	input = append(append(header, '\n'), large...)
+	for i := 0; i < 80; i++ {
+		out, _, code, err = (runner.Real{}).Run(context.Background(), binaryPath, []string{"-test.run=^TestDroppedHelper$"}, runner.RunOpts{Uid: 65534, Gid: 65534, Groups: []uint32{}, Env: []string{"NOVAPANEL_FILEOP_CHILD=1"}, Stdin: bytes.NewReader(input)})
+		if err != nil || code != 0 || json.Unmarshal(out, &response) != nil || response.Code != "" {
+			close(stop)
+			<-observed
+			t.Fatalf("private write: %d %s %v", code, out, err)
+		}
+	}
+	close(stop)
+	seen := <-observed
+	if seen.err != nil || seen.count == 0 {
+		t.Fatalf("temporary file observations: %+v", seen)
+	}
+	info, err = os.Stat(filepath.Join(dir, "written"))
+	if err != nil || unix.Stat(filepath.Join(dir, "written"), &owner) != nil || info.Mode().Perm() != 0600 || owner.Uid != 65534 {
+		t.Fatalf("private result: %v %v", info, err)
 	}
 }
