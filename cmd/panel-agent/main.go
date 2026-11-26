@@ -212,6 +212,13 @@ running:
 	return err
 }
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "__archive" {
+		if err := fileop.ArchiveHelper(os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "archive helper failed")
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "__fileop" {
 		if err := fileop.Helper(os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "file helper failed")
