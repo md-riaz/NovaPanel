@@ -54,6 +54,32 @@ func TestCronRenderAndValidation(t *testing.T) {
 		}
 	}
 }
+
+type cronMissing struct {
+	calls        []string
+	inspectFails bool
+}
+
+func (f *cronMissing) Run(_ context.Context, p string, args []string, _ runner.RunOpts) ([]byte, []byte, int, error) {
+	f.calls = append(f.calls, p+" "+strings.Join(args, " "))
+	if args[0] == "show" && !f.inspectFails {
+		return []byte("not-found\n"), nil, 0, nil
+	}
+	return nil, nil, 1, errors.New("failed")
+}
+func TestCronDisableMissing(t *testing.T) {
+	f := &cronMissing{}
+	if err := cronDisable(context.Background(), f, "missing.timer", "missing.service"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.calls) != 3 || !strings.Contains(f.calls[0], "disable --now") {
+		t.Fatal(f.calls)
+	}
+	f = &cronMissing{inspectFails: true}
+	if err := cronDisable(context.Background(), f, "missing.timer"); err == nil {
+		t.Fatal("inspection failure was ignored")
+	}
+}
 func TestCronApplyRollback(t *testing.T) {
 	dir := t.TempDir()
 	row := store.CronJob{ID: testCronID, SiteID: testCronSite, UnitName: cronUnit(testCronSite, testCronID)}

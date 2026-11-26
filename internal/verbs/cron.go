@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -89,6 +90,29 @@ func cronCommand(ctx context.Context, r runner.Runner, program string, args ...s
 	}
 	return nil
 }
+func cronDisable(ctx context.Context, r runner.Runner, units ...string) error {
+	args := append([]string{"disable", "--now"}, units...)
+	if err := cronCommand(ctx, r, platform.Systemctl, args...); err == nil {
+		return nil
+	}
+	if r == nil {
+		return rpc.Errf("agent_error", "Cron execution unavailable")
+	}
+	for _, unit := range units {
+		out, _, code, err := r.Run(ctx, platform.Systemctl, []string{"show", "--property=LoadState", "--value", unit}, runner.RunOpts{})
+		if strings.TrimSpace(string(out)) == "not-found" && ctx.Err() == nil {
+			continue
+		}
+		if err != nil || code != 0 {
+			return rpc.Errf("agent_error", "Cannot inspect cron unit %s", unit)
+		}
+		if err := cronCommand(ctx, r, platform.Systemctl, "disable", "--now", unit); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func cronCreate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := *args.(*cronCreateArgs)
 	if v.CronID != "" {
@@ -233,12 +257,16 @@ func (c cronState) mutationExec(ctx context.Context, j *jobs.Job) error {
 	case "cron.enable":
 		err = (cronState{a}).install(ctx, row)
 	case "cron.disable":
-		if err = cronCommand(ctx, a.Exec, platform.Systemctl, "disable", "--now", row.UnitName+".timer"); err == nil {
-			err = a.Store.SetCronEnabled(ctx, row.ID, false)
+		if err = cronDisable(ctx, a.Exec, row.UnitName+".timer"); err == nil {
+			if err = a.Store.SetCronEnabled(ctx, row.ID, false); err != nil {
+				err = errors.Join(err, jobs.ErrRetry)
+			}
 		}
 	case "cron.delete":
 		if err = cronRemove(ctx, a.Exec, cronUnitsDir, row.UnitName); err == nil {
-			err = a.Store.DeleteCron(ctx, row.ID)
+			if err = a.Store.DeleteCron(ctx, row.ID); err != nil {
+				err = errors.Join(err, jobs.ErrRetry)
+			}
 		}
 	default:
 		return rpc.Errf("invalid_argument", "Invalid cron operation")
@@ -330,7 +358,7 @@ func (c cronState) teardown(ctx context.Context, dir, siteID string) error {
 	}
 	for name := range names {
 		if systemdErr == nil {
-			if err := cronCommand(ctx, a.Exec, platform.Systemctl, "disable", "--now", name+".timer", name+".service"); err != nil {
+			if err := cronDisable(ctx, a.Exec, name+".timer", name+".service"); err != nil {
 				return err
 			}
 		}
@@ -353,7 +381,7 @@ func cronUnlink(dir, name string) error {
 	return nil
 }
 func cronRemove(ctx context.Context, r runner.Runner, dir, name string) error {
-	if err := cronCommand(ctx, r, platform.Systemctl, "disable", "--now", name+".timer", name+".service"); err != nil {
+	if err := cronDisable(ctx, r, name+".timer", name+".service"); err != nil {
 		return err
 	}
 	if err := cronUnlink(dir, name); err != nil {
@@ -414,9 +442,10 @@ func cronApply(ctx context.Context, r runner.Runner, dir string, row store.CronJ
 	if err = apply(); err == nil {
 		return nil
 	}
-	recovery := context.WithoutCancel(ctx)
+	recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 	var rollback error
-	rollback = errors.Join(rollback, cronCommand(recovery, r, platform.Systemctl, "disable", "--now", row.UnitName+".timer", row.UnitName+".service"))
+	rollback = errors.Join(rollback, cronDisable(recovery, r, row.UnitName+".timer", row.UnitName+".service"))
 	if row.Enabled {
 		rollback = errors.Join(rollback, cronFiles(dir, row.UnitName, service, timer))
 	} else {
