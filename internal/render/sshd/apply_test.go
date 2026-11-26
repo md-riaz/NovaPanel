@@ -99,7 +99,7 @@ func TestReplayAppliesFromLastKnownGood(t *testing.T) {
 	if err := a.Apply(context.Background(), d); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.calls) != 2 {
+	if !reflect.DeepEqual(r.calls, []string{"/usr/sbin/sshd -t", "/usr/bin/systemctl reload ssh.service"}) {
 		t.Fatalf("candidate replay commands: %v", r.calls)
 	}
 	b, err := os.ReadFile(path + ".lkg")
@@ -114,11 +114,44 @@ func TestReplayAppliesFromLastKnownGood(t *testing.T) {
 	if err := a.Apply(context.Background(), d); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.calls) != 2 {
+	if !reflect.DeepEqual(r.calls, []string{"/usr/sbin/sshd -t", "/usr/bin/systemctl reload ssh.service"}) {
 		t.Fatalf("removal replay commands: %v", r.calls)
 	}
 	if _, err := os.Stat(path + ".lkg"); !os.IsNotExist(err) {
 		t.Fatalf("last-known-good still present: %v", err)
+	}
+}
+
+func TestOfflineTeardownThenEnableRestoresRestriction(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "novapanel-demo.conf")
+	r := &fakeRunner{}
+	a := &Applier{Root: dir, Runner: r}
+	enabled := Desired{Site: "demo", User: "demo", Enabled: true}
+	if err := a.Apply(context.Background(), enabled); err != nil {
+		t.Fatal(err)
+	}
+	r.calls = nil
+	if err := a.Apply(context.Background(), Desired{Site: "demo", User: "demo", Offline: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("drop-in remains: %v", err)
+	}
+	if b, err := os.ReadFile(path + ".lkg"); err != nil || !reflect.DeepEqual(b, content(enabled)) {
+		t.Fatalf("last-known-good: %q %v", b, err)
+	}
+	if len(r.calls) != 0 {
+		t.Fatalf("offline commands: %v", r.calls)
+	}
+	if err := a.Apply(context.Background(), enabled); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(path); err != nil || !reflect.DeepEqual(b, content(enabled)) {
+		t.Fatalf("restriction missing: %q %v", b, err)
+	}
+	if !reflect.DeepEqual(r.calls, []string{"/usr/sbin/sshd -t", "/usr/bin/systemctl reload ssh.service"}) {
+		t.Fatalf("enable commands: %v", r.calls)
 	}
 }
 

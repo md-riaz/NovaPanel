@@ -90,14 +90,17 @@ func (a *Applier) Unchanged(d Desired) (bool, error) {
 		return false, err
 	}
 	defer root.Close()
-	current, err := readRegular(root, "novapanel-"+d.Site+".conf.lkg")
-	if os.IsNotExist(err) {
-		return !d.Enabled, nil
-	}
-	if err != nil {
+	name := "novapanel-" + d.Site + ".conf"
+	good, err := readRegular(root, name+".lkg")
+	goodAbsent := os.IsNotExist(err)
+	if err != nil && !goodAbsent {
 		return false, err
 	}
-	return d.Enabled && bytes.Equal(current, content(d)), nil
+	live, liveErr := readRegular(root, name)
+	if !d.Enabled {
+		return goodAbsent && os.IsNotExist(liveErr), nil
+	}
+	return !goodAbsent && liveErr == nil && bytes.Equal(good, content(d)) && bytes.Equal(live, content(d)), nil
 }
 
 func (a *Applier) Apply(ctx context.Context, d Desired) error {
