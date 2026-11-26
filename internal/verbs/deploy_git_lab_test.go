@@ -151,6 +151,19 @@ func TestDeployGitLab(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(home, "public/index.html")); string(got) != "first" {
 		t.Fatal(string(got))
 	}
+	gidNum, _ := strconv.ParseUint(gid, 10, 32)
+	dropped := deployUserRunner{runner: a.Exec, uid: uint32(wantUID), gid: uint32(gidNum)}
+	if e = deployHelper(ctx, dropped, home, "prepare", []byte("lab key")); e != nil {
+		t.Fatal(e)
+	}
+	identity := filepath.Join(home, ".novapanel/deploy/id_ed25519")
+	var keyStat unix.Stat_t
+	if e = unix.Stat(identity, &keyStat); e != nil || keyStat.Uid != uint32(wantUID) || keyStat.Mode&0777 != 0600 {
+		t.Fatalf("identity ownership or mode: %+v %v", keyStat, e)
+	}
+	if e = deployHelper(ctx, dropped, home, "remove", nil); e != nil {
+		t.Fatal(e)
+	}
 	if _, e = os.Stat(filepath.Join(home, ".novapanel/deploy/id_ed25519")); !os.IsNotExist(e) {
 		t.Fatal("identity not removed")
 	}
