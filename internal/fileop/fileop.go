@@ -80,14 +80,19 @@ func Helper(in io.Reader, out io.Writer) error {
 	}
 	res, err := Apply(req)
 	if err != nil {
-		res = Response{Code: "agent_error"}
-		if errors.Is(err, os.ErrNotExist) {
-			res.Code = "not_found"
-		} else if errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.EXDEV) || errors.Is(err, unix.EINVAL) {
-			res.Code = "invalid_argument"
-		}
+		res = Response{Code: errorCode(err)}
 	}
 	return json.NewEncoder(out).Encode(res)
+}
+
+func errorCode(err error) string {
+	if errors.Is(err, os.ErrNotExist) {
+		return "not_found"
+	}
+	if errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.EXDEV) || errors.Is(err, unix.EINVAL) {
+		return "invalid_argument"
+	}
+	return "agent_error"
 }
 
 func Apply(req Request) (Response, error) {
@@ -103,6 +108,11 @@ func Apply(req Request) (Response, error) {
 	p := path.Clean(req.Path)
 	f, err := root.OpenFile(p, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
+		var pe *os.PathError
+		// os.Root's escape error is unexported, so recognize it only at the confined open.
+		if errors.As(err, &pe) && pe.Err.Error() == "path escapes from parent" {
+			return res, unix.EINVAL
+		}
 		return res, err
 	}
 	defer f.Close()

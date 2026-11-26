@@ -93,3 +93,29 @@ func FuzzValidatePath(f *testing.F) {
 		}
 	})
 }
+
+func TestEscapeCodes(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "site", "public")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret"), []byte("secret"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range []string{"read", "list"} {
+		for _, p := range []string{"escape", "escape/secret"} {
+			result, err := Apply(Request{Base: base, Name: "site", Operation: op, Path: p})
+			if err == nil || errorCode(err) != "invalid_argument" || len(result.Content) != 0 || len(result.Entries) != 0 {
+				t.Fatalf("%s %s: %+v, %v", op, p, result, err)
+			}
+		}
+	}
+	if errorCode(unix.EIO) != "agent_error" {
+		t.Fatal("I/O failure misclassified")
+	}
+}
