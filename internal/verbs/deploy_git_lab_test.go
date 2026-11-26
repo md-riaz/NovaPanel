@@ -6,10 +6,10 @@ import (
 	"context"
 	"os"
 
+	"golang.org/x/sys/unix"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 
 	"novapanel/internal/agent"
@@ -123,11 +123,12 @@ func TestDeployGitLab(t *testing.T) {
 	if got, e := os.ReadFile(filepath.Join(home, "public/index.html")); e != nil || string(got) != "first" {
 		t.Fatalf("first checkout %s %v", got, e)
 	}
-	info, e := os.Stat(filepath.Join(home, "public/index.html"))
+	var info unix.Stat_t
+	e = unix.Stat(filepath.Join(home, "public/index.html"), &info)
 	if e != nil {
 		t.Fatal(e)
 	}
-	owner := info.Sys().(*syscall.Stat_t).Uid
+	owner := info.Uid
 	wantUID, _ := strconv.ParseUint(uid, 10, 32)
 	if owner != uint32(wantUID) {
 		t.Fatalf("checkout owner %d, want %d", owner, wantUID)
