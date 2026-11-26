@@ -75,11 +75,34 @@ func applyWrite(root *os.Root, req Request, content []byte) error {
 		}
 		defer parent.Close()
 		name := path.Base(p)
-		f, info, err := leaf(parent, name)
+		dir, err := parent.Open(".")
+		if err != nil {
+			return err
+		}
+		defer dir.Close()
+		var random [16]byte
+		if _, err = rand.Read(random[:]); err != nil {
+			return err
+		}
+		tmp := ".novapanel-" + hex.EncodeToString(random[:])
+		f, err := parent.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
+		if err != nil {
+			return err
+		}
+		defer parent.Remove(tmp)
+		defer f.Close()
+		if _, err = f.Write(content); err != nil {
+			return err
+		}
+		if err = f.Sync(); err != nil {
+			return err
+		}
+		// Mode is captured at overwrite: API writes lock, but shell replacement can race without publishing old bytes.
+		target, info, err := leaf(parent, name)
 		exists := err == nil
 		mode := os.FileMode(0644)
 		if exists {
-			f.Close()
+			target.Close()
 			if !info.Mode().IsRegular() {
 				return unix.EINVAL
 			}
@@ -87,33 +110,15 @@ func applyWrite(root *os.Root, req Request, content []byte) error {
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		var random [16]byte
-		if _, err = rand.Read(random[:]); err != nil {
+		if err = f.Chmod(mode); err != nil {
 			return err
 		}
-		tmp := ".novapanel-" + hex.EncodeToString(random[:])
-		f, err = parent.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
-		if err != nil {
-			return err
-		}
-		defer parent.Remove(tmp)
-		if _, err = f.Write(content); err == nil {
-			err = f.Chmod(mode)
-		}
-		if e := f.Close(); err == nil {
-			err = e
-		}
-		if err != nil {
+		if err = f.Close(); err != nil {
 			return err
 		}
 		if exists {
 			return parent.Rename(tmp, name)
 		}
-		dir, err := parent.Open(".")
-		if err != nil {
-			return err
-		}
-		defer dir.Close()
 		return unix.Renameat2(int(dir.Fd()), tmp, int(dir.Fd()), name, unix.RENAME_NOREPLACE)
 	case "move":
 		if ValidatePath(req.From) != nil || ValidatePath(req.To) != nil || path.Clean(req.From) == "." || path.Clean(req.To) == "." {
