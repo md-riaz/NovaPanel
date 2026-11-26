@@ -5,10 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
-
-	runner "novapanel/internal/exec"
-	"novapanel/internal/platform"
 
 	"golang.org/x/sys/unix"
 	"novapanel/internal/agent"
@@ -16,7 +12,10 @@ import (
 	"novapanel/internal/rpc"
 )
 
-type sshdState struct{ a *agent.Agent }
+type sshdState struct {
+	a          *agent.Agent
+	systemdDir string
+}
 
 // apply is the shared serialized entry point for SSH config mutations.
 func (s sshdState) apply(ctx context.Context, d sshd.Desired, teardown bool) error {
@@ -49,22 +48,23 @@ func (s sshdState) apply(ctx context.Context, d sshd.Desired, teardown bool) err
 	} else if !os.IsNotExist(err) {
 		return err
 	}
+	unchanged, err := a.SSHD.Unchanged(d)
+	if err != nil {
+		return err
+	}
+	if unchanged {
+		return nil
+	}
 	if teardown {
-		_, statErr := os.Stat("/run/systemd/system")
+		path := s.systemdDir
+		if path == "" {
+			path = "/run/systemd/system"
+		}
+		_, statErr := os.Stat(path)
 		if os.IsNotExist(statErr) {
 			d.Offline = true
 		} else if statErr != nil {
 			return statErr
-		} else {
-			if a.Exec == nil {
-				return rpc.Errf("agent_error", "SSH execution unavailable")
-			}
-			out, stderr, code, e := a.Exec.Run(ctx, platform.Systemctl, []string{"show", "--property=LoadState", "--value", "ssh.service"}, runner.RunOpts{})
-			if strings.Contains(string(stderr), "System has not been booted with systemd as init system") || strings.TrimSpace(string(out)) == "not-found" {
-				d.Offline = true
-			} else if e != nil || code != 0 {
-				return rpc.Errf("agent_error", "Cannot inspect SSH service")
-			}
 		}
 	}
 	err = a.SSHD.Apply(ctx, d)

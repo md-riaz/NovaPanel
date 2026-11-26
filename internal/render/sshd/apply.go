@@ -2,6 +2,7 @@
 package sshd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -55,6 +56,50 @@ func (a *Applier) Heal(ctx context.Context) error {
 	return a.command(ctx, platform.Systemctl, "reload", "ssh.service")
 }
 
+func content(d Desired) []byte {
+	return []byte(fmt.Sprintf("Match User %s\n    ForceCommand internal-sftp\n    AllowTcpForwarding no\n    X11Forwarding no\n    PermitTTY no\n", d.User))
+}
+
+// Unchanged checks whether a requested state needs a filesystem mutation.
+func (a *Applier) Unchanged(d Desired) (bool, error) {
+	if err := (&validate.V{}).SiteName(d.Site); err != nil {
+		return false, err
+	}
+	if d.User != d.Site {
+		return false, rpcerr.Errf("invalid_argument", "Invalid SSH user binding")
+	}
+	dir := a.Root
+	if dir == "" {
+		dir = DefaultRoot
+	}
+	if !filepath.IsAbs(dir) {
+		return false, rpcerr.Errf("invalid_argument", "Invalid SSH config directory")
+	}
+	resolved, err := filepath.EvalSymlinks(dir)
+	if os.IsNotExist(err) && !d.Enabled {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !filepath.IsAbs(dir) || resolved != dir {
+		return false, rpcerr.Errf("invalid_argument", "Invalid SSH config directory")
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return false, err
+	}
+	defer root.Close()
+	current, err := readRegular(root, "novapanel-"+d.Site+".conf")
+	if os.IsNotExist(err) {
+		return !d.Enabled, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return d.Enabled && bytes.Equal(current, content(d)), nil
+}
+
 func (a *Applier) Apply(ctx context.Context, d Desired) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -63,8 +108,12 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 			return err
 		}
 	}
-	if err := (&validate.V{}).SiteName(d.Site); err != nil {
+	unchanged, err := a.Unchanged(d)
+	if err != nil {
 		return err
+	}
+	if unchanged {
+		return nil
 	}
 	if d.Offline && d.Enabled {
 		return rpcerr.Errf("invalid_argument", "Offline SSH enable is forbidden")
@@ -102,7 +151,7 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 	}
 	var desired []byte
 	if d.Enabled {
-		desired = []byte(fmt.Sprintf("Match User %s\n    ForceCommand internal-sftp\n    AllowTcpForwarding no\n    X11Forwarding no\n    PermitTTY no\n", d.User))
+		desired = content(d)
 		err = writeAtomic(root, name, desired)
 	} else {
 		err = remove(root, name)

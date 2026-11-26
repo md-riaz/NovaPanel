@@ -54,11 +54,45 @@ func TestSSHDTeardownWithoutSystemd(t *testing.T) {
 	}
 	r := &sshdTestRunner{}
 	a := &agent.Agent{Cfg: config.Config{DBPath: filepath.Join(state, "agent.db")}, Jobs: &jobs.Queue{}, Exec: r, SSHD: &sshd.Applier{Root: root, Runner: r}}
-	if err := (sshdState{a}).apply(context.Background(), sshd.Desired{Site: "demo", User: "demo"}, true); err != nil {
+	if err := (sshdState{a: a}).apply(context.Background(), sshd.Desired{Site: "demo", User: "demo"}, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) || r.calls != 0 {
 		t.Fatalf("file or command: %v, %d", err, r.calls)
+	}
+}
+
+func TestSSHDTeardownNoopAndReloadFailure(t *testing.T) {
+	state, root, systemd := t.TempDir(), t.TempDir(), t.TempDir()
+	r := &sshdTestRunner{fail: map[int]bool{1: true, 2: true, 3: true}}
+	a := &agent.Agent{Cfg: config.Config{DBPath: filepath.Join(state, "agent.db")}, Jobs: &jobs.Queue{}, Exec: r, SSHD: &sshd.Applier{Root: root, Runner: r}}
+	s := sshdState{a: a, systemdDir: systemd}
+	d := sshd.Desired{Site: "demo", User: "demo"}
+	if err := s.apply(context.Background(), d, true); err != nil || r.calls != 0 {
+		t.Fatalf("absent teardown: %v calls %d", err, r.calls)
+	}
+	marker := filepath.Join(state, "sshd-diverged")
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("unexpected marker: %v", err)
+	}
+	path := filepath.Join(root, "novapanel-demo.conf")
+	good := []byte("old good")
+	if err := os.WriteFile(path, good, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".lkg", good, 0644); err != nil {
+		t.Fatal(err)
+	}
+	r.fail = map[int]bool{2: true, 3: true}
+	if err := s.apply(context.Background(), d, true); err == nil {
+		t.Fatal("expected failure")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || string(b) != string(good) {
+		t.Fatalf("restore: %q %v", b, err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("missing marker: %v", err)
 	}
 }
 
@@ -68,7 +102,7 @@ func TestSSHDMarkerHealsAndRefuses(t *testing.T) {
 	a := &agent.Agent{Cfg: config.Config{DBPath: filepath.Join(state, "agent.db")}, Jobs: &jobs.Queue{}, Exec: r, SSHD: &sshd.Applier{Root: root, Runner: r}}
 	d := sshd.Desired{Site: "demo", User: "demo", Enabled: true}
 	ctx := context.Background()
-	if err := (sshdState{a}).apply(ctx, d, false); err == nil {
+	if err := (sshdState{a: a}).apply(ctx, d, false); err == nil {
 		t.Fatal("expected divergence")
 	}
 	marker := filepath.Join(state, "sshd-diverged")
@@ -76,12 +110,12 @@ func TestSSHDMarkerHealsAndRefuses(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatalf("marker: %v %v", info, err)
 	}
-	err = (sshdState{a}).apply(ctx, d, false)
+	err = (sshdState{a: a}).apply(ctx, d, false)
 	var coded *rpc.CodedError
 	if !errors.As(err, &coded) || coded.Code != "precondition_failed" {
 		t.Fatalf("expected refusal: %v", err)
 	}
-	if err = (sshdState{a}).apply(ctx, d, false); err != nil {
+	if err = (sshdState{a: a}).apply(ctx, d, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = os.Stat(marker); !os.IsNotExist(err) {

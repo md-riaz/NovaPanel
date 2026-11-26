@@ -60,6 +60,9 @@ func TestApplyAndRollback(t *testing.T) {
 	}
 	r.calls = nil
 	r.check = nil
+	if err := a.Apply(context.Background(), d); err != nil || len(r.calls) != 0 {
+		t.Fatalf("unchanged apply: %v, calls %v", err, r.calls)
+	}
 	r.fail = map[int]bool{1: true}
 	d.Enabled = false
 	if err := a.Apply(context.Background(), d); err == nil {
