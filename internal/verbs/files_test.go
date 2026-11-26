@@ -1,12 +1,18 @@
 package verbs
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"novapanel/internal/agent"
+	runner "novapanel/internal/exec"
 	"novapanel/internal/fileop"
+	"novapanel/internal/jobs"
 	"novapanel/internal/rpc"
+	"novapanel/internal/store"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFilesRegistryAndValidation(t *testing.T) {
@@ -24,6 +30,37 @@ func TestFilesRegistryAndValidation(t *testing.T) {
 	}
 	if (&filesReadArgs{SiteID: id, Offset: -1}).Validate() == nil || (&filesReadArgs{SiteID: id, Length: -1}).Validate() == nil {
 		t.Fatal("accepted negative offset or length")
+	}
+}
+
+func TestArchiveExecDoesNotRelockSite(t *testing.T) {
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	q := jobs.NewQueue(s, nil, nil)
+	id := "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+	unlock, err := q.LockSite(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	a := &agent.Agent{Store: s, Jobs: q, Exec: runner.Real{}}
+	for _, tc := range []struct {
+		exec func(context.Context, *agent.Agent, *jobs.Job) error
+		args any
+	}{
+		{filesArchiveExec, filesArchiveArgs{SiteID: id, Paths: []string{"a"}, Dest: "out"}},
+		{filesExtractExec, filesExtractArgs{SiteID: id, Archive: "a", Dest: "out"}},
+	} {
+		data, _ := json.Marshal(tc.args)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		err := tc.exec(ctx, a, &jobs.Job{Args: data})
+		cancel()
+		if e, ok := err.(*rpc.CodedError); !ok || e.Code != "not_found" {
+			t.Fatalf("exec under lock: %v", err)
+		}
 	}
 }
 
