@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"novapanel/internal/agent"
 	"novapanel/internal/audit"
+	"novapanel/internal/deploy"
+	runner "novapanel/internal/exec"
 	"novapanel/internal/id"
 	"novapanel/internal/jobs"
 	"novapanel/internal/render/nginx"
@@ -17,6 +19,25 @@ import (
 	"testing"
 )
 
+type siteDeleteDeployRunner struct {
+	t      *testing.T
+	called bool
+}
+
+func (r *siteDeleteDeployRunner) Run(_ context.Context, _ string, args []string, opts runner.RunOpts) ([]byte, []byte, int, error) {
+	if len(args) != 1 || args[0] != "__deploy" || opts.Uid != 1001 || opts.Gid != 1001 || len(opts.Groups) != 0 {
+		r.t.Fatal("teardown did not use site credentials")
+	}
+	var req deploy.Request
+	if err := json.NewDecoder(opts.Stdin).Decode(&req); err != nil {
+		r.t.Fatal(err)
+	}
+	if req.Operation != "teardown" {
+		r.t.Fatalf("operation %q", req.Operation)
+	}
+	r.called = true
+	return nil, nil, 0, deploy.Apply(req)
+}
 func TestSiteMutations(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -49,7 +70,8 @@ func TestSiteMutations(t *testing.T) {
 	a.Nginx = &nginx.Applier{Root: filepath.Join(root, "nginx"), Runner: commands, Probe: func(context.Context, nginx.Desired) error { return nil }}
 	sid, _ := id.New()
 	did, _ := id.New()
-	a.Exec = &accountRunner{root: a.Cfg.SitesRoot, name: "demo", id: sid, marker: "novapanel-site="}
+	teardown := &siteDeleteDeployRunner{t: t}
+	a.Exec = &accountRunner{root: a.Cfg.SitesRoot, name: "demo", id: sid, marker: "novapanel-site=", other: teardown}
 	site, err := st.CreateSite(ctx, store.Site{ID: sid, Name: "demo", Type: "static", Docroot: filepath.Join(a.Cfg.SitesRoot, "demo", "public")}, store.Domain{ID: did, FQDN: "demo.test"})
 	if err != nil {
 		t.Fatal(err)
@@ -198,6 +220,20 @@ func TestSiteMutations(t *testing.T) {
 	if r := call("deploy.configure", map[string]any{"site_id": sid, "repo_url": "https://example.com/repo", "branch": "main"}); !r.OK {
 		t.Fatalf("deploy configure: %+v", r)
 	}
+	actualDeployDir := filepath.Join(a.Cfg.SitesRoot, "demo", ".novapanel", "deploy")
+	if err = os.MkdirAll(actualDeployDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(actualDeployDir, "id_ed25519"), []byte("crash residue"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "outside")
+	if err = os.WriteFile(outside, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(outside, filepath.Join(actualDeployDir, "known_hosts")); err != nil {
+		t.Fatal(err)
+	}
 	deployDir := filepath.Join(root, "deploy", sid)
 	if err = os.MkdirAll(deployDir, 0700); err != nil {
 		t.Fatal(err)
@@ -239,6 +275,15 @@ func TestSiteMutations(t *testing.T) {
 	}
 	if err = rpc.Registry["site.delete"].Exec(ctx, a, &dj); err != nil {
 		t.Fatal(err)
+	}
+	if !teardown.called {
+		t.Fatal("site-user deploy teardown was not called")
+	}
+	if _, err = os.Lstat(actualDeployDir); !os.IsNotExist(err) {
+		t.Fatalf("deploy state remains: %v", err)
+	}
+	if b, err := os.ReadFile(outside); err != nil || string(b) != "keep" {
+		t.Fatalf("symlink target changed: %v", err)
 	}
 	if err = rpc.Registry["site.delete"].Exec(ctx, a, &dj); err != nil {
 		t.Fatalf("delete retry %v", err)

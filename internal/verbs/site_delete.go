@@ -241,6 +241,28 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 	if e = a.Store.DeleteDeployKey(ctx, s.ID); e != nil {
 		return e
 	}
+	{
+		_, configErr := a.Store.DeployConfig(ctx, s.ID)
+		if configErr == nil {
+			if a.Exec == nil {
+				return rpc.Errf("agent_error", "Site account unavailable")
+			}
+			uid, gid, err := php.ResolveUserForDelete(ctx, a.Exec, a.Cfg.SitesRoot, s.Name, s.ID)
+			if err != nil {
+				var coded *rpc.CodedError
+				if !errors.As(err, &coded) || coded.Code != "not_found" {
+					return err
+				}
+			} else {
+				r := deployUserRunner{runner: a.Exec, uid: uid, gid: gid}
+				if err = deployHelper(ctx, r, filepath.Join(a.Cfg.SitesRoot, s.Name), "teardown", nil); err != nil {
+					return err
+				}
+			}
+		} else if !errors.Is(configErr, sql.ErrNoRows) {
+			return configErr
+		}
+	}
 	if e = removeDeployFiles(a.Cfg.DBPath, s.ID); e != nil {
 		return e
 	}

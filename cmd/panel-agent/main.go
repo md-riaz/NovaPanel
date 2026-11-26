@@ -10,6 +10,7 @@ import (
 	"net"
 	"novapanel/internal/agent"
 	"novapanel/internal/config"
+	"novapanel/internal/deploy"
 	"novapanel/internal/exec"
 	"novapanel/internal/fileop"
 	"novapanel/internal/jobs"
@@ -222,6 +223,13 @@ func main() {
 	if len(os.Args) == 2 && os.Args[1] == "__fileop" {
 		if err := fileop.Helper(os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "file helper failed")
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) == 2 && os.Args[1] == "__deploy" {
+		if err := deploy.Helper(os.Stdin); err != nil {
+			fmt.Fprintln(os.Stderr, "deploy helper failed")
 			os.Exit(1)
 		}
 		return
