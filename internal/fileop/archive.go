@@ -22,6 +22,10 @@ const archiveEntries = 10000
 const archiveFileBytes = 32 << 20
 const archiveTotalBytes = 256 << 20
 
+var errForeignStage = errors.New("staging path occupied by foreign data")
+
+const stageMarker = ".novapanel-owner"
+
 type ArchiveRequest struct {
 	Base, Name, Operation string
 	Paths                 []string
@@ -67,10 +71,8 @@ func extract(root *os.Root, req ArchiveRequest) error {
 	if err != nil {
 		return err
 	}
-	if req.JobID != "" {
-		if err = root.RemoveAll(tmp); err != nil {
-			return err
-		}
+	if err = clearStage(root, tmp, req.JobID); err != nil {
+		return err
 	}
 	f, err := openArchiveSource(root, path.Clean(req.Archive))
 	if err != nil {
@@ -91,12 +93,13 @@ func extract(root *os.Root, req ArchiveRequest) error {
 	if len(z.File) > archiveEntries {
 		return unix.EINVAL
 	}
-	if err = root.Mkdir(tmp, 0700); err != nil {
+	stageInfo, err := createStage(root, tmp, req.JobID)
+	if err != nil {
 		return err
 	}
-	defer root.RemoveAll(tmp)
-	stageInfo, err := root.Lstat(tmp)
-	if err != nil {
+	defer clearStage(root, tmp, req.JobID)
+	payload := path.Join(tmp, "data")
+	if err = root.Mkdir(payload, 0700); err != nil {
 		return err
 	}
 	stageDir, err := root.Open(".")
@@ -104,7 +107,7 @@ func extract(root *os.Root, req ArchiveRequest) error {
 		return err
 	}
 	defer stageDir.Close()
-	top := fmt.Sprintf("/proc/self/fd/%d/%s", stageDir.Fd(), tmp)
+	top := fmt.Sprintf("/proc/self/fd/%d/%s", stageDir.Fd(), payload)
 	var total uint64
 	seen := map[string]bool{}
 	for _, entry := range z.File {
@@ -132,15 +135,15 @@ func extract(root *os.Root, req ArchiveRequest) error {
 			return err
 		}
 		if entry.Mode().IsDir() {
-			if err = root.MkdirAll(path.Join(tmp, name), 0755); err != nil {
+			if err = root.MkdirAll(path.Join(payload, name), 0755); err != nil {
 				return err
 			}
 			continue
 		}
-		if err = root.MkdirAll(path.Join(tmp, path.Dir(name)), 0755); err != nil {
+		if err = root.MkdirAll(path.Join(payload, path.Dir(name)), 0755); err != nil {
 			return err
 		}
-		out, e := root.OpenFile(path.Join(tmp, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
+		out, e := root.OpenFile(path.Join(payload, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
 		if e != nil {
 			return e
 		}
@@ -162,11 +165,71 @@ func extract(root *os.Root, req ArchiveRequest) error {
 	if err = sameStage(root, tmp, stageInfo); err != nil {
 		return err
 	}
-	if err = root.Chmod(tmp, 0755); err != nil {
+	if err = root.Chmod(payload, 0755); err != nil {
 		return err
 	}
 	// shortcut: a crash after publication replays as conflict, use a journal if exact completion is required.
-	return publishArchive(root, tmp, path.Clean(req.Dest))
+	return publishArchive(root, payload, path.Clean(req.Dest))
+}
+
+func clearStage(root *os.Root, name, jobID string) error {
+	info, err := root.Lstat(name)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return errForeignStage
+	}
+	f, err := openArchiveSource(root, path.Join(name, stageMarker))
+	if err != nil {
+		return errForeignStage
+	}
+	markerInfo, err := f.Stat()
+	if err != nil || !markerInfo.Mode().IsRegular() {
+		f.Close()
+		return errForeignStage
+	}
+	contents, err := io.ReadAll(io.LimitReader(f, 27))
+	f.Close()
+	if err != nil || string(contents) != jobID {
+		return errForeignStage
+	}
+	if err = sameStage(root, name, info); err != nil {
+		return errForeignStage
+	}
+	return root.RemoveAll(name)
+}
+
+func createStage(root *os.Root, name, jobID string) (os.FileInfo, error) {
+	if err := root.Mkdir(name, 0700); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return nil, errForeignStage
+		}
+		return nil, err
+	}
+	info, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	f, err := root.OpenFile(path.Join(name, stageMarker), os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
+	if err != nil {
+		return nil, err
+	}
+	_, err = io.WriteString(f, jobID)
+	closeErr := f.Close()
+	if err != nil {
+		return nil, err
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	if err = sameStage(root, name, info); err != nil {
+		return nil, err
+	}
+	return info, nil
 }
 
 func sameStage(root *os.Root, name string, original os.FileInfo) error {
@@ -238,19 +301,14 @@ func archive(root *os.Root, req ArchiveRequest) error {
 	if err != nil {
 		return err
 	}
-	if req.JobID != "" {
-		if err = root.RemoveAll(tmp); err != nil {
-			return err
-		}
-	}
-	if err = root.Mkdir(tmp, 0700); err != nil {
+	if err = clearStage(root, tmp, req.JobID); err != nil {
 		return err
 	}
-	defer root.RemoveAll(tmp)
-	stageInfo, err := root.Lstat(tmp)
+	stageInfo, err := createStage(root, tmp, req.JobID)
 	if err != nil {
 		return err
 	}
+	defer clearStage(root, tmp, req.JobID)
 	f, err := root.OpenFile(path.Join(tmp, "data"), os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
 	if err != nil {
 		return err

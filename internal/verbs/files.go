@@ -301,6 +301,8 @@ func (s fileopService) invoke(ctx context.Context, siteID string, request any, c
 	}
 	if res.Code != "" {
 		switch res.Code {
+		case "precondition_failed":
+			return res, rpc.Errf(res.Code, "Staging path occupied by foreign data; clear it to proceed")
 		case "not_found", "invalid_argument", "conflict":
 			return res, rpc.Errf(res.Code, "File operation failed")
 		default:

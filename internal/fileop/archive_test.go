@@ -211,6 +211,9 @@ func TestArchiveReplayCleansOwnStage(t *testing.T) {
 		if err = os.Mkdir(stage, 0700); err != nil {
 			t.Fatal(err)
 		}
+		if err = os.WriteFile(filepath.Join(stage, stageMarker), []byte(id), 0600); err != nil {
+			t.Fatal(err)
+		}
 		if err = os.WriteFile(filepath.Join(stage, "stale"), []byte("stale"), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -277,12 +280,82 @@ func TestMovedStageFailsClosed(t *testing.T) {
 	if err = <-done; err == nil {
 		t.Fatal("extract succeeded after stage moved")
 	}
-	entries, err := os.ReadDir(filepath.Join(outside, "moved"))
-	if err != nil || len(entries) != 0 {
-		t.Fatalf("outside writes: %v %v", entries, err)
+	if _, err = os.Stat(filepath.Join(outside, "moved", "data", "file-00000")); !os.IsNotExist(err) {
+		t.Fatalf("outside write: %v", err)
 	}
 	if _, err = os.Stat(filepath.Join(d, "out")); !os.IsNotExist(err) {
 		t.Fatalf("destination appeared: %v", err)
+	}
+}
+
+func TestForeignArchiveStageIsPreserved(t *testing.T) {
+	for _, op := range []string{"archive", "extract"} {
+		for _, kind := range []string{"file", "directory", "wrong-marker", "symlink"} {
+			t.Run(op+"/"+kind, func(t *testing.T) {
+				d := t.TempDir()
+				root, err := os.OpenRoot(d)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer root.Close()
+				id := "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+				name := ".novapanel-" + op + "-" + id
+				stage := filepath.Join(d, name)
+				switch kind {
+				case "file":
+					err = os.WriteFile(stage, []byte("keep"), 0600)
+				case "symlink":
+					err = os.Symlink("source", stage)
+				default:
+					err = os.Mkdir(stage, 0700)
+					if err == nil {
+						err = os.WriteFile(filepath.Join(stage, "keep"), []byte("keep"), 0600)
+					}
+					if err == nil && kind == "wrong-marker" {
+						err = os.WriteFile(filepath.Join(stage, stageMarker), []byte("wrong"), 0600)
+					}
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				req := ArchiveRequest{Operation: op, JobID: id, Paths: []string{"source"}, Archive: "source", Dest: "dest"}
+				run := archive
+				if op == "extract" {
+					run = extract
+				}
+				if err = run(root, req); errorCode(err) != "precondition_failed" {
+					t.Fatalf("got %v", err)
+				}
+				if _, err = os.Lstat(stage); err != nil {
+					t.Fatalf("foreign stage removed: %v", err)
+				}
+				if kind == "directory" || kind == "wrong-marker" {
+					if data, err := os.ReadFile(filepath.Join(stage, "keep")); err != nil || string(data) != "keep" {
+						t.Fatalf("foreign data: %q %v", data, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestArchiveStageMarker(t *testing.T) {
+	d := t.TempDir()
+	root, err := os.OpenRoot(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	id := "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+	if _, err = createStage(root, "stage", id); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(d, "stage", stageMarker))
+	if err != nil || string(data) != id {
+		t.Fatalf("marker %q: %v", data, err)
+	}
+	if err = clearStage(root, "stage", id); err != nil {
+		t.Fatal(err)
 	}
 }
 

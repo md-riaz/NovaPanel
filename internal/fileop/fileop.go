@@ -106,6 +106,9 @@ func Helper(in io.Reader, out io.Writer) error {
 }
 
 func errorCode(err error) string {
+	if errors.Is(err, errForeignStage) {
+		return "precondition_failed"
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		return "not_found"
 	}
