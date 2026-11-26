@@ -78,7 +78,7 @@ func deployRunExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if err := v.Validate(); err != nil {
 		return err
 	}
-	return executeDeploy(ctx, a, j, v.SiteID, v.Ref, "")
+	return (deployService{a}).execute(ctx, j, v.SiteID, v.Ref, "")
 }
 func deployRollbackExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	var v deployRollbackArgs
@@ -88,7 +88,7 @@ func deployRollbackExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 	if err := v.Validate(); err != nil {
 		return err
 	}
-	return executeDeploy(ctx, a, j, v.SiteID, "", v.SHA)
+	return (deployService{a}).execute(ctx, j, v.SiteID, "", v.SHA)
 }
 func deployHelper(ctx context.Context, r runner.Runner, home, op string, key []byte) error {
 	program, err := os.Executable()
@@ -106,7 +106,11 @@ func deployHelper(ctx context.Context, r runner.Runner, home, op string, key []b
 	}
 	return nil
 }
-func executeDeploy(ctx context.Context, a *agent.Agent, j *jobs.Job, siteID, ref, rollback string) (ret error) {
+
+type deployService struct{ a *agent.Agent }
+
+func (d deployService) execute(ctx context.Context, j *jobs.Job, siteID, ref, rollback string) (ret error) {
+	a := d.a
 	if j.ObjectKey != "site:"+siteID {
 		return rpc.Errf("forbidden", "Job binding mismatch")
 	}

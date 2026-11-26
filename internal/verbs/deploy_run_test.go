@@ -132,22 +132,22 @@ func TestDeployRunWiring(t *testing.T) {
 	}
 	a, _ := deployFixture(t, false)
 	j := &jobs.Job{ID: "job", ObjectKey: "site:" + deployTestSite}
-	if got := codeOf(executeDeploy(context.Background(), a, j, deployTestSite, "main", "")); got != "precondition_failed" {
+	if got := codeOf((deployService{a}).execute(context.Background(), j, deployTestSite, "main", "")); got != "precondition_failed" {
 		t.Fatal(got)
 	}
 	a, f := deployFixture(t, true)
 	j = &jobs.Job{ID: "job", ObjectKey: "site:" + deployTestSite}
-	if got := codeOf(executeDeploy(context.Background(), a, j, deployTestSite, "", testSHA)); got != "invalid_argument" {
+	if got := codeOf((deployService{a}).execute(context.Background(), j, deployTestSite, "", testSHA)); got != "invalid_argument" {
 		t.Fatal(got)
 	}
 	f.foreign = true
-	if got := codeOf(executeDeploy(context.Background(), a, j, deployTestSite, "main", "")); got != "conflict" {
+	if got := codeOf((deployService{a}).execute(context.Background(), j, deployTestSite, "main", "")); got != "conflict" {
 		t.Fatal(got)
 	}
 	f.foreign = false
 	f.commands = nil
 	f.operations = nil
-	if err := executeDeploy(context.Background(), a, j, deployTestSite, "main", ""); err != nil {
+	if err := (deployService{a}).execute(context.Background(), j, deployTestSite, "main", ""); err != nil {
 		t.Fatal(err)
 	}
 	var seen []string
