@@ -206,7 +206,7 @@ func TestSiteMutations(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err = st.Tx(ctx, func(tx *sql.Tx) error {
-		_, e := tx.ExecContext(ctx, "INSERT INTO deploys(id,site_id,repo_url,branch,sha,state,created) VALUES(?,?,?,?,?,?,?)", "deploy", sid, "https://example.com/repo", "main", "sha", "success", 1)
+		_, e := tx.ExecContext(ctx, "INSERT INTO deploys(id,site_id,repo_url,branch,sha,state,created) VALUES(?,?,?,?,?,?,?)", "deploy", sid, "https://example.com/repo", "main", "sha", "done", 1)
 		return e
 	}); err != nil {
 		t.Fatal(err)

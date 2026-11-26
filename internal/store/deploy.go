@@ -88,7 +88,7 @@ func (s *Store) DeleteDeployKey(ctx context.Context, siteID string) error {
 func (s *Store) DeployHistory(ctx context.Context, siteID string, limit int, successful bool) ([]Deploy, error) {
 	query := "SELECT COALESCE(sha,''),state,created FROM deploys WHERE site_id=?"
 	if successful {
-		query += " AND state='success'"
+		query += " AND state='done'"
 	}
 	rows, err := s.db.QueryContext(ctx, query+" ORDER BY created DESC, id DESC LIMIT ?", siteID, limit)
 	if err != nil {

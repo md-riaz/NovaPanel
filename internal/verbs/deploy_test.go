@@ -132,7 +132,7 @@ func TestDeployConfigureAndReads(t *testing.T) {
 		for i := 0; i < 105; i++ {
 			state := "failed"
 			if i == 50 || i == 90 {
-				state = "success"
+				state = "done"
 			}
 			if _, e := tx.ExecContext(ctx, "INSERT INTO deploys(id,site_id,repo_url,branch,sha,state,created) VALUES(?,?,?,?,?,?,?)", fmt.Sprintf("%03d", i), deployTestSite, args.RepoURL, args.Branch, fmt.Sprintf("sha%d", i), state, i); e != nil {
 				return e
@@ -156,7 +156,7 @@ func TestDeployConfigureAndReads(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ = json.Marshal(status)
-	if err = json.Unmarshal(b, &statusData); err != nil || statusData.SHA != "sha90" || statusData.State != "success" || statusData.LastRun != 90 {
+	if err = json.Unmarshal(b, &statusData); err != nil || statusData.SHA != "sha90" || statusData.State != "done" || statusData.LastRun != 90 {
 		t.Fatalf("status: %s %v", b, err)
 	}
 	for _, tc := range []struct{ limit, want int }{{0, 20}, {3, 3}, {1000, 100}} {
