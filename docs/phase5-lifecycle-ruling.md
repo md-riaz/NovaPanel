@@ -129,8 +129,9 @@ deleted site leaves live timers, a live sftp rule, and a sealed secret behind:
   `novapanel-cron-ab-*` would also match site `ab-cd`'s units and delete another site's timers. With
   the fixed-length ULID segment terminated by `-`, no site id is a prefix of another, so the match is
   unambiguous; the matcher asserts the full `<site_id>-` boundary rather than a bare `HasPrefix`. For
-  each, `systemctl disable --now` then remove both unit files then `daemon-reload`. Ensure-state: a
-  missing unit is not an error.
+  each, remove both unit files always; when systemd is running (`/run/systemd/system` is present), run
+  `systemctl disable --now` first and `daemon-reload` after removal. A failed disable fails teardown so
+  the delete retries rather than leaving a loaded timer. Ensure-state: a missing unit is not an error.
 - SFTP-only: remove the managed sshd drop-in `sshd_config.d/novapanel-<site>.conf` if present through
   the one shared sshd apply function (section 7), which takes the global sshd lock, honors the
   divergence marker, validates with `sshd -t`, and reloads. Ensure-state; `site.delete` never edits
@@ -182,20 +183,22 @@ so the name parses and matches unambiguously, section 3).
   of one file. The `<site>-<id>` name is agent-owned, so completing a partial install never adopts a
   foreign unit. `cron.disable` and `cron.delete` are the ensure-state inverse: `disable --now`, and for
   delete remove both files and `daemon-reload`.
-- F8 validate and revert must restore the exact prior systemd state, not just the files. Before
-  mutating, snapshot the prior state of the unit pair: `is-enabled` and `is-active` (for a first create
-  the prior state is "absent"). Keep a `.lkg` pair per unit. Validate the rendered pair with
-  `systemd-analyze verify` before `daemon-reload`. On any validate, enable, or start failure the
-  rollback runs these steps in this exact order, so there is no contradiction about when to disable:
+- F8 validate and revert restores the prior managed systemd state. The committed `cron_jobs` row is
+  the last-known-good: the unit pair is a pure function of its `schedule`, `argv_json`, and the resolved
+  site user, so rollback re-renders from that row rather than keeping a separate `.lkg` pair. Validate
+  the rendered pair with `systemd-analyze verify` before `daemon-reload`. On any validate, enable, or
+  start failure the rollback runs these steps in this exact order:
   1. `disable --now` both units unconditionally, so no partially-enabled or started timer survives the
      failed attempt (removing files first would leave systemd holding an enabled-but-fileless unit);
-  2. restore the `.lkg` files, or when the prior state was absent remove both files;
+  2. re-render the unit files from the committed row when `enabled=1`, or remove both files when
+     `enabled=0` or this is a first create;
   3. `daemon-reload`;
-  4. restore the exact prior snapshot across all four `enabled` x `active` combinations: previously
-     enabled and active -> `enable --now`; enabled and inactive -> `enable` (no start); disabled and
-     active -> `start` (no enable), so a running-but-unenabled timer is put back to active rather than
-     left stopped by step 1's `--now`; disabled and inactive -> leave disabled and stopped; previously
-     absent -> already gone from steps 1-2.
+  4. when `enabled=1`, restore (enabled, active) with `enable --now`; when `enabled=0` or this is a
+     first create, leave the units removed (disabled, inactive).
+  NovaPanel manages cron timers only through `systemctl enable --now` and `disable --now`, so enabled
+  and active always move together. A disabled-but-active timer is never produced by `cron.*` and
+  rollback need not encode it; a human running `systemctl start` without enable creates foreign state
+  outside what `cron.*` manages.
   If any rollback step itself fails, fail closed: return a coded error that names the divergence rather
   than reporting success, so an operator reconciles a job left stopped or half-restored. The row keeps
   `enabled=0` on failure, so the next `cron.create`/`enable` replay ensure-states it forward or
