@@ -92,7 +92,10 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 	}
 	defer root.Close()
 	name := "novapanel-" + d.Site + ".conf"
-	old, err := readRegular(root, name)
+	if _, err = readRegular(root, name); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	old, err := readRegular(root, name+".lkg")
 	exists := err == nil
 	if err != nil && !os.IsNotExist(err) {
 		return err

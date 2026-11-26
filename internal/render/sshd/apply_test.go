@@ -80,6 +80,35 @@ func TestApplyAndRollback(t *testing.T) {
 		t.Fatal("drop-in not removed", err)
 	}
 }
+func TestReplayRestoresLastKnownGood(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "novapanel-demo.conf")
+	good := []byte("Match User demo\n    ForceCommand internal-sftp\n")
+	if err := os.WriteFile(path, []byte("unvalidated candidate"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".lkg", good, 0644); err != nil {
+		t.Fatal(err)
+	}
+	r := &fakeRunner{fail: map[int]bool{1: true}}
+	r.check = func(n int) {
+		if n == 2 {
+			b, err := os.ReadFile(path)
+			if err != nil || string(b) != string(good) {
+				t.Fatalf("reload saw %q: %v", b, err)
+			}
+		}
+	}
+	a := &Applier{Root: dir, Runner: r}
+	if err := a.Apply(context.Background(), Desired{Site: "demo", User: "demo", Enabled: true}); err == nil {
+		t.Fatal("expected failure")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || string(b) != string(good) {
+		t.Fatalf("restored %q: %v", b, err)
+	}
+}
+
 func TestApplyDivergenceAndValidation(t *testing.T) {
 	r := &fakeRunner{fail: map[int]bool{1: true, 2: true}}
 	a := &Applier{Root: t.TempDir(), Runner: r}
