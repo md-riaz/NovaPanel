@@ -99,7 +99,10 @@ func applyWrite(root *os.Root, req Request, content []byte) error {
 		if err = f.Sync(); err != nil {
 			return err
 		}
-		// Mode is captured at overwrite: API writes lock, but shell replacement can race without publishing old bytes.
+		// Mode preservation applies to the file identified when overwrite begins.
+		// A site shell user replacing the path during the write is outside that guarantee.
+		// This cannot expose old bytes because the write replaces the content, and the
+		// site lock prevents concurrent API writes.
 		target, info, err := leaf(parent, name)
 		exists := err == nil
 		mode := os.FileMode(0644)
