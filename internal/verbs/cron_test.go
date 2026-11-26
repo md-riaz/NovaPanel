@@ -91,12 +91,19 @@ func TestCronRegistryAndBadSchedule(t *testing.T) {
 	if list.MinRole != rpc.ReadOnly || !list.ReadOnly || list.Scope != "sites:read" || list.MFA || list.Slow {
 		t.Fatalf("list: %+v", list)
 	}
+	for _, schedule := range []string{"--help", "--version", "-x"} {
+		_, err := cronCreate(context.Background(), agent.New(), &cronCreateArgs{SiteID: testCronSite, Schedule: schedule, Argv: []string{"/bin/echo"}})
+		var coded *rpc.CodedError
+		if !errors.As(err, &coded) || coded.Code != "invalid_argument" {
+			t.Fatalf("schedule %q: %v", schedule, err)
+		}
+	}
 	a := agent.New()
-	f := &cronFake{fail: "calendar bad"}
+	f := &cronFake{fail: "calendar -- bad"}
 	a.Exec = f
 	_, err := cronCreate(context.Background(), a, &cronCreateArgs{SiteID: testCronSite, Schedule: "bad", Argv: []string{"/bin/echo"}})
 	var coded *rpc.CodedError
-	if !errors.As(err, &coded) || coded.Code != "invalid_argument" || len(f.calls) != 1 || f.calls[0] != "/usr/bin/systemd-analyze calendar bad" {
+	if !errors.As(err, &coded) || coded.Code != "invalid_argument" || len(f.calls) != 1 || f.calls[0] != "/usr/bin/systemd-analyze calendar -- bad" {
 		t.Fatalf("bad schedule: %v %v", err, f.calls)
 	}
 }

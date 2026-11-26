@@ -43,7 +43,7 @@ func (v *cronIDArgs) Validate() error {
 	return nil
 }
 func (v *cronCreateArgs) Validate() error {
-	if !id.Valid(v.SiteID) || len(v.Argv) == 0 || !filepath.IsAbs(v.Argv[0]) || v.Schedule == "" {
+	if !id.Valid(v.SiteID) || len(v.Argv) == 0 || !filepath.IsAbs(v.Argv[0]) || v.Schedule == "" || strings.HasPrefix(v.Schedule, "-") {
 		return rpc.Errf("invalid_argument", "Invalid cron job")
 	}
 	for _, s := range append(append([]string{}, v.Argv...), v.Schedule) {
@@ -124,7 +124,7 @@ func cronCreate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	if a.Exec == nil {
 		return nil, rpc.Errf("agent_error", "Cron execution unavailable")
 	}
-	_, _, code, err := a.Exec.Run(ctx, systemdAnalyze, []string{"calendar", v.Schedule}, runner.RunOpts{})
+	_, _, code, err := a.Exec.Run(ctx, systemdAnalyze, []string{"calendar", "--", v.Schedule}, runner.RunOpts{})
 	if code > 0 {
 		return nil, rpc.Errf("invalid_argument", "Invalid schedule")
 	}
