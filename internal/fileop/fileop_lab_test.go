@@ -102,6 +102,10 @@ func TestDroppedHelper(t *testing.T) {
 			t.Fatalf("%s: %d %s %v", tc.req.Operation, code, out, err)
 		}
 	}
+	got, err = os.ReadFile(filepath.Join(dir, "large"))
+	if err != nil || !bytes.Equal(got, bytes.Repeat([]byte{'x'}, MaxWrite)) {
+		t.Fatalf("maximum framed write: len=%d err=%v", len(got), err)
+	}
 	info, err = os.Stat(filepath.Join(dir, "created"))
 	if err != nil || unix.Stat(filepath.Join(dir, "created"), &owner) != nil || !info.IsDir() || owner.Uid != 65534 {
 		t.Fatalf("directory ownership: %v %v", info, err)

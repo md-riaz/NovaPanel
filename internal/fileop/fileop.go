@@ -14,7 +14,7 @@ import (
 )
 
 const MaxChunk = 512 << 10
-const MaxWrite = 768 << 10
+const MaxWrite = 512 << 10
 
 // MaxEntries bounds both directory memory and helper output.
 const MaxEntries = 512

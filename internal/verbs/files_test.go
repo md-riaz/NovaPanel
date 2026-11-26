@@ -2,7 +2,10 @@ package verbs
 
 import (
 	"encoding/base64"
+	"encoding/json"
+	"novapanel/internal/fileop"
 	"novapanel/internal/rpc"
+	"strings"
 	"testing"
 )
 
@@ -42,10 +45,22 @@ func TestFilesWriteRegistryAndValidation(t *testing.T) {
 	if (&filesChmodArgs{SiteID: id, Mode: 0777}).Validate() == nil {
 		t.Fatal("accepted mode")
 	}
-	if (&filesWriteArgs{SiteID: id, ContentB64: base64.StdEncoding.EncodeToString(make([]byte, 768<<10))}).Validate() != nil {
+	max := &filesWriteArgs{SiteID: id, Path: "file", ContentB64: base64.StdEncoding.EncodeToString(make([]byte, fileop.MaxWrite))}
+	if max.Validate() != nil {
 		t.Fatal("rejected maximum write")
 	}
-	if (&filesWriteArgs{SiteID: id, ContentB64: base64.StdEncoding.EncodeToString(make([]byte, (768<<10)+1))}).Validate() == nil {
-		t.Fatal("accepted oversized write")
+	args, err := json.Marshal(max)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := json.Marshal(rpc.Request{ID: id, Verb: "files.write", Args: args})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = rpc.DecodeLine(frame); err != nil {
+		t.Fatalf("maximum write does not fit RPC frame: %v", err)
+	}
+	if err := (&filesWriteArgs{SiteID: id, ContentB64: base64.StdEncoding.EncodeToString(make([]byte, fileop.MaxWrite+1))}).Validate(); err == nil || !strings.Contains(err.Error(), "files.upload") || err.(*rpc.CodedError).Code != "invalid_argument" {
+		t.Fatalf("oversized write: %v", err)
 	}
 }

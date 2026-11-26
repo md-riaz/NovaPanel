@@ -58,11 +58,14 @@ func (v *filesWriteArgs) Validate() error {
 		return err
 	}
 	if len(v.ContentB64) > base64.StdEncoding.EncodedLen(fileop.MaxWrite) {
-		return rpc.Errf("invalid_argument", "File content exceeds 768 KiB")
+		return rpc.Errf("invalid_argument", "File content exceeds 512 KiB; use files.upload for larger files")
 	}
 	content, err := base64.StdEncoding.DecodeString(v.ContentB64)
-	if err != nil || len(content) > fileop.MaxWrite {
-		return rpc.Errf("invalid_argument", "Invalid or oversized file content")
+	if err != nil {
+		return rpc.Errf("invalid_argument", "Invalid base64 file content")
+	}
+	if len(content) > fileop.MaxWrite {
+		return rpc.Errf("invalid_argument", "File content exceeds 512 KiB; use files.upload for larger files")
 	}
 	return nil
 }
