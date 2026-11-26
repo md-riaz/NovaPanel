@@ -1,6 +1,7 @@
 package fileop
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,13 +14,16 @@ import (
 )
 
 const MaxChunk = 512 << 10
+const MaxWrite = 512 << 10
 
 // MaxEntries bounds both directory memory and helper output.
 const MaxEntries = 512
 
 type Request struct {
 	Base, Name, Operation, Path string
+	From, To                    string
 	Offset, Length              int
+	Mode                        uint32
 }
 type Entry struct {
 	Name  string `json:"name"`
@@ -75,11 +79,26 @@ func Helper(in io.Reader, out io.Writer) error {
 	if os.Geteuid() == 0 {
 		return errors.New("refusing root helper")
 	}
+	reader := bufio.NewReaderSize(in, 65537)
+	header, err := reader.ReadSlice('\n')
+	if err != nil || len(header) > 65536 {
+		return errors.New("invalid file operation header")
+	}
 	var req Request
-	if err := json.NewDecoder(io.LimitReader(in, 65536)).Decode(&req); err != nil {
+	if err := json.Unmarshal(header, &req); err != nil {
 		return err
 	}
-	res, err := Apply(req)
+	var content []byte
+	if req.Operation == "write" {
+		if req.Length < 0 || req.Length > MaxWrite {
+			return json.NewEncoder(out).Encode(Response{Code: "invalid_argument"})
+		}
+		content = make([]byte, req.Length)
+		if _, err := io.ReadFull(reader, content); err != nil {
+			return err
+		}
+	}
+	res, err := apply(req, content)
 	if err != nil {
 		res = Response{Code: errorCode(err)}
 	}
@@ -90,6 +109,13 @@ func errorCode(err error) string {
 	if errors.Is(err, os.ErrNotExist) {
 		return "not_found"
 	}
+	if errors.Is(err, unix.EEXIST) || errors.Is(err, unix.ENOTEMPTY) {
+		return "conflict"
+	}
+	var pe *os.PathError
+	if errors.As(err, &pe) && pe.Err.Error() == "path escapes from parent" {
+		return "invalid_argument"
+	}
 	if errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.EXDEV) || errors.Is(err, unix.EINVAL) {
 		return "invalid_argument"
 	}
@@ -97,6 +123,10 @@ func errorCode(err error) string {
 }
 
 func Apply(req Request) (Response, error) {
+	return apply(req, nil)
+}
+
+func apply(req Request, content []byte) (Response, error) {
 	var res Response
 	if ValidatePath(req.Path) != nil || req.Offset < 0 || req.Length < 0 {
 		return res, unix.EINVAL
@@ -107,6 +137,9 @@ func Apply(req Request) (Response, error) {
 	}
 	defer root.Close()
 	p := path.Clean(req.Path)
+	if req.Operation != "read" && req.Operation != "list" {
+		return res, applyWrite(root, req, content)
+	}
 	f, err := root.OpenFile(p, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		var pe *os.PathError

@@ -6,10 +6,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"golang.org/x/sys/unix"
 	runner "novapanel/internal/exec"
 )
 
@@ -54,6 +57,7 @@ func TestDroppedHelper(t *testing.T) {
 	}
 	for _, tc := range []struct{ path, content, code string }{{"allowed", "site-only", ""}, {"denied", "", "agent_error"}} {
 		input, _ := json.Marshal(Request{Base: base, Name: "site", Operation: "read", Path: tc.path})
+		input = append(input, '\n')
 		out, _, code, err := (runner.Real{}).Run(context.Background(), binaryPath, []string{"-test.run=^TestDroppedHelper$"}, runner.RunOpts{Uid: 65534, Gid: 65534, Groups: []uint32{}, Env: []string{"NOVAPANEL_FILEOP_CHILD=1"}, Stdin: bytes.NewReader(input)})
 		if err != nil || code != 0 {
 			t.Fatalf("helper: %d %v", code, err)
@@ -62,5 +66,119 @@ func TestDroppedHelper(t *testing.T) {
 		if err = json.Unmarshal(out, &r); err != nil || string(r.Content) != tc.content || r.Code != tc.code {
 			t.Fatalf("%s: %s %v", tc.path, out, err)
 		}
+	}
+	if err := os.Chown(dir, 65534, 65534); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("<>&\n\x00byte-exact")
+	header, _ := json.Marshal(Request{Base: base, Name: "site", Operation: "write", Path: "written", Length: len(content)})
+	header = append(header, '\n')
+	input := append(header, content...)
+	out, _, code, err := (runner.Real{}).Run(context.Background(), binaryPath, []string{"-test.run=^TestDroppedHelper$"}, runner.RunOpts{Uid: 65534, Gid: 65534, Groups: []uint32{}, Env: []string{"NOVAPANEL_FILEOP_CHILD=1"}, Stdin: bytes.NewReader(input)})
+	var response Response
+	if err != nil || code != 0 || json.Unmarshal(out, &response) != nil || response.Code != "" {
+		t.Fatalf("write helper: %d %s %v", code, out, err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "written"))
+	if err != nil || !bytes.Equal(got, content) {
+		t.Fatalf("content %q: %v", got, err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "written"))
+	var owner unix.Stat_t
+	if err != nil || unix.Stat(filepath.Join(dir, "written"), &owner) != nil || info.Mode().Perm() != 0644 || owner.Uid != 65534 {
+		t.Fatalf("ownership/mode: %v %v", info, err)
+	}
+	for _, tc := range []struct {
+		req     Request
+		content []byte
+	}{
+		{Request{Base: base, Name: "site", Operation: "write", Path: "large", Length: MaxWrite}, bytes.Repeat([]byte{'x'}, MaxWrite)},
+		{Request{Base: base, Name: "site", Operation: "mkdir", Path: "created"}, nil},
+		{Request{Base: base, Name: "site", Operation: "chmod", Path: "written", Mode: 0600}, nil},
+	} {
+		header, _ := json.Marshal(tc.req)
+		input := append(append(header, '\n'), tc.content...)
+		out, _, code, err := (runner.Real{}).Run(context.Background(), binaryPath, []string{"-test.run=^TestDroppedHelper$"}, runner.RunOpts{Uid: 65534, Gid: 65534, Groups: []uint32{}, Env: []string{"NOVAPANEL_FILEOP_CHILD=1"}, Stdin: bytes.NewReader(input)})
+		var response Response
+		if err != nil || code != 0 || json.Unmarshal(out, &response) != nil || response.Code != "" {
+			t.Fatalf("%s: %d %s %v", tc.req.Operation, code, out, err)
+		}
+	}
+	got, err = os.ReadFile(filepath.Join(dir, "large"))
+	if err != nil || !bytes.Equal(got, bytes.Repeat([]byte{'x'}, MaxWrite)) {
+		t.Fatalf("maximum framed write: len=%d err=%v", len(got), err)
+	}
+	info, err = os.Stat(filepath.Join(dir, "created"))
+	if err != nil || unix.Stat(filepath.Join(dir, "created"), &owner) != nil || !info.IsDir() || owner.Uid != 65534 {
+		t.Fatalf("directory ownership: %v %v", info, err)
+	}
+	info, err = os.Stat(filepath.Join(dir, "written"))
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("chmod: %v %v", info, err)
+	}
+	if err := os.Chmod(filepath.Join(dir, "written"), 0400); err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	type observation struct {
+		count int
+		err   error
+	}
+	observed := make(chan observation, 1)
+	go func() {
+		var result observation
+		defer func() { observed <- result }()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				result.err = err
+				return
+			}
+			for _, e := range entries {
+				if !strings.HasPrefix(e.Name(), ".novapanel-") && e.Name() != "written" {
+					continue
+				}
+				i, err := os.Lstat(filepath.Join(dir, e.Name()))
+				if os.IsNotExist(err) {
+					continue
+				}
+				if err != nil {
+					result.err = err
+					return
+				}
+				if e.Name() != "written" {
+					result.count++
+				}
+				if i.Mode().Perm()&0077 != 0 {
+					result.err = fmt.Errorf("temporary file mode %o", i.Mode().Perm())
+					return
+				}
+			}
+		}
+	}()
+	large := bytes.Repeat([]byte{'x'}, MaxWrite)
+	header, _ = json.Marshal(Request{Base: base, Name: "site", Operation: "write", Path: "written", Length: len(large)})
+	input = append(append(header, '\n'), large...)
+	for i := 0; i < 80; i++ {
+		out, _, code, err = (runner.Real{}).Run(context.Background(), binaryPath, []string{"-test.run=^TestDroppedHelper$"}, runner.RunOpts{Uid: 65534, Gid: 65534, Groups: []uint32{}, Env: []string{"NOVAPANEL_FILEOP_CHILD=1"}, Stdin: bytes.NewReader(input)})
+		if err != nil || code != 0 || json.Unmarshal(out, &response) != nil || response.Code != "" {
+			close(stop)
+			<-observed
+			t.Fatalf("private write: %d %s %v", code, out, err)
+		}
+	}
+	close(stop)
+	seen := <-observed
+	if seen.err != nil || seen.count == 0 {
+		t.Fatalf("temporary file observations: %+v", seen)
+	}
+	info, err = os.Stat(filepath.Join(dir, "written"))
+	if err != nil || unix.Stat(filepath.Join(dir, "written"), &owner) != nil || info.Mode().Perm() != 0400 || owner.Uid != 65534 {
+		t.Fatalf("private result: %v %v", info, err)
 	}
 }
