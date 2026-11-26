@@ -28,7 +28,7 @@ func TestLabSSHDConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	conf := filepath.Join(dir, "sshd_config")
-	body := "HostKey " + key + "\nPidFile " + filepath.Join(dir, "sshd.pid") + "\nInclude " + filepath.Join(dir, "novapanel-*.conf") + "\n"
+	body := "HostKey " + key + "\nPidFile " + filepath.Join(dir, "sshd.pid") + "\nInclude " + filepath.Join(dir, "novapanel-*.conf") + "\nPort 2222\n"
 	if err := os.WriteFile(conf, []byte(body), 0600); err != nil {
 		t.Fatal(err)
 	}
