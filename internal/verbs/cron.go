@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"novapanel/internal/agent"
 	runner "novapanel/internal/exec"
 	"novapanel/internal/id"
@@ -352,22 +353,18 @@ func (c cronState) teardown(ctx context.Context, dir, siteID string) error {
 			names[base] = true
 		}
 	}
-	_, systemdErr := os.Stat("/run/systemd/system")
-	if systemdErr != nil && !os.IsNotExist(systemdErr) {
-		return systemdErr
-	}
 	for name := range names {
-		if systemdErr == nil {
-			if err := cronDisable(ctx, a.Exec, name+".timer", name+".service"); err != nil {
-				return err
-			}
+		if err := cronDisable(ctx, a.Exec, name+".timer", name+".service"); err != nil {
+			log.Printf("cron teardown: cannot disable %s: %v", name, err)
 		}
 		if err := cronUnlink(dir, name); err != nil {
 			return err
 		}
 	}
-	if len(names) > 0 && systemdErr == nil {
-		return cronCommand(ctx, a.Exec, platform.Systemctl, "daemon-reload")
+	if len(names) > 0 {
+		if err := cronCommand(ctx, a.Exec, platform.Systemctl, "daemon-reload"); err != nil {
+			log.Printf("cron teardown: cannot reload systemd: %v", err)
+		}
 	}
 	return nil
 }

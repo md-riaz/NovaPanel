@@ -124,6 +124,8 @@ func TestCronTeardownAndLookup(t *testing.T) {
 	}
 	a := agent.New()
 	a.Store = s
+	fake := &cronFake{}
+	a.Exec = fake
 	args := &cronIDArgs{CronID: testCronID}
 	key, err := (cronState{a}).resolve(ctx, args)
 	if err != nil || key != "site:"+testCronSite || args.SiteID != testCronSite {
@@ -160,6 +162,24 @@ func TestCronTeardownAndLookup(t *testing.T) {
 	}
 	if _, err = os.Stat(filepath.Join(dir, other)); err != nil {
 		t.Fatalf("foreign unit removed: %v", err)
+	}
+	calls := strings.Join(fake.calls, "\n")
+	if !strings.Contains(calls, "/usr/bin/systemctl disable --now "+row.UnitName+".timer "+row.UnitName+".service") || !strings.Contains(calls, "/usr/bin/systemctl daemon-reload") {
+		t.Fatal(fake.calls)
+	}
+	if err = os.WriteFile(filepath.Join(dir, own), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	failing := &cronMissing{inspectFails: true}
+	a.Exec = failing
+	if err = (cronState{a}).teardown(ctx, dir, testCronSite); err != nil {
+		t.Fatalf("systemctl failure wedged teardown: %v", err)
+	}
+	if _, err = os.Stat(filepath.Join(dir, own)); !os.IsNotExist(err) {
+		t.Fatalf("unit survived systemctl failure: %v", err)
+	}
+	if !strings.Contains(strings.Join(failing.calls, "\n"), "daemon-reload") {
+		t.Fatal(failing.calls)
 	}
 }
 func TestCronRenderAndValidation(t *testing.T) {
