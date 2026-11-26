@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -230,5 +231,85 @@ func TestArchiveReplayCleansOwnStage(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(d, "out", "source"))
 	if err != nil || string(got) != "ok" {
 		t.Fatalf("output %q: %v", got, err)
+	}
+}
+
+func TestMovedStageFailsClosed(t *testing.T) {
+	d := t.TempDir()
+	outside := t.TempDir()
+	root, err := os.OpenRoot(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	var b bytes.Buffer
+	w := zip.NewWriter(&b)
+	for i := 0; i < 10000; i++ {
+		if _, err = w.Create(fmt.Sprintf("file-%05d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(d, "in.zip"), b.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	id := "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+	stage := filepath.Join(d, ".novapanel-extract-"+id)
+	done := make(chan error, 1)
+	go func() {
+		done <- extract(root, ArchiveRequest{JobID: id, Operation: "extract", Archive: "in.zip", Dest: "out"})
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err = os.Lstat(stage); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("stage not created")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err = os.Rename(stage, filepath.Join(outside, "moved")); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-done; err == nil {
+		t.Fatal("extract succeeded after stage moved")
+	}
+	entries, err := os.ReadDir(filepath.Join(outside, "moved"))
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("outside writes: %v %v", entries, err)
+	}
+	if _, err = os.Stat(filepath.Join(d, "out")); !os.IsNotExist(err) {
+		t.Fatalf("destination appeared: %v", err)
+	}
+}
+
+func TestPublishRejectsEscapeAndExistingDestination(t *testing.T) {
+	d := t.TempDir()
+	outside := t.TempDir()
+	root, err := os.OpenRoot(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err = os.WriteFile(filepath.Join(d, "stage"), []byte("new"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(d, "existing"), []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = publishArchive(root, "stage", "existing"); errorCode(err) != "conflict" {
+		t.Fatalf("existing: %v", err)
+	}
+	if err = os.Symlink(outside, filepath.Join(d, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	if err = publishArchive(root, "stage", "escape/file"); err == nil {
+		t.Fatal("escape accepted")
+	}
+	if _, err = os.Stat(filepath.Join(outside, "file")); !os.IsNotExist(err) {
+		t.Fatalf("outside publish: %v", err)
 	}
 }

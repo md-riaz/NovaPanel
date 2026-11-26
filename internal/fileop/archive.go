@@ -63,17 +63,12 @@ func extract(root *os.Root, req ArchiveRequest) error {
 	if req.Archive == "" || req.Dest == "" || ValidatePath(req.Archive) != nil || ValidatePath(req.Dest) != nil || path.Clean(req.Dest) == "." {
 		return unix.EINVAL
 	}
-	parent, err := root.OpenRoot(path.Dir(path.Clean(req.Dest)))
-	if err != nil {
-		return err
-	}
-	defer parent.Close()
 	tmp, err := stageName(req)
 	if err != nil {
 		return err
 	}
 	if req.JobID != "" {
-		if err = parent.RemoveAll(tmp); err != nil {
+		if err = root.RemoveAll(tmp); err != nil {
 			return err
 		}
 	}
@@ -96,26 +91,20 @@ func extract(root *os.Root, req ArchiveRequest) error {
 	if len(z.File) > archiveEntries {
 		return unix.EINVAL
 	}
-	dir, err := parent.Open(".")
+	if err = root.Mkdir(tmp, 0700); err != nil {
+		return err
+	}
+	defer root.RemoveAll(tmp)
+	stageInfo, err := root.Lstat(tmp)
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
-	if err = parent.Mkdir(tmp, 0700); err != nil {
-		return err
-	}
-	defer parent.RemoveAll(tmp)
-	stage, err := parent.OpenRoot(tmp)
-	if err != nil {
-		return err
-	}
-	defer stage.Close()
-	stageDir, err := stage.Open(".")
+	stageDir, err := root.Open(".")
 	if err != nil {
 		return err
 	}
 	defer stageDir.Close()
-	top := fmt.Sprintf("/proc/self/fd/%d", stageDir.Fd())
+	top := fmt.Sprintf("/proc/self/fd/%d/%s", stageDir.Fd(), tmp)
 	var total uint64
 	seen := map[string]bool{}
 	for _, entry := range z.File {
@@ -139,25 +128,22 @@ func extract(root *os.Root, req ArchiveRequest) error {
 	}
 	for _, entry := range z.File {
 		name := path.Clean(strings.TrimSuffix(entry.Name, "/"))
+		if err = sameStage(root, tmp, stageInfo); err != nil {
+			return err
+		}
 		if entry.Mode().IsDir() {
-			if err = stage.MkdirAll(name, 0755); err != nil {
+			if err = root.MkdirAll(path.Join(tmp, name), 0755); err != nil {
 				return err
 			}
 			continue
 		}
-		if err = stage.MkdirAll(path.Dir(name), 0755); err != nil {
+		if err = root.MkdirAll(path.Join(tmp, path.Dir(name)), 0755); err != nil {
 			return err
 		}
-		parentDir, e := openArchiveSource(stage, path.Dir(name))
+		out, e := root.OpenFile(path.Join(tmp, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
 		if e != nil {
 			return e
 		}
-		fd, e := unix.Openat(int(parentDir.Fd()), path.Base(name), unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
-		parentDir.Close()
-		if e != nil {
-			return e
-		}
-		out := os.NewFile(uintptr(fd), name)
 		in, e := entry.Open()
 		if e != nil {
 			out.Close()
@@ -173,11 +159,35 @@ func extract(root *os.Root, req ArchiveRequest) error {
 			return unix.EINVAL
 		}
 	}
-	if err = stage.Chmod(".", 0755); err != nil {
+	if err = sameStage(root, tmp, stageInfo); err != nil {
+		return err
+	}
+	if err = root.Chmod(tmp, 0755); err != nil {
 		return err
 	}
 	// shortcut: a crash after publication replays as conflict, use a journal if exact completion is required.
-	return unix.Renameat2(int(dir.Fd()), tmp, int(dir.Fd()), path.Base(path.Clean(req.Dest)), unix.RENAME_NOREPLACE)
+	return publishArchive(root, tmp, path.Clean(req.Dest))
+}
+
+func sameStage(root *os.Root, name string, original os.FileInfo) error {
+	current, err := root.Lstat(name)
+	if err != nil {
+		return err
+	}
+	if !current.IsDir() || !os.SameFile(original, current) {
+		return unix.EINVAL
+	}
+	return nil
+}
+
+func publishArchive(root *os.Root, src, dest string) error {
+	if _, err := root.Lstat(dest); err == nil {
+		return unix.EEXIST
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	// shortcut: a site user can race the no-replace precheck, use an atomic confined rename if available.
+	return root.Rename(src, dest)
 }
 
 func stageName(req ArchiveRequest) (string, error) {
@@ -224,30 +234,24 @@ func archive(root *os.Root, req ArchiveRequest) error {
 	if req.Dest == "" || ValidatePath(req.Dest) != nil || path.Clean(req.Dest) == "." || len(req.Paths) == 0 || len(req.Paths) > archiveEntries {
 		return unix.EINVAL
 	}
-	parent, err := root.OpenRoot(path.Dir(path.Clean(req.Dest)))
-	if err != nil {
-		return err
-	}
-	defer parent.Close()
-	dir, err := parent.Open(".")
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
 	tmp, err := stageName(req)
 	if err != nil {
 		return err
 	}
 	if req.JobID != "" {
-		if err = parent.RemoveAll(tmp); err != nil {
+		if err = root.RemoveAll(tmp); err != nil {
 			return err
 		}
 	}
-	if err = parent.Mkdir(tmp, 0700); err != nil {
+	if err = root.Mkdir(tmp, 0700); err != nil {
 		return err
 	}
-	defer parent.RemoveAll(tmp)
-	f, err := parent.OpenFile(path.Join(tmp, "data"), os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
+	defer root.RemoveAll(tmp)
+	stageInfo, err := root.Lstat(tmp)
+	if err != nil {
+		return err
+	}
+	f, err := root.OpenFile(path.Join(tmp, "data"), os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
 	if err != nil {
 		return err
 	}
@@ -255,7 +259,7 @@ func archive(root *os.Root, req ArchiveRequest) error {
 	w := zip.NewWriter(f)
 	count, total := 0, int64(0)
 	seen := map[string]bool{}
-	tempPath := path.Join(path.Dir(path.Clean(req.Dest)), tmp)
+	tempPath := tmp
 	var add func(string) error
 	add = func(name string) error {
 		if ValidatePath(name) != nil || name == "" {
@@ -341,5 +345,8 @@ func archive(root *os.Root, req ArchiveRequest) error {
 		return err
 	}
 	// shortcut: a crash after publication replays as conflict, use a journal if exact completion is required.
-	return unix.Renameat2(int(dir.Fd()), path.Join(tmp, "data"), int(dir.Fd()), path.Base(path.Clean(req.Dest)), unix.RENAME_NOREPLACE)
+	if err = sameStage(root, tmp, stageInfo); err != nil {
+		return err
+	}
+	return publishArchive(root, path.Join(tmp, "data"), path.Clean(req.Dest))
 }
