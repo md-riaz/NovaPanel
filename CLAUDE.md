@@ -6,11 +6,15 @@ conflict is a blocker to raise, not a thing to silently resolve in code.
 
 ## How coding work is orchestrated
 
-The main session (Opus) only plans and guides: it writes briefs and rulings, picks the slice,
-dispatches workers, and makes the merge decision. It does not do the checking itself.
+The main session (Opus) only plans and guides. It owns the plan, the branch, and every merge
+decision; it writes briefs and rulings, picks the slice, and dispatches workers. It does not do the
+checking itself.
 
-- Read-only checking runs on Haiku: searching, mapping, locating seams, reviews, verifying findings,
-  inspecting diffs, and reading gate and CI results. Haiku never edits files.
+- Read-only checking runs on Haiku: searching, mapping, locating seams, gathering evidence,
+  inspecting a diff, reading gate and CI results, and confirming a change matches its brief or a
+  fix delta matches the findings list. Haiku never edits files.
+- Independent adversarial review runs on a codex Orca worker separate from the implementer. It
+  refutes the code and verifies a finding before it is reported. It is not Haiku or the main session.
 - Implementation edits run on a codex Orca worker, each edit in its own isolated git worktree, so
   parallel edits never collide.
 - Deterministic control flow stays in the workflow script, not in agent prose: branching, which
