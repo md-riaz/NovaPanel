@@ -147,6 +147,21 @@ func verifyUser(ctx context.Context, r runner.Runner, root, name, id string, all
 	return nil
 }
 
+// ResolveUserForDelete accepts the retained marker during deletion replay.
+func ResolveUserForDelete(ctx context.Context, r runner.Runner, root, name, id string) (uint32, uint32, error) {
+	if err := verifyUser(ctx, r, root, name, id, true); err != nil {
+		return 0, 0, err
+	}
+	a, err := lookup(ctx, r, root, name)
+	if err != nil {
+		return 0, 0, err
+	}
+	if a == nil || (a.gecos != marker+id && a.gecos != retainedMarker+id) {
+		return 0, 0, rpcerr.Errf("precondition_failed", "site account unavailable")
+	}
+	return a.uid, a.gid, nil
+}
+
 // RetainUser marks an owned account as retained after its pool is disabled.
 // Replaying the same retention is safe; retained accounts are never adopted.
 func RetainUser(ctx context.Context, r runner.Runner, root, name, id string) error {

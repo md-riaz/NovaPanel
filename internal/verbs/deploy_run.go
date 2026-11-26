@@ -191,14 +191,14 @@ func executeDeploy(ctx context.Context, a *agent.Agent, j *jobs.Job, siteID, ref
 		clear(block.Bytes)
 		defer clear(identity)
 	}
-	if err = deployHelper(ctx, sr, home, "prepare", identity); err != nil {
-		return err
-	}
 	defer func() {
 		if e := deployHelper(context.Background(), sr, home, "remove", nil); e != nil && ret == nil {
 			ret = e
 		}
 	}()
+	if err = deployHelper(ctx, sr, home, "prepare", identity); err != nil {
+		return err
+	}
 	dir := filepath.Join(home, ".novapanel", "deploy")
 	gitdir := filepath.Join(dir, "repo.git")
 	env := []string{"HOME=" + home, "PATH=/usr/bin:/bin", "GIT_TERMINAL_PROMPT=0"}
@@ -276,4 +276,15 @@ func executeDeploy(ctx context.Context, a *agent.Agent, j *jobs.Job, siteID, ref
 	}
 	j.Result, _ = json.Marshal(map[string]string{"sha": sha})
 	return nil
+}
+
+// deployUserRunner runs the teardown helper as the proven site account.
+type deployUserRunner struct {
+	runner   runner.Runner
+	uid, gid uint32
+}
+
+func (r deployUserRunner) Run(ctx context.Context, prog string, args []string, opts runner.RunOpts) ([]byte, []byte, int, error) {
+	opts.Uid, opts.Gid, opts.Groups = r.uid, r.gid, []uint32{}
+	return r.runner.Run(ctx, prog, args, opts)
 }
