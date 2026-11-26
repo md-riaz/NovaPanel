@@ -23,7 +23,7 @@ func TestPhase4SchemaContract(t *testing.T) {
 					s.Close()
 				}
 			}()
-			if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations"); n != 9 {
+			if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations"); n != 10 {
 				t.Fatalf("production migrations: %d", n)
 			}
 			if upgrade {
