@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 
 	"novapanel/internal/agent"
@@ -27,6 +29,58 @@ type filesReadArgs struct {
 	Length int    `json:"length,omitempty"`
 }
 
+type filesWriteArgs struct {
+	SiteID     string `json:"site_id"`
+	Path       string `json:"path"`
+	ContentB64 string `json:"content_b64"`
+}
+type filesMkdirArgs struct {
+	SiteID string `json:"site_id"`
+	Path   string `json:"path"`
+}
+type filesMoveArgs struct {
+	SiteID string `json:"site_id"`
+	From   string `json:"from"`
+	To     string `json:"to"`
+}
+type filesDeleteArgs struct {
+	SiteID string `json:"site_id"`
+	Path   string `json:"path"`
+}
+type filesChmodArgs struct {
+	SiteID string `json:"site_id"`
+	Path   string `json:"path"`
+	Mode   uint32 `json:"mode"`
+}
+
+func (v *filesWriteArgs) Validate() error {
+	if err := validateFiles(v.SiteID, v.Path); err != nil {
+		return err
+	}
+	if len(v.ContentB64) > base64.StdEncoding.EncodedLen(fileop.MaxWrite) {
+		return rpc.Errf("invalid_argument", "File content exceeds 768 KiB")
+	}
+	content, err := base64.StdEncoding.DecodeString(v.ContentB64)
+	if err != nil || len(content) > fileop.MaxWrite {
+		return rpc.Errf("invalid_argument", "Invalid or oversized file content")
+	}
+	return nil
+}
+func (v *filesMkdirArgs) Validate() error  { return validateFiles(v.SiteID, v.Path) }
+func (v *filesDeleteArgs) Validate() error { return validateFiles(v.SiteID, v.Path) }
+func (v *filesMoveArgs) Validate() error {
+	if err := validateFiles(v.SiteID, v.From); err != nil {
+		return err
+	}
+	return validateFiles(v.SiteID, v.To)
+}
+func (v *filesChmodArgs) Validate() error {
+	if !fileop.ValidMode(v.Mode) {
+		return rpc.Errf("invalid_argument", "Invalid file mode")
+	}
+	return validateFiles(v.SiteID, v.Path)
+}
+
 func validateFiles(site, path string) error {
 	if !id.Valid(site) || fileop.ValidatePath(path) != nil {
 		return rpc.Errf("invalid_argument", "Invalid site ID or path")
@@ -44,10 +98,46 @@ func (v *filesReadArgs) Validate() error {
 func init() {
 	rpc.Register(rpc.Verb{Name: "files.list", MinRole: rpc.Admin, Scope: "sites:read", ReadOnly: true, NewArgs: func() any { return &filesListArgs{} }, Run: filesList})
 	rpc.Register(rpc.Verb{Name: "files.read", MinRole: rpc.Admin, Scope: "sites:read", ReadOnly: true, NewArgs: func() any { return &filesReadArgs{} }, Run: filesRead})
+	rpc.Register(rpc.Verb{Name: "files.write", MinRole: rpc.Admin, Scope: "sites:write", NewArgs: func() any { return &filesWriteArgs{} }, Run: filesWrite})
+	rpc.Register(rpc.Verb{Name: "files.mkdir", MinRole: rpc.Admin, Scope: "sites:write", NewArgs: func() any { return &filesMkdirArgs{} }, Run: filesMkdir})
+	rpc.Register(rpc.Verb{Name: "files.move", MinRole: rpc.Admin, Scope: "sites:write", NewArgs: func() any { return &filesMoveArgs{} }, Run: filesMove})
+	rpc.Register(rpc.Verb{Name: "files.delete", MinRole: rpc.Admin, Scope: "sites:write", NewArgs: func() any { return &filesDeleteArgs{} }, Run: filesDelete})
+	rpc.Register(rpc.Verb{Name: "files.chmod", MinRole: rpc.Admin, Scope: "sites:write", NewArgs: func() any { return &filesChmodArgs{} }, Run: filesChmod})
+}
+func filesWrite(ctx context.Context, a *agent.Agent, args any) (any, error) {
+	v := args.(*filesWriteArgs)
+	if err := v.Validate(); err != nil {
+		return nil, err
+	}
+	content, _ := base64.StdEncoding.DecodeString(v.ContentB64)
+	return filesMutate(ctx, a, v.SiteID, fileop.Request{Operation: "write", Path: v.Path, Length: len(content)}, content)
+}
+func filesMkdir(ctx context.Context, a *agent.Agent, args any) (any, error) {
+	v := args.(*filesMkdirArgs)
+	return filesMutate(ctx, a, v.SiteID, fileop.Request{Operation: "mkdir", Path: v.Path}, nil)
+}
+func filesMove(ctx context.Context, a *agent.Agent, args any) (any, error) {
+	v := args.(*filesMoveArgs)
+	return filesMutate(ctx, a, v.SiteID, fileop.Request{Operation: "move", From: v.From, To: v.To}, nil)
+}
+func filesDelete(ctx context.Context, a *agent.Agent, args any) (any, error) {
+	v := args.(*filesDeleteArgs)
+	return filesMutate(ctx, a, v.SiteID, fileop.Request{Operation: "delete", Path: v.Path}, nil)
+}
+func filesChmod(ctx context.Context, a *agent.Agent, args any) (any, error) {
+	v := args.(*filesChmodArgs)
+	return filesMutate(ctx, a, v.SiteID, fileop.Request{Operation: "chmod", Path: v.Path, Mode: v.Mode}, nil)
+}
+func filesMutate(ctx context.Context, a *agent.Agent, siteID string, req fileop.Request, content []byte) (any, error) {
+	_, err := (fileopService{a}).run(ctx, siteID, req, content)
+	if err != nil {
+		return nil, err
+	}
+	return struct{}{}, nil
 }
 func filesList(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*filesListArgs)
-	res, err := (fileopService{a}).run(ctx, v.SiteID, fileop.Request{Operation: "list", Path: v.Path})
+	res, err := (fileopService{a}).run(ctx, v.SiteID, fileop.Request{Operation: "list", Path: v.Path}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +150,7 @@ func filesList(ctx context.Context, a *agent.Agent, args any) (any, error) {
 }
 func filesRead(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*filesReadArgs)
-	res, err := (fileopService{a}).run(ctx, v.SiteID, fileop.Request{Operation: "read", Path: v.Path, Offset: v.Offset, Length: v.Length})
+	res, err := (fileopService{a}).run(ctx, v.SiteID, fileop.Request{Operation: "read", Path: v.Path, Offset: v.Offset, Length: v.Length}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +166,7 @@ func filesRead(ctx context.Context, a *agent.Agent, args any) (any, error) {
 
 type fileopService struct{ a *agent.Agent }
 
-func (s fileopService) run(ctx context.Context, siteID string, req fileop.Request) (fileop.Response, error) {
+func (s fileopService) run(ctx context.Context, siteID string, req fileop.Request, content []byte) (fileop.Response, error) {
 	a := s.a
 	var res fileop.Response
 	if a.Jobs == nil || a.Exec == nil || a.Store == nil {
@@ -111,7 +201,7 @@ func (s fileopService) run(ctx context.Context, siteID string, req fileop.Reques
 	if err = json.NewEncoder(&body).Encode(req); err != nil {
 		return res, err
 	}
-	out, _, code, err := a.Exec.Run(ctx, program, []string{"__fileop"}, runner.RunOpts{Uid: uid, Gid: gid, Groups: []uint32{}, Stdin: &body, MaxOutput: 2 << 20})
+	out, _, code, err := a.Exec.Run(ctx, program, []string{"__fileop"}, runner.RunOpts{Uid: uid, Gid: gid, Groups: []uint32{}, Stdin: io.MultiReader(&body, bytes.NewReader(content)), MaxOutput: 2 << 20})
 	if err != nil || code != 0 {
 		return res, rpc.Errf("agent_error", "File operation failed")
 	}
@@ -120,7 +210,7 @@ func (s fileopService) run(ctx context.Context, siteID string, req fileop.Reques
 	}
 	if res.Code != "" {
 		switch res.Code {
-		case "not_found", "invalid_argument":
+		case "not_found", "invalid_argument", "conflict":
 			return res, rpc.Errf(res.Code, "File operation failed")
 		default:
 			return res, rpc.Errf("agent_error", "File operation failed")
