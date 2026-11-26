@@ -187,12 +187,12 @@ func TestCronRenderAndValidation(t *testing.T) {
 	if err := v.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	row := store.CronJob{ID: testCronID, SiteID: testCronSite, Schedule: v.Schedule, ArgvJSON: `["/bin/echo","hello \\\"world\\\""]`, UnitName: cronUnit(testCronSite, testCronID)}
+	row := store.CronJob{ID: testCronID, SiteID: testCronSite, Schedule: v.Schedule, ArgvJSON: `["/bin/echo","hello \"world\""]`, UnitName: cronUnit(testCronSite, testCronID)}
 	service, timer, err := cronRender(row, store.Site{Name: "example", Docroot: "/srv/sites/example/public"}, 123)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range []string{"Type=oneshot", "User=example", "Group=123", "WorkingDirectory=/srv/sites/example/public", `ExecStart="/bin/echo"`} {
+	for _, s := range []string{"Type=oneshot", "User=example", "Group=123", "WorkingDirectory=/srv/sites/example/public", `ExecStart="/bin/echo" "hello \"world\""`} {
 		if !strings.Contains(service, s) {
 			t.Fatalf("missing %q in %s", s, service)
 		}
@@ -200,7 +200,7 @@ func TestCronRenderAndValidation(t *testing.T) {
 	if !strings.Contains(timer, "OnCalendar=daily") {
 		t.Fatal(timer)
 	}
-	for _, bad := range []string{"relative", "/bin/%s", "/bin/$x", "/bin/x\n", "/bin/x\x00"} {
+	for _, bad := range []string{"relative", "/bin/%s", "/bin/$x", "/bin/x\n", "/bin/x\x00", `/bin/with\backslash`, "/bin/é"} {
 		v.Argv = []string{bad}
 		if v.Validate() == nil {
 			t.Fatalf("accepted %q", bad)

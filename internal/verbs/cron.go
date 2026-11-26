@@ -54,6 +54,13 @@ func (v *cronCreateArgs) Validate() error {
 			}
 		}
 	}
+	for _, arg := range v.Argv {
+		for _, c := range arg {
+			if c >= 127 || c == '\\' {
+				return rpc.Errf("invalid_argument", "Invalid cron argument")
+			}
+		}
+	}
 	return nil
 }
 func init() {
