@@ -45,10 +45,10 @@ func TestReadAndConfinement(t *testing.T) {
 	if err != nil || len(r.Content) != 0 || !r.EOF {
 		t.Fatalf("past EOF: %+v %v", r, err)
 	}
-	for _, p := range []string{"../", "../../etc/passwd", "/etc/passwd", "bad\x00name", "link", "link/secret"} {
+	for _, p := range []string{"../", "../../etc/passwd", "/etc/passwd", "bad\x00name", "bad\\name", "link", "link/secret"} {
 		req.Path = p
-		if _, err = Apply(req); err == nil {
-			t.Errorf("accepted %q", p)
+		if _, err = Apply(req); err == nil || errorCode(err) != "invalid_argument" {
+			t.Errorf("accepted or misclassified %q: %v", p, err)
 		}
 	}
 	req = Request{Base: base, Name: "site", Operation: "list"}
@@ -84,11 +84,11 @@ func TestReadAndConfinement(t *testing.T) {
 }
 
 func FuzzValidatePath(f *testing.F) {
-	for _, p := range []string{"../", "../../etc/passwd", "/etc/passwd", "a\x00b"} {
+	for _, p := range []string{"../", "../../etc/passwd", "/etc/passwd", "a\x00b", "a\\b"} {
 		f.Add(p)
 	}
 	f.Fuzz(func(t *testing.T, p string) {
-		if (strings.HasPrefix(p, "/") || strings.ContainsRune(p, 0)) && ValidatePath(p) == nil {
+		if (strings.HasPrefix(p, "/") || strings.ContainsAny(p, "\\\x00")) && ValidatePath(p) == nil {
 			t.Fatalf("accepted %q", p)
 		}
 	})

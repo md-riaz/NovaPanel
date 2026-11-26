@@ -38,7 +38,8 @@ type Response struct {
 
 // ValidatePath rejects traversal components even when they could resolve inside the root.
 func ValidatePath(p string) error {
-	if strings.ContainsRune(p, 0) || path.IsAbs(p) {
+	// Linux permits backslashes in names, but files.* deliberately rejects them.
+	if strings.ContainsAny(p, "\\\x00") || path.IsAbs(p) {
 		return errors.New("invalid path")
 	}
 	for _, part := range strings.Split(p, "/") {
