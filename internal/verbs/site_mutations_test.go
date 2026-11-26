@@ -10,6 +10,7 @@ import (
 	"novapanel/internal/jobs"
 	"novapanel/internal/render/nginx"
 	"novapanel/internal/rpc"
+	"novapanel/internal/secret"
 	"novapanel/internal/store"
 	"os"
 	"path/filepath"
@@ -33,6 +34,11 @@ func TestSiteMutations(t *testing.T) {
 	a.Store = st
 	a.Audit = log
 	a.Cfg.SitesRoot = filepath.Join(root, "sites")
+	a.Cfg.DBPath = filepath.Join(root, "panel.db")
+	a.Secret, err = secret.New(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
 	a.Cfg.ACMEWebroot = filepath.Join(root, "acme")
 	for _, p := range []string{"sites-available", "sites-enabled"} {
 		if err = os.MkdirAll(filepath.Join(root, "nginx", p), 0755); err != nil {
@@ -189,6 +195,22 @@ func TestSiteMutations(t *testing.T) {
 	if r := call("redirect.add", map[string]any{"site_id": sid, "source": "/x;evil", "target": "/new", "code": 301}); r.Code != "invalid_argument" {
 		t.Fatalf("source validation %+v", r)
 	}
+	if r := call("deploy.configure", map[string]any{"site_id": sid, "repo_url": "https://example.com/repo", "branch": "main"}); !r.OK {
+		t.Fatalf("deploy configure: %+v", r)
+	}
+	deployDir := filepath.Join(root, "deploy", sid)
+	if err = os.MkdirAll(deployDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(deployDir, "identity"), []byte("key"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.Tx(ctx, func(tx *sql.Tx) error {
+		_, e := tx.ExecContext(ctx, "INSERT INTO deploys(id,site_id,repo_url,branch,sha,state,created) VALUES(?,?,?,?,?,?,?)", "deploy", sid, "https://example.com/repo", "main", "sha", "done", 1)
+		return e
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err = st.SetSiteStatus(ctx, sid, "failed"); err != nil {
 		t.Fatal(err)
 	}
@@ -226,6 +248,18 @@ func TestSiteMutations(t *testing.T) {
 	}
 	if _, err = st.SiteByID(ctx, sid); err == nil {
 		t.Fatal("site remains")
+	}
+	if _, err = st.DeployKey(ctx, sid); err != sql.ErrNoRows {
+		t.Fatalf("deploy key remains: %v", err)
+	}
+	if _, err = st.DeployConfig(ctx, sid); err != sql.ErrNoRows {
+		t.Fatalf("deploy config remains: %v", err)
+	}
+	if rows, err := st.DeployHistory(ctx, sid, 100, false); err != nil || len(rows) != 0 {
+		t.Fatalf("deploy history remains: %v %v", rows, err)
+	}
+	if _, err = os.Stat(filepath.Join(deployDir, "identity")); !os.IsNotExist(err) {
+		t.Fatalf("deploy files remain: %v", err)
 	}
 	_ = site
 }
