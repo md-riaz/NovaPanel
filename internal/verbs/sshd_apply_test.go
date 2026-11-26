@@ -26,6 +26,21 @@ func (r *sshdTestRunner) Run(context.Context, string, []string, runner.RunOpts) 
 	}
 	return nil, nil, 0, nil
 }
+func TestSFTPOnlyArgumentsAndObjectKey(t *testing.T) {
+	v := &sftpOnlyArgs{SiteID: "01K8WMXZF57CGNZKX1FZ38DZMA"}
+	if v.Validate() == nil {
+		t.Fatal("missing enabled accepted")
+	}
+	enabled := false
+	v.Enabled = &enabled
+	if err := v.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if key := rpc.Registry["sshkey.sftp_only"].ObjectKey(v); key != "site:"+v.SiteID {
+		t.Fatal(key)
+	}
+}
+
 func TestSSHDMarkerHealsAndRefuses(t *testing.T) {
 	state, root := t.TempDir(), t.TempDir()
 	r := &sshdTestRunner{fail: map[int]bool{1: true, 2: true, 3: true}}
