@@ -258,7 +258,7 @@ func TestSiteMutations(t *testing.T) {
 	if rows, err := st.DeployHistory(ctx, sid, 100, false); err != nil || len(rows) != 0 {
 		t.Fatalf("deploy history remains: %v %v", rows, err)
 	}
-	if _, err = os.Stat(deployDir); !os.IsNotExist(err) {
+	if _, err = os.Stat(filepath.Join(deployDir, "identity")); !os.IsNotExist(err) {
 		t.Fatalf("deploy files remain: %v", err)
 	}
 	_ = site

@@ -29,5 +29,25 @@ func removeDeployFiles(dbPath, siteID string) error {
 		return err
 	}
 	defer root.Close()
-	return root.RemoveAll(siteID)
+	info, err := root.Lstat(siteID)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return rpc.Errf("precondition_failed", "Invalid deploy site directory")
+	}
+	siteRoot, err := root.OpenRoot(siteID)
+	if err != nil {
+		return err
+	}
+	defer siteRoot.Close()
+	for _, name := range []string{"identity", "known_hosts"} {
+		if err = siteRoot.Remove(name); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }

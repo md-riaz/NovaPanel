@@ -212,7 +212,9 @@ func TestDeployFileCleanup(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatalf("deploy directory remains: %v", err)
+	for _, name := range []string{"identity", "known_hosts"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("deploy file remains: %v", err)
+		}
 	}
 }
