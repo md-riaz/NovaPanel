@@ -16,8 +16,11 @@ import (
 	"novapanel/internal/rpc"
 )
 
-// applySSHD is the shared serialized entry point for SSH config mutations.
-func applySSHD(ctx context.Context, a *agent.Agent, d sshd.Desired, teardown bool) error {
+type sshdState struct{ a *agent.Agent }
+
+// apply is the shared serialized entry point for SSH config mutations.
+func (s sshdState) apply(ctx context.Context, d sshd.Desired, teardown bool) error {
+	a := s.a
 	if a.Jobs == nil || a.SSHD == nil {
 		return rpc.Errf("agent_error", "SSH configuration unavailable")
 	}

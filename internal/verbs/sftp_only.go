@@ -54,7 +54,7 @@ func sftpOnlyExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if _, _, err = php.ResolveUser(ctx, a.Exec, a.Cfg.SitesRoot, site.Name, site.ID); err != nil {
 		return err
 	}
-	if err = applySSHD(ctx, a, sshd.Desired{Site: site.Name, User: site.Name, Enabled: *v.Enabled}, false); err != nil {
+	if err = (sshdState{a}).apply(ctx, sshd.Desired{Site: site.Name, User: site.Name, Enabled: *v.Enabled}, false); err != nil {
 		return err
 	}
 	j.Result = json.RawMessage(`{}`)

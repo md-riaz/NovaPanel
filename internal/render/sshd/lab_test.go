@@ -3,8 +3,8 @@
 package sshd
 
 import (
+	runner "novapanel/internal/exec"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,10 +18,14 @@ func TestLabSSHDConfig(t *testing.T) {
 	}
 	dir := t.TempDir()
 	key := filepath.Join(dir, "hostkey")
-	cmd := exec.Command(keygen, "-q", "-t", "ed25519", "-N", "", "-f", key)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("keygen: %v %s", err, out)
+	run := func(prog string, args ...string) ([]byte, error) {
+		out, stderr, code, err := (runner.Real{}).Run(t.Context(), prog, args, runner.RunOpts{Env: os.Environ()})
+		if err != nil || code != 0 {
+			t.Fatalf("%s: %v %s", prog, err, stderr)
+		}
+		return out, err
 	}
+	run(keygen, "-q", "-t", "ed25519", "-N", "", "-f", key)
 	r := &fakeRunner{}
 	a := &Applier{Root: dir, Runner: r}
 	if err := a.Apply(t.Context(), Desired{Site: "demo", User: "demo", Enabled: true}); err != nil {
@@ -32,12 +36,8 @@ func TestLabSSHDConfig(t *testing.T) {
 	if err := os.WriteFile(conf, []byte(body), 0600); err != nil {
 		t.Fatal(err)
 	}
-	cmd = exec.Command(binary, "-t", "-f", conf)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("sshd -t: %v %s", err, out)
-	}
-	cmd = exec.Command(binary, "-T", "-f", conf, "-C", "user=demo,host=localhost,addr=127.0.0.1")
-	out, err := cmd.CombinedOutput()
+	run(binary, "-t", "-f", conf)
+	out, err := run(binary, "-T", "-f", conf, "-C", "user=demo,host=localhost,addr=127.0.0.1")
 	if err != nil || !strings.Contains(string(out), "forcecommand internal-sftp") {
 		t.Fatalf("sshd -T: %v %s", err, out)
 	}

@@ -32,7 +32,7 @@ func TestSSHDMarkerHealsAndRefuses(t *testing.T) {
 	a := &agent.Agent{Cfg: config.Config{DBPath: filepath.Join(state, "agent.db")}, Jobs: &jobs.Queue{}, Exec: r, SSHD: &sshd.Applier{Root: root, Runner: r}}
 	d := sshd.Desired{Site: "demo", User: "demo", Enabled: true}
 	ctx := context.Background()
-	if err := applySSHD(ctx, a, d, false); err == nil {
+	if err := (sshdState{a}).apply(ctx, d, false); err == nil {
 		t.Fatal("expected divergence")
 	}
 	marker := filepath.Join(state, "sshd-diverged")
@@ -40,12 +40,12 @@ func TestSSHDMarkerHealsAndRefuses(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatalf("marker: %v %v", info, err)
 	}
-	err = applySSHD(ctx, a, d, false)
+	err = (sshdState{a}).apply(ctx, d, false)
 	var coded *rpc.CodedError
 	if !errors.As(err, &coded) || coded.Code != "precondition_failed" {
 		t.Fatalf("expected refusal: %v", err)
 	}
-	if err = applySSHD(ctx, a, d, false); err != nil {
+	if err = (sshdState{a}).apply(ctx, d, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = os.Stat(marker); !os.IsNotExist(err) {
