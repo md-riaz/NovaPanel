@@ -30,7 +30,7 @@ func TestWriteOperations(t *testing.T) {
 	if err != nil || string(got) != "second" || os.SameFile(before, after) || after.Mode().Perm() != 0644 {
 		t.Fatalf("overwrite: %q %v", got, err)
 	}
-	for _, mode := range []os.FileMode{0600, 0640, 0644, os.ModeSetgid | 0640} {
+	for _, mode := range []os.FileMode{0400, 0600, 0640, 0644, os.ModeSetgid | 0640} {
 		if err := os.Chmod(filepath.Join(dir, "file"), mode); err != nil {
 			t.Fatal(err)
 		}

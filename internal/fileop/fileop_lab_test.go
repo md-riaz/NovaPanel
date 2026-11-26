@@ -116,6 +116,9 @@ func TestDroppedHelper(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatalf("chmod: %v %v", info, err)
 	}
+	if err := os.Chmod(filepath.Join(dir, "written"), 0400); err != nil {
+		t.Fatal(err)
+	}
 	stop := make(chan struct{})
 	type observation struct {
 		count int
@@ -148,7 +151,9 @@ func TestDroppedHelper(t *testing.T) {
 					result.err = err
 					return
 				}
-				result.count++
+				if e.Name() != "written" {
+					result.count++
+				}
 				if i.Mode().Perm()&0077 != 0 {
 					result.err = fmt.Errorf("temporary file mode %o", i.Mode().Perm())
 					return
@@ -173,7 +178,7 @@ func TestDroppedHelper(t *testing.T) {
 		t.Fatalf("temporary file observations: %+v", seen)
 	}
 	info, err = os.Stat(filepath.Join(dir, "written"))
-	if err != nil || unix.Stat(filepath.Join(dir, "written"), &owner) != nil || info.Mode().Perm() != 0600 || owner.Uid != 65534 {
+	if err != nil || unix.Stat(filepath.Join(dir, "written"), &owner) != nil || info.Mode().Perm() != 0400 || owner.Uid != 65534 {
 		t.Fatalf("private result: %v %v", info, err)
 	}
 }

@@ -85,6 +85,8 @@ func applyWrite(root *os.Root, req Request, content []byte) error {
 			return err
 		}
 		tmp := ".novapanel-" + hex.EncodeToString(random[:])
+		// Temp starts at 0600; only its site-user owner can access it before the final mode.
+		// Its owner bits may briefly exceed that mode; group/other bits never do.
 		f, err := parent.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
 		if err != nil {
 			return err
