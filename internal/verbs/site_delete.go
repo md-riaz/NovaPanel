@@ -238,6 +238,12 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 			j.Step = durable.Step
 		}
 	}
+	if e = a.Store.DeleteDeployKey(ctx, s.ID); e != nil {
+		return e
+	}
+	if e = removeDeployFiles(a.Cfg.DBPath, s.ID); e != nil {
+		return e
+	}
 	if !v.PurgeFiles {
 		if a.Exec == nil {
 			return rpc.Errf("agent_error", "Site account unavailable")
