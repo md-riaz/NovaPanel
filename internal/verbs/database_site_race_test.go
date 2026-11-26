@@ -43,6 +43,8 @@ func TestSiteDeleteDatabaseCreateOrders(t *testing.T) {
 				t.Fatal(err)
 			}
 			a := agent.New()
+			a.Cfg.DBPath = filepath.Join(root, "panel.db")
+			a.SSHD.Root = filepath.Join(root, "missing-ssh")
 			a.Store = s
 			a.Audit = l
 			a.Secret = seal
