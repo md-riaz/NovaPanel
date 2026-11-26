@@ -83,7 +83,7 @@ func TestApplyAndRollback(t *testing.T) {
 func TestApplyDivergenceAndValidation(t *testing.T) {
 	r := &fakeRunner{fail: map[int]bool{1: true, 2: true}}
 	a := &Applier{Root: t.TempDir(), Runner: r}
-	if err := a.Apply(context.Background(), Desired{Site: "demo", User: "demo", Enabled: true}); !errors.Is(err, Diverged) {
+	if err := a.Apply(context.Background(), Desired{Site: "demo", User: "demo", Enabled: true}); !errors.Is(err, ErrDiverged) {
 		t.Fatal(err)
 	}
 	for _, d := range []Desired{{Site: "demo\nMatch User root", User: "demo", Enabled: true}, {Site: "demo", User: "root", Enabled: true}} {

@@ -33,8 +33,8 @@ type Applier struct {
 	mu     sync.Mutex
 }
 
-// Diverged reports that the previous configuration could not be restored and reloaded.
-var Diverged = errors.New("sshd configuration diverged")
+// ErrDiverged reports that the previous configuration could not be restored and reloaded.
+var ErrDiverged = errors.New("sshd configuration diverged")
 
 func (a *Applier) command(ctx context.Context, prog string, args ...string) error {
 	if a.Runner == nil {
@@ -123,7 +123,7 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 			restore = a.command(recovery, platform.Systemctl, "reload", "ssh.service")
 		}
 		if restore != nil {
-			return errors.Join(err, Diverged, restore)
+			return errors.Join(err, ErrDiverged, restore)
 		}
 		return err
 	}

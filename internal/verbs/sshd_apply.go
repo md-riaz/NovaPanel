@@ -68,7 +68,7 @@ func (s sshdState) apply(ctx context.Context, d sshd.Desired, teardown bool) err
 		}
 	}
 	err = a.SSHD.Apply(ctx, d)
-	if !errors.Is(err, sshd.Diverged) {
+	if !errors.Is(err, sshd.ErrDiverged) {
 		return err
 	}
 	f, markerErr := root.OpenFile(marker, os.O_WRONLY|os.O_CREATE|unix.O_NOFOLLOW, 0600)
