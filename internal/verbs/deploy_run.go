@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -169,6 +170,18 @@ func (d deployService) execute(ctx context.Context, j *jobs.Job, siteID, ref, ro
 	if err != nil {
 		return rpc.Errf("precondition_failed", "Site account unavailable")
 	}
+	// A hard kill may leave the 0600 identity until the next run or site deletion.
+	defer func() {
+		if e := deployHelper(context.Background(), sr, home, "remove", nil); e != nil {
+			log.Print("deploy: unable to remove site identity file")
+			if ret == nil {
+				ret = e
+			}
+		}
+	}()
+	if err = deployHelper(ctx, sr, home, "remove", nil); err != nil {
+		return err
+	}
 	var identity []byte
 	if strings.HasPrefix(cfg.RepoURL, "ssh://") {
 		sealed, e := a.Store.DeployKey(ctx, siteID)
@@ -193,11 +206,7 @@ func (d deployService) execute(ctx context.Context, j *jobs.Job, siteID, ref, ro
 		clear(block.Bytes)
 		defer clear(identity)
 	}
-	defer func() {
-		if e := deployHelper(context.Background(), sr, home, "remove", nil); e != nil && ret == nil {
-			ret = e
-		}
-	}()
+
 	if err = deployHelper(ctx, sr, home, "prepare", identity); err != nil {
 		return err
 	}

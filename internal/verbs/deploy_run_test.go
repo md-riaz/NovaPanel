@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -27,6 +28,7 @@ type deployFake struct {
 	commands      [][]string
 	operations    []string
 	missingCommit bool
+	failFetch     bool
 }
 
 func (f *deployFake) Run(_ context.Context, prog string, args []string, opts run.RunOpts) ([]byte, []byte, int, error) {
@@ -54,6 +56,23 @@ func (f *deployFake) Run(_ context.Context, prog string, args []string, opts run
 		if json.Unmarshal(b, &v) != nil {
 			f.t.Fatal("bad helper request")
 		}
+		path := filepath.Join(f.home, ".novapanel", "deploy", "id_ed25519")
+		if v.Operation == "remove" {
+			if e := os.Remove(path); e != nil && !os.IsNotExist(e) {
+				f.t.Fatal(e)
+			}
+		}
+		if v.Operation == "prepare" {
+			if _, e := os.Stat(path); !os.IsNotExist(e) {
+				f.t.Fatal("stale identity was not removed first")
+			}
+			if e := os.MkdirAll(filepath.Dir(path), 0700); e != nil {
+				f.t.Fatal(e)
+			}
+			if e := os.WriteFile(path, v.Key, 0600); e != nil {
+				f.t.Fatal(e)
+			}
+		}
 		f.operations = append(f.operations, v.Operation)
 		if v.Operation == "prepare" && (!strings.Contains(string(v.Key), "OPENSSH PRIVATE KEY") || strings.Contains(strings.Join(args, " "), "PRIVATE")) {
 			f.t.Fatal("missing stdin key")
@@ -72,6 +91,9 @@ func (f *deployFake) Run(_ context.Context, prog string, args []string, opts run
 	}
 	cmd := append([]string(nil), args[len(base):]...)
 	f.commands = append(f.commands, cmd)
+	if cmd[0] == "fetch" && f.failFetch {
+		return nil, nil, 1, errors.New("fetch failed")
+	}
 	if cmd[0] == "cat-file" && f.missingCommit {
 		return nil, nil, 1, errors.New("missing object")
 	}
@@ -144,9 +166,19 @@ func TestDeployRunWiring(t *testing.T) {
 	if got := codeOf((deployService{a}).execute(context.Background(), j, deployTestSite, "", testSHA)); got != "invalid_argument" {
 		t.Fatal(got)
 	}
+	identityPath := filepath.Join(f.home, ".novapanel", "deploy", "id_ed25519")
+	if err := os.MkdirAll(filepath.Dir(identityPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(identityPath, []byte("stale key"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	f.foreign = true
 	if got := codeOf((deployService{a}).execute(context.Background(), j, deployTestSite, "main", "")); got != "conflict" {
 		t.Fatal(got)
+	}
+	if _, err := os.Stat(identityPath); !os.IsNotExist(err) {
+		t.Fatalf("identity remains after git error: %v", err)
 	}
 	f.foreign = false
 	f.commands = nil
@@ -162,7 +194,7 @@ func TestDeployRunWiring(t *testing.T) {
 	if !strings.Contains(joined, "ls-remote,fetch,cat-file,checkout") {
 		t.Fatal(joined)
 	}
-	if strings.Join(f.operations, ",") != "prepare,remove" {
+	if strings.Join(f.operations, ",") != "remove,prepare,remove" {
 		t.Fatal(f.operations)
 	}
 	if string(j.Result) != "{\"sha\":\""+testSHA+"\"}" {
@@ -177,7 +209,7 @@ func TestDeployRunWiring(t *testing.T) {
 			t.Fatal("replay resolved a new SHA")
 		}
 	}
-	if strings.Join(f.operations, ",") != "prepare,remove" {
+	if strings.Join(f.operations, ",") != "remove,prepare,remove" {
 		t.Fatal(f.operations)
 	}
 	_, _, _, sha, state, e := a.Store.DeployJob(context.Background(), j.ID)
@@ -212,5 +244,28 @@ func TestDeployMissingPinnedCommitFailsClosed(t *testing.T) {
 	_, _, _, sha, state, e := a.Store.DeployJob(context.Background(), j.ID)
 	if e != nil || sha != testSHA || state != "failed" {
 		t.Fatal(sha, state, e)
+	}
+}
+
+func TestDeployFailedGitRemovesIdentity(t *testing.T) {
+	a, f := deployFixture(t, true)
+	f.failFetch = true
+	path := filepath.Join(f.home, ".novapanel", "deploy", "id_ed25519")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("stale"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	j := &jobs.Job{ID: "failed-fetch", ObjectKey: "site:" + deployTestSite}
+	err := (deployService{a}).execute(context.Background(), j, deployTestSite, "main", "")
+	if codeOf(err) != "agent_error" {
+		t.Fatalf("error %v", err)
+	}
+	if strings.Join(f.operations, ",") != "remove,prepare,remove" {
+		t.Fatal(f.operations)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("identity remains: %v", err)
 	}
 }
