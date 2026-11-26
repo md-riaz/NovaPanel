@@ -8,9 +8,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 
+	"golang.org/x/sys/unix"
 	runner "novapanel/internal/exec"
 )
 
@@ -82,7 +82,8 @@ func TestDroppedHelper(t *testing.T) {
 		t.Fatalf("content %q: %v", got, err)
 	}
 	info, err := os.Stat(filepath.Join(dir, "written"))
-	if err != nil || info.Mode().Perm() != 0644 || info.Sys().(*syscall.Stat_t).Uid != 65534 {
+	var owner unix.Stat_t
+	if err != nil || unix.Stat(filepath.Join(dir, "written"), &owner) != nil || info.Mode().Perm() != 0644 || owner.Uid != 65534 {
 		t.Fatalf("ownership/mode: %v %v", info, err)
 	}
 	for _, tc := range []struct {
@@ -102,7 +103,7 @@ func TestDroppedHelper(t *testing.T) {
 		}
 	}
 	info, err = os.Stat(filepath.Join(dir, "created"))
-	if err != nil || !info.IsDir() || info.Sys().(*syscall.Stat_t).Uid != 65534 {
+	if err != nil || unix.Stat(filepath.Join(dir, "created"), &owner) != nil || !info.IsDir() || owner.Uid != 65534 {
 		t.Fatalf("directory ownership: %v %v", info, err)
 	}
 	info, err = os.Stat(filepath.Join(dir, "written"))

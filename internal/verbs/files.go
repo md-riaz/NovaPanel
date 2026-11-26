@@ -110,25 +110,25 @@ func filesWrite(ctx context.Context, a *agent.Agent, args any) (any, error) {
 		return nil, err
 	}
 	content, _ := base64.StdEncoding.DecodeString(v.ContentB64)
-	return filesMutate(ctx, a, v.SiteID, fileop.Request{Operation: "write", Path: v.Path, Length: len(content)}, content)
+	return mutateFile(ctx, a, v.SiteID, fileop.Request{Operation: "write", Path: v.Path, Length: len(content)}, content)
 }
 func filesMkdir(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*filesMkdirArgs)
-	return filesMutate(ctx, a, v.SiteID, fileop.Request{Operation: "mkdir", Path: v.Path}, nil)
+	return mutateFile(ctx, a, v.SiteID, fileop.Request{Operation: "mkdir", Path: v.Path}, nil)
 }
 func filesMove(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*filesMoveArgs)
-	return filesMutate(ctx, a, v.SiteID, fileop.Request{Operation: "move", From: v.From, To: v.To}, nil)
+	return mutateFile(ctx, a, v.SiteID, fileop.Request{Operation: "move", From: v.From, To: v.To}, nil)
 }
 func filesDelete(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*filesDeleteArgs)
-	return filesMutate(ctx, a, v.SiteID, fileop.Request{Operation: "delete", Path: v.Path}, nil)
+	return mutateFile(ctx, a, v.SiteID, fileop.Request{Operation: "delete", Path: v.Path}, nil)
 }
 func filesChmod(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*filesChmodArgs)
-	return filesMutate(ctx, a, v.SiteID, fileop.Request{Operation: "chmod", Path: v.Path, Mode: v.Mode}, nil)
+	return mutateFile(ctx, a, v.SiteID, fileop.Request{Operation: "chmod", Path: v.Path, Mode: v.Mode}, nil)
 }
-func filesMutate(ctx context.Context, a *agent.Agent, siteID string, req fileop.Request, content []byte) (any, error) {
+func mutateFile(ctx context.Context, a *agent.Agent, siteID string, req fileop.Request, content []byte) (any, error) {
 	_, err := (fileopService{a}).run(ctx, siteID, req, content)
 	if err != nil {
 		return nil, err
