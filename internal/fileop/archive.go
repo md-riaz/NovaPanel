@@ -58,7 +58,7 @@ func extract(root *os.Root, req ArchiveRequest) error {
 	if req.Archive == "" || req.Dest == "" || ValidatePath(req.Archive) != nil || ValidatePath(req.Dest) != nil || path.Clean(req.Dest) == "." {
 		return unix.EINVAL
 	}
-	f, err := root.OpenFile(path.Clean(req.Archive), os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	f, err := openArchiveSource(root, path.Clean(req.Archive))
 	if err != nil {
 		return err
 	}
@@ -138,10 +138,16 @@ func extract(root *os.Root, req ArchiveRequest) error {
 		if err = stage.MkdirAll(path.Dir(name), 0755); err != nil {
 			return err
 		}
-		out, e := stage.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
+		parentDir, e := openArchiveSource(stage, path.Dir(name))
 		if e != nil {
 			return e
 		}
+		fd, e := unix.Openat(int(parentDir.Fd()), path.Base(name), unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
+		parentDir.Close()
+		if e != nil {
+			return e
+		}
+		out := os.NewFile(uintptr(fd), name)
 		in, e := entry.Open()
 		if e != nil {
 			out.Close()
@@ -172,26 +178,25 @@ func tempName() (string, error) {
 }
 
 func openArchiveSource(root *os.Root, name string) (*os.File, error) {
-	current, err := root.OpenRoot(".")
+	current, err := root.Open(".")
 	if err != nil {
 		return nil, err
 	}
 	defer func() { current.Close() }()
 	parts := strings.Split(name, "/")
 	for _, part := range parts[:len(parts)-1] {
-		dir, err := current.OpenFile(part, os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
-		if err != nil {
-			return nil, err
-		}
-		next, err := os.OpenRoot(fmt.Sprintf("/proc/self/fd/%d", dir.Fd()))
-		dir.Close()
+		fd, err := unix.Openat(int(current.Fd()), part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		if err != nil {
 			return nil, err
 		}
 		current.Close()
-		current = next
+		current = os.NewFile(uintptr(fd), part)
 	}
-	return current.OpenFile(parts[len(parts)-1], os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	fd, err := unix.Openat(int(current.Fd()), parts[len(parts)-1], unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), name), nil
 }
 
 func archive(root *os.Root, req ArchiveRequest) error {

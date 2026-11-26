@@ -159,7 +159,7 @@ func TestArchiveSkipsSymlinksAndOwnTemp(t *testing.T) {
 	}
 	defer z.Close()
 	if len(z.File) != 1 || z.File[0].Name != "file" {
-		t.Fatalf("entries: %+v", z.File)
+		t.Fatalf("unexpected entries: %v", len(z.File))
 	}
 	if err = archive(root, ArchiveRequest{Paths: []string{"file"}, Dest: "out.zip"}); err != unix.EEXIST {
 		t.Fatalf("overwrite: %v", err)
