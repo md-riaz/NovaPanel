@@ -148,10 +148,10 @@ func TestCronTeardownAndLookup(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err = (cronState{a}).teardown(ctx, dir, testCronSite); err != nil {
+	if err = (cronState{a}).teardownSystemd(ctx, dir, testCronSite, true); err != nil {
 		t.Fatal(err)
 	}
-	if err = (cronState{a}).teardown(ctx, dir, testCronSite); err != nil {
+	if err = (cronState{a}).teardownSystemd(ctx, dir, testCronSite, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = os.Stat(filepath.Join(dir, own)); !os.IsNotExist(err) {
@@ -172,14 +172,31 @@ func TestCronTeardownAndLookup(t *testing.T) {
 	}
 	failing := &cronMissing{inspectFails: true}
 	a.Exec = failing
-	if err = (cronState{a}).teardown(ctx, dir, testCronSite); err != nil {
-		t.Fatalf("systemctl failure wedged teardown: %v", err)
+	if err = (cronState{a}).teardownSystemd(ctx, dir, testCronSite, true); !errors.Is(err, jobs.ErrRetry) {
+		t.Fatalf("systemctl failure must retry: %v", err)
+	}
+	if _, err = os.Stat(filepath.Join(dir, own)); err != nil {
+		t.Fatalf("unit removed despite failed disable: %v", err)
+	}
+	failing.calls = nil
+	if err = (cronState{a}).teardownSystemd(ctx, dir, testCronSite, false); err != nil {
+		t.Fatal(err)
 	}
 	if _, err = os.Stat(filepath.Join(dir, own)); !os.IsNotExist(err) {
-		t.Fatalf("unit survived systemctl failure: %v", err)
+		t.Fatalf("unit remains without systemd: %v", err)
 	}
-	if !strings.Contains(strings.Join(failing.calls, "\n"), "daemon-reload") {
-		t.Fatal(failing.calls)
+	if len(failing.calls) != 0 {
+		t.Fatalf("called systemctl without systemd: %v", failing.calls)
+	}
+	if err = os.WriteFile(filepath.Join(dir, own), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	a.Exec = cronNotBooted{}
+	if err = (cronState{a}).teardownSystemd(ctx, dir, testCronSite, true); err != nil {
+		t.Fatalf("not-booted systemd: %v", err)
+	}
+	if _, err = os.Stat(filepath.Join(dir, own)); !os.IsNotExist(err) {
+		t.Fatalf("unit remains with systemd not booted: %v", err)
 	}
 }
 func TestCronRenderAndValidation(t *testing.T) {
@@ -206,6 +223,12 @@ func TestCronRenderAndValidation(t *testing.T) {
 			t.Fatalf("accepted %q", bad)
 		}
 	}
+}
+
+type cronNotBooted struct{}
+
+func (cronNotBooted) Run(context.Context, string, []string, runner.RunOpts) ([]byte, []byte, int, error) {
+	return nil, []byte("System has not been booted with systemd as init system"), 1, errors.New("not booted")
 }
 
 type cronMissing struct {

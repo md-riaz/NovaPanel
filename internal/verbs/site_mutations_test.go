@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"novapanel/internal/agent"
 	"novapanel/internal/audit"
 	"novapanel/internal/deploy"
@@ -20,15 +19,11 @@ import (
 	"testing"
 )
 
-type cronFailureRunner struct {
-	runner.Runner
-	called bool
-}
+type cronSystemctlRunner struct{ runner.Runner }
 
-func (r *cronFailureRunner) Run(ctx context.Context, program string, args []string, opts runner.RunOpts) ([]byte, []byte, int, error) {
+func (r cronSystemctlRunner) Run(ctx context.Context, program string, args []string, opts runner.RunOpts) ([]byte, []byte, int, error) {
 	if program == "/usr/bin/systemctl" {
-		r.called = true
-		return nil, nil, -1, errors.New("systemctl unavailable")
+		return nil, nil, 0, nil
 	}
 	return r.Runner.Run(ctx, program, args, opts)
 }
@@ -281,8 +276,7 @@ func TestSiteMutations(t *testing.T) {
 	if err = st.Tx(ctx, func(tx *sql.Tx) error { return st.InsertCronTx(ctx, tx, cronRow) }); err != nil {
 		t.Fatal(err)
 	}
-	cronFailure := &cronFailureRunner{Runner: a.Exec}
-	a.Exec = cronFailure
+	a.Exec = cronSystemctlRunner{a.Exec}
 	// Cleanup failure must retain site metadata for a retry.
 	a.Nginx = nil
 	if err = rpc.Registry["site.delete"].Exec(ctx, a, &dj); err == nil {
@@ -302,9 +296,6 @@ func TestSiteMutations(t *testing.T) {
 	}
 	if !teardown.called {
 		t.Fatal("site-user deploy teardown was not called")
-	}
-	if !cronFailure.called {
-		t.Fatal("cron systemctl failure was not exercised")
 	}
 	if _, err = os.Lstat(actualDeployDir); !os.IsNotExist(err) {
 		t.Fatalf("deploy state remains: %v", err)

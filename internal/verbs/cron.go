@@ -88,11 +88,17 @@ func init() {
 	}})
 	rpc.Register(rpc.Verb{Name: "cron.list", MinRole: rpc.ReadOnly, ReadOnly: true, Scope: "sites:read", NewArgs: func() any { return &siteIDArgs{} }, Run: cronList})
 }
+
+var errSystemdNotBooted = errors.New("systemd is not booted")
+
 func cronCommand(ctx context.Context, r runner.Runner, program string, args ...string) error {
 	if r == nil {
 		return rpc.Errf("agent_error", "Cron execution unavailable")
 	}
-	_, _, code, err := r.Run(ctx, program, args, runner.RunOpts{})
+	_, stderr, code, err := r.Run(ctx, program, args, runner.RunOpts{})
+	if program == platform.Systemctl && strings.Contains(string(stderr), "System has not been booted with systemd as init system") {
+		return errSystemdNotBooted
+	}
 	if err != nil || code != 0 {
 		return rpc.Errf("agent_error", "Cron command failed: %s", program)
 	}
@@ -102,12 +108,17 @@ func cronDisable(ctx context.Context, r runner.Runner, units ...string) error {
 	args := append([]string{"disable", "--now"}, units...)
 	if err := cronCommand(ctx, r, platform.Systemctl, args...); err == nil {
 		return nil
+	} else if errors.Is(err, errSystemdNotBooted) {
+		return err
 	}
 	if r == nil {
 		return rpc.Errf("agent_error", "Cron execution unavailable")
 	}
 	for _, unit := range units {
-		out, _, code, err := r.Run(ctx, platform.Systemctl, []string{"show", "--property=LoadState", "--value", unit}, runner.RunOpts{})
+		out, stderr, code, err := r.Run(ctx, platform.Systemctl, []string{"show", "--property=LoadState", "--value", unit}, runner.RunOpts{})
+		if strings.Contains(string(stderr), "System has not been booted with systemd as init system") {
+			return errSystemdNotBooted
+		}
 		if strings.TrimSpace(string(out)) == "not-found" && ctx.Err() == nil {
 			continue
 		}
@@ -330,6 +341,14 @@ func cronFiles(dir, name, service, timer string) error {
 	return cronWrite(dir, name+".timer", timer)
 }
 func (c cronState) teardown(ctx context.Context, dir, siteID string) error {
+	_, err := os.Stat("/run/systemd/system")
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return c.teardownSystemd(ctx, dir, siteID, err == nil)
+}
+
+func (c cronState) teardownSystemd(ctx context.Context, dir, siteID string, running bool) error {
 	a := c.a
 	if !id.Valid(siteID) {
 		return rpc.Errf("invalid_argument", "Invalid site ID")
@@ -361,14 +380,18 @@ func (c cronState) teardown(ctx context.Context, dir, siteID string) error {
 		}
 	}
 	for name := range names {
-		if err := cronDisable(ctx, a.Exec, name+".timer", name+".service"); err != nil {
-			log.Printf("cron teardown: cannot disable %s: %v", name, err)
+		if running {
+			if err := cronDisable(ctx, a.Exec, name+".timer", name+".service"); errors.Is(err, errSystemdNotBooted) {
+				running = false
+			} else if err != nil {
+				return errors.Join(err, jobs.ErrRetry)
+			}
 		}
 		if err := cronUnlink(dir, name); err != nil {
 			return err
 		}
 	}
-	if len(names) > 0 {
+	if len(names) > 0 && running {
 		if err := cronCommand(ctx, a.Exec, platform.Systemctl, "daemon-reload"); err != nil {
 			log.Printf("cron teardown: cannot reload systemd: %v", err)
 		}
