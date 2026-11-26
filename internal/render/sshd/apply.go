@@ -24,6 +24,7 @@ const Binary = "/usr/sbin/sshd"
 type Desired struct {
 	Site, User string
 	Enabled    bool
+	Offline    bool // teardown when ssh is not managed by a running systemd
 }
 type Applier struct {
 	Root   string
@@ -65,6 +66,9 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 	if err := (&validate.V{}).SiteName(d.Site); err != nil {
 		return err
 	}
+	if d.Offline && d.Enabled {
+		return rpcerr.Errf("invalid_argument", "Offline SSH enable is forbidden")
+	}
 	if d.User != d.Site {
 		return rpcerr.Errf("invalid_argument", "Invalid SSH user binding")
 	}
@@ -73,6 +77,9 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 		dir = DefaultRoot
 	}
 	resolved, err := filepath.EvalSymlinks(dir)
+	if d.Offline && os.IsNotExist(err) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -107,6 +114,9 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 	}
 	if err != nil {
 		return err
+	}
+	if d.Offline {
+		return remove(root, name+".lkg")
 	}
 	if err = a.Heal(ctx); err != nil {
 		recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)

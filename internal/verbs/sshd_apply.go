@@ -5,6 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+
+	runner "novapanel/internal/exec"
+	"novapanel/internal/platform"
 
 	"golang.org/x/sys/unix"
 	"novapanel/internal/agent"
@@ -13,7 +17,7 @@ import (
 )
 
 // applySSHD is the shared serialized entry point for SSH config mutations.
-func applySSHD(ctx context.Context, a *agent.Agent, d sshd.Desired) error {
+func applySSHD(ctx context.Context, a *agent.Agent, d sshd.Desired, teardown bool) error {
 	if a.Jobs == nil || a.SSHD == nil {
 		return rpc.Errf("agent_error", "SSH configuration unavailable")
 	}
@@ -41,6 +45,24 @@ func applySSHD(ctx context.Context, a *agent.Agent, d sshd.Desired) error {
 		}
 	} else if !os.IsNotExist(err) {
 		return err
+	}
+	if teardown {
+		_, statErr := os.Stat("/run/systemd/system")
+		if os.IsNotExist(statErr) {
+			d.Offline = true
+		} else if statErr != nil {
+			return statErr
+		} else {
+			if a.Exec == nil {
+				return rpc.Errf("agent_error", "SSH execution unavailable")
+			}
+			out, stderr, code, e := a.Exec.Run(ctx, platform.Systemctl, []string{"show", "--property=LoadState", "--value", "ssh.service"}, runner.RunOpts{})
+			if strings.Contains(string(stderr), "System has not been booted with systemd as init system") || strings.TrimSpace(string(out)) == "not-found" {
+				d.Offline = true
+			} else if e != nil || code != 0 {
+				return rpc.Errf("agent_error", "Cannot inspect SSH service")
+			}
+		}
 	}
 	err = a.SSHD.Apply(ctx, d)
 	if !errors.Is(err, sshd.Diverged) {
