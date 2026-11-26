@@ -99,3 +99,40 @@ func TestExtractCaps(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractZipBomb(t *testing.T) {
+	var b bytes.Buffer
+	w := zip.NewWriter(&b)
+	h := &zip.FileHeader{Name: "bomb", Method: zip.Deflate}
+	f, err := w.CreateHeader(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := make([]byte, 1<<20)
+	for i := 0; i < 33; i++ {
+		if _, err = f.Write(chunk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if b.Len() > 1<<20 {
+		t.Fatal("test archive did not compress")
+	}
+	d := t.TempDir()
+	root, err := os.OpenRoot(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err = os.WriteFile(filepath.Join(d, "in.zip"), b.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = extract(root, ArchiveRequest{Archive: "in.zip", Dest: "out"}); err != unix.EINVAL {
+		t.Fatalf("got %v", err)
+	}
+	if _, err = os.Stat(filepath.Join(d, "out")); !os.IsNotExist(err) {
+		t.Fatalf("destination exists: %v", err)
+	}
+}
