@@ -238,7 +238,7 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 			j.Step = durable.Step
 		}
 	}
-	if !v.PurgeFiles {
+	{
 		_, configErr := a.Store.DeployConfig(ctx, s.ID)
 		if configErr == nil {
 			if a.Exec == nil {

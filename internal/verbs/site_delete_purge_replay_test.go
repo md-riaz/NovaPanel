@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"novapanel/internal/agent"
 	"novapanel/internal/audit"
+	"novapanel/internal/deploy"
 	runner "novapanel/internal/exec"
 	"novapanel/internal/id"
 	"novapanel/internal/jobs"
 	"novapanel/internal/php"
 	"novapanel/internal/render/nginx"
 	"novapanel/internal/rpc"
+	"novapanel/internal/secret"
 	"novapanel/internal/store"
 	"os"
 	"path/filepath"
@@ -23,9 +25,24 @@ import (
 type purgeRunner struct {
 	root, id         string
 	missing, foreign bool
+	teardown         bool
 }
 
-func (r *purgeRunner) Run(_ context.Context, prog string, _ []string, _ runner.RunOpts) ([]byte, []byte, int, error) {
+func (r *purgeRunner) Run(_ context.Context, prog string, args []string, opts runner.RunOpts) ([]byte, []byte, int, error) {
+	if len(args) == 1 && args[0] == "__deploy" {
+		if opts.Uid != 1001 || opts.Gid != 1001 || len(opts.Groups) != 0 {
+			return nil, nil, 1, errors.New("wrong credentials")
+		}
+		var req deploy.Request
+		if err := json.NewDecoder(opts.Stdin).Decode(&req); err != nil {
+			return nil, nil, 1, err
+		}
+		r.teardown = true
+		if err := deploy.Apply(req); err != nil {
+			return nil, nil, 1, err
+		}
+		return nil, nil, 0, nil
+	}
 	switch prog {
 	case "/usr/bin/getent":
 		if r.missing {
@@ -89,6 +106,20 @@ func TestPHPSitePurgeCrashReplay(t *testing.T) {
 			if err = st.SetSiteStatus(ctx, sid, "active"); err != nil {
 				t.Fatal(err)
 			}
+			if variant == "replay" {
+				sealer, _ := secret.New(make([]byte, 32))
+				sealed, _ := sealer.Seal(make([]byte, 32))
+				if err = st.CreateDeployConfig(ctx, store.DeployConfig{SiteID: sid, RepoURL: "https://example.com/repo", Branch: "main", PublicKey: "test"}, store.ACMESealed{Nonce: sealed.Nonce, Ciphertext: sealed.Ciphertext}); err != nil {
+					t.Fatal(err)
+				}
+				dir := filepath.Join(a.Cfg.SitesRoot, "demo", ".novapanel", "deploy", "repo.git")
+				if err = os.MkdirAll(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err = os.WriteFile(filepath.Join(filepath.Dir(dir), "id_ed25519"), []byte("residue"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			server := rpc.NewServer(a)
 			server.ConfigureJobs()
 			if err := a.Jobs.PrepareStartup(ctx); err != nil {
@@ -110,6 +141,20 @@ func TestPHPSitePurgeCrashReplay(t *testing.T) {
 			}
 			if err = server.ExecuteJob(ctx, &j); !errors.Is(err, jobs.ErrRetry) || r.missing {
 				t.Fatalf("expected fail-closed purge with account retained: %v missing=%v", err, r.missing)
+			}
+			if variant == "replay" {
+				if !r.teardown {
+					t.Fatal("purge omitted site-user deploy teardown")
+				}
+				if _, err = os.Stat(filepath.Join(a.Cfg.SitesRoot, "demo", ".novapanel", "deploy")); !os.IsNotExist(err) {
+					t.Fatalf("deploy residue remains: %v", err)
+				}
+				if err = st.Tx(ctx, func(tx *sql.Tx) error {
+					_, e := tx.ExecContext(ctx, "DELETE FROM deploy_config WHERE site_id=?", sid)
+					return e
+				}); err != nil {
+					t.Fatal(err)
+				}
 			}
 			// Model an earlier completed removal for crash-replay compatibility.
 			if err = os.RemoveAll(filepath.Join(a.Cfg.SitesRoot, "demo")); err != nil {
