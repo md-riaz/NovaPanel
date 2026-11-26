@@ -80,6 +80,33 @@ func TestCronDisableMissing(t *testing.T) {
 		t.Fatal("inspection failure was ignored")
 	}
 }
+func TestCronApplyCompletesPartialInstall(t *testing.T) {
+	dir := t.TempDir()
+	row := store.CronJob{ID: testCronID, SiteID: testCronSite, UnitName: cronUnit(testCronSite, testCronID)}
+	if err := os.WriteFile(filepath.Join(dir, row.UnitName+".service"), []byte("old"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	f := &cronFake{}
+	if err := cronApply(context.Background(), f, dir, row, "new service", "new timer"); err != nil {
+		t.Fatal(err)
+	}
+	for suffix, want := range map[string]string{".service": "new service", ".timer": "new timer"} {
+		b, err := os.ReadFile(filepath.Join(dir, row.UnitName+suffix))
+		if err != nil || string(b) != want {
+			t.Fatalf("%s: %s %v", suffix, b, err)
+		}
+	}
+	if len(f.calls) != 3 || !strings.Contains(f.calls[0], "systemd-analyze verify ") || !strings.Contains(f.calls[1], "daemon-reload") || !strings.Contains(f.calls[2], "enable --now") {
+		t.Fatal(f.calls)
+	}
+}
+func TestCronRollbackFailureIsCoded(t *testing.T) {
+	row := store.CronJob{ID: testCronID, SiteID: testCronSite, UnitName: cronUnit(testCronSite, testCronID)}
+	err := cronApply(context.Background(), &cronMissing{inspectFails: true}, t.TempDir(), row, "service", "timer")
+	if err == nil || !strings.Contains(err.Error(), "rollback divergence") {
+		t.Fatalf("expected rollback divergence: %v", err)
+	}
+}
 func TestCronApplyRollback(t *testing.T) {
 	dir := t.TempDir()
 	row := store.CronJob{ID: testCronID, SiteID: testCronSite, UnitName: cronUnit(testCronSite, testCronID)}
