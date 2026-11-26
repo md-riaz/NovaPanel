@@ -159,7 +159,7 @@ func filesArchiveExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if err := v.Validate(); err != nil {
 		return err
 	}
-	if err := (fileopService{a}).archive(ctx, v.SiteID, fileop.ArchiveRequest{Operation: "archive", Paths: v.Paths, Dest: v.Dest}); err != nil {
+	if err := (fileopService{a}).archive(ctx, v.SiteID, fileop.ArchiveRequest{JobID: j.ID, Operation: "archive", Paths: v.Paths, Dest: v.Dest}); err != nil {
 		return err
 	}
 	j.Result = json.RawMessage(`{}`)
@@ -173,7 +173,7 @@ func filesExtractExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if err := v.Validate(); err != nil {
 		return err
 	}
-	if err := (fileopService{a}).archive(ctx, v.SiteID, fileop.ArchiveRequest{Operation: "extract", Archive: v.Archive, Dest: v.Dest}); err != nil {
+	if err := (fileopService{a}).archive(ctx, v.SiteID, fileop.ArchiveRequest{JobID: j.ID, Operation: "extract", Archive: v.Archive, Dest: v.Dest}); err != nil {
 		return err
 	}
 	j.Result = json.RawMessage(`{}`)

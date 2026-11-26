@@ -12,6 +12,7 @@ import (
 	"path"
 	"strings"
 
+	"novapanel/internal/id"
 	"novapanel/internal/validate"
 
 	"golang.org/x/sys/unix"
@@ -25,6 +26,7 @@ type ArchiveRequest struct {
 	Base, Name, Operation string
 	Paths                 []string
 	Archive, Dest         string
+	JobID                 string
 }
 
 func ArchiveHelper(in io.Reader, out io.Writer) error {
@@ -34,6 +36,9 @@ func ArchiveHelper(in io.Reader, out io.Writer) error {
 	var req ArchiveRequest
 	if err := json.NewDecoder(io.LimitReader(in, 65536)).Decode(&req); err != nil {
 		return err
+	}
+	if !id.Valid(req.JobID) {
+		return json.NewEncoder(out).Encode(Response{Code: "invalid_argument"})
 	}
 	root, err := OpenDocroot(req.Base, req.Name)
 	if err == nil {
@@ -58,6 +63,20 @@ func extract(root *os.Root, req ArchiveRequest) error {
 	if req.Archive == "" || req.Dest == "" || ValidatePath(req.Archive) != nil || ValidatePath(req.Dest) != nil || path.Clean(req.Dest) == "." {
 		return unix.EINVAL
 	}
+	parent, err := root.OpenRoot(path.Dir(path.Clean(req.Dest)))
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	tmp, err := stageName(req)
+	if err != nil {
+		return err
+	}
+	if req.JobID != "" {
+		if err = parent.RemoveAll(tmp); err != nil {
+			return err
+		}
+	}
 	f, err := openArchiveSource(root, path.Clean(req.Archive))
 	if err != nil {
 		return err
@@ -77,20 +96,11 @@ func extract(root *os.Root, req ArchiveRequest) error {
 	if len(z.File) > archiveEntries {
 		return unix.EINVAL
 	}
-	parent, err := root.OpenRoot(path.Dir(path.Clean(req.Dest)))
-	if err != nil {
-		return err
-	}
-	defer parent.Close()
 	dir, err := parent.Open(".")
 	if err != nil {
 		return err
 	}
 	defer dir.Close()
-	tmp, err := tempName()
-	if err != nil {
-		return err
-	}
 	if err = parent.Mkdir(tmp, 0700); err != nil {
 		return err
 	}
@@ -166,7 +176,18 @@ func extract(root *os.Root, req ArchiveRequest) error {
 	if err = stage.Chmod(".", 0755); err != nil {
 		return err
 	}
+	// shortcut: a crash after publication replays as conflict, use a journal if exact completion is required.
 	return unix.Renameat2(int(dir.Fd()), tmp, int(dir.Fd()), path.Base(path.Clean(req.Dest)), unix.RENAME_NOREPLACE)
+}
+
+func stageName(req ArchiveRequest) (string, error) {
+	if req.JobID == "" {
+		return tempName()
+	}
+	if !id.Valid(req.JobID) || (req.Operation != "archive" && req.Operation != "extract") {
+		return "", unix.EINVAL
+	}
+	return ".novapanel-" + req.Operation + "-" + req.JobID, nil
 }
 
 func tempName() (string, error) {
@@ -213,15 +234,23 @@ func archive(root *os.Root, req ArchiveRequest) error {
 		return err
 	}
 	defer dir.Close()
-	tmp, err := tempName()
+	tmp, err := stageName(req)
 	if err != nil {
 		return err
 	}
-	f, err := parent.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
+	if req.JobID != "" {
+		if err = parent.RemoveAll(tmp); err != nil {
+			return err
+		}
+	}
+	if err = parent.Mkdir(tmp, 0700); err != nil {
+		return err
+	}
+	defer parent.RemoveAll(tmp)
+	f, err := parent.OpenFile(path.Join(tmp, "data"), os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
 	if err != nil {
 		return err
 	}
-	defer parent.Remove(tmp)
 	defer f.Close()
 	w := zip.NewWriter(f)
 	count, total := 0, int64(0)
@@ -311,5 +340,6 @@ func archive(root *os.Root, req ArchiveRequest) error {
 	if err = f.Close(); err != nil {
 		return err
 	}
-	return unix.Renameat2(int(dir.Fd()), tmp, int(dir.Fd()), path.Base(path.Clean(req.Dest)), unix.RENAME_NOREPLACE)
+	// shortcut: a crash after publication replays as conflict, use a journal if exact completion is required.
+	return unix.Renameat2(int(dir.Fd()), path.Join(tmp, "data"), int(dir.Fd()), path.Base(path.Clean(req.Dest)), unix.RENAME_NOREPLACE)
 }

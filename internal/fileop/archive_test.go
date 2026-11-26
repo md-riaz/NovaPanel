@@ -190,3 +190,45 @@ func TestArchiveSkipsSymlinksAndOwnTemp(t *testing.T) {
 		t.Fatalf("overwrite: %v", err)
 	}
 }
+
+func TestArchiveReplayCleansOwnStage(t *testing.T) {
+	d := t.TempDir()
+	root, err := os.OpenRoot(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err = os.WriteFile(filepath.Join(d, "source"), []byte("ok"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	id := "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+	for _, req := range []ArchiveRequest{
+		{Operation: "archive", JobID: id, Paths: []string{"source"}, Dest: "out.zip"},
+		{Operation: "extract", JobID: id, Archive: "out.zip", Dest: "out"},
+	} {
+		stage := filepath.Join(d, ".novapanel-"+req.Operation+"-"+id)
+		if err = os.Mkdir(stage, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(stage, "stale"), []byte("stale"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		run := archive
+		if req.Operation == "extract" {
+			run = extract
+		}
+		if err = run(root, req); err != nil {
+			t.Fatalf("%s replay: %v", req.Operation, err)
+		}
+		if _, err = os.Stat(stage); !os.IsNotExist(err) {
+			t.Fatalf("stale stage: %v", err)
+		}
+		if err = run(root, req); errorCode(err) != "conflict" {
+			t.Fatalf("%s published replay: %v", req.Operation, err)
+		}
+	}
+	got, err := os.ReadFile(filepath.Join(d, "out", "source"))
+	if err != nil || string(got) != "ok" {
+		t.Fatalf("output %q: %v", got, err)
+	}
+}

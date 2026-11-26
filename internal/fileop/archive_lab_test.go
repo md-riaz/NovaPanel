@@ -54,7 +54,7 @@ func TestDroppedArchive(t *testing.T) {
 	}
 	call := func(req ArchiveRequest, want string) {
 		t.Helper()
-		req.Base, req.Name = base, "site"
+		req.Base, req.Name, req.JobID = base, "site", "01ARZ3NDEKTSV4RRFFQ69G5FAV"
 		data, _ := json.Marshal(req)
 		out, _, code, err := (runner.Real{}).Run(context.Background(), exe, []string{"-test.run=^TestDroppedArchive$"}, runner.RunOpts{Uid: 65534, Gid: 65534, Groups: []uint32{}, Env: []string{"NOVAPANEL_ARCHIVE_CHILD=1"}, Stdin: bytes.NewReader(data)})
 		var res Response
