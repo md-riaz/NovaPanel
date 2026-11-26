@@ -105,3 +105,22 @@ func (s *Store) DeployHistory(ctx context.Context, siteID string, limit int, suc
 	}
 	return out, rows.Err()
 }
+
+// DeployJob returns the pinned SHA for a replay of the same job.
+func (s *Store) DeployJob(ctx context.Context, jobID string) (siteID, repoURL, branch, sha, state string, err error) {
+	err = s.db.QueryRowContext(ctx, "SELECT site_id,repo_url,branch,sha,state FROM deploys WHERE id=?", jobID).Scan(&siteID, &repoURL, &branch, &sha, &state)
+	return
+}
+func (s *Store) InsertDeploy(ctx context.Context, id, siteID, url, branch, sha string, created int64) error {
+	_, err := s.db.ExecContext(ctx, "INSERT INTO deploys(id,site_id,repo_url,branch,sha,state,created) VALUES(?,?,?,?,?,'running',?)", id, siteID, url, branch, sha, created)
+	return err
+}
+func (s *Store) FinishDeploy(ctx context.Context, id, state string) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE deploys SET state=? WHERE id=?", state, id)
+	return err
+}
+func (s *Store) HasDeploySHA(ctx context.Context, siteID, sha string) (bool, error) {
+	var found int
+	err := s.db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM deploys WHERE site_id=? AND sha=?)", siteID, sha).Scan(&found)
+	return found != 0, err
+}
