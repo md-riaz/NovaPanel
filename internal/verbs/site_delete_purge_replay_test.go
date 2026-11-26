@@ -75,6 +75,8 @@ func TestPHPSitePurgeCrashReplay(t *testing.T) {
 			}
 			defer log.Close()
 			a := agent.New()
+			a.Cfg.DBPath = filepath.Join(root, "panel.db")
+			a.SSHD.Root = filepath.Join(root, "missing-ssh")
 			a.Store = st
 			a.Audit = log
 			a.Cfg.SitesRoot = filepath.Join(root, "sites")
