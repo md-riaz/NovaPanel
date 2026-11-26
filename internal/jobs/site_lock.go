@@ -7,6 +7,25 @@ import (
 	"novapanel/internal/validate"
 )
 
+// LockSSHD follows site -> osuser -> sshd; workers yield on contention.
+func (q *Queue) LockSSHD(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if _, worker := ctx.Value(heldLocksKey{}).(map[string]bool); worker {
+		release, ok := q.locks.tryLock("sshd")
+		if !ok {
+			return nil, ErrRetry
+		}
+		if err := ctx.Err(); err != nil {
+			release()
+			return nil, err
+		}
+		return release, nil
+	}
+	return q.locks.lockContext(ctx, "sshd")
+}
+
 func (q *Queue) LockSite(ctx context.Context, siteID string) (func(), error) {
 	if !id.Valid(siteID) {
 		return nil, errors.New("jobs: invalid site ID")
