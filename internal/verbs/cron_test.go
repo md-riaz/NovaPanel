@@ -2,13 +2,17 @@ package verbs
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"novapanel/internal/agent"
 	runner "novapanel/internal/exec"
+	"novapanel/internal/rpc"
 	"novapanel/internal/store"
 )
 
@@ -28,6 +32,77 @@ func (f *cronFake) Run(_ context.Context, p string, a []string, _ runner.RunOpts
 		return nil, nil, 1, errors.New("failed")
 	}
 	return nil, nil, 0, nil
+}
+func TestCronRegistryAndBadSchedule(t *testing.T) {
+	for _, name := range []string{"cron.create", "cron.delete", "cron.enable", "cron.disable"} {
+		v := rpc.Registry[name]
+		if v.MinRole != rpc.Admin || v.Scope != "sites:write" || !v.Slow || v.MFA || v.Exec == nil {
+			t.Fatalf("%s: %+v", name, v)
+		}
+	}
+	list := rpc.Registry["cron.list"]
+	if list.MinRole != rpc.ReadOnly || !list.ReadOnly || list.Scope != "sites:read" || list.MFA || list.Slow {
+		t.Fatalf("list: %+v", list)
+	}
+	a := agent.New()
+	f := &cronFake{fail: "calendar bad"}
+	a.Exec = f
+	_, err := cronCreate(context.Background(), a, &cronCreateArgs{SiteID: testCronSite, Schedule: "bad", Argv: []string{"/bin/echo"}})
+	var coded *rpc.CodedError
+	if !errors.As(err, &coded) || coded.Code != "invalid_argument" || len(f.calls) != 1 || f.calls[0] != "/usr/bin/systemd-analyze calendar bad" {
+		t.Fatalf("bad schedule: %v %v", err, f.calls)
+	}
+}
+func TestCronTeardownAndLookup(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.Open(filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	_, err = s.CreateSite(ctx, store.Site{ID: testCronSite, Name: "demo", Type: "static", Docroot: "/srv/sites/demo/public"}, store.Domain{ID: "domain", FQDN: "demo.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := store.CronJob{ID: testCronID, SiteID: testCronSite, Schedule: "daily", ArgvJSON: `["/bin/echo","hi"]`, UnitName: cronUnit(testCronSite, testCronID), Created: 1}
+	if err = s.Tx(ctx, func(tx *sql.Tx) error { return s.InsertCronTx(ctx, tx, row) }); err != nil {
+		t.Fatal(err)
+	}
+	a := agent.New()
+	a.Store = s
+	args := &cronIDArgs{CronID: testCronID}
+	key, err := (cronState{a}).resolve(ctx, args)
+	if err != nil || key != "site:"+testCronSite || args.SiteID != testCronSite {
+		t.Fatalf("resolve: %s %+v %v", key, args, err)
+	}
+	got, err := cronList(ctx, a, &siteIDArgs{testCronSite})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(got)
+	if err != nil || !strings.Contains(string(raw), `"argv":["/bin/echo","hi"]`) {
+		t.Fatalf("list: %s %v", raw, err)
+	}
+	dir := t.TempDir()
+	own := row.UnitName + ".timer"
+	other := cronUnit("01ARZ3NDEKTSV4RRFFQ69G5FAX", testCronID) + ".timer"
+	for _, name := range []string{own, other} {
+		if err = os.WriteFile(filepath.Join(dir, name), []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = (cronState{a}).teardown(ctx, dir, testCronSite); err != nil {
+		t.Fatal(err)
+	}
+	if err = (cronState{a}).teardown(ctx, dir, testCronSite); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(dir, own)); !os.IsNotExist(err) {
+		t.Fatalf("own unit remains: %v", err)
+	}
+	if _, err = os.Stat(filepath.Join(dir, other)); err != nil {
+		t.Fatalf("foreign unit removed: %v", err)
+	}
 }
 func TestCronRenderAndValidation(t *testing.T) {
 	v := cronCreateArgs{SiteID: testCronSite, Schedule: "daily", Argv: []string{"/bin/echo", `hello "world"`}}

@@ -30,6 +30,9 @@ func TestCronPersistence(t *testing.T) {
 	if err != nil || len(rows) != 1 || !rows[0].Enabled || rows[0].ArgvJSON != row.ArgvJSON {
 		t.Fatalf("list: %+v %v", rows, err)
 	}
+	if err = s.SetSiteStatus(ctx, row.SiteID, "deleting"); err != nil {
+		t.Fatal(err)
+	}
 	if err = s.DeleteSite(ctx, row.SiteID); err != nil {
 		t.Fatal(err)
 	}
