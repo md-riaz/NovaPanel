@@ -27,6 +27,27 @@ func TestFilesRegistryAndValidation(t *testing.T) {
 	}
 }
 
+func TestFilesArchiveRegistryAndValidation(t *testing.T) {
+	id := "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+	for _, tc := range []struct {
+		name string
+		args any
+	}{
+		{"files.archive", &filesArchiveArgs{SiteID: id, Paths: []string{"a"}, Dest: "out.zip"}},
+		{"files.extract", &filesExtractArgs{SiteID: id, Archive: "in.zip", Dest: "out"}},
+	} {
+		v := rpc.Registry[tc.name]
+		if v.MinRole != rpc.Admin || v.Scope != "sites:write" || !v.Slow || v.MFA || v.Exec == nil || v.ObjectKey(tc.args) != "site:"+id {
+			t.Fatalf("%s: %+v", tc.name, v)
+		}
+	}
+	for _, p := range []string{"", "../x", "/x", `a\b`, "a\x00b"} {
+		if (&filesArchiveArgs{SiteID: id, Paths: []string{p}, Dest: "out"}).Validate() == nil || (&filesExtractArgs{SiteID: id, Archive: p, Dest: "out"}).Validate() == nil {
+			t.Fatalf("accepted %q", p)
+		}
+	}
+}
+
 func TestFilesWriteRegistryAndValidation(t *testing.T) {
 	for _, name := range []string{"files.write", "files.mkdir", "files.move", "files.delete", "files.chmod"} {
 		v, ok := rpc.Registry[name]

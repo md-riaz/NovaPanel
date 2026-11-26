@@ -197,12 +197,17 @@ func archive(root *os.Root, req ArchiveRequest) error {
 	defer f.Close()
 	w := zip.NewWriter(f)
 	count, total := 0, int64(0)
+	seen := map[string]bool{}
+	tempPath := path.Join(path.Dir(path.Clean(req.Dest)), tmp)
 	var add func(string) error
 	add = func(name string) error {
 		if ValidatePath(name) != nil || name == "" {
 			return unix.EINVAL
 		}
 		name = path.Clean(name)
+		if name == tempPath {
+			return nil
+		}
 		file, err := root.OpenFile(name, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 		if errors.Is(err, unix.ELOOP) {
 			return nil
@@ -218,6 +223,10 @@ func archive(root *os.Root, req ArchiveRequest) error {
 		if !info.IsDir() && !info.Mode().IsRegular() {
 			return nil
 		}
+		if seen[name] {
+			return unix.EINVAL
+		}
+		seen[name] = true
 		count++
 		if count > archiveEntries {
 			return unix.EINVAL
