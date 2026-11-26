@@ -30,14 +30,14 @@ func TestWriteOperations(t *testing.T) {
 	if err != nil || string(got) != "second" || os.SameFile(before, after) || after.Mode().Perm() != 0644 {
 		t.Fatalf("overwrite: %q %v", got, err)
 	}
-	for _, mode := range []os.FileMode{0600, 0640} {
+	for _, mode := range []os.FileMode{0600, 0640, 0644, os.ModeSetgid | 0640} {
 		if err := os.Chmod(filepath.Join(dir, "file"), mode); err != nil {
 			t.Fatal(err)
 		}
 		run("write", "file", "", 0, []byte("private"), "")
 		info, err := os.Stat(filepath.Join(dir, "file"))
 		got, readErr := os.ReadFile(filepath.Join(dir, "file"))
-		if err != nil || readErr != nil || info.Mode().Perm() != mode || string(got) != "private" {
+		if err != nil || readErr != nil || info.Mode()&(os.ModePerm|os.ModeSetgid) != mode || string(got) != "private" {
 			t.Fatalf("overwrite mode %o: %v, %v", mode, info, err)
 		}
 	}
@@ -47,7 +47,18 @@ func TestWriteOperations(t *testing.T) {
 	run("mkdir", "sub", "", 0, nil, "conflict")
 	run("write", "sub", "", 0, nil, "invalid_argument")
 	run("move", "file", "max", 0, nil, "conflict")
+	before, err = os.Stat(filepath.Join(dir, "file"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	run("move", "file", "sub/moved", 0, nil, "")
+	after, err = os.Stat(filepath.Join(dir, "sub", "moved"))
+	if err != nil || !os.SameFile(before, after) {
+		t.Fatalf("move did not preserve inode: %v", err)
+	}
+	if _, err = os.Lstat(filepath.Join(dir, "file")); !os.IsNotExist(err) {
+		t.Fatalf("source survived move: %v", err)
+	}
 	for _, mode := range []uint32{0644, 0640, 0600, 0755, 0750, 0700} {
 		run("chmod", "sub/moved", "", mode, nil, "")
 		i, err := os.Stat(filepath.Join(dir, "sub", "moved"))
@@ -87,6 +98,8 @@ func TestWriteOperations(t *testing.T) {
 	if i, err := os.Lstat(filepath.Join(dir, "relocated")); err != nil || i.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("relocated symlink: %v %v", i, err)
 	}
+	run("read", "relocated", "", 0, nil, "invalid_argument")
+	run("write", "relocated", "", 0, []byte("bad"), "invalid_argument")
 	run("delete", "relocated", "", 0, nil, "")
 	got, err = os.ReadFile(filepath.Join(outside, "target"))
 	if err != nil || string(got) != "safe" {
@@ -142,10 +155,25 @@ func TestMoveConcurrentSymlinkSwap(t *testing.T) {
 		}
 		if err == nil {
 			info, e := os.Lstat(dest)
-			if e != nil || !(info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0) {
+			if e != nil {
 				close(stop)
 				<-done
 				t.Fatalf("destination: %v %v", info, e)
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				link, e := os.Readlink(dest)
+				if e != nil || link != outside {
+					close(stop)
+					<-done
+					t.Fatalf("moved link: %q %v", link, e)
+				}
+			} else {
+				content, e := os.ReadFile(dest)
+				if e != nil || !info.Mode().IsRegular() || string(content) != "inside" {
+					close(stop)
+					<-done
+					t.Fatalf("partial move: %q %v", content, e)
+				}
 			}
 			if e = os.Remove(dest); e != nil {
 				close(stop)

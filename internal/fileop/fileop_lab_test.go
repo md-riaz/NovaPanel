@@ -137,7 +137,7 @@ func TestDroppedHelper(t *testing.T) {
 				return
 			}
 			for _, e := range entries {
-				if !strings.HasPrefix(e.Name(), ".novapanel-") {
+				if !strings.HasPrefix(e.Name(), ".novapanel-") && e.Name() != "written" {
 					continue
 				}
 				i, err := os.Lstat(filepath.Join(dir, e.Name()))
