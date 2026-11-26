@@ -132,6 +132,7 @@ func (d deployService) execute(ctx context.Context, j *jobs.Job, siteID, ref, ro
 	}
 	oldSite, oldURL, oldBranch, sha, state, err := a.Store.DeployJob(ctx, j.ID)
 	exists := err == nil
+	replay := exists
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -265,12 +266,19 @@ func (d deployService) execute(ctx context.Context, j *jobs.Job, siteID, ref, ro
 		}
 		exists = true
 	}
-	fetchRef := ref
-	if fetchRef == "" {
-		fetchRef = sha
+	present := false
+	if rollback != "" || replay {
+		_, c, e = git("cat-file", "-e", sha+"^{commit}")
+		present = e == nil && c == 0
 	}
-	if _, c, e = git("fetch", "--depth", "50", "origin", fetchRef); e != nil || c != 0 {
-		return fail()
+	if !present {
+		fetchRef := ref
+		if rollback != "" || replay {
+			fetchRef = sha
+		}
+		if _, c, e = git("fetch", "--depth", "50", "origin", fetchRef); e != nil || c != 0 {
+			return fail()
+		}
 	}
 	if _, c, e = git("checkout", "--detach", sha); e != nil || c != 0 {
 		return fail()
