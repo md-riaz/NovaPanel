@@ -90,7 +90,7 @@ func (a *Applier) Unchanged(d Desired) (bool, error) {
 		return false, err
 	}
 	defer root.Close()
-	current, err := readRegular(root, "novapanel-"+d.Site+".conf")
+	current, err := readRegular(root, "novapanel-"+d.Site+".conf.lkg")
 	if os.IsNotExist(err) {
 		return !d.Enabled, nil
 	}
@@ -157,7 +157,7 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 		err = remove(root, name)
 	}
 	if err == nil && d.Offline {
-		return remove(root, name+".lkg")
+		return nil
 	}
 	if err == nil {
 		err = a.Heal(ctx)

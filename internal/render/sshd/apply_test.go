@@ -83,6 +83,45 @@ func TestApplyAndRollback(t *testing.T) {
 		t.Fatal("drop-in not removed", err)
 	}
 }
+func TestReplayAppliesFromLastKnownGood(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "novapanel-demo.conf")
+	d := Desired{Site: "demo", User: "demo", Enabled: true}
+	want := content(d)
+	if err := os.WriteFile(path, want, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".lkg", []byte("old"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	r := &fakeRunner{}
+	a := &Applier{Root: dir, Runner: r}
+	if err := a.Apply(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.calls) != 2 {
+		t.Fatalf("candidate replay commands: %v", r.calls)
+	}
+	b, err := os.ReadFile(path + ".lkg")
+	if err != nil || string(b) != string(want) {
+		t.Fatalf("promoted: %q %v", b, err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	d.Enabled = false
+	r.calls = nil
+	if err := a.Apply(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.calls) != 2 {
+		t.Fatalf("removal replay commands: %v", r.calls)
+	}
+	if _, err := os.Stat(path + ".lkg"); !os.IsNotExist(err) {
+		t.Fatalf("last-known-good still present: %v", err)
+	}
+}
+
 func TestReplayRestoresLastKnownGood(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "novapanel-demo.conf")

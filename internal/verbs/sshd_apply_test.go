@@ -52,6 +52,9 @@ func TestSSHDTeardownWithoutSystemd(t *testing.T) {
 	if err := os.WriteFile(path, []byte("old"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(path+".lkg", []byte("old"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	r := &sshdTestRunner{}
 	a := &agent.Agent{Cfg: config.Config{DBPath: filepath.Join(state, "agent.db")}, Jobs: &jobs.Queue{}, Exec: r, SSHD: &sshd.Applier{Root: root, Runner: r}}
 	if err := (sshdState{a: a}).apply(context.Background(), sshd.Desired{Site: "demo", User: "demo"}, true); err != nil {
@@ -59,6 +62,9 @@ func TestSSHDTeardownWithoutSystemd(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) || r.calls != 0 {
 		t.Fatalf("file or command: %v, %d", err, r.calls)
+	}
+	if _, err := os.Stat(path + ".lkg"); err != nil {
+		t.Fatalf("last-known-good lost: %v", err)
 	}
 }
 
