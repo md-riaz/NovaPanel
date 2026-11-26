@@ -110,26 +110,26 @@ func filesWrite(ctx context.Context, a *agent.Agent, args any) (any, error) {
 		return nil, err
 	}
 	content, _ := base64.StdEncoding.DecodeString(v.ContentB64)
-	return mutateFile(ctx, a, v.SiteID, fileop.Request{Operation: "write", Path: v.Path, Length: len(content)}, content)
+	return (fileopService{a}).mutate(ctx, v.SiteID, fileop.Request{Operation: "write", Path: v.Path, Length: len(content)}, content)
 }
 func filesMkdir(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*filesMkdirArgs)
-	return mutateFile(ctx, a, v.SiteID, fileop.Request{Operation: "mkdir", Path: v.Path}, nil)
+	return (fileopService{a}).mutate(ctx, v.SiteID, fileop.Request{Operation: "mkdir", Path: v.Path}, nil)
 }
 func filesMove(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*filesMoveArgs)
-	return mutateFile(ctx, a, v.SiteID, fileop.Request{Operation: "move", From: v.From, To: v.To}, nil)
+	return (fileopService{a}).mutate(ctx, v.SiteID, fileop.Request{Operation: "move", From: v.From, To: v.To}, nil)
 }
 func filesDelete(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*filesDeleteArgs)
-	return mutateFile(ctx, a, v.SiteID, fileop.Request{Operation: "delete", Path: v.Path}, nil)
+	return (fileopService{a}).mutate(ctx, v.SiteID, fileop.Request{Operation: "delete", Path: v.Path}, nil)
 }
 func filesChmod(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := args.(*filesChmodArgs)
-	return mutateFile(ctx, a, v.SiteID, fileop.Request{Operation: "chmod", Path: v.Path, Mode: v.Mode}, nil)
+	return (fileopService{a}).mutate(ctx, v.SiteID, fileop.Request{Operation: "chmod", Path: v.Path, Mode: v.Mode}, nil)
 }
-func mutateFile(ctx context.Context, a *agent.Agent, siteID string, req fileop.Request, content []byte) (any, error) {
-	_, err := (fileopService{a}).run(ctx, siteID, req, content)
+func (s fileopService) mutate(ctx context.Context, siteID string, req fileop.Request, content []byte) (any, error) {
+	_, err := s.run(ctx, siteID, req, content)
 	if err != nil {
 		return nil, err
 	}
