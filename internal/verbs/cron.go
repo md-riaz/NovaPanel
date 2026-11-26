@@ -56,10 +56,27 @@ func (v *cronCreateArgs) Validate() error {
 }
 func init() {
 	rpc.Register(rpc.Verb{Name: "cron.create", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, NewArgs: func() any { return &cronCreateArgs{} }, ObjectKey: func(v any) string { return "site:" + v.(*cronCreateArgs).SiteID }, Run: cronCreate, Exec: cronCreateExec})
-	for _, name := range []string{"cron.delete", "cron.enable", "cron.disable"} {
-		name := name
-		rpc.Register(rpc.Verb{Name: name, MinRole: rpc.Admin, Scope: "sites:write", Slow: true, NewArgs: func() any { return &cronIDArgs{} }, ObjectKey: func(v any) string { return "site:" + v.(*cronIDArgs).SiteID }, ResolveObjectKey: cronResolve, Run: func(ctx context.Context, a *agent.Agent, v any) (any, error) { return cronMutation(ctx, a, v, name) }, Exec: cronMutationExec})
-	}
+	rpc.Register(rpc.Verb{Name: "cron.delete", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, NewArgs: func() any { return &cronIDArgs{} }, ObjectKey: func(v any) string { return "site:" + v.(*cronIDArgs).SiteID }, ResolveObjectKey: func(ctx context.Context, a *agent.Agent, v any) (string, error) {
+		return (cronState{a}).resolve(ctx, v)
+	}, Run: func(ctx context.Context, a *agent.Agent, v any) (any, error) {
+		return (cronState{a}).mutation(ctx, v, "cron.delete")
+	}, Exec: func(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
+		return (cronState{a}).mutationExec(ctx, j)
+	}})
+	rpc.Register(rpc.Verb{Name: "cron.enable", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, NewArgs: func() any { return &cronIDArgs{} }, ObjectKey: func(v any) string { return "site:" + v.(*cronIDArgs).SiteID }, ResolveObjectKey: func(ctx context.Context, a *agent.Agent, v any) (string, error) {
+		return (cronState{a}).resolve(ctx, v)
+	}, Run: func(ctx context.Context, a *agent.Agent, v any) (any, error) {
+		return (cronState{a}).mutation(ctx, v, "cron.enable")
+	}, Exec: func(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
+		return (cronState{a}).mutationExec(ctx, j)
+	}})
+	rpc.Register(rpc.Verb{Name: "cron.disable", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, NewArgs: func() any { return &cronIDArgs{} }, ObjectKey: func(v any) string { return "site:" + v.(*cronIDArgs).SiteID }, ResolveObjectKey: func(ctx context.Context, a *agent.Agent, v any) (string, error) {
+		return (cronState{a}).resolve(ctx, v)
+	}, Run: func(ctx context.Context, a *agent.Agent, v any) (any, error) {
+		return (cronState{a}).mutation(ctx, v, "cron.disable")
+	}, Exec: func(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
+		return (cronState{a}).mutationExec(ctx, j)
+	}})
 	rpc.Register(rpc.Verb{Name: "cron.list", MinRole: rpc.ReadOnly, ReadOnly: true, Scope: "sites:read", NewArgs: func() any { return &siteIDArgs{} }, Run: cronList})
 }
 func cronCommand(ctx context.Context, r runner.Runner, program string, args ...string) error {
@@ -109,7 +126,11 @@ func cronCreate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	return a.Jobs.EnqueueCronCreate(ctx, &v, "site:"+v.SiteID, func(ctx context.Context, tx *sql.Tx, j *jobs.Job) error { return a.Store.InsertCronTx(ctx, tx, row) })
 }
 func cronUnit(siteID, cronID string) string { return "novapanel-cron-" + siteID + "-" + cronID }
-func cronResolve(ctx context.Context, a *agent.Agent, args any) (string, error) {
+
+type cronState struct{ a *agent.Agent }
+
+func (c cronState) resolve(ctx context.Context, args any) (string, error) {
+	a := c.a
 	v := args.(*cronIDArgs)
 	if err := v.Validate(); err != nil {
 		return "", err
@@ -124,7 +145,8 @@ func cronResolve(ctx context.Context, a *agent.Agent, args any) (string, error) 
 	v.SiteID = row.SiteID
 	return "site:" + row.SiteID, nil
 }
-func cronMutation(ctx context.Context, a *agent.Agent, args any, name string) (any, error) {
+func (c cronState) mutation(ctx context.Context, args any, name string) (any, error) {
+	a := c.a
 	v := args.(*cronIDArgs)
 	row, err := a.Store.CronByID(ctx, v.CronID)
 	if err != nil {
@@ -177,13 +199,14 @@ func cronCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if row.SiteID != v.SiteID || j.ObjectKey != "site:"+row.SiteID {
 		return rpc.Errf("precondition_failed", "Cron binding changed")
 	}
-	if err = cronInstall(ctx, a, row); err != nil {
+	if err = (cronState{a}).install(ctx, row); err != nil {
 		return err
 	}
 	j.Result, _ = json.Marshal(map[string]string{"cron_id": row.ID})
 	return nil
 }
-func cronMutationExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
+func (c cronState) mutationExec(ctx context.Context, j *jobs.Job) error {
+	a := c.a
 	var v cronIDArgs
 	if json.Unmarshal(j.Args, &v) != nil || v.Validate() != nil || !id.Valid(v.SiteID) || j.ObjectKey != "site:"+v.SiteID {
 		return rpc.Errf("invalid_argument", "Invalid cron binding")
@@ -196,12 +219,19 @@ func cronMutationExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if err != nil {
 		return siteError(err)
 	}
-	if row.SiteID != v.SiteID {
-		return rpc.Errf("precondition_failed", "Cron site changed")
+	if row.SiteID != v.SiteID || row.UnitName != cronUnit(row.SiteID, row.ID) {
+		return rpc.Errf("precondition_failed", "Cron binding changed")
+	}
+	site, err := a.Store.SiteByID(ctx, row.SiteID)
+	if err != nil {
+		return siteError(err)
+	}
+	if site.Status != "active" {
+		return rpc.Errf("precondition_failed", "Site must be active")
 	}
 	switch j.Verb {
 	case "cron.enable":
-		err = cronInstall(ctx, a, row)
+		err = (cronState{a}).install(ctx, row)
 	case "cron.disable":
 		if err = cronCommand(ctx, a.Exec, platform.Systemctl, "disable", "--now", row.UnitName+".timer"); err == nil {
 			err = a.Store.SetCronEnabled(ctx, row.ID, false)
@@ -263,7 +293,8 @@ func cronFiles(dir, name, service, timer string) error {
 	}
 	return cronWrite(dir, name+".timer", timer)
 }
-func cronTeardown(ctx context.Context, a *agent.Agent, dir, siteID string) error {
+func (c cronState) teardown(ctx context.Context, dir, siteID string) error {
+	a := c.a
 	if !id.Valid(siteID) {
 		return rpc.Errf("invalid_argument", "Invalid site ID")
 	}
@@ -294,6 +325,9 @@ func cronTeardown(ctx context.Context, a *agent.Agent, dir, siteID string) error
 		}
 	}
 	_, systemdErr := os.Stat("/run/systemd/system")
+	if systemdErr != nil && !os.IsNotExist(systemdErr) {
+		return systemdErr
+	}
 	for name := range names {
 		if systemdErr == nil {
 			if err := cronCommand(ctx, a.Exec, platform.Systemctl, "disable", "--now", name+".timer", name+".service"); err != nil {
@@ -327,7 +361,8 @@ func cronRemove(ctx context.Context, r runner.Runner, dir, name string) error {
 	}
 	return cronCommand(ctx, r, platform.Systemctl, "daemon-reload")
 }
-func cronInstall(ctx context.Context, a *agent.Agent, row store.CronJob) error {
+func (c cronState) install(ctx context.Context, row store.CronJob) error {
+	a := c.a
 	site, err := a.Store.SiteByID(ctx, row.SiteID)
 	if err != nil {
 		return siteError(err)
