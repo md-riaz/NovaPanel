@@ -122,6 +122,43 @@ func TestReplayAppliesFromLastKnownGood(t *testing.T) {
 	}
 }
 
+func TestApplyReplacesSymlinkAndThenNoops(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "novapanel-demo.conf")
+	target := filepath.Join(dir, "unmanaged")
+	d := Desired{Site: "demo", User: "demo", Enabled: true}
+	if err := os.WriteFile(target, []byte("untouched"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".lkg", content(d), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	r := &fakeRunner{}
+	a := &Applier{Root: dir, Runner: r}
+	if err := a.Apply(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(path); err != nil || !reflect.DeepEqual(b, content(d)) {
+		t.Fatalf("drop-in: %q %v", b, err)
+	}
+	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("not regular: %v %v", info, err)
+	}
+	if b, err := os.ReadFile(target); err != nil || string(b) != "untouched" {
+		t.Fatalf("target: %q %v", b, err)
+	}
+	if !reflect.DeepEqual(r.calls, []string{"/usr/sbin/sshd -t", "/usr/bin/systemctl reload ssh.service"}) {
+		t.Fatal(r.calls)
+	}
+	r.calls = nil
+	if err := a.Apply(context.Background(), d); err != nil || len(r.calls) != 0 {
+		t.Fatalf("steady state: %v %v", err, r.calls)
+	}
+}
+
 func TestOfflineTeardownThenEnableRestoresRestriction(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "novapanel-demo.conf")
