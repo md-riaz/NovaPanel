@@ -41,6 +41,27 @@ func TestSFTPOnlyArgumentsAndObjectKey(t *testing.T) {
 	}
 }
 
+func TestSSHDTeardownWithoutSystemd(t *testing.T) {
+	if _, err := os.Stat("/run/systemd/system"); err == nil {
+		t.Skip("requires no systemd")
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	state, root := t.TempDir(), t.TempDir()
+	path := filepath.Join(root, "novapanel-demo.conf")
+	if err := os.WriteFile(path, []byte("old"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	r := &sshdTestRunner{}
+	a := &agent.Agent{Cfg: config.Config{DBPath: filepath.Join(state, "agent.db")}, Jobs: &jobs.Queue{}, Exec: r, SSHD: &sshd.Applier{Root: root, Runner: r}}
+	if err := (sshdState{a}).apply(context.Background(), sshd.Desired{Site: "demo", User: "demo"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) || r.calls != 0 {
+		t.Fatalf("file or command: %v, %d", err, r.calls)
+	}
+}
+
 func TestSSHDMarkerHealsAndRefuses(t *testing.T) {
 	state, root := t.TempDir(), t.TempDir()
 	r := &sshdTestRunner{fail: map[int]bool{1: true, 2: true, 3: true}}

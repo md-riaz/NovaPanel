@@ -97,14 +97,6 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	// Preserve the previous state before replacing the active file.
-	if exists {
-		if err = writeAtomic(root, name+".lkg", old); err != nil {
-			return err
-		}
-	} else if err = remove(root, name+".lkg"); err != nil {
-		return err
-	}
 	var desired []byte
 	if d.Enabled {
 		desired = []byte(fmt.Sprintf("Match User %s\n    ForceCommand internal-sftp\n    AllowTcpForwarding no\n    X11Forwarding no\n    PermitTTY no\n", d.User))
