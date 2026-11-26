@@ -149,12 +149,7 @@ func TestPHPSitePurgeCrashReplay(t *testing.T) {
 				if _, err = os.Stat(filepath.Join(a.Cfg.SitesRoot, "demo", ".novapanel", "deploy")); !os.IsNotExist(err) {
 					t.Fatalf("deploy residue remains: %v", err)
 				}
-				if err = st.Tx(ctx, func(tx *sql.Tx) error {
-					_, e := tx.ExecContext(ctx, "DELETE FROM deploy_config WHERE site_id=?", sid)
-					return e
-				}); err != nil {
-					t.Fatal(err)
-				}
+
 			}
 			// Model an earlier completed removal for crash-replay compatibility.
 			if err = os.RemoveAll(filepath.Join(a.Cfg.SitesRoot, "demo")); err != nil {
