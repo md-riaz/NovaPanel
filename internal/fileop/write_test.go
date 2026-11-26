@@ -74,7 +74,7 @@ func TestWriteOperations(t *testing.T) {
 		for _, bad := range []string{"../bad", "/tmp/bad", "bad\x00name", "bad\\name", "escape/target"} {
 			run(op, bad, "destination", 0644, []byte("bad"), "invalid_argument")
 		}
-		if op != "delete" {
+		if op != "delete" && op != "move" {
 			run(op, "link", "destination", 0644, []byte("bad"), "invalid_argument")
 		}
 	}
@@ -82,8 +82,83 @@ func TestWriteOperations(t *testing.T) {
 		run("move", "max", bad, 0, nil, "invalid_argument")
 	}
 	run("move", "max", "link", 0, nil, "conflict")
-	run("delete", "link", "", 0, nil, "")
+	run("move", "missing", "destination", 0, nil, "not_found")
+	run("move", "link", "relocated", 0, nil, "")
+	if i, err := os.Lstat(filepath.Join(dir, "relocated")); err != nil || i.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("relocated symlink: %v %v", i, err)
+	}
+	run("delete", "relocated", "", 0, nil, "")
 	got, err = os.ReadFile(filepath.Join(outside, "target"))
+	if err != nil || string(got) != "safe" {
+		t.Fatalf("outside changed: %q %v", got, err)
+	}
+}
+
+func TestMoveConcurrentSymlinkSwap(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "site", "public")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "target")
+	if err := os.WriteFile(outside, []byte("safe"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	src, staged, dest := filepath.Join(dir, "source"), filepath.Join(dir, "staged"), filepath.Join(dir, "dest")
+	stop := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				done <- nil
+				return
+			default:
+			}
+			if err := os.Symlink(outside, staged); err != nil {
+				done <- err
+				return
+			}
+			if err := os.Rename(staged, src); err != nil {
+				done <- err
+				return
+			}
+			if err := os.WriteFile(staged, []byte("inside"), 0600); err != nil {
+				done <- err
+				return
+			}
+			if err := os.Rename(staged, src); err != nil {
+				done <- err
+				return
+			}
+		}
+	}()
+	for i := 0; i < 500; i++ {
+		_, err := Apply(Request{Base: base, Name: "site", Operation: "move", From: "source", To: "dest"})
+		if err != nil && !os.IsNotExist(err) {
+			close(stop)
+			<-done
+			t.Fatalf("move: %v", err)
+		}
+		if err == nil {
+			info, e := os.Lstat(dest)
+			if e != nil || !(info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0) {
+				close(stop)
+				<-done
+				t.Fatalf("destination: %v %v", info, e)
+			}
+			if e = os.Remove(dest); e != nil {
+				close(stop)
+				<-done
+				t.Fatal(e)
+			}
+		}
+	}
+	close(stop)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(outside)
 	if err != nil || string(got) != "safe" {
 		t.Fatalf("outside changed: %q %v", got, err)
 	}

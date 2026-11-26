@@ -129,11 +129,6 @@ func applyWrite(root *os.Root, req Request, content []byte) error {
 			return err
 		}
 		defer to.Close()
-		f, _, err := leaf(from, path.Base(path.Clean(req.From)))
-		if err != nil {
-			return err
-		}
-		f.Close()
 		a, err := from.Open(".")
 		if err != nil {
 			return err
