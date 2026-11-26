@@ -175,6 +175,27 @@ func TestCronApplyCompletesPartialInstall(t *testing.T) {
 		t.Fatal(f.calls)
 	}
 }
+func TestCronReplayAfterInstallFailure(t *testing.T) {
+	for _, stage := range []string{"systemd-analyze verify", "daemon-reload", "enable --now"} {
+		t.Run(stage, func(t *testing.T) {
+			dir := t.TempDir()
+			row := store.CronJob{ID: testCronID, SiteID: testCronSite, UnitName: cronUnit(testCronSite, testCronID)}
+			f := &cronFake{fail: stage}
+			if err := cronApply(context.Background(), f, dir, row, "service", "timer"); err == nil {
+				t.Fatal("expected failure")
+			}
+			if err := cronApply(context.Background(), f, dir, row, "service", "timer"); err != nil {
+				t.Fatal(err)
+			}
+			for suffix, want := range map[string]string{".service": "service", ".timer": "timer"} {
+				b, err := os.ReadFile(filepath.Join(dir, row.UnitName+suffix))
+				if err != nil || string(b) != want {
+					t.Fatalf("%s: %s %v", suffix, b, err)
+				}
+			}
+		})
+	}
+}
 func TestCronRollbackFailureIsCoded(t *testing.T) {
 	row := store.CronJob{ID: testCronID, SiteID: testCronSite, UnitName: cronUnit(testCronSite, testCronID)}
 	err := cronApply(context.Background(), &cronMissing{inspectFails: true}, t.TempDir(), row, "service", "timer")
