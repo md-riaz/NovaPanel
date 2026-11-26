@@ -136,3 +136,32 @@ func TestExtractZipBomb(t *testing.T) {
 		t.Fatalf("destination exists: %v", err)
 	}
 }
+
+func TestArchiveSkipsSymlinksAndOwnTemp(t *testing.T) {
+	d := t.TempDir()
+	if err := os.WriteFile(filepath.Join(d, "file"), []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("file", filepath.Join(d, "link")); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err = archive(root, ArchiveRequest{Paths: []string{"."}, Dest: "out.zip"}); err != nil {
+		t.Fatal(err)
+	}
+	z, err := zip.OpenReader(filepath.Join(d, "out.zip"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer z.Close()
+	if len(z.File) != 1 || z.File[0].Name != "file" {
+		t.Fatalf("entries: %+v", z.File)
+	}
+	if err = archive(root, ArchiveRequest{Paths: []string{"file"}, Dest: "out.zip"}); err != unix.EEXIST {
+		t.Fatalf("overwrite: %v", err)
+	}
+}

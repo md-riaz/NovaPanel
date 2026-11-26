@@ -171,6 +171,29 @@ func tempName() (string, error) {
 	return ".novapanel-" + hex.EncodeToString(b[:]), nil
 }
 
+func openArchiveSource(root *os.Root, name string) (*os.File, error) {
+	current, err := root.OpenRoot(".")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { current.Close() }()
+	parts := strings.Split(name, "/")
+	for _, part := range parts[:len(parts)-1] {
+		dir, err := current.OpenFile(part, os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+		if err != nil {
+			return nil, err
+		}
+		next, err := os.OpenRoot(fmt.Sprintf("/proc/self/fd/%d", dir.Fd()))
+		dir.Close()
+		if err != nil {
+			return nil, err
+		}
+		current.Close()
+		current = next
+	}
+	return current.OpenFile(parts[len(parts)-1], os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+}
+
 func archive(root *os.Root, req ArchiveRequest) error {
 	if req.Dest == "" || ValidatePath(req.Dest) != nil || path.Clean(req.Dest) == "." || len(req.Paths) == 0 || len(req.Paths) > archiveEntries {
 		return unix.EINVAL
@@ -208,7 +231,7 @@ func archive(root *os.Root, req ArchiveRequest) error {
 		if name == tempPath {
 			return nil
 		}
-		file, err := root.OpenFile(name, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+		file, err := openArchiveSource(root, name)
 		if errors.Is(err, unix.ELOOP) {
 			return nil
 		}
