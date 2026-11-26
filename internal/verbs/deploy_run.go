@@ -130,7 +130,7 @@ func (d deployService) execute(ctx context.Context, j *jobs.Job, siteID, ref, ro
 			return rpc.Errf("invalid_argument", "Unknown deploy SHA")
 		}
 	}
-	oldSite, oldURL, oldBranch, sha, state, err := a.Store.DeployJob(ctx, j.ID)
+	oldSite, oldURL, oldBranch, sha, _, err := a.Store.DeployJob(ctx, j.ID)
 	exists := err == nil
 	replay := exists
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -139,10 +139,7 @@ func (d deployService) execute(ctx context.Context, j *jobs.Job, siteID, ref, ro
 	if exists && oldSite != siteID {
 		return rpc.Errf("forbidden", "Job binding mismatch")
 	}
-	if exists && state == "done" {
-		j.Result, _ = json.Marshal(map[string]string{"sha": sha})
-		return nil
-	}
+
 	if exists {
 		cfg.RepoURL, cfg.Branch = oldURL, oldBranch
 	}
