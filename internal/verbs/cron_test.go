@@ -86,7 +86,8 @@ func TestCronTeardownAndLookup(t *testing.T) {
 	dir := t.TempDir()
 	own := row.UnitName + ".timer"
 	other := cronUnit("01ARZ3NDEKTSV4RRFFQ69G5FAX", testCronID) + ".timer"
-	for _, name := range []string{own, other} {
+	orphan := cronUnit(testCronSite, "01ARZ3NDEKTSV4RRFFQ69G5FAX") + ".service"
+	for _, name := range []string{own, other, orphan} {
 		if err = os.WriteFile(filepath.Join(dir, name), []byte("x"), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -99,6 +100,9 @@ func TestCronTeardownAndLookup(t *testing.T) {
 	}
 	if _, err = os.Stat(filepath.Join(dir, own)); !os.IsNotExist(err) {
 		t.Fatalf("own unit remains: %v", err)
+	}
+	if _, err = os.Stat(filepath.Join(dir, orphan)); !os.IsNotExist(err) {
+		t.Fatalf("orphan remains: %v", err)
 	}
 	if _, err = os.Stat(filepath.Join(dir, other)); err != nil {
 		t.Fatalf("foreign unit removed: %v", err)
@@ -185,6 +189,40 @@ func TestCronReplayAfterInstallFailure(t *testing.T) {
 				t.Fatal("expected failure")
 			}
 			if err := cronApply(context.Background(), f, dir, row, "service", "timer"); err != nil {
+				t.Fatal(err)
+			}
+			for suffix, want := range map[string]string{".service": "service", ".timer": "timer"} {
+				b, err := os.ReadFile(filepath.Join(dir, row.UnitName+suffix))
+				if err != nil || string(b) != want {
+					t.Fatalf("%s: %s %v", suffix, b, err)
+				}
+			}
+		})
+	}
+}
+
+type cronCrash struct{ at string }
+
+func (f *cronCrash) Run(_ context.Context, p string, args []string, _ runner.RunOpts) ([]byte, []byte, int, error) {
+	if strings.Contains(p+" "+strings.Join(args, " "), f.at) {
+		panic("simulated crash")
+	}
+	return nil, nil, 0, nil
+}
+func TestCronReplayAfterCrash(t *testing.T) {
+	for _, stage := range []string{"systemd-analyze verify", "daemon-reload", "enable --now"} {
+		t.Run(stage, func(t *testing.T) {
+			dir := t.TempDir()
+			row := store.CronJob{ID: testCronID, SiteID: testCronSite, UnitName: cronUnit(testCronSite, testCronID)}
+			func() {
+				defer func() {
+					if recover() == nil {
+						t.Fatal("expected crash")
+					}
+				}()
+				_ = cronApply(context.Background(), &cronCrash{at: stage}, dir, row, "service", "timer")
+			}()
+			if err := cronApply(context.Background(), &cronFake{}, dir, row, "service", "timer"); err != nil {
 				t.Fatal(err)
 			}
 			for suffix, want := range map[string]string{".service": "service", ".timer": "timer"} {
