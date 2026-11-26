@@ -100,6 +100,31 @@ func TestExtractCaps(t *testing.T) {
 	}
 }
 
+func TestExtractRejectsOversizedArchiveBeforeParsing(t *testing.T) {
+	d := t.TempDir()
+	f, err := os.Create(filepath.Join(d, "large.zip"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.Truncate(archiveTotalBytes + 1); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err = extract(root, ArchiveRequest{Archive: "large.zip", Dest: "out"}); err != unix.EINVAL {
+		t.Fatalf("got %v", err)
+	}
+	if _, err = os.Stat(filepath.Join(d, "out")); !os.IsNotExist(err) {
+		t.Fatalf("destination exists: %v", err)
+	}
+}
+
 func TestExtractZipBomb(t *testing.T) {
 	var b bytes.Buffer
 	w := zip.NewWriter(&b)

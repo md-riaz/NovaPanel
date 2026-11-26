@@ -67,7 +67,7 @@ func extract(root *os.Root, req ArchiveRequest) error {
 	if err != nil {
 		return err
 	}
-	if !info.Mode().IsRegular() {
+	if !info.Mode().IsRegular() || info.Size() > archiveTotalBytes {
 		return unix.EINVAL
 	}
 	z, err := zip.NewReader(f, info.Size())
