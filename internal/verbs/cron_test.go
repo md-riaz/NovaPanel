@@ -11,8 +11,11 @@ import (
 	"testing"
 
 	"novapanel/internal/agent"
+	"novapanel/internal/audit"
 	runner "novapanel/internal/exec"
+	"novapanel/internal/jobs"
 	"novapanel/internal/rpc"
+	"novapanel/internal/secret"
 	"novapanel/internal/store"
 )
 
@@ -32,6 +35,50 @@ func (f *cronFake) Run(_ context.Context, p string, a []string, _ runner.RunOpts
 		return nil, nil, 1, errors.New("failed")
 	}
 	return nil, nil, 0, nil
+}
+func TestCronCreateWriteAhead(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.Open(filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	_, err = s.CreateSite(ctx, store.Site{ID: testCronSite, Name: "demo", Type: "static", Docroot: "/srv/sites/demo/public"}, store.Domain{ID: "domain", FQDN: "demo.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.SetSiteStatus(ctx, testCronSite, "active"); err != nil {
+		t.Fatal(err)
+	}
+	log, err := audit.Open(s, filepath.Join(t.TempDir(), "audit"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	seal, err := secret.New(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := agent.New()
+	a.Store = s
+	a.Jobs = jobs.NewQueue(s, seal, log)
+	a.Exec = &cronFake{}
+	if err = a.Jobs.PrepareOperations(ctx); err != nil {
+		t.Fatal(err)
+	}
+	result, err := cronCreate(jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: "owner", Role: "admin"}), a, &cronCreateArgs{SiteID: testCronSite, Schedule: "daily", Argv: []string{"/bin/echo", "hello"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := result.(jobs.EnqueueResult).Job
+	var input cronCreateArgs
+	if err = json.Unmarshal(job.Args, &input); err != nil {
+		t.Fatal(err)
+	}
+	row, err := s.CronByID(ctx, input.CronID)
+	if err != nil || row.Enabled || row.UnitName != cronUnit(testCronSite, input.CronID) || row.ArgvJSON != `["/bin/echo","hello"]` {
+		t.Fatalf("reservation: %+v %v", row, err)
+	}
 }
 func TestCronRegistryAndBadSchedule(t *testing.T) {
 	for _, name := range []string{"cron.create", "cron.delete", "cron.enable", "cron.disable"} {
