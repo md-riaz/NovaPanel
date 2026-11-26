@@ -87,6 +87,11 @@ func (q *Queue) EnqueueSiteCreate(ctx context.Context, args any, objectKey strin
 	return q.enqueue(ctx, "site.create", args, objectKey, false, nil, reserve)
 }
 
+// EnqueueCronCreate commits the cron reservation with its job.
+func (q *Queue) EnqueueCronCreate(ctx context.Context, args any, objectKey string, reserve func(context.Context, *sql.Tx, *store.Job) error) (EnqueueResult, error) {
+	return q.enqueue(ctx, "cron.create", args, objectKey, false, nil, reserve)
+}
+
 type databaseIntent struct {
 	password string
 	database *store.Database

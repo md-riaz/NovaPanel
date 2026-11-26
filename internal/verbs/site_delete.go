@@ -238,6 +238,9 @@ func siteDeleteExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 			j.Step = durable.Step
 		}
 	}
+	if e = cronTeardown(ctx, a, cronUnitsDir, s.ID); e != nil {
+		return e
+	}
 	if e = a.Store.DeleteDeployKey(ctx, s.ID); e != nil {
 		return e
 	}
