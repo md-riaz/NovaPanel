@@ -269,12 +269,17 @@ func (d deployService) execute(ctx context.Context, j *jobs.Job, siteID, ref, ro
 		present = e == nil && c == 0
 	}
 	if !present {
-		fetchRef := ref
-		if rollback != "" || replay {
-			fetchRef = sha
+		if _, c, e = git("fetch", "--depth", "50", "origin", sha); e != nil || c != 0 {
+			fetchRef := ref
+			if fetchRef == "" {
+				fetchRef = cfg.Branch
+			}
+			if _, c, e = git("fetch", "--depth", "50", "origin", fetchRef); e != nil || c != 0 {
+				return fail()
+			}
 		}
-		if _, c, e = git("fetch", "--depth", "50", "origin", fetchRef); e != nil || c != 0 {
-			return fail()
+		if _, c, e = git("cat-file", "-e", sha+"^{commit}"); e != nil || c != 0 {
+			return rpc.Errf("agent_error", "Pinned deploy commit unavailable; ref may have moved, retry deployment")
 		}
 	}
 	if _, c, e = git("checkout", "--detach", sha); e != nil || c != 0 {

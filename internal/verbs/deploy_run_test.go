@@ -21,11 +21,12 @@ import (
 const testSHA = "0123456789abcdef0123456789abcdef01234567"
 
 type deployFake struct {
-	t          *testing.T
-	home, url  string
-	foreign    bool
-	commands   [][]string
-	operations []string
+	t             *testing.T
+	home, url     string
+	foreign       bool
+	commands      [][]string
+	operations    []string
+	missingCommit bool
 }
 
 func (f *deployFake) Run(_ context.Context, prog string, args []string, opts run.RunOpts) ([]byte, []byte, int, error) {
@@ -71,6 +72,9 @@ func (f *deployFake) Run(_ context.Context, prog string, args []string, opts run
 	}
 	cmd := append([]string(nil), args[len(base):]...)
 	f.commands = append(f.commands, cmd)
+	if cmd[0] == "cat-file" && f.missingCommit {
+		return nil, nil, 1, errors.New("missing object")
+	}
 	switch cmd[0] {
 	case "remote":
 		if cmd[1] == "get-url" {
@@ -155,7 +159,7 @@ func TestDeployRunWiring(t *testing.T) {
 		seen = append(seen, c[0])
 	}
 	joined := strings.Join(seen, ",")
-	if !strings.Contains(joined, "ls-remote,fetch,checkout") {
+	if !strings.Contains(joined, "ls-remote,fetch,cat-file,checkout") {
 		t.Fatal(joined)
 	}
 	if strings.Join(f.operations, ",") != "prepare,remove" {
@@ -178,6 +182,35 @@ func TestDeployRunWiring(t *testing.T) {
 	}
 	_, _, _, sha, state, e := a.Store.DeployJob(context.Background(), j.ID)
 	if e != nil || sha != testSHA || state != "done" {
+		t.Fatal(sha, state, e)
+	}
+}
+
+func TestDeployMissingPinnedCommitFailsClosed(t *testing.T) {
+	a, f := deployFixture(t, true)
+	f.missingCommit = true
+	j := &jobs.Job{ID: "missing-pin", ObjectKey: "site:" + deployTestSite}
+	err := (deployService{a}).execute(context.Background(), j, deployTestSite, "main", "")
+	if codeOf(err) != "agent_error" {
+		t.Fatalf("error %v", err)
+	}
+	found := false
+	for _, c := range f.commands {
+		if c[0] == "fetch" {
+			found = true
+			if c[len(c)-1] != testSHA {
+				t.Fatalf("fetch not pinned: %q", c)
+			}
+		}
+		if c[0] == "checkout" {
+			t.Fatal("checked out missing commit")
+		}
+	}
+	if !found {
+		t.Fatal("missing fetch")
+	}
+	_, _, _, sha, state, e := a.Store.DeployJob(context.Background(), j.ID)
+	if e != nil || sha != testSHA || state != "failed" {
 		t.Fatal(sha, state, e)
 	}
 }
