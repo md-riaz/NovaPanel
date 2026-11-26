@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 type fakeRunner struct {
@@ -156,6 +159,52 @@ func TestApplyReplacesSymlinkAndThenNoops(t *testing.T) {
 	r.calls = nil
 	if err := a.Apply(context.Background(), d); err != nil || len(r.calls) != 0 {
 		t.Fatalf("steady state: %v %v", err, r.calls)
+	}
+}
+
+func TestApplyRepairsSpecialAndUnreadableFiles(t *testing.T) {
+	for _, kind := range []string{"fifo", "mode000"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "novapanel-demo.conf")
+			d := Desired{Site: "demo", User: "demo", Enabled: true}
+			if err := os.WriteFile(path+".lkg", content(d), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if kind == "fifo" {
+				if err := unix.Mkfifo(path, 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(path, content(d), 0000); err != nil {
+				t.Fatal(err)
+			}
+			r := &fakeRunner{}
+			a := &Applier{Root: dir, Runner: r}
+			done := make(chan error, 1)
+			go func() { done <- a.Apply(context.Background(), d) }()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("apply blocked on live drop-in")
+			}
+			info, err := os.Lstat(path)
+			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() == 0 {
+				t.Fatalf("not readable regular file: %v %v", info, err)
+			}
+			if b, err := os.ReadFile(path); err != nil || !reflect.DeepEqual(b, content(d)) {
+				t.Fatalf("drop-in: %q %v", b, err)
+			}
+			if !reflect.DeepEqual(r.calls, []string{"/usr/sbin/sshd -t", "/usr/bin/systemctl reload ssh.service"}) {
+				t.Fatal(r.calls)
+			}
+			r.calls = nil
+			if err := a.Apply(context.Background(), d); err != nil || len(r.calls) != 0 {
+				t.Fatalf("steady state: %v %v", err, r.calls)
+			}
+		})
 	}
 }
 

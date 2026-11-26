@@ -186,7 +186,7 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 }
 
 func readRegular(root *os.Root, name string) ([]byte, error) {
-	f, err := root.OpenFile(name, os.O_RDONLY|unix.O_NOFOLLOW, 0)
+	f, err := root.OpenFile(name, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +195,7 @@ func readRegular(root *os.Root, name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() {
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0444 == 0 {
 		return nil, rpcerr.Errf("invalid_argument", "Invalid SSH config file")
 	}
 	return io.ReadAll(f)
