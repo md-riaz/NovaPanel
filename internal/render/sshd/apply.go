@@ -104,13 +104,13 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 	} else {
 		err = remove(root, name)
 	}
-	if err != nil {
-		return err
-	}
-	if d.Offline {
+	if err == nil && d.Offline {
 		return remove(root, name+".lkg")
 	}
-	if err = a.Heal(ctx); err != nil {
+	if err == nil {
+		err = a.Heal(ctx)
+	}
+	if err != nil {
 		recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
 		var restore error
@@ -119,7 +119,7 @@ func (a *Applier) Apply(ctx context.Context, d Desired) error {
 		} else {
 			restore = remove(root, name)
 		}
-		if restore == nil {
+		if restore == nil && !d.Offline {
 			restore = a.command(recovery, platform.Systemctl, "reload", "ssh.service")
 		}
 		if restore != nil {
