@@ -164,6 +164,18 @@ func TestDeployRunWiring(t *testing.T) {
 	if string(j.Result) != "{\"sha\":\""+testSHA+"\"}" {
 		t.Fatal(string(j.Result))
 	}
+	f.commands, f.operations = nil, nil
+	if err := (deployService{a}).execute(context.Background(), j, deployTestSite, "main", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range f.commands {
+		if c[0] == "ls-remote" {
+			t.Fatal("replay resolved a new SHA")
+		}
+	}
+	if strings.Join(f.operations, ",") != "prepare,remove" {
+		t.Fatal(f.operations)
+	}
 	_, _, _, sha, state, e := a.Store.DeployJob(context.Background(), j.ID)
 	if e != nil || sha != testSHA || state != "done" {
 		t.Fatal(sha, state, e)
