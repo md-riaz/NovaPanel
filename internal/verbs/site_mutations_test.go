@@ -19,6 +19,15 @@ import (
 	"testing"
 )
 
+type cronSystemctlRunner struct{ runner.Runner }
+
+func (r cronSystemctlRunner) Run(ctx context.Context, program string, args []string, opts runner.RunOpts) ([]byte, []byte, int, error) {
+	if program == "/usr/bin/systemctl" {
+		return nil, nil, 0, nil
+	}
+	return r.Runner.Run(ctx, program, args, opts)
+}
+
 type siteDeleteDeployRunner struct {
 	t      *testing.T
 	called bool
@@ -259,6 +268,15 @@ func TestSiteMutations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cronID, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cronRow := store.CronJob{ID: cronID, SiteID: sid, Schedule: "daily", ArgvJSON: `["/bin/true"]`, UnitName: "novapanel-cron-" + sid + "-" + cronID, Created: 1}
+	if err = st.Tx(ctx, func(tx *sql.Tx) error { return st.InsertCronTx(ctx, tx, cronRow) }); err != nil {
+		t.Fatal(err)
+	}
+	a.Exec = cronSystemctlRunner{a.Exec}
 	// Cleanup failure must retain site metadata for a retry.
 	a.Nginx = nil
 	if err = rpc.Registry["site.delete"].Exec(ctx, a, &dj); err == nil {
@@ -293,6 +311,9 @@ func TestSiteMutations(t *testing.T) {
 	}
 	if _, err = st.SiteByID(ctx, sid); err == nil {
 		t.Fatal("site remains")
+	}
+	if _, err = st.CronByID(ctx, cronID); err != sql.ErrNoRows {
+		t.Fatalf("cron row remains: %v", err)
 	}
 	if _, err = st.DeployKey(ctx, sid); err != sql.ErrNoRows {
 		t.Fatalf("deploy key remains: %v", err)
