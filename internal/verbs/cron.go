@@ -340,8 +340,12 @@ func cronFiles(dir, name, service, timer string) error {
 	}
 	return cronWrite(dir, name+".timer", timer)
 }
-func (c cronState) teardown(ctx context.Context, dir, siteID string) error {
-	_, err := os.Stat("/run/systemd/system")
+func (c cronState) teardown(ctx context.Context, dir, siteID string, systemdDir ...string) error {
+	path := "/run/systemd/system"
+	if len(systemdDir) > 0 {
+		path = systemdDir[0]
+	}
+	_, err := os.Stat(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}

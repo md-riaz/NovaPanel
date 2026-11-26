@@ -140,22 +140,28 @@ func TestCronTeardownAndLookup(t *testing.T) {
 		t.Fatalf("list: %s %v", raw, err)
 	}
 	dir := t.TempDir()
+	present := t.TempDir()
+	absent := filepath.Join(t.TempDir(), "absent")
 	own := row.UnitName + ".timer"
+	service := row.UnitName + ".service"
 	other := cronUnit("01ARZ3NDEKTSV4RRFFQ69G5FAX", testCronID) + ".timer"
 	orphan := cronUnit(testCronSite, "01ARZ3NDEKTSV4RRFFQ69G5FAX") + ".service"
-	for _, name := range []string{own, other, orphan} {
+	for _, name := range []string{own, service, other, orphan} {
 		if err = os.WriteFile(filepath.Join(dir, name), []byte("x"), 0644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err = (cronState{a}).teardownSystemd(ctx, dir, testCronSite, true); err != nil {
+	if err = (cronState{a}).teardown(ctx, dir, testCronSite, present); err != nil {
 		t.Fatal(err)
 	}
-	if err = (cronState{a}).teardownSystemd(ctx, dir, testCronSite, true); err != nil {
+	if err = (cronState{a}).teardown(ctx, dir, testCronSite, present); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = os.Stat(filepath.Join(dir, own)); !os.IsNotExist(err) {
 		t.Fatalf("own unit remains: %v", err)
+	}
+	if _, err = os.Stat(filepath.Join(dir, service)); !os.IsNotExist(err) {
+		t.Fatalf("own service remains: %v", err)
 	}
 	if _, err = os.Stat(filepath.Join(dir, orphan)); !os.IsNotExist(err) {
 		t.Fatalf("orphan remains: %v", err)
@@ -167,37 +173,65 @@ func TestCronTeardownAndLookup(t *testing.T) {
 	if !strings.Contains(calls, "/usr/bin/systemctl disable --now "+row.UnitName+".timer "+row.UnitName+".service") || !strings.Contains(calls, "/usr/bin/systemctl daemon-reload") {
 		t.Fatal(fake.calls)
 	}
-	if err = os.WriteFile(filepath.Join(dir, own), []byte("x"), 0644); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{own, service} {
+		if err = os.WriteFile(filepath.Join(dir, name), []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	failing := &cronMissing{inspectFails: true}
+	failing := &cronDisableFailure{}
 	a.Exec = failing
-	if err = (cronState{a}).teardownSystemd(ctx, dir, testCronSite, true); !errors.Is(err, jobs.ErrRetry) {
+	if err = (cronState{a}).teardown(ctx, dir, testCronSite, present); !errors.Is(err, jobs.ErrRetry) {
 		t.Fatalf("systemctl failure must retry: %v", err)
 	}
-	if _, err = os.Stat(filepath.Join(dir, own)); err != nil {
-		t.Fatalf("unit removed despite failed disable: %v", err)
+	for _, name := range []string{own, service} {
+		if _, err = os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("%s removed despite failed disable: %v", name, err)
+		}
+	}
+	if !strings.Contains(strings.Join(failing.calls, "\n"), "show --property=LoadState --value") {
+		t.Fatal(failing.calls)
 	}
 	failing.calls = nil
-	if err = (cronState{a}).teardownSystemd(ctx, dir, testCronSite, false); err != nil {
+	if err = (cronState{a}).teardown(ctx, dir, testCronSite, absent); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = os.Stat(filepath.Join(dir, own)); !os.IsNotExist(err) {
-		t.Fatalf("unit remains without systemd: %v", err)
+	for _, name := range []string{own, service} {
+		if _, err = os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s remains without systemd: %v", name, err)
+		}
 	}
 	if len(failing.calls) != 0 {
 		t.Fatalf("called systemctl without systemd: %v", failing.calls)
 	}
-	if err = os.WriteFile(filepath.Join(dir, own), []byte("x"), 0644); err != nil {
-		t.Fatal(err)
+	orphanTimer := strings.TrimSuffix(orphan, ".service") + ".timer"
+	for _, name := range []string{own, service, orphan, orphanTimer} {
+		if err = os.WriteFile(filepath.Join(dir, name), []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	a.Exec = cronNotBooted{}
-	if err = (cronState{a}).teardownSystemd(ctx, dir, testCronSite, true); err != nil {
+	notBooted := &cronNotBooted{}
+	a.Exec = notBooted
+	if err = (cronState{a}).teardown(ctx, dir, testCronSite, present); err != nil {
 		t.Fatalf("not-booted systemd: %v", err)
 	}
-	if _, err = os.Stat(filepath.Join(dir, own)); !os.IsNotExist(err) {
-		t.Fatalf("unit remains with systemd not booted: %v", err)
+	if notBooted.calls != 1 {
+		t.Fatalf("systemctl called after systemd was found absent: %d", notBooted.calls)
 	}
+	for _, name := range []string{own, service, orphan, orphanTimer} {
+		if _, err = os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s remains with systemd not booted: %v", name, err)
+		}
+	}
+}
+
+type cronDisableFailure struct{ calls []string }
+
+func (f *cronDisableFailure) Run(_ context.Context, program string, args []string, _ runner.RunOpts) ([]byte, []byte, int, error) {
+	f.calls = append(f.calls, program+" "+strings.Join(args, " "))
+	if len(args) > 0 && args[0] == "show" {
+		return []byte("loaded\n"), nil, 0, nil
+	}
+	return nil, nil, 1, errors.New("disable failed")
 }
 func TestCronRenderAndValidation(t *testing.T) {
 	v := cronCreateArgs{SiteID: testCronSite, Schedule: "daily", Argv: []string{"/bin/echo", `hello "world"`}}
@@ -225,9 +259,10 @@ func TestCronRenderAndValidation(t *testing.T) {
 	}
 }
 
-type cronNotBooted struct{}
+type cronNotBooted struct{ calls int }
 
-func (cronNotBooted) Run(context.Context, string, []string, runner.RunOpts) ([]byte, []byte, int, error) {
+func (f *cronNotBooted) Run(context.Context, string, []string, runner.RunOpts) ([]byte, []byte, int, error) {
+	f.calls++
 	return nil, []byte("System has not been booted with systemd as init system"), 1, errors.New("not booted")
 }
 
