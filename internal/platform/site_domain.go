@@ -32,6 +32,7 @@ type ExecutionDomain struct {
 	capability *runner.Cgroup
 	file       *os.File
 	retire     func(context.Context) error
+	path       string
 }
 
 func newExecutionDomain(r runner.Runner, c *runner.Cgroup, retire func(context.Context) error) *ExecutionDomain {
@@ -75,6 +76,7 @@ func OpenExecutionDomain(path string) (*ExecutionDomain, error) {
 		return fail()
 	}
 	d := newExecutionDomain(runner.Real{}, cap, nil)
+	d.path = path
 	d.file = f
 	d.retire = d.killAndWait
 	// A root-owned directory alone does not exclude delegated migration files.
@@ -116,9 +118,30 @@ func (d *ExecutionDomain) Run(ctx context.Context, prog string, args []string, o
 
 // admit lets Drain cancel and wait for every operation holding the domain.
 func (d *ExecutionDomain) admit(ctx context.Context) (context.Context, func(), error) {
+	installOwners.Lock()
+	owner, reserved := installOwners.paths[d.path]
+	if d.path != "" && reserved && owner != d {
+		installOwners.Unlock()
+		return nil, nil, fmt.Errorf("%w: domain path owned by another handle", errDomain)
+	}
+	if d.path != "" {
+		installOwners.active[d.path]++
+	}
+	installOwners.Unlock()
+	releasePath := func() {
+		if d.path != "" {
+			installOwners.Lock()
+			installOwners.active[d.path]--
+			if installOwners.active[d.path] == 0 {
+				delete(installOwners.active, d.path)
+			}
+			installOwners.Unlock()
+		}
+	}
 	d.mu.Lock()
 	if d.closed || ctx.Err() != nil {
 		d.mu.Unlock()
+		releasePath()
 		return nil, nil, errDomain
 	}
 	if d.active == 0 {
@@ -137,6 +160,7 @@ func (d *ExecutionDomain) admit(ctx context.Context) (context.Context, func(), e
 			close(d.idle)
 		}
 		d.mu.Unlock()
+		releasePath()
 	}
 	// Check lifetime cancellation synchronously as well as through AfterFunc.
 	if d.ctx.Err() != nil {

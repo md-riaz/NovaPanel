@@ -4,6 +4,7 @@ package platform
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,16 +112,40 @@ func TestInstallDomainLab(t *testing.T) {
 		close(release)
 		t.Fatalf("created second owner during effect: %+v", other)
 	}
-	competing := make(chan string, 2)
+	alternate, err := OpenExecutionDomain(filepath.Join("/sys/fs/cgroup", own, "novapanel-install", site))
+	if err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	if _, _, _, err := alternate.Run(ctx, "/usr/bin/true", nil, runner.RunOpts{Uid: 65534, Gid: 65534}); err == nil {
+		close(release)
+		alternate.Close()
+		t.Fatal("alternate handle admitted a child during effect")
+	}
+	if err := alternate.Close(); err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	type competingResult struct {
+		kind string
+		err  error
+	}
+	competing := make(chan competingResult, 2)
 	go func() {
-		_, _, _, _ = d.Run(ctx, "/usr/bin/true", nil, runner.RunOpts{Uid: 65534, Gid: 65534})
-		competing <- "child"
+		_, _, code, err := d.Run(ctx, "/usr/bin/true", nil, runner.RunOpts{Uid: 65534, Gid: 65534})
+		if err == nil && code != 0 {
+			err = fmt.Errorf("child exit %d", code)
+		}
+		competing <- competingResult{"child", err}
 	}()
-	go func() { _ = d.WithEmpty(ctx, func(context.Context) error { competing <- "effect"; return nil }) }()
+	go func() {
+		err := d.WithEmpty(ctx, func(context.Context) error { return nil })
+		competing <- competingResult{"effect", err}
+	}()
 	select {
 	case got := <-competing:
 		close(release)
-		t.Fatalf("%s crossed held effect", got)
+		t.Fatalf("%s crossed held effect", got.kind)
 	case <-time.After(25 * time.Millisecond):
 	}
 	close(release)
@@ -129,7 +154,10 @@ func TestInstallDomainLab(t *testing.T) {
 	}
 	for i := 0; i < 2; i++ {
 		select {
-		case <-competing:
+		case got := <-competing:
+			if got.err != nil {
+				t.Fatalf("%s failed: %v", got.kind, got.err)
+			}
 		case <-ctx.Done():
 			t.Fatal(ctx.Err())
 		}
@@ -210,6 +238,29 @@ func TestInstallDomainLab(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := recovered.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	unremovable, err := CreateInstallDomain(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(path, "leftover"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := unremovable.Close(ctx); err == nil {
+		t.Fatal("removed nonempty cgroup directory")
+	}
+	reopened, err := CreateInstallDomain(site)
+	if err != nil {
+		t.Fatalf("ownership retained after failed unlink: %v", err)
+	}
+	if err := unremovable.Close(ctx); err == nil {
+		t.Fatal("old handle retried after detachment")
+	}
+	if err := os.Remove(filepath.Join(path, "leftover")); err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
 }

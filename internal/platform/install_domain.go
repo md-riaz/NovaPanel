@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"golang.org/x/sys/unix"
 	runner "novapanel/internal/exec"
@@ -19,16 +20,18 @@ import (
 
 var installOwners = struct {
 	sync.Mutex
-	sites map[string]*InstallDomain
-}{sites: make(map[string]*InstallDomain)}
+	paths  map[string]*ExecutionDomain
+	active map[string]int
+}{paths: make(map[string]*ExecutionDomain), active: make(map[string]int)}
 
 // InstallDomain holds an install cgroup; it does not attest account freshness,
 // close other launchers or exclude account and filesystem changes.
 type InstallDomain struct {
-	gate   installgate.Gate
-	domain *ExecutionDomain
-	parent *os.File
-	name   string
+	gate     installgate.Gate
+	domain   *ExecutionDomain
+	parent   *os.File
+	name     string
+	detached atomic.Bool
 }
 
 // CreateInstallDomain creates or reopens the site's empty domain below the
@@ -37,21 +40,6 @@ func CreateInstallDomain(siteID string) (*InstallDomain, error) {
 	if !id.Valid(siteID) {
 		return nil, errDomain
 	}
-	installOwners.Lock()
-	if _, exists := installOwners.sites[siteID]; exists {
-		installOwners.Unlock()
-		return nil, fmt.Errorf("%w: site install domain already owned", errDomain)
-	}
-	installOwners.sites[siteID] = nil
-	installOwners.Unlock()
-	owned := false
-	defer func() {
-		if !owned {
-			installOwners.Lock()
-			delete(installOwners.sites, siteID)
-			installOwners.Unlock()
-		}
-	}()
 	raw, err := os.ReadFile("/proc/self/cgroup")
 	if err != nil {
 		return nil, err
@@ -61,6 +49,23 @@ func CreateInstallDomain(siteID string) (*InstallDomain, error) {
 		return nil, err
 	}
 	path := filepath.Join("/sys/fs/cgroup", own)
+	domainPath := filepath.Join(path, "novapanel-install", siteID)
+	installOwners.Lock()
+	_, exists := installOwners.paths[domainPath]
+	if exists || installOwners.active[domainPath] != 0 {
+		installOwners.Unlock()
+		return nil, fmt.Errorf("%w: site install domain already owned or active", errDomain)
+	}
+	installOwners.paths[domainPath] = nil
+	installOwners.Unlock()
+	owned := false
+	defer func() {
+		if !owned {
+			installOwners.Lock()
+			delete(installOwners.paths, domainPath)
+			installOwners.Unlock()
+		}
+	}()
 	fd, err := unix.Open(path, unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_RDONLY, 0)
 	if err != nil {
 		return nil, fmt.Errorf("%w: open delegated cgroup: %v", errDomain, err)
@@ -94,14 +99,14 @@ func CreateInstallDomain(siteID string) (*InstallDomain, error) {
 		// A crash remnant is usable only after OpenExecutionDomain validates
 		// root ownership, control files, domain type and recursive emptiness.
 	}
-	d, err := OpenExecutionDomain(filepath.Join(path, "novapanel-install", siteID))
+	d, err := OpenExecutionDomain(domainPath)
 	if err != nil {
 		parent.Close()
 		return nil, err
 	}
 	handle := &InstallDomain{domain: d, parent: parent, name: siteID}
 	installOwners.Lock()
-	installOwners.sites[siteID] = handle
+	installOwners.paths[domainPath] = d
 	installOwners.Unlock()
 	owned = true
 	return handle, nil
@@ -192,20 +197,19 @@ func (d *InstallDomain) Run(ctx context.Context, program string, args []string, 
 // Close drains before removing the site domain. An unsuccessful drain retains it.
 func (d *InstallDomain) Close(ctx context.Context) error {
 	return d.gate.Close(func() error { return d.domain.Drain(ctx) }, func() error {
-		if err := unix.Unlinkat(int(d.parent.Fd()), d.name, unix.AT_REMOVEDIR); err != nil {
-			return err
+		if d.detached.Swap(true) {
+			return errDomain
 		}
-		if err := d.domain.Close(); err != nil {
-			return err
-		}
-		if err := d.parent.Close(); err != nil {
-			return err
-		}
-		installOwners.Lock()
-		if installOwners.sites[d.name] == d {
-			delete(installOwners.sites, d.name)
-		}
-		installOwners.Unlock()
-		return nil
+		// Once drain succeeds no admitted effect survives, even if removal or
+		// descriptor close fails; allow a validated reopen of the remnant.
+		defer func() {
+			installOwners.Lock()
+			if installOwners.paths[d.domain.path] == d.domain {
+				delete(installOwners.paths, d.domain.path)
+			}
+			installOwners.Unlock()
+		}()
+		unlinkErr := unix.Unlinkat(int(d.parent.Fd()), d.name, unix.AT_REMOVEDIR)
+		return errors.Join(unlinkErr, d.domain.Close(), d.parent.Close())
 	})
 }
