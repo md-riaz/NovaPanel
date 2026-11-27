@@ -139,8 +139,16 @@ func TestTLSPrimaryPublicationExecutor(t *testing.T) {
 						f.a.Cfg.TLSDir = filepath.Join(root, "wrong-root")
 						before, _ := os.Readlink(filepath.Join(original, "alias.test/current"))
 						bad, stop := context.WithTimeout(context.Background(), 100*time.Millisecond)
-						_ = f.a.Jobs.Run(bad)
+						beforeCalls := f.runner.calls
+						recoveryErr := f.a.Jobs.Run(bad)
+						if recoveryErr == nil && bad.Err() == nil {
+							stop()
+							t.Fatal("changed TLS root accepted")
+						}
 						stop()
+						if f.runner.calls != beforeCalls {
+							t.Fatal("binding refusal reloaded nginx")
+						}
 						after, _ := os.Readlink(filepath.Join(original, "alias.test/current"))
 						if before != after {
 							t.Fatal("binding mismatch published")
