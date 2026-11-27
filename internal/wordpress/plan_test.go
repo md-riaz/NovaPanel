@@ -22,7 +22,7 @@ func TestInstallPlan(t *testing.T) {
 		t.Fatalf("bad context: %+v", p)
 	}
 	want := []Step{
-		{Kind: Download, Program: "/usr/bin/php8.3", Args: []string{"-c", "/usr/lib/novapanel/wpcli/php.ini", "/usr/lib/novapanel/wpcli/wp-cli-2.12.0.phar", "core", "download", "--version=7.1.4", "--locale=en_US"}},
+		{Kind: Download},
 		{Kind: VerifyChecksums, Program: "/usr/bin/php8.3", Args: []string{"-c", "/usr/lib/novapanel/wpcli/php.ini", "/usr/lib/novapanel/wpcli/wp-cli-2.12.0.phar", "core", "verify-checksums", "--version=7.1.4", "--locale=en_US"}},
 		{Kind: PublishProtectedConfig},
 		{Kind: IsInstalled, Program: "/usr/bin/php8.3", Args: []string{"-c", "/usr/lib/novapanel/wpcli/php.ini", "/usr/lib/novapanel/wpcli/wp-cli-2.12.0.phar", "core", "is-installed"}},
@@ -50,9 +50,9 @@ func TestInstallPlan(t *testing.T) {
 	}
 	// No mutable singleton slices or input aliasing.
 	p.Env[0] = "poison"
-	p.Steps[0].Args[0] = "poison"
+	p.Steps[1].Args[0] = "poison"
 	p2, err := BuildInstall(validInput(), artifactEvidence(t))
-	if err != nil || p2.Env[0] != "PATH=/usr/bin:/bin" || p2.Steps[0].Args[0] != "-c" {
+	if err != nil || p2.Env[0] != "PATH=/usr/bin:/bin" || p2.Steps[1].Args[0] != "-c" {
 		t.Fatal("shared plan state")
 	}
 	b, err := json.Marshal(p2)

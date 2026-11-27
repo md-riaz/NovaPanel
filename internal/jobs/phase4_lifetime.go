@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -321,6 +322,16 @@ func (q *Queue) withFreshWordPressLifetime(ctx context.Context, jid string, iden
 	plan, err := wordpress.BuildInstall(in, op.Identity.WordPress.Evidence)
 	if err != nil {
 		return err
+	}
+	program, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	for i := range plan.Steps {
+		if plan.Steps[i].Kind == wordpress.Download {
+			plan.Steps[i].Program = program
+			plan.Steps[i].Args = []string{"__wordpress-extract", identity.Docroot}
+		}
 	}
 	domain, err := createDomain(identity.SiteID)
 	if err != nil {

@@ -18,6 +18,7 @@ import (
 	"novapanel/internal/sshkey"
 	"novapanel/internal/validate"
 	"novapanel/internal/verbs"
+	"novapanel/internal/wordpress"
 	"os"
 	"os/signal"
 	"time"
@@ -222,6 +223,13 @@ running:
 	return err
 }
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "__wordpress-extract" {
+		if err := wordpress.ExtractFreshCore(context.Background(), os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, "WordPress extraction failed")
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "__archive" {
 		if err := fileop.ArchiveHelper(os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "archive helper failed")

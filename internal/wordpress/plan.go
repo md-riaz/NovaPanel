@@ -36,8 +36,8 @@ const (
 	AdministratorPassword StdinRequirement = "administrator_password_plus_newline"
 )
 
-// Step names a secret channel, never its contents. PublishProtectedConfig has no
-// executable: the agent must atomically publish eight local salts and 0400 config.
+// Step names a secret channel, never its contents. Download and config publication
+// are bound by the agent to their confined helpers, not to executable plan inputs.
 type Step struct {
 	Kind    StepKind
 	Program string
@@ -74,7 +74,7 @@ func BuildInstall(in InstallInput, evidence ArtifactEvidence) (Plan, error) {
 		return Step{Kind: kind, Program: "/usr/bin/php8.3", Args: argv, Stdin: stdin}
 	}
 	p.Steps = []Step{
-		command(Download, "", "core", "download", "--version=7.1.4", "--locale=en_US"),
+		{Kind: Download},
 		command(VerifyChecksums, "", "core", "verify-checksums", "--version=7.1.4", "--locale=en_US"),
 		{Kind: PublishProtectedConfig},
 		command(IsInstalled, "", "core", "is-installed"),

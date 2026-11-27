@@ -100,13 +100,6 @@ func (q *Queue) InstallFreshWordPress(ctx context.Context, jobID string, identit
 			return err
 		}
 		artifactsReady := op.Checkpoint != "db_applied" && archivePresent
-		if !artifactsReady && op.Identity.DownloadStarted {
-			for i := range l.plan.Steps {
-				if l.plan.Steps[i].Kind == wordpress.Download {
-					l.plan.Steps[i].Args = append(l.plan.Steps[i].Args, "--force")
-				}
-			}
-		}
 		if err = runFreshInstall(ctx, l, artifactsReady, func() error { return wordpress.VerifyDownloadedArchive(archive, identity.UID) }, func() error { return q.CreateWordPressConfig(ctx, jobID, q.configCustody, l.ConfigIsolation) }, credentials.AdminPassword); err != nil {
 			return err
 		}
