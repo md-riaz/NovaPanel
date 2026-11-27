@@ -76,7 +76,7 @@ func TestWordPressConfigRequiresWorkerAndIsolation(t *testing.T) {
 		t.Fatal("missing custody recovered")
 	}
 	op, err := s.LoadOperation(ctx, en.Job.ID)
-	if err != nil || op.Checkpoint != "db_applied" || len(op.Ciphertext) == 0 {
+	if err != nil || op.Checkpoint != "config_published" || len(op.Ciphertext) == 0 {
 		t.Fatal("failure lost recovery", err)
 	}
 }

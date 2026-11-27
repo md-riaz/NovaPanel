@@ -26,6 +26,7 @@ type lifetimeStore interface {
 	operationStore
 	SiteByID(context.Context, string) (store.Site, error)
 	CheckFreshSiteLifetime(context.Context, store.SiteLifetime) error
+	CheckActivatedSiteLifetime(context.Context, store.SiteLifetime, string) error
 	ActivateSiteLifetime(context.Context, store.SiteLifetime) error
 }
 
@@ -177,14 +178,7 @@ func withInstallLifetime(ctx context.Context, l *WordPressLifetime, operation fu
 		if err = l.activateServing(ctx); err != nil {
 			return
 		}
-		err = func() (releaseErr error) {
-			defer func() {
-				if recover() != nil {
-					releaseErr = errors.New("jobs: serving release panicked")
-				}
-			}()
-			return release(l)
-		}()
+		err = callServingRelease(l, release)
 		l.mu.Lock()
 		released := l.released
 		l.successful = false
@@ -199,8 +193,40 @@ func withInstallLifetime(ctx context.Context, l *WordPressLifetime, operation fu
 	return operation(l)
 }
 
+func callServingRelease(l *WordPressLifetime, release func(*WordPressLifetime) error) (err error) {
+	defer func() {
+		if recover() != nil {
+			err = errors.New("jobs: serving release panicked")
+		}
+	}()
+	return release(l)
+}
+
+func replayActivatedLifetime(ctx context.Context, domain installLifetimeDomain, identity store.SiteLifetime, check func(context.Context) error, release func(*WordPressLifetime) error) error {
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	err := domain.Close(cleanup)
+	cancel()
+	if err != nil {
+		return err
+	}
+	if release == nil {
+		return errors.New("jobs: lifetime consumer unavailable")
+	}
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	if err = check(ctx); err != nil {
+		return err
+	}
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	return callServingRelease(&WordPressLifetime{identity: identity, closed: true, released: true}, release)
+}
+
 // WithFreshWordPressLifetime holds the existing operation locks and install
-// domain for the complete callback. Slice 1b owns the callback and FPM enable.
+// domain for the complete callback. The serving callback must ensure its state
+// idempotently, because activation may have committed before a crash.
 func (q *Queue) WithFreshWordPressLifetime(ctx context.Context, jid string, identity store.SiteLifetime, operation func(*WordPressLifetime) error, release func(*WordPressLifetime) error) error {
 	lease, _ := ctx.Value(configWorkerKey{}).(*configWorkerLease)
 	if lease == nil || lease.queue != q || lease.job != jid || !lease.active.Load() || q.healthy() != nil {
@@ -244,11 +270,24 @@ func (q *Queue) WithFreshWordPressLifetime(ctx context.Context, jid string, iden
 	if site.Status != "creating" {
 		return rpcerr.Errf("precondition_failed", "site account is not non-serving")
 	}
+	if identity.AllocatingJob != jid {
+		return rpcerr.Errf("precondition_failed", "site account belongs to another operation")
+	}
+	replay := false
 	if err = s.CheckFreshSiteLifetime(ctx, identity); err != nil {
-		if errors.Is(err, store.ErrSitePrecondition) {
-			return rpcerr.Errf("precondition_failed", "site account is not fresh")
+		if !errors.Is(err, store.ErrSitePrecondition) {
+			return err
 		}
-		return err
+		if err = s.CheckActivatedSiteLifetime(ctx, identity, jid); err != nil {
+			if errors.Is(err, store.ErrSitePrecondition) {
+				return rpcerr.Errf("precondition_failed", "site account is not fresh")
+			}
+			return err
+		}
+		replay = true
+	}
+	if operation == nil || release == nil {
+		return errors.New("jobs: lifetime consumer unavailable")
 	}
 	if _, err = q.OpenWordPressCredentials(ctx, jid); err != nil {
 		return err
@@ -268,6 +307,17 @@ func (q *Queue) WithFreshWordPressLifetime(ctx context.Context, jid string, iden
 	domain, err := platform.CreateInstallDomain(identity.SiteID)
 	if err != nil {
 		return err
+	}
+	if replay {
+		return replayActivatedLifetime(ctx, domain, identity, func(ctx context.Context) error {
+			if err := q.healthy(); err != nil {
+				return err
+			}
+			if err := s.CheckOperation(ctx, jid); err != nil {
+				return err
+			}
+			return s.CheckActivatedSiteLifetime(ctx, identity, jid)
+		}, release)
 	}
 	binding := configcustody.ConfigBinding{JobID: jid, SiteID: identity.SiteID, DatabaseID: op.DatabaseID, AccountID: op.Identity.Database.PrimaryUserID, Docroot: identity.Docroot, UID: identity.UID, GID: identity.GID}
 	l := &WordPressLifetime{domain: domain, binding: binding, identity: identity, plan: plan, activate: s.ActivateSiteLifetime, check: func(checkCtx context.Context) error {
