@@ -75,3 +75,16 @@ func TestFreshInstallChildCrashReplay(t *testing.T) {
 		})
 	}
 }
+
+func TestFreshInstallRefusesChildWhenPreflightFails(t *testing.T) {
+	d := &crashInstallDomain{runs: map[wordpress.StepKind]int{}}
+	plan := wordpress.Plan{Steps: []wordpress.Step{{Kind: wordpress.Download, Program: "/stub", Args: []string{string(wordpress.Download)}}}}
+	l := &WordPressLifetime{domain: d, identity: store.SiteLifetime{UID: 123, GID: 456}, plan: plan, check: func(context.Context) error { return errors.New("preflight failed") }}
+	err := withInstallLifetime(context.Background(), l, func(l *WordPressLifetime) error {
+		_, _, _, err := l.runReviewed(context.Background(), reviewedInstallChild{kind: wordpress.Download})
+		return err
+	}, func(*WordPressLifetime) error { t.Fatal("released"); return nil })
+	if err == nil || len(d.runs) != 0 {
+		t.Fatal("child ran after preflight failure")
+	}
+}
