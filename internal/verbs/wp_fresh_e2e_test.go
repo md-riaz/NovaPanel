@@ -4,6 +4,7 @@ package verbs_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -238,7 +239,39 @@ func TestFreshWordPressRollbackOfflineE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.Remove(marker)
+	if err = st.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `CREATE TRIGGER test_fail_rollback_fence BEFORE UPDATE OF step ON jobs WHEN NEW.step='wordpress_rollback_intent' BEGIN SELECT RAISE(FAIL,'injected rollback fence failure'); END`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	first := create()
+	select {
+	case err := <-done:
+		if !errors.Is(err, jobs.ErrRetry) {
+			t.Fatalf("worker did not fail closed: %v", err)
+		}
+	case <-time.After(180 * time.Second):
+		t.Fatal("worker did not stop after rollback fence failure")
+	}
+	opBefore, err := st.LoadOperation(ctx, first.Job.ID)
+	if err != nil || (opBefore.Checkpoint != "security_failed" && opBefore.Checkpoint != "verification_in_progress") {
+		t.Fatalf("verification failure not durable: checkpoint=%s err=%v", opBefore.Checkpoint, err)
+	}
+	if err = st.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `DROP TRIGGER test_fail_rollback_fence`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The live checksum service now matches; restart must still roll back.
+	if err = os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	if err = a.Jobs.PrepareOperations(ctx); err != nil {
+		t.Fatalf("restart recovery: %v", err)
+	}
+	go func() { done <- a.Jobs.Run(run) }()
 	failed := wait(first)
 	if failed.State != "failed" {
 		t.Fatalf("mismatch accepted: %+v", failed)
@@ -272,9 +305,6 @@ func TestFreshWordPressRollbackOfflineE2E(t *testing.T) {
 	out, _, code, err := (runner.Real{}).Run(ctx, "/usr/bin/mariadb", []string{"--no-defaults", "--protocol=socket", "--user=root", "--batch", "--skip-column-names"}, runner.RunOpts{Stdin: strings.NewReader(sql)})
 	if err != nil || code != 0 || strings.TrimSpace(string(out)) != "0" {
 		t.Fatalf("database residue: %s exit=%d %v", out, code, err)
-	}
-	if err = os.Remove(marker); err != nil {
-		t.Fatal(err)
 	}
 	second := create()
 	completed := wait(second)
