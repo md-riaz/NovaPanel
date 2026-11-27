@@ -17,6 +17,10 @@ import (
 
 var errDomain = errors.New("platform: execution domain refused")
 
+func overlapsDomain(a, b string) bool {
+	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
+}
+
 // ExecutionDomain owns launcher admission and recursive process retirement only.
 // It does not attest account freshness, IO retirement or filesystem custody.
 // Trusted root must exclude all outside launch, migration and replacement.
@@ -32,6 +36,7 @@ type ExecutionDomain struct {
 	capability *runner.Cgroup
 	file       *os.File
 	retire     func(context.Context) error
+	path       string
 }
 
 func newExecutionDomain(r runner.Runner, c *runner.Cgroup, retire func(context.Context) error) *ExecutionDomain {
@@ -46,6 +51,12 @@ func newExecutionDomain(r runner.Runner, c *runner.Cgroup, retire func(context.C
 func OpenExecutionDomain(path string) (*ExecutionDomain, error) {
 	if filepath.Clean(path) != path || !strings.HasPrefix(path, "/sys/fs/cgroup/") {
 		return nil, errDomain
+	}
+	installOwners.Lock()
+	active := installOwners.active[path] != 0
+	installOwners.Unlock()
+	if active {
+		return nil, fmt.Errorf("%w: domain has active admissions", errDomain)
 	}
 	fd, err := unix.Open("/", unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_RDONLY, 0)
 	if err != nil {
@@ -75,6 +86,7 @@ func OpenExecutionDomain(path string) (*ExecutionDomain, error) {
 		return fail()
 	}
 	d := newExecutionDomain(runner.Real{}, cap, nil)
+	d.path = path
 	d.file = f
 	d.retire = d.killAndWait
 	// A root-owned directory alone does not exclude delegated migration files.
@@ -102,34 +114,71 @@ func OpenExecutionDomain(path string) (*ExecutionDomain, error) {
 // Run places children at birth and holds admission until the runner returns.
 // Callers must still supply validated numeric credentials and reviewed commands.
 func (d *ExecutionDomain) Run(ctx context.Context, prog string, args []string, o runner.RunOpts) ([]byte, []byte, int, error) {
-	d.mu.Lock()
-	if d.closed || o.Cgroup != nil || ctx.Err() != nil {
-		d.mu.Unlock()
+	if o.Cgroup != nil {
 		return nil, nil, -1, errDomain
+	}
+	work, done, err := d.admit(ctx)
+	if err != nil {
+		return nil, nil, -1, err
+	}
+	defer done()
+	o.Cgroup = d.capability
+	return d.runner.Run(work, prog, args, o)
+}
+
+// admit lets Drain cancel and wait for every operation holding the domain.
+func (d *ExecutionDomain) admit(ctx context.Context) (context.Context, func(), error) {
+	installOwners.Lock()
+	for path, owner := range installOwners.paths {
+		if d.path != "" && overlapsDomain(d.path, path) && (d.path != path || owner != d) {
+			installOwners.Unlock()
+			return nil, nil, fmt.Errorf("%w: domain path owned by another handle", errDomain)
+		}
+	}
+	if d.path != "" {
+		installOwners.active[d.path]++
+	}
+	installOwners.Unlock()
+	releasePath := func() {
+		if d.path != "" {
+			installOwners.Lock()
+			installOwners.active[d.path]--
+			if installOwners.active[d.path] == 0 {
+				delete(installOwners.active, d.path)
+			}
+			installOwners.Unlock()
+		}
+	}
+	d.mu.Lock()
+	if d.closed || ctx.Err() != nil {
+		d.mu.Unlock()
+		releasePath()
+		return nil, nil, errDomain
 	}
 	if d.active == 0 {
 		d.idle = make(chan struct{})
 	}
 	d.active++
 	d.mu.Unlock()
-	defer func() {
+	work, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(d.ctx, cancel)
+	done := func() {
+		stop()
+		cancel()
 		d.mu.Lock()
 		d.active--
 		if d.active == 0 {
 			close(d.idle)
 		}
 		d.mu.Unlock()
-	}()
-	work, cancel := context.WithCancel(ctx)
-	stop := context.AfterFunc(d.ctx, cancel)
-	defer cancel()
-	defer stop()
+		releasePath()
+	}
 	// Check lifetime cancellation synchronously as well as through AfterFunc.
 	if d.ctx.Err() != nil {
-		return nil, nil, -1, errDomain
+		done()
+		return nil, nil, errDomain
 	}
-	o.Cgroup = d.capability
-	return d.runner.Run(work, prog, args, o)
+	return work, done, nil
 }
 
 // Drain permanently closes admission, cancels and drains admitted launches, then

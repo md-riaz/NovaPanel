@@ -50,6 +50,29 @@ func TestDomainCloseAdmissionDrainsBeforeKill(t *testing.T) {
 		t.Fatal("missing process retirement")
 	}
 }
+
+func TestDomainDrainCancelsAndWaitsForHeldEffect(t *testing.T) {
+	d := newExecutionDomain(nil, nil, func(context.Context) error { return nil })
+	work, done, err := d.admit(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := d.Drain(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("drain: %v", err)
+	}
+	if work.Err() == nil {
+		t.Fatal("held effect was not canceled")
+	}
+	done()
+	if err := d.Drain(domainDeadline(t)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := d.admit(context.Background()); err == nil {
+		t.Fatal("admission reopened")
+	}
+}
 func TestDomainRefusesForeignCapability(t *testing.T) {
 	d := newExecutionDomain(nil, nil, func(context.Context) error { return nil })
 	if _, _, _, err := d.Run(context.Background(), "/unused", nil, runner.RunOpts{Cgroup: new(runner.Cgroup)}); err == nil {
