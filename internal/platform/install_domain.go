@@ -27,11 +27,12 @@ var installOwners = struct {
 // InstallDomain holds an install cgroup; it does not attest account freshness,
 // close other launchers or exclude account and filesystem changes.
 type InstallDomain struct {
-	gate     installgate.Gate
-	domain   *ExecutionDomain
-	parent   *os.File
-	name     string
-	detached atomic.Bool
+	gate        installgate.Gate
+	domain      *ExecutionDomain
+	parent      *os.File
+	name        string
+	detached    atomic.Bool
+	closeDomain func() error
 }
 
 // CreateInstallDomain creates or reopens the site's empty domain below the
@@ -51,8 +52,20 @@ func CreateInstallDomain(siteID string) (*InstallDomain, error) {
 	path := filepath.Join("/sys/fs/cgroup", own)
 	domainPath := filepath.Join(path, "novapanel-install", siteID)
 	installOwners.Lock()
-	_, exists := installOwners.paths[domainPath]
-	if exists || installOwners.active[domainPath] != 0 {
+	conflict := false
+	for path := range installOwners.paths {
+		if overlapsDomain(path, domainPath) {
+			conflict = true
+			break
+		}
+	}
+	for path := range installOwners.active {
+		if overlapsDomain(path, domainPath) {
+			conflict = true
+			break
+		}
+	}
+	if conflict {
 		installOwners.Unlock()
 		return nil, fmt.Errorf("%w: site install domain already owned or active", errDomain)
 	}
@@ -104,7 +117,12 @@ func CreateInstallDomain(siteID string) (*InstallDomain, error) {
 		parent.Close()
 		return nil, err
 	}
-	handle := &InstallDomain{domain: d, parent: parent, name: siteID}
+	handle := &InstallDomain{domain: d, parent: parent, name: siteID, closeDomain: d.Close}
+	if err := handle.empty(); err != nil {
+		d.Close()
+		parent.Close()
+		return nil, err
+	}
 	installOwners.Lock()
 	installOwners.paths[domainPath] = d
 	installOwners.Unlock()
@@ -160,7 +178,36 @@ func (d *InstallDomain) empty() error {
 	if !empty {
 		return errDomain
 	}
-	return nil
+	return d.leaf()
+}
+
+// leaf rejects even unpopulated child cgroups; recursive emptiness alone does
+// not prevent a separate child-domain handle from admitting a process.
+func (d *InstallDomain) leaf() error {
+	fd, err := unix.Openat(int(d.domain.file.Fd()), ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	dir := os.NewFile(uintptr(fd), "install-domain-leaf")
+	defer dir.Close()
+	for {
+		names, err := dir.Readdirnames(64)
+		for _, name := range names {
+			var st unix.Stat_t
+			if unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW) != nil {
+				return errDomain
+			}
+			if st.Mode&unix.S_IFMT == unix.S_IFDIR {
+				return fmt.Errorf("%w: install domain is not a leaf", errDomain)
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
 }
 
 // WithEmpty holds this domain's admission gate around a synchronous trusted-root
@@ -210,6 +257,6 @@ func (d *InstallDomain) Close(ctx context.Context) error {
 			installOwners.Unlock()
 		}()
 		unlinkErr := unix.Unlinkat(int(d.parent.Fd()), d.name, unix.AT_REMOVEDIR)
-		return errors.Join(unlinkErr, d.domain.Close(), d.parent.Close())
+		return errors.Join(unlinkErr, d.closeDomain(), d.parent.Close())
 	})
 }

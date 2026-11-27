@@ -17,6 +17,10 @@ import (
 
 var errDomain = errors.New("platform: execution domain refused")
 
+func overlapsDomain(a, b string) bool {
+	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
+}
+
 // ExecutionDomain owns launcher admission and recursive process retirement only.
 // It does not attest account freshness, IO retirement or filesystem custody.
 // Trusted root must exclude all outside launch, migration and replacement.
@@ -47,6 +51,12 @@ func newExecutionDomain(r runner.Runner, c *runner.Cgroup, retire func(context.C
 func OpenExecutionDomain(path string) (*ExecutionDomain, error) {
 	if filepath.Clean(path) != path || !strings.HasPrefix(path, "/sys/fs/cgroup/") {
 		return nil, errDomain
+	}
+	installOwners.Lock()
+	active := installOwners.active[path] != 0
+	installOwners.Unlock()
+	if active {
+		return nil, fmt.Errorf("%w: domain has active admissions", errDomain)
 	}
 	fd, err := unix.Open("/", unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_RDONLY, 0)
 	if err != nil {
@@ -119,10 +129,11 @@ func (d *ExecutionDomain) Run(ctx context.Context, prog string, args []string, o
 // admit lets Drain cancel and wait for every operation holding the domain.
 func (d *ExecutionDomain) admit(ctx context.Context) (context.Context, func(), error) {
 	installOwners.Lock()
-	owner, reserved := installOwners.paths[d.path]
-	if d.path != "" && reserved && owner != d {
-		installOwners.Unlock()
-		return nil, nil, fmt.Errorf("%w: domain path owned by another handle", errDomain)
+	for path, owner := range installOwners.paths {
+		if d.path != "" && overlapsDomain(d.path, path) && (d.path != path || owner != d) {
+			installOwners.Unlock()
+			return nil, nil, fmt.Errorf("%w: domain path owned by another handle", errDomain)
+		}
 	}
 	if d.path != "" {
 		installOwners.active[d.path]++

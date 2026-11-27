@@ -4,6 +4,7 @@ package platform
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -98,9 +99,53 @@ func TestInstallDomainLab(t *testing.T) {
 	if err := d.Empty(); err != nil {
 		t.Fatal(err)
 	}
+	path := filepath.Join("/sys/fs/cgroup", own, "novapanel-install", site)
+	childPath := filepath.Join(path, "child")
+	if err := os.Mkdir(childPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Empty(); err == nil {
+		t.Fatal("non-leaf domain reported empty")
+	}
+	if _, _, _, err := d.Run(ctx, "/usr/bin/true", nil, runner.RunOpts{}); err == nil {
+		t.Fatal("admitted child into non-leaf")
+	}
+	if err := d.WithEmpty(ctx, func(context.Context) error { t.Fatal("effect on non-leaf"); return nil }); err == nil {
+		t.Fatal("accepted effect on non-leaf")
+	}
+	if err := os.Remove(childPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.WithEmpty(ctx, func(effectCtx context.Context) error {
+		if err := os.Mkdir(childPath, 0755); err != nil {
+			return err
+		}
+		defer os.Remove(childPath)
+		child, err := OpenExecutionDomain(childPath)
+		if err != nil {
+			return err
+		}
+		defer child.Close()
+		if _, _, _, err := child.Run(effectCtx, "/usr/bin/true", nil, runner.RunOpts{Uid: 65534, Gid: 65534}); err == nil {
+			return errors.New("descendant admission crossed parent effect")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.WithEmpty(ctx, func(context.Context) error { return os.Mkdir(childPath, 0755) }); err == nil {
+		t.Fatal("post-effect non-leaf accepted")
+	}
+	if err := os.Remove(childPath); err != nil {
+		t.Fatal(err)
+	}
 	calls := 0
 	if err := d.WithEmpty(ctx, func(context.Context) error { calls++; return nil }); err != nil || calls != 1 {
 		t.Fatalf("synchronous empty effect: calls=%d err=%v", calls, err)
+	}
+	alternate, err := OpenExecutionDomain(path)
+	if err != nil {
+		t.Fatal(err)
 	}
 	entered, release := make(chan struct{}), make(chan struct{})
 	effectDone := make(chan error, 1)
@@ -111,11 +156,6 @@ func TestInstallDomainLab(t *testing.T) {
 	if other, err := CreateInstallDomain(site); err == nil {
 		close(release)
 		t.Fatalf("created second owner during effect: %+v", other)
-	}
-	alternate, err := OpenExecutionDomain(filepath.Join("/sys/fs/cgroup", own, "novapanel-install", site))
-	if err != nil {
-		close(release)
-		t.Fatal(err)
 	}
 	if _, _, _, err := alternate.Run(ctx, "/usr/bin/true", nil, runner.RunOpts{Uid: 65534, Gid: 65534}); err == nil {
 		close(release)
@@ -189,7 +229,6 @@ func TestInstallDomainLab(t *testing.T) {
 		t.Fatalf("domain remains: %v", err)
 	}
 	// An empty, root-owned crash remnant is reopened under a new sole owner.
-	path := filepath.Join("/sys/fs/cgroup", own, "novapanel-install", site)
 	if err := os.Mkdir(path, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -197,6 +236,21 @@ func TestInstallDomainLab(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, doneAdmission, err := remnant.admit(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other, err := OpenExecutionDomain(path); err == nil {
+		other.Close()
+		doneAdmission()
+		t.Fatal("opened domain with active admission")
+	}
+	if other, err := CreateInstallDomain(site); err == nil {
+		other.Close(ctx)
+		doneAdmission()
+		t.Fatal("adopted domain with active admission")
+	}
+	doneAdmission()
 	remnantCtx, stopRemnant := context.WithCancel(ctx)
 	remnantDone := make(chan struct{})
 	go func() {
@@ -225,6 +279,11 @@ func TestInstallDomainLab(t *testing.T) {
 		stopRemnant()
 		t.Fatalf("adopted populated crash remnant: %+v", other)
 	}
+	if other, err := OpenExecutionDomain(path); err == nil {
+		other.Close()
+		stopRemnant()
+		t.Fatal("opened populated active domain")
+	}
 	stopRemnant()
 	<-remnantDone
 	if err := remnant.Drain(ctx); err != nil {
@@ -250,9 +309,9 @@ func TestInstallDomainLab(t *testing.T) {
 	if err := unremovable.Close(ctx); err == nil {
 		t.Fatal("removed nonempty cgroup directory")
 	}
-	reopened, err := CreateInstallDomain(site)
-	if err != nil {
-		t.Fatalf("ownership retained after failed unlink: %v", err)
+	if reopened, err := CreateInstallDomain(site); err == nil {
+		reopened.Close(ctx)
+		t.Fatal("adopted non-leaf crash remnant")
 	}
 	if err := unremovable.Close(ctx); err == nil {
 		t.Fatal("old handle retried after detachment")
@@ -260,7 +319,27 @@ func TestInstallDomainLab(t *testing.T) {
 	if err := os.Remove(filepath.Join(path, "leftover")); err != nil {
 		t.Fatal(err)
 	}
+	reopened, err := CreateInstallDomain(site)
+	if err != nil {
+		t.Fatalf("ownership retained after failed unlink: %v", err)
+	}
 	if err := reopened.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	closeFailure, err := CreateInstallDomain(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalClose := closeFailure.closeDomain
+	closeFailure.closeDomain = func() error { return errors.Join(originalClose(), errors.New("injected close failure")) }
+	if err := closeFailure.Close(ctx); err == nil {
+		t.Fatal("missing close error")
+	}
+	afterError, err := CreateInstallDomain(site)
+	if err != nil {
+		t.Fatalf("ownership retained after post-unlink close error: %v", err)
+	}
+	if err := afterError.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
 }
