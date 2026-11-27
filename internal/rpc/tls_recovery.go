@@ -2,7 +2,9 @@ package rpc
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"novapanel/internal/id"
 	"novapanel/internal/jobs"
 	"novapanel/internal/store"
@@ -23,6 +25,13 @@ func (s *Server) prepareTLSRecovery(ctx context.Context) (*jobs.Job, error) {
 				}
 				for _, j := range rows {
 					if j.Step == "tls_committed" && (j.Verb == "ssl.upload" || j.Verb == "ssl.issue" || j.Verb == "ssl.renew" || j.Verb == "site.update") && (j.State == "running" || j.Code == "interrupted") {
+						composite, err := s.compositeTLSOwner(ctx, j)
+						if err != nil {
+							return nil, err
+						}
+						if composite {
+							continue
+						}
 						if err = s.executeJob(ctx, &j, true); err != nil {
 							return nil, err
 						}
@@ -50,6 +59,13 @@ func (s *Server) prepareTLSRecovery(ctx context.Context) (*jobs.Job, error) {
 	if j.Verb != "ssl.upload" && j.Verb != "ssl.issue" && j.Verb != "ssl.renew" && j.Verb != "site.update" {
 		return nil, Errf("forbidden", "Invalid TLS recovery verb")
 	}
+	composite, err := s.compositeTLSOwner(ctx, j)
+	if err != nil {
+		return nil, err
+	}
+	if composite {
+		return nil, nil
+	}
 	if j.State != "running" && !(j.State == "failed" && j.Code == "interrupted") {
 		return nil, Errf("precondition_failed", "Invalid TLS recovery state")
 	}
@@ -57,6 +73,20 @@ func (s *Server) prepareTLSRecovery(ctx context.Context) (*jobs.Job, error) {
 		return nil, err
 	}
 	return &j, nil
+}
+
+func (s *Server) compositeTLSOwner(ctx context.Context, j jobs.Job) (bool, error) {
+	if j.Verb != "site.update" {
+		return false, nil
+	}
+	op, err := s.Agent.Store.LoadOperation(ctx, j.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return op.Kind == store.SiteUpdate, nil
 }
 
 func (s *Server) resumeTLSRecovery(ctx context.Context, j *jobs.Job) error {
