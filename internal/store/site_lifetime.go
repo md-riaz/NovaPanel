@@ -82,5 +82,6 @@ func (s *Store) ActivateSiteLifetime(ctx context.Context, l SiteLifetime) error 
 	if n != 1 {
 		return ErrSitePrecondition
 	}
+	freshCheckpointTestHook(ctx, l.AllocatingJob, "activated")
 	return nil
 }

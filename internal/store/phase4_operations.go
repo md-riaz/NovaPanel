@@ -583,7 +583,7 @@ func TeardownStarted(op Operation) bool {
 }
 
 func (s *Store) CheckpointOperation(ctx context.Context, jid, from, to string) error {
-	return s.Tx(ctx, func(tx *sql.Tx) error {
+	err := s.Tx(ctx, func(tx *sql.Tx) error {
 		op, e := loadOperation(ctx, tx, jid)
 		if e != nil {
 			return e
@@ -605,6 +605,10 @@ func (s *Store) CheckpointOperation(ctx context.Context, jid, from, to string) e
 		r, e := tx.ExecContext(ctx, "UPDATE phase4_operations SET checkpoint=?,updated=? WHERE job_id=? AND checkpoint=?", to, s.clock.Now(), jid, from)
 		return affected(r, e)
 	})
+	if err == nil {
+		freshCheckpointTestHook(ctx, jid, to)
+	}
+	return err
 }
 
 // CompleteOperation publishes verified metadata, claim, job and journal in one commit.

@@ -12,7 +12,11 @@ import (
 
 // VerifyDownloadedArchive validates the held site's cached tarball before use.
 func VerifyDownloadedArchive(path string, uid uint32) error {
-	return verifyDownloadedArchive(path, uid, ApprovedArtifacts().WordPress.SHA256)
+	err := verifyDownloadedArchive(path, uid, ApprovedArtifacts().WordPress.SHA256)
+	if err == nil {
+		freshArchiveTestHook()
+	}
+	return err
 }
 
 func verifyDownloadedArchive(path string, uid uint32, expected string) error {
