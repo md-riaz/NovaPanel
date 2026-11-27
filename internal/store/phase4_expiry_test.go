@@ -98,3 +98,32 @@ func TestExpireOperationsLeavesFreshWordPressForJobRecovery(t *testing.T) {
 	}
 
 }
+
+func TestFreshVerificationRecoveryDisposition(t *testing.T) {
+	for _, tc := range []struct {
+		checkpoint string
+		rollback   bool
+	}{
+		{"db_applied", false}, {"verification_in_progress", true}, {"security_failed", true}, {"verified_resumable", false}, {"config_published", false}, {"verified", false},
+	} {
+		t.Run(tc.checkpoint, func(t *testing.T) {
+			ctx := context.Background()
+			s, err := Open(filepath.Join(t.TempDir(), "panel.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			phase4Job(t, s.db.raw, "fresh-job", "running")
+			phase4Exec(t, s.db.raw, `INSERT INTO sites(id,name,type,docroot,created,updated,lifetime_state) VALUES('fresh','fresh','wordpress','/sites/fresh/public',1,1,'provisioning')`)
+			phase4Exec(t, s.db.raw, `INSERT INTO site_account_provenance(site_id,account_name,uid,gid,allocating_job,evidence) VALUES('fresh','fresh',2000000,2000000,'fresh-job','reserved')`)
+			phase4Exec(t, s.db.raw, `INSERT INTO phase4_operations(job_id,kind,site_id,checkpoint,identities_json,expires,updated) VALUES('fresh-job','wordpress_install','fresh',?,'{}',1,1)`, tc.checkpoint)
+			if err = s.RecoverJobs(ctx, 2); err != nil {
+				t.Fatal(err)
+			}
+			j, err := s.GetJob(ctx, "fresh-job")
+			if err != nil || j.State != "queued" || (j.Step == FreshWordPressRollbackIntentStep) != tc.rollback {
+				t.Fatalf("recovery: %+v %v", j, err)
+			}
+		})
+	}
+}

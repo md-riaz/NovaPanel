@@ -58,16 +58,22 @@ func TestFreshWordPressWorkerRollbackAndNameReuse(t *testing.T) {
 			return nil
 		}
 		attempts++
-		if attempts <= 2 {
+		if attempts == 1 {
+			if err := s.CheckpointOperation(run, j.ID, "prepared", "db_applied"); err != nil {
+				return err
+			}
+			if err := s.CheckpointOperation(run, j.ID, "db_applied", "verification_in_progress"); err != nil {
+				return err
+			}
 			return errors.New("checksum mismatch")
 		}
-		if attempts == 3 {
+		if attempts == 2 {
 			if j.Step != store.FreshWordPressRollbackStep {
 				t.Fatalf("missing rollback intent: %+v", j)
 			}
 			return errors.Join(ErrRetry, errors.New("injected teardown failure"))
 		}
-		if attempts == 4 {
+		if attempts == 3 {
 			if err := s.MarkFreshWordPressRollbackCleaned(run, j.ID); err != nil {
 				return err
 			}
@@ -90,8 +96,8 @@ func TestFreshWordPressWorkerRollbackAndNameReuse(t *testing.T) {
 		t.Fatal(err)
 	}
 	j, err = s.GetJob(ctx, en.Job.ID)
-	if err != nil || j.State != "queued" {
-		t.Fatalf("recovery did not queue re-verification: %+v %v", j, err)
+	if err != nil || j.State != "queued" || j.Step != store.FreshWordPressRollbackIntentStep {
+		t.Fatalf("ambiguous verification did not queue rollback: %+v %v", j, err)
 	}
 	if err = q.execute(ctx, j); err != nil {
 		t.Fatal(err)

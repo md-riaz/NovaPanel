@@ -81,8 +81,8 @@ func TestFreshInstallChildCrashReplay(t *testing.T) {
 			if stop == wordpress.VerifyChecksums && (d.runs[wordpress.Download] != 2 || d.runs[wordpress.VerifyChecksums] != 2) {
 				t.Fatalf("checksum replay: %#v", d.runs)
 			}
-			if stop == wordpress.InstallCore && (d.runs[wordpress.InstallCore] != 1 || d.runs[wordpress.VerifyChecksums] != 2) {
-				t.Fatalf("replay must reverify and skip reinstall: %#v", d.runs)
+			if stop == wordpress.InstallCore && (d.runs[wordpress.InstallCore] != 1 || d.runs[wordpress.VerifyChecksums] != 1) {
+				t.Fatalf("replay must preserve verification and skip reinstall: %#v", d.runs)
 			}
 		})
 	}
@@ -110,7 +110,7 @@ func TestFreshArtifactFailureWorkerRetry(t *testing.T) {
 		retry  bool
 	}{
 		{"download-transport", wordpress.Download, wordpress.ExtractRetryExit, "", true},
-		{"checksum-fetch", wordpress.VerifyChecksums, 1, "Error: Couldn't get checksums from WordPress.org.\n", true},
+		{"checksum-fetch", wordpress.VerifyChecksums, 1, "Error: Couldn't get checksums from WordPress.org.\n", false},
 		{"checksum-mismatch", wordpress.VerifyChecksums, 1, "Error: WordPress installation doesn't verify against checksums.\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -163,21 +163,25 @@ func TestFreshArtifactFailureWorkerRetry(t *testing.T) {
 	}
 }
 
-func TestFreshInstallRecoveryRechecksChecksumMismatch(t *testing.T) {
-	d := &crashInstallDomain{stop: wordpress.VerifyChecksums, runs: map[wordpress.StepKind]int{}}
-	plan := wordpress.Plan{Steps: []wordpress.Step{{Kind: wordpress.VerifyChecksums, Program: "/stub", Args: []string{string(wordpress.VerifyChecksums)}}}}
-	pins := 0
-	for attempt := 0; attempt < 2; attempt++ {
-		d.fired = false
-		l := &WordPressLifetime{domain: d, identity: store.SiteLifetime{UID: 123, GID: 456}, plan: plan, check: func(context.Context) error { return nil }}
-		err := withInstallLifetime(context.Background(), l, func(l *WordPressLifetime) error {
-			return runFreshInstall(context.Background(), l, true, func() error { pins++; return nil }, func() error { t.Fatal("published after mismatch"); return nil }, "admin")
-		}, func(*WordPressLifetime) error { t.Fatal("served after mismatch"); return nil })
-		if err == nil || errors.Is(err, ErrRetry) {
-			t.Fatalf("checksum mismatch must fail terminally: %v", err)
+func TestFreshInstallResumeRechecksPinnedArchive(t *testing.T) {
+	d := &crashInstallDomain{runs: map[wordpress.StepKind]int{}}
+	plan := wordpress.Plan{}
+	for _, k := range []wordpress.StepKind{wordpress.IsInstalled, wordpress.InstallCore} {
+		step := wordpress.Step{Kind: k, Program: "/stub", Args: []string{string(k)}}
+		if k == wordpress.InstallCore {
+			step.Stdin = wordpress.AdministratorPassword
 		}
+		plan.Steps = append(plan.Steps, step)
 	}
-	if pins != 2 || d.runs[wordpress.VerifyChecksums] != 2 || d.runs[wordpress.InstallCore] != 0 {
-		t.Fatalf("recovery did not fail closed: pins=%d runs=%v", pins, d.runs)
+	binding := configcustody.ConfigBinding{JobID: "job", SiteID: "site", UID: 123, GID: 456}
+	l := &WordPressLifetime{domain: d, binding: binding, identity: store.SiteLifetime{UID: 123, GID: 456}, plan: plan, check: func(context.Context) error { return nil }, activate: func(context.Context, store.SiteLifetime) error { return nil }}
+	pins := 0
+	err := withInstallLifetime(context.Background(), l, func(l *WordPressLifetime) error {
+		return runFreshInstall(context.Background(), l, true, func() error { pins++; return nil }, func() error {
+			return l.ConfigIsolation(context.Background(), binding, func(context.Context) error { return nil })
+		}, "admin")
+	}, func(*WordPressLifetime) error { return nil })
+	if err != nil || pins != 1 || d.runs[wordpress.VerifyChecksums] != 0 || d.runs[wordpress.InstallCore] != 1 {
+		t.Fatalf("resume failed: err=%v pins=%d runs=%v", err, pins, d.runs)
 	}
 }

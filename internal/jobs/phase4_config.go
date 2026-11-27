@@ -110,7 +110,7 @@ func (q *Queue) CreateWordPressConfig(ctx context.Context, jobID, custody string
 		return refuse
 	}
 	op, err := s.LoadOperation(ctx, jobID)
-	if err != nil || op.Kind != store.WordPressInstall || (op.Checkpoint != "db_applied" && op.Checkpoint != "config_published" && op.Checkpoint != "verified") {
+	if err != nil || op.Kind != store.WordPressInstall || (op.Checkpoint != "db_applied" && op.Checkpoint != "verified_resumable" && op.Checkpoint != "config_published" && op.Checkpoint != "verified") {
 		return refuse
 	}
 	w := op.Identity.WordPress
@@ -135,8 +135,8 @@ func (q *Queue) CreateWordPressConfig(ctx context.Context, jobID, custody string
 			return refuse
 		}
 		// Record the recovery obligation before publishing any config bytes.
-		if op.Checkpoint == "db_applied" {
-			if err := s.CheckpointOperation(effectCtx, jobID, "db_applied", "config_published"); err != nil {
+		if op.Checkpoint == "db_applied" || op.Checkpoint == "verified_resumable" {
+			if err := s.CheckpointOperation(effectCtx, jobID, op.Checkpoint, "config_published"); err != nil {
 				return err
 			}
 		}

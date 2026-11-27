@@ -589,6 +589,9 @@ func (s *Store) CheckpointOperation(ctx context.Context, jid, from, to string) e
 			return e
 		}
 		allowed := from == "prepared" && to == "teardown_started" && (op.Kind == SiteDelete || op.Kind == DatabaseDelete || op.Kind == DBUserDelete) || from == "teardown_started" && to == "db_applied" && TeardownStarted(op) || from == "prepared" && to == "db_applied" && op.Kind != PHPSet || from == "prepared" && to == "config_published" && op.Kind == PHPSet || from == "db_applied" && to == "verified" || from == "db_applied" && to == "config_published" || from == "config_published" && to == "verified"
+		if op.Kind == WordPressInstall && ((from == "db_applied" && to == "verification_in_progress") || (from == "verification_in_progress" && (to == "verified_resumable" || to == "security_failed" || to == "db_applied")) || (from == "verified_resumable" && (to == "verification_in_progress" || to == "config_published"))) {
+			allowed = true
+		}
 		if !allowed || op.Checkpoint != from {
 			return ErrSiteConflict
 		}

@@ -223,6 +223,10 @@ func (s *Store) UpdateJob(ctx context.Context, j Job) error {
 }
 func (s *Store) RecoverJobs(ctx context.Context, now int64) error {
 	return s.Tx(ctx, func(tx *sql.Tx) error {
+		// An interrupted live verification has no trustworthy outcome; roll back.
+		if _, e := tx.ExecContext(ctx, `UPDATE jobs SET step=? WHERE (state='running' OR (state='failed' AND code='interrupted')) AND coalesce(step,'') NOT IN ('wordpress_rollback','wordpress_rollback_cleaned','wordpress_rollback_intent') AND EXISTS (SELECT 1 FROM phase4_operations o JOIN site_account_provenance p ON p.site_id=o.site_id AND p.allocating_job=o.job_id JOIN sites s ON s.id=o.site_id WHERE o.job_id=jobs.id AND o.kind='wordpress_install' AND o.checkpoint IN ('verification_in_progress','security_failed') AND s.lifetime_state='provisioning')`, FreshWordPressRollbackIntentStep); e != nil {
+			return e
+		}
 		// A validated typed journal owns roll-forward, including secret-input jobs.
 		// Locally contained post-effect failures finish as failed/interrupted,
 		// unlike process interruption's running row. Both retain the original

@@ -40,6 +40,7 @@ type WordPressLifetime struct {
 	activate                                        func(context.Context, store.SiteLifetime) error
 	closed, failed, published, successful, released bool
 	stage                                           int
+	verified                                        func() error
 	plan                                            wordpress.Plan
 	check                                           func(context.Context) error
 	parent                                          context.Context
