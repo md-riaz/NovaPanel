@@ -358,11 +358,13 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 	err = nil
 	isOperation := false
 	wordpressInstall := false
+	compositeUpdate := false
 	freshInstall := false
 	phpRecovery := false
 	if s, ok := q.store.(operationStore); ok {
 		if op, loadErr := s.LoadOperation(ctx, j.ID); loadErr == nil {
 			isOperation = true
+			compositeUpdate = op.Kind == store.SiteUpdate
 			wordpressInstall = op.Kind == store.WordPressInstall && j.Verb == "site.create"
 			if op.Kind == store.WordPressInstall && j.Verb == "site.create" {
 				if fresh, ok := q.store.(interface {
@@ -500,7 +502,10 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 		}
 	}
 	if wordpressInstall && errors.Is(err, ErrRetry) {
-		return q.requeueWordPress(ctx, j.ID)
+		return q.requeueOperation(ctx, j.ID)
+	}
+	if compositeUpdate && errors.Is(err, ErrRetry) {
+		return q.requeueOperation(ctx, j.ID)
 	}
 	if freshInstall && j.Step == store.FreshWordPressRollbackCleanedStep && err != nil && !errors.Is(err, ErrRetry) {
 		return q.finish(ctx, j, err)
@@ -691,10 +696,10 @@ func (q *Queue) beginFreshRollback(ctx context.Context, j Job, code string) erro
 	}
 	// The durable fence prevents the install from running again on retry or restart.
 	_ = s.BeginFreshWordPressRollback(ctx, j.ID, code)
-	return q.requeueWordPress(ctx, j.ID)
+	return q.requeueOperation(ctx, j.ID)
 }
 
-func (q *Queue) requeueWordPress(ctx context.Context, jid string) error {
+func (q *Queue) requeueOperation(ctx context.Context, jid string) error {
 	current, err := q.store.GetJob(ctx, jid)
 	if err != nil {
 		return err

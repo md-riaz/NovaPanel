@@ -246,6 +246,9 @@ func (s *Store) CompleteCompositeOperation(ctx context.Context, jobID string) er
 		if err != nil {
 			return err
 		}
+		if code == "" && s.clock.Now() >= op.Expires {
+			code = "interrupted"
+		}
 		if p := op.Identity.PublicationAudit; p != nil {
 			if p.State != "intent" {
 				return ErrSitePrecondition

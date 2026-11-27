@@ -429,8 +429,8 @@ func operationBlocked(ctx context.Context, tx *sql.Tx, op Operation) error {
 var ErrOperationLocked = errors.New("operation locked")
 var ErrOperationExpired = errors.New("operation interrupted by expiry")
 
-// freshInstallJobDriven identifies a journal owned by its reserved-account job.
-func freshInstallJobDriven(ctx context.Context, tx *sql.Tx, op Operation) (bool, error) {
+// operationExpiryExempt identifies active lifetimes that must roll forward.
+func operationExpiryExempt(ctx context.Context, tx *sql.Tx, op Operation) (bool, error) {
 	if op.Kind == SiteUpdate {
 		var engaged bool
 		err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM phase4_operation_children c WHERE c.job_id=? AND c.child_kind='maintenance_on' AND c.bracket_engaged=1) AND NOT EXISTS(SELECT 1 FROM phase4_operation_children c WHERE c.job_id=? AND c.child_kind='maintenance_off' AND c.status='committed')`, op.JobID, op.JobID).Scan(&engaged)
@@ -468,7 +468,7 @@ func (s *Store) checkOperation(ctx context.Context, jid string, restoration bool
 			if op.Checkpoint == "done" {
 				return nil
 			}
-			jobDriven, err := freshInstallJobDriven(ctx, tx, op)
+			jobDriven, err := operationExpiryExempt(ctx, tx, op)
 			if err != nil {
 				return err
 			}
@@ -624,9 +624,14 @@ func (s *Store) CheckpointOperation(ctx context.Context, jid, from, to string) e
 		if !allowed || op.Checkpoint != from {
 			return ErrSiteConflict
 		}
-		jobDriven, err := freshInstallJobDriven(ctx, tx, op)
+		jobDriven, err := operationExpiryExempt(ctx, tx, op)
 		if err != nil {
 			return err
+		}
+		if op.Kind == SiteUpdate && from == "prepared" && to == "verified" && !jobDriven {
+			if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM phase4_operation_children WHERE job_id=? AND child_kind='maintenance_on' AND bracket_engaged=1) AND EXISTS(SELECT 1 FROM phase4_operation_children WHERE job_id=? AND child_kind='maintenance_off' AND status='committed')`, jid, jid).Scan(&jobDriven); err != nil {
+				return err
+			}
 		}
 		if op.Checkpoint == "expired" || (s.clock.Now() >= op.Expires && !TeardownStarted(op) && !jobDriven) {
 			return ErrOperationExpired
@@ -655,7 +660,7 @@ func (s *Store) CompleteOperation(ctx context.Context, jid string, claim *JobCla
 			return nil
 		}
 		now := s.clock.Now()
-		jobDriven, err := freshInstallJobDriven(ctx, tx, op)
+		jobDriven, err := operationExpiryExempt(ctx, tx, op)
 		if err != nil {
 			return err
 		}

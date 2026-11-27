@@ -64,6 +64,9 @@ func (s *Server) prepareTLSRecovery(ctx context.Context) (*jobs.Job, error) {
 		return nil, err
 	}
 	if composite {
+		if j.State != "queued" && j.State != "running" && !(j.State == "failed" && j.Code == "interrupted") {
+			return nil, Errf("precondition_failed", "Invalid TLS recovery state")
+		}
 		return nil, nil
 	}
 	if j.State != "running" && !(j.State == "failed" && j.Code == "interrupted") {
@@ -85,6 +88,9 @@ func (s *Server) compositeTLSOwner(ctx context.Context, j jobs.Job) (bool, error
 	}
 	if err != nil {
 		return false, err
+	}
+	if op.Kind == store.SiteUpdate && (op.Checkpoint == "done" || op.Checkpoint == "expired") {
+		return false, Errf("precondition_failed", "Invalid composite TLS recovery state")
 	}
 	return op.Kind == store.SiteUpdate, nil
 }
