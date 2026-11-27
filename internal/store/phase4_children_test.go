@@ -113,3 +113,34 @@ func TestPHPChildAtomicMetadata(t *testing.T) {
 		t.Fatalf("parent: %+v %v", job, err)
 	}
 }
+
+func TestCompositeReservationIncludesSnapshots(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	sid := "01K8WMXZF57CGNZKX1FZ38DZMA"
+	version := "8.3"
+	if _, err = s.CreateSite(ctx, Site{ID: sid, Name: "demo", Type: "php", Docroot: "/srv/sites/demo/public", PHPVersion: &version}, Domain{ID: "01K8WMXZF57CGNZKX1FZ38DZMB", FQDN: "demo.example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.SetSiteStatus(ctx, sid, "active"); err != nil {
+		t.Fatal(err)
+	}
+	maintenance := true
+	v := &CompositeSiteUpdate{SiteID: sid, PHPVersion: &version, Maintenance: &maintenance}
+	j := Job{ID: "01K8WMXZF57CGNZKX1FZ38DZMC", Verb: "site.update", ObjectKey: "site:" + sid, CreatedBy: "local-root", Role: "owner", Args: []byte(`{}`), State: "queued"}
+	if _, err = s.PrepareOperation(ctx, j, JobClaim{}, OperationRequest{Kind: SiteUpdate, SiteID: sid, SiteUpdate: v}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	op, err := s.LoadOperation(ctx, j.ID)
+	if err != nil || op.Kind != SiteUpdate || op.Identity.SiteUpdate == nil {
+		t.Fatalf("parent: %+v %v", op, err)
+	}
+	children, err := s.OperationChildren(ctx, j.ID)
+	if err != nil || len(children) != 2 || children[0].Kind != "php_change" || children[0].Identity.PHP == nil || children[1].Kind != "maintenance_off" {
+		t.Fatalf("children: %+v %v", children, err)
+	}
+}

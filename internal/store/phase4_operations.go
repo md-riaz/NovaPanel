@@ -23,6 +23,7 @@ const (
 	DatabaseDelete     OperationKind = "database_delete"
 	DBUserDelete       OperationKind = "dbuser_delete"
 	PHPSet             OperationKind = "php_set"
+	SiteUpdate         OperationKind = "site_update"
 	OperationTTLMillis int64         = 86400000
 )
 
@@ -35,6 +36,7 @@ type OperationRequest struct {
 	PurgeFiles, PurgeDatabases bool
 	WordPress                  *WordPressReservation
 	PHP                        *php.SetRequest
+	SiteUpdate                 *CompositeSiteUpdate
 }
 type OperationDatabase struct {
 	Database OperationDatabaseRecord
@@ -55,6 +57,7 @@ type OperationIdentity struct {
 	DownloadStarted            bool                  `json:",omitempty"`
 	WordPress                  *WordPressReservation `json:",omitempty"`
 	PHP                        *PHPOperationIdentity `json:",omitempty"`
+	SiteUpdate                 *CompositeSiteUpdate  `json:",omitempty"`
 }
 type Operation struct {
 	JobID, Owner                   string
@@ -146,6 +149,12 @@ func validOperationIdentity(o Operation) bool {
 	if o.Kind == PHPSet {
 		return validPHPSetIdentity(o)
 	}
+	if o.Kind == SiteUpdate {
+		return validCompositeSiteUpdate(o)
+	}
+	if o.Identity.SiteUpdate != nil {
+		return false
+	}
 	if o.Identity.PHP != nil {
 		return false
 	}
@@ -197,6 +206,8 @@ func operationVerb(k OperationKind) string {
 		return "site.delete"
 	case PHPSet:
 		return "php.set"
+	case SiteUpdate:
+		return "site.update"
 	case DatabaseCreate:
 		return "database.create"
 	case DatabaseRotate:
@@ -219,6 +230,9 @@ func operationSecrets(k OperationKind) bool {
 func (s *Store) PrepareOperation(ctx context.Context, j Job, c JobClaim, r OperationRequest, nonce, ciphertext []byte) (op Operation, err error) {
 	if r.Kind == PHPSet {
 		return s.preparePHPSet(ctx, j, r, nonce, ciphertext)
+	}
+	if r.Kind == SiteUpdate {
+		return s.prepareCompositeSiteUpdate(ctx, j, r, nonce, ciphertext)
 	}
 	if r.Kind == WordPressInstall {
 		return s.prepareWordPress(ctx, j, c, r, nonce, ciphertext)
