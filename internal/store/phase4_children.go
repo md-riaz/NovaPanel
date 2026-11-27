@@ -191,7 +191,7 @@ func (s *Store) CompleteCompositeOperation(ctx context.Context, jobID string) er
 			Error   string `json:"typed_error,omitempty"`
 		}
 		var children []result
-		code, finalizer := "", false
+		code, finalizer, failed, finalizerSeen := "", false, false, false
 		for rows.Next() {
 			var c result
 			if err = rows.Scan(&c.Ordinal, &c.Kind, &c.Status, &c.Error); err != nil {
@@ -203,7 +203,15 @@ func (s *Store) CompleteCompositeOperation(ctx context.Context, jobID string) er
 				return ErrSitePrecondition
 			}
 			if c.Kind == "maintenance_off" {
+				if finalizerSeen {
+					rows.Close()
+					return ErrSitePrecondition
+				}
+				finalizerSeen = true
 				finalizer = c.Status == "committed"
+			}
+			if c.Status == "failed" {
+				failed = true
 			}
 			if c.Status == "failed" && c.Error != "not_attempted" && code == "" {
 				code = c.Error
@@ -215,7 +223,7 @@ func (s *Store) CompleteCompositeOperation(ctx context.Context, jobID string) er
 		if err != nil {
 			return err
 		}
-		if len(children) == 0 || !finalizer || children[len(children)-1].Kind != "maintenance_off" {
+		if len(children) == 0 || !finalizer || children[len(children)-1].Kind != "maintenance_off" || (failed && code == "") {
 			return ErrSitePrecondition
 		}
 		raw, err := json.Marshal(children)
