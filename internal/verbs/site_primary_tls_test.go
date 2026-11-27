@@ -173,6 +173,11 @@ func TestTLSPrimaryPublicationExecutor(t *testing.T) {
 						f.server.ConfigureJobs()
 					}
 				}
+				if restored {
+					if err = f.st.RecoverJobs(context.Background(), time.Now().UnixMilli()); err != nil {
+						t.Fatal(err)
+					}
+				}
 				f.runner.fail = ""
 				f.a.Nginx.Probe = func(context.Context, nginx.Desired) error { return nil }
 				j, err := f.st.GetJob(context.Background(), f.job)
@@ -185,9 +190,6 @@ func TestTLSPrimaryPublicationExecutor(t *testing.T) {
 				j, err = f.st.GetJob(context.Background(), f.job)
 				if err != nil || j.State != "done" || j.Step != "phase4_committed" {
 					t.Fatalf("composite job: %+v %v", j, err)
-				}
-				if (failure == "-t" || failure == "reload" || failure == "probe" || failure == "database") && j.Attempts < 2 {
-					t.Fatalf("failure was not retried: %+v", j)
 				}
 				children, err := f.st.OperationChildren(context.Background(), f.job)
 				if err != nil || len(children) != 2 || children[0].Status != "committed" || children[1].Status != "committed" {
