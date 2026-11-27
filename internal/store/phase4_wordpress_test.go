@@ -10,6 +10,44 @@ import (
 	"testing"
 )
 
+func TestPrepareFreshWordPress(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	m := wordpress.ApprovedArtifacts()
+	r := WordPressReservation{SiteID: "01K8WMXZF57CGNZKX1FZ38DZMA", DomainID: "01K8WMXZF57CGNZKX1FZ38DZMB", Input: wordpress.InstallInput{SitesRoot: "/scratch/sites", SiteName: "example", PrimaryDomain: "example.test", DatabaseID: "01K8WMXZF57CGNZKX1FZ38DZMQ", DatabaseUserID: "01K8WMXZF57CGNZKX1FZ38DZMR", Locale: "en_US", Administrator: wordpress.Administrator{Title: "Example", Username: "Admin", Email: "owner@example.test"}}, Evidence: wordpress.ArtifactEvidence{CLISHA256: m.CLI.SHA256, WordPressSHA256: m.WordPress.SHA256, ChecksumsSHA256: m.ChecksumsSHA256, SignatureVerified: true, SignerFingerprint: m.CLISignerFingerprint}}
+	version := "8.3"
+	site := Site{ID: r.SiteID, Name: r.Input.SiteName, Type: "wordpress", Docroot: "/scratch/sites/example/public", PHPVersion: &version}
+	domain := Domain{ID: r.DomainID, FQDN: r.Input.PrimaryDomain}
+	j := Job{ID: "job", Verb: "site.create", ObjectKey: "site:" + r.SiteID, CreatedBy: "session", Role: "owner", State: "queued", Args: []byte(`{}`)}
+	claim := JobClaim{JobID: j.ID, ClaimHash: "hash"}
+	_, err = s.PrepareFreshWordPress(ctx, j, claim, r, site, domain, PHPLimits{}, func(WordPressReservation) ([]byte, []byte, error) { return nil, nil, errors.New("seal failed") })
+	if err == nil || phase4Count(t, s.db.raw, `SELECT count(*) FROM sites`) != 0 || phase4Count(t, s.db.raw, `SELECT count(*) FROM jobs`) != 0 {
+		t.Fatal("failed sealing did not roll back admission")
+	}
+	op, err := s.PrepareFreshWordPress(ctx, j, claim, r, site, domain, PHPLimits{}, func(got WordPressReservation) ([]byte, []byte, error) {
+		if got.Input.UID != 2000000 || got.Input.GID != 2000000 {
+			t.Fatalf("identity: %+v", got.Input)
+		}
+		return []byte{1}, []byte{2}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.CheckOperation(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	if op.Identity.WordPress.Input.UID != 2000000 {
+		t.Fatal("UID not bound")
+	}
+	if phase4Count(t, s.db.raw, `SELECT count(*) FROM sites s JOIN site_account_provenance p ON p.site_id=s.id JOIN jobs j ON j.id=p.allocating_job WHERE s.status='creating' AND s.lifetime_state='provisioning' AND j.verb='site.create'`) != 1 {
+		t.Fatal("reservation missing")
+	}
+}
+
 func TestWordPressReservationBeforeResourceRows(t *testing.T) {
 	ctx := context.Background()
 	s, e := Open(filepath.Join(t.TempDir(), "panel.db"))

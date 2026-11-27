@@ -18,6 +18,54 @@ type WordPressReservation struct {
 	Evidence wordpress.ArtifactEvidence
 }
 
+// PrepareFreshWordPress creates the job before its account provenance, then
+// seals the allocated identity and credentials before committing the reservation.
+func (s *Store) PrepareFreshWordPress(ctx context.Context, j Job, c JobClaim, r WordPressReservation, site Site, domain Domain, limits PHPLimits, seal func(WordPressReservation) ([]byte, []byte, error)) (op Operation, err error) {
+	err = s.Tx(ctx, func(tx *sql.Tx) error {
+		if j.Verb != "site.create" || j.CreatedBy == "" || j.State != "queued" || c.JobID != j.ID || c.ClaimHash == "" || seal == nil || r.SiteID != site.ID || r.DomainID != domain.ID || r.Input.SiteName != site.Name || r.Input.PrimaryDomain != domain.FQDN {
+			return ErrSiteInvalid
+		}
+		if err := insertJob(ctx, tx, j); err != nil {
+			return err
+		}
+		uid, err := s.ReserveWordPressSiteTx(ctx, tx, site, domain, j.ID, limits)
+		if err != nil {
+			return err
+		}
+		r.Input.UID, r.Input.GID = uid, uid
+		ident := OperationIdentity{Version: 1, Database: OperationDatabaseRecord{ID: r.Input.DatabaseID, SiteID: r.SiteID, Name: "d_" + strings.ToLower(r.Input.DatabaseID), Engine: "mariadb", PrimaryUserID: r.Input.DatabaseUserID}, Accounts: []OperationAccount{{ID: r.Input.DatabaseUserID, Username: "u_" + strings.ToLower(r.Input.DatabaseUserID), Host: "127.0.0.1"}}, WordPress: &r}
+		op = Operation{JobID: j.ID, Owner: j.CreatedBy, Kind: WordPressInstall, SiteID: r.SiteID, DatabaseID: r.Input.DatabaseID, Checkpoint: "prepared", Identity: ident}
+		if !validWordPressIdentity(op) {
+			return ErrSiteInvalid
+		}
+		if err = operationBlocked(ctx, tx, op); err != nil {
+			return err
+		}
+		op.Nonce, op.Ciphertext, err = seal(r)
+		if err != nil {
+			return err
+		}
+		if len(op.Nonce) == 0 || len(op.Ciphertext) == 0 {
+			return ErrSiteInvalid
+		}
+		c.Nonce, c.Ciphertext, c.Expires = nil, nil, 0
+		if err = insertClaim(ctx, tx, c); err != nil {
+			return err
+		}
+		op.Updated = s.clock.Now()
+		op.Expires = op.Updated + OperationTTLMillis
+		raw, err := json.Marshal(ident)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO phase4_operations(job_id,kind,site_id,db_id,checkpoint,identities_json,nonce,ciphertext,expires,updated) VALUES(?,?,?,?,'prepared',?,?,?,?,?)`, j.ID, WordPressInstall, r.SiteID, op.DatabaseID, string(raw), op.Nonce, op.Ciphertext, op.Expires, op.Updated); err != nil {
+			return err
+		}
+		return checkWordPress(ctx, tx, op)
+	})
+	return
+}
+
 func validWordPressIdentity(op Operation) bool {
 	id := op.Identity
 	w := id.WordPress

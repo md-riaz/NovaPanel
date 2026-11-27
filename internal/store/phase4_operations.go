@@ -129,7 +129,7 @@ func scanOperation(row scanner) (o Operation, err error) {
 		return
 	}
 	var extra any
-	if d.Decode(&extra) != io.EOF || verb != operationVerb(o.Kind) || !validOperationIdentity(o) {
+	if d.Decode(&extra) != io.EOF || (verb != operationVerb(o.Kind) && !(o.Kind == WordPressInstall && verb == "site.create")) || !validOperationIdentity(o) {
 		err = errors.New("operation identity corrupt")
 	}
 	return
