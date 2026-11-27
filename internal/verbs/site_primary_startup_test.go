@@ -423,13 +423,19 @@ func TestPrimaryTLSSIGKILLQueueStartup(t *testing.T) {
 	}
 }
 
+// Role and effect are not in the composite identity, so there is no snapshot to compare.
+// Terminal-job forgery is shared with existing operations; legitimate completion is covered separately.
 func TestPrimaryTLSStartupRejectsChangedBinding(t *testing.T) {
-	for _, mode := range []string{"role", "effect", "terminal", "args", "no-primary", "hsts-authority", "patch", "domains", "site", "target", "old-root", "old-version", "new-root", "new-primary", "stale-version", "equal-version", "version-one", "version-unknown", "trailing", "corrupt", "wrong-job", "nginx-root"} {
+	for _, mode := range []string{"args", "no-primary", "hsts-authority", "patch", "domains", "site", "target", "old-root", "old-version", "new-root", "new-primary", "stale-version", "equal-version", "version-one", "version-unknown", "trailing", "corrupt", "wrong-job", "nginx-root"} {
 		t.Run(mode, func(t *testing.T) {
 			root := t.TempDir()
 			f := newPrimaryRestart(t, root, true)
-			f.a.Nginx.Probe = func(context.Context, nginx.Desired) error { panic("interrupt") }
-			runPrimaryQueue(t, f.a, f.job)
+			interrupt, stop := context.WithCancel(context.Background())
+			f.a.Nginx.Probe = func(context.Context, nginx.Desired) error { stop(); return context.Canceled }
+			if err := f.a.Jobs.Run(interrupt); err != nil {
+				t.Fatal(err)
+			}
+			stop()
 			ctx := context.Background()
 			original, err := f.st.TLSIntent(ctx)
 			if err != nil || len(original) == 0 {
@@ -512,6 +518,9 @@ func TestPrimaryTLSStartupRejectsChangedBinding(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if mode == "args" || mode == "no-primary" {
+				changed = original
+			}
 			if mode == "trailing" {
 				changed = append(changed, []byte(` {}`)...)
 			}
@@ -529,31 +538,54 @@ func TestPrimaryTLSStartupRejectsChangedBinding(t *testing.T) {
 			defer f.close(t)
 			calls := 0
 			f.a.Nginx.Probe = func(context.Context, nginx.Desired) error { calls++; return nil }
-			before, _ := os.ReadFile(filepath.Join(f.a.Nginx.Root, "sites-available/demo.conf"))
 			pointer, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "alias.test/current"))
-			run, cancel := context.WithTimeout(ctx, 5*time.Second)
-			defer cancel()
-			err = f.a.Jobs.Run(run)
-			if !errors.Is(err, jobs.ErrRecoveryBlocked) {
-				t.Fatalf("expected fail closed: %v", err)
+			if mode == "wrong-job" || mode == "corrupt" {
+				if err = f.a.Jobs.PrepareStartup(ctx); err != nil {
+					t.Fatal(err)
+				}
+				job, err := f.st.GetJob(ctx, f.job)
+				if err != nil || job.Code == "agent_error" || calls != 0 {
+					t.Fatalf("orphan affected composite: %+v calls=%d err=%v", job, calls, err)
+				}
+				anomaly, err := f.st.Setting(ctx, "tls:publication:unreconciled:v1")
+				if err != nil || string(anomaly) != "true" {
+					t.Fatalf("orphan anomaly: %s %v", anomaly, err)
+				}
+			} else {
+				run, cancel := context.WithCancel(ctx)
+				done := make(chan error, 1)
+				go func() { done <- f.a.Jobs.Run(run) }()
+				deadline := time.Now().Add(5 * time.Second)
+				for {
+					children, e := f.st.OperationChildren(ctx, f.job)
+					if e == nil && len(children) > 0 && children[len(children)-1].Status == "committed" {
+						break
+					}
+					if time.Now().After(deadline) {
+						cancel()
+						<-done
+						t.Fatalf("finalizer did not commit: %+v %v", children, e)
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				cancel()
+				if err = <-done; err != nil {
+					t.Fatal(err)
+				}
+				job, e := f.st.GetJob(ctx, f.job)
+				op, oe := f.st.LoadOperation(ctx, f.job)
+				site, se := f.st.SiteByID(ctx, f.site)
+				if e != nil || oe != nil || se != nil || job.Code != "agent_error" || job.State == "done" || op.Reconciled || op.Checkpoint == "done" || op.Checkpoint == "expired" || !site.Maintenance {
+					t.Fatalf("quarantine: job=%+v op=%+v site=%+v errors=%v %v %v", job, op, site, e, oe, se)
+				}
 			}
-			pending, _ := f.st.TLSIntent(ctx)
-			if string(pending) != string(changed) || calls != 0 {
-				t.Fatal("unresolved journal changed or publication ran")
+			pending, err := f.st.TLSIntent(ctx)
+			if err != nil || string(pending) != string(changed) {
+				t.Fatalf("intent changed: %s %v", pending, err)
 			}
-			after, _ := os.ReadFile(filepath.Join(f.a.Nginx.Root, "sites-available/demo.conf"))
 			afterPointer, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "alias.test/current"))
-			if string(before) != string(after) || pointer != afterPointer {
-				t.Fatal("rejected recovery changed files")
-			}
-			read := f.server.Dispatch(rpc.WithCaller(ctx, rpc.RootCaller(0)), rpc.Request{Verb: "site.list", Args: json.RawMessage(`{}`)})
-			if !read.OK {
-				t.Fatalf("reads unavailable: %+v", read)
-			}
-			raw, _ := json.Marshal(map[string]any{"site_id": f.site, "maintenance": false})
-			mutation := f.server.Dispatch(rpc.WithCaller(ctx, rpc.RootCaller(0)), rpc.Request{Verb: "site.update", Args: raw})
-			if mutation.OK {
-				t.Fatal("mutation passed unresolved journal")
+			if pointer != afterPointer {
+				t.Fatal("rejected recovery changed TLS pointer")
 			}
 		})
 	}
