@@ -169,8 +169,11 @@ func (s *Store) CommitPHPChild(ctx context.Context, jobID string, ordinal int) e
 }
 
 func (s *Store) EngageOperationBracket(ctx context.Context, jobID string) error {
-	r, err := s.db.ExecContext(ctx, `UPDATE phase4_operation_children SET bracket_engaged=1,updated=? WHERE job_id=? AND child_kind='maintenance_on' AND checkpoint='prepared' AND status='pending' AND EXISTS(SELECT 1 FROM phase4_operation_children c WHERE c.job_id=? AND c.child_kind='maintenance_off' AND c.status='pending')`, s.clock.Now(), jobID, jobID)
-	return affected(r, err)
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		now := s.clock.Now()
+		r, err := tx.ExecContext(ctx, `UPDATE phase4_operation_children SET bracket_engaged=1,updated=? WHERE job_id=? AND child_kind='maintenance_on' AND checkpoint='prepared' AND status='pending' AND EXISTS(SELECT 1 FROM phase4_operation_children c WHERE c.job_id=? AND c.child_kind='maintenance_off' AND c.status='pending') AND EXISTS(SELECT 1 FROM phase4_operations o JOIN jobs j ON j.id=o.job_id WHERE o.job_id=? AND o.kind='site_update' AND o.checkpoint='prepared' AND j.state='running' AND (o.expires>? OR phase4_operation_children.bracket_engaged=1))`, now, jobID, jobID, jobID, now)
+		return affected(r, err)
+	})
 }
 
 // CompleteCompositeOperation atomically publishes the aggregate and terminal parent.

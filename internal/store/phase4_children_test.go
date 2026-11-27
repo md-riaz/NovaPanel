@@ -150,3 +150,30 @@ func TestCompositeReservationIncludesSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestEngagedBracketPreventsExpiryBeforeEffectCommit(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	phase4Job(t, s.db.raw, "bracket", "running")
+	phase4Exec(t, s.db.raw, `INSERT INTO phase4_operations(job_id,kind,checkpoint,identities_json,expires,updated) VALUES('bracket','site_update','prepared','{}',9999999999999,1)`)
+	if err = s.PrepareOperationChildren(ctx, "bracket", []OperationChild{{Ordinal: 0, Kind: "maintenance_on"}, {Ordinal: 1, Kind: "maintenance_off"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.EngageOperationBracket(ctx, "bracket"); err != nil {
+		t.Fatal(err)
+	}
+	phase4Exec(t, s.db.raw, `UPDATE phase4_operations SET expires=1 WHERE job_id='bracket'`)
+	if n, err := s.ExpireOperations(ctx); err != nil || n != 0 {
+		t.Fatalf("exempt: %d %v", n, err)
+	}
+	if err = s.CommitOperationChild(ctx, "bracket", 1, "verified", "committed", ""); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.ExpireOperations(ctx); err != nil || n != 1 {
+		t.Fatalf("restored: %d %v", n, err)
+	}
+}
