@@ -89,7 +89,7 @@ func (q *Queue) InstallFreshWordPress(ctx context.Context, jobID string, identit
 			return err
 		}
 		manifest := wordpress.ApprovedArtifacts()
-		archive := filepath.Join(filepath.Dir(l.plan.Dir), "cache", "core", "wordpress-"+manifest.WordPress.Version+"-"+manifest.Locale+".tar.gz")
+		archive := filepath.Join(filepath.Dir(identity.Docroot), ".novapanel-wpcli", "cache", "core", "wordpress-"+manifest.WordPress.Version+"-"+manifest.Locale+".tar.gz")
 		archivePresent := false
 		if _, err := os.Lstat(archive); err == nil {
 			if err := wordpress.VerifyDownloadedArchive(archive, identity.UID); err != nil {

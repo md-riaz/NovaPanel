@@ -240,6 +240,9 @@ func (q *Queue) WithFreshWordPressLifetime(ctx context.Context, jid string, iden
 		if err := php.VerifyUser(ctx, runner.Real{}, root, identity.Name, identity.SiteID); err != nil {
 			return err
 		}
+		if err := wordpress.EnsureToolWorkspace(root, identity.Name, identity.UID, identity.GID); err != nil {
+			return err
+		}
 		_, err := platform.NewSiteRunner(ctx, runner.Real{}, root, identity.Name, identity.UID, identity.GID)
 		return err
 	}, func(siteID string) (installLifetimeDomain, error) { return platform.CreateInstallDomain(siteID) })

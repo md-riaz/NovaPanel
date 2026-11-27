@@ -2,7 +2,7 @@ internal/wordpress/offline/testdata/* -text
 tools/phase4wpoffline/php.ini -text
 tools/phase4wpoffline/bootstrap.php -text
 tools/phase4wpoffline/transport.php -text
-packaging/rootfs/etc/novapanel/wordpress/php.ini -text
-packaging/rootfs/usr/local/lib/novapanel/wp-cli-2.12.0.phar -text
-packaging/rootfs/usr/local/lib/novapanel/wp-cli-2.12.0.phar.asc -text
-packaging/rootfs/usr/local/lib/novapanel/wp-cli-release.gpg -text
+packaging/rootfs/usr/lib/novapanel/wpcli/php.ini -text
+packaging/rootfs/usr/lib/novapanel/wpcli/wp-cli-2.12.0.phar -text
+packaging/rootfs/usr/lib/novapanel/wpcli/wp-cli-2.12.0.phar.asc -text
+packaging/rootfs/usr/lib/novapanel/wpcli/wp-cli-release.gpg -text

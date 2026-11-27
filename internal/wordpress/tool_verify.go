@@ -7,23 +7,56 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
+	"golang.org/x/sys/unix"
 	runner "novapanel/internal/exec"
 )
 
 const (
-	ToolPath          = "/usr/local/lib/novapanel/wp-cli-2.12.0.phar"
+	ToolPath          = "/usr/lib/novapanel/wpcli/wp-cli-2.12.0.phar"
 	ToolSignaturePath = ToolPath + ".asc"
-	ToolKeyringPath   = "/usr/local/lib/novapanel/wp-cli-release.gpg"
-	ToolINIPath       = "/etc/novapanel/wordpress/php.ini"
+	ToolKeyringPath   = "/usr/lib/novapanel/wpcli/wp-cli-release.gpg"
+	ToolINIPath       = "/usr/lib/novapanel/wpcli/php.ini"
 	toolINIHash       = "85fbf24d39ff1fc334b5ad17272c624c3b1d085b8169007b15ae31d33b7139bc"
 	toolKeyringHash   = "fd1efb9e77bc9a2b6e207e0e731f5360d2bb0d83c8065383875ea60919c6cbf6"
 )
 
 // VerifyTool verifies held root-owned tool bytes, reviewed ini and release signature.
 func VerifyTool(ctx context.Context, r runner.Runner) (ArtifactEvidence, error) {
+	if err := verifyToolDirectories(); err != nil {
+		return ArtifactEvidence{}, err
+	}
 	return verifyTool(ctx, r, [4]string{ToolPath, ToolSignaturePath, ToolKeyringPath, ToolINIPath}, 0, false)
+}
+
+func verifyToolDirectories() error {
+	dir := filepath.Dir(ToolPath)
+	for p := dir; ; p = filepath.Dir(p) {
+		var st unix.Stat_t
+		if unix.Lstat(p, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFDIR || st.Uid != 0 || st.Mode&0022 != 0 || st.Mode&0001 == 0 {
+			return errStaged
+		}
+		for _, name := range []string{"wp-cli.yml", "wp-cli.local.yml"} {
+			if _, err := os.Lstat(filepath.Join(p, name)); !os.IsNotExist(err) {
+				return errStaged
+			}
+		}
+		if p == "/" {
+			break
+		}
+	}
+	var st unix.Stat_t
+	scan := filepath.Join(dir, "empty-ini")
+	if unix.Lstat(scan, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFDIR || st.Uid != 0 || st.Mode&0022 != 0 || st.Mode&0005 != 0005 {
+		return errStaged
+	}
+	entries, err := os.ReadDir(scan)
+	if err != nil || len(entries) != 0 {
+		return errStaged
+	}
+	return nil
 }
 
 func verifyTool(ctx context.Context, r runner.Runner, paths [4]string, owner uint32, fixture bool) (ArtifactEvidence, error) {

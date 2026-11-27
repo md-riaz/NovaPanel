@@ -20,6 +20,9 @@ the group on the agent socket (F1).
 d /run/novapanel      0755 root root      -
 d /run/php/novapanel  0755 root root      -
 d /var/lib/novapanel  0700 root root      -
+d /usr/lib/novapanel  0755 root root      -
+d /usr/lib/novapanel/wpcli 0755 root root -
+d /usr/lib/novapanel/wpcli/empty-ini 0755 root root -
 d /var/log/novapanel  0750 root novapanel -
 d /var/www/acme       0755 root root      -     # world-traversable ACME webroot (B-D8)
 ```

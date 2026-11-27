@@ -15,7 +15,7 @@ func TestVerifyPackagedTool(t *testing.T) {
 	}
 	root := filepath.Join("..", "..", "packaging", "rootfs")
 	dir := t.TempDir()
-	sources := []string{"usr/local/lib/novapanel/wp-cli-2.12.0.phar", "usr/local/lib/novapanel/wp-cli-2.12.0.phar.asc", "usr/local/lib/novapanel/wp-cli-release.gpg", "etc/novapanel/wordpress/php.ini"}
+	sources := []string{"usr/lib/novapanel/wpcli/wp-cli-2.12.0.phar", "usr/lib/novapanel/wpcli/wp-cli-2.12.0.phar.asc", "usr/lib/novapanel/wpcli/wp-cli-release.gpg", "usr/lib/novapanel/wpcli/php.ini"}
 	var paths [4]string
 	for i, source := range sources {
 		b, err := os.ReadFile(filepath.Join(root, source))

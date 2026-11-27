@@ -63,12 +63,12 @@ func BuildInstall(in InstallInput, evidence ArtifactEvidence) (Plan, error) {
 		return Plan{}, err
 	}
 	docroot := filepath.Join(in.SitesRoot, in.SiteName, "public")
-	base := filepath.Join("/var/lib/novapanel/wordpress", in.SiteName)
-	p := Plan{Docroot: docroot, Dir: base + "/bootstrap", UID: in.UID, GID: in.GID, Groups: []uint32{}, Env: []string{
-		"PATH=/usr/bin:/bin", "LANG=C.UTF-8", "HOME=" + base + "/home", "WP_CLI_CONFIG_PATH=/dev/null", "WP_CLI_CACHE_DIR=" + base + "/cache", "WP_CLI_PACKAGES_DIR=" + base + "/packages", "PHP_INI_SCAN_DIR=" + base + "/empty-ini",
+	base := filepath.Join(in.SitesRoot, in.SiteName, ".novapanel-wpcli")
+	p := Plan{Docroot: docroot, Dir: "/usr/lib/novapanel/wpcli", UID: in.UID, GID: in.GID, Groups: []uint32{}, Env: []string{
+		"PATH=/usr/bin:/bin", "LANG=C.UTF-8", "HOME=" + base + "/home", "WP_CLI_CONFIG_PATH=/dev/null", "WP_CLI_CACHE_DIR=" + base + "/cache", "WP_CLI_PACKAGES_DIR=" + base + "/packages", "PHP_INI_SCAN_DIR=/usr/lib/novapanel/wpcli/empty-ini",
 	}}
 	command := func(kind StepKind, stdin StdinRequirement, args ...string) Step {
-		argv := []string{"-c", "/etc/novapanel/wordpress/php.ini", "/usr/local/lib/novapanel/wp-cli-2.12.0.phar"}
+		argv := []string{"-c", ToolINIPath, ToolPath}
 		argv = append(argv, args...)
 		argv = append(argv, "--path="+docroot, "--skip-plugins", "--skip-themes", "--skip-packages")
 		return Step{Kind: kind, Program: "/usr/bin/php8.3", Args: argv, Stdin: stdin}
