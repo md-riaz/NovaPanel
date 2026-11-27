@@ -11,6 +11,19 @@ import (
 	"novapanel/internal/wordpress"
 )
 
+type rollbackIntentFailStore struct {
+	*store.Store
+	fail bool
+}
+
+func (s *rollbackIntentFailStore) BeginFreshWordPressRollback(ctx context.Context, jid, code string) error {
+	if s.fail {
+		s.fail = false
+		return store.ErrSitePrecondition
+	}
+	return s.Store.BeginFreshWordPressRollback(ctx, jid, code)
+}
+
 func TestFreshWordPressWorkerRollbackAndNameReuse(t *testing.T) {
 	q, s, _, ctx := fixture(t)
 	if err := q.PrepareOperations(ctx); err != nil {
@@ -29,22 +42,23 @@ func TestFreshWordPressWorkerRollbackAndNameReuse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	q.store = &rollbackIntentFailStore{Store: s, fail: true}
 	attempts := 0
 	q.SetRunner(func(run context.Context, j *Job) error {
 		if j.ID != en.Job.ID {
 			return nil
 		}
 		attempts++
-		if attempts == 1 {
+		if attempts <= 2 {
 			return errors.New("checksum mismatch")
 		}
-		if attempts == 2 {
+		if attempts == 3 {
 			if j.Step != store.FreshWordPressRollbackStep {
 				t.Fatalf("missing rollback intent: %+v", j)
 			}
 			return errors.Join(ErrRetry, errors.New("injected teardown failure"))
 		}
-		if attempts == 3 {
+		if attempts == 4 {
 			if err := s.MarkFreshWordPressRollbackCleaned(run, j.ID); err != nil {
 				return err
 			}
@@ -60,6 +74,24 @@ func TestFreshWordPressWorkerRollbackAndNameReuse(t *testing.T) {
 		t.Fatal(err)
 	}
 	j, err := s.GetJob(ctx, en.Job.ID)
+	if err != nil || j.State != "queued" || j.Step != "" {
+		t.Fatalf("intent refusal stopped worker: %+v %v", j, err)
+	}
+	otherBefore, err := q.Enqueue(ctx, "reconcile", map[string]string{}, "other-system")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = q.execute(ctx, otherBefore.Job); err != nil {
+		t.Fatal(err)
+	}
+	otherBeforeJob, err := s.GetJob(ctx, otherBefore.Job.ID)
+	if err != nil || otherBeforeJob.State != "done" {
+		t.Fatalf("intent refusal blocked unrelated work: %+v %v", otherBeforeJob, err)
+	}
+	if err = q.execute(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	j, err = s.GetJob(ctx, en.Job.ID)
 	if err != nil || j.State != "queued" || j.Step != store.FreshWordPressRollbackStep {
 		t.Fatalf("rollback not queued: %+v %v", j, err)
 	}

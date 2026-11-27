@@ -650,11 +650,9 @@ func (q *Queue) beginFreshRollback(ctx context.Context, j Job, code string) erro
 	s, ok := q.store.(interface {
 		BeginFreshWordPressRollback(context.Context, string, string) error
 	})
-	if !ok {
-		return ErrRecoveryBlocked
-	}
-	if err := s.BeginFreshWordPressRollback(ctx, j.ID, code); err != nil {
-		return err
+	if ok {
+		// A site-local refusal must not stop the shared worker or admit teardown.
+		_ = s.BeginFreshWordPressRollback(ctx, j.ID, code)
 	}
 	return q.requeueWordPress(ctx, j.ID)
 }

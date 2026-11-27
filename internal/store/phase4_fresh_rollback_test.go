@@ -28,6 +28,11 @@ func TestFreshWordPressRollbackIntentSurvivesRecovery(t *testing.T) {
 	if _, err = s.StartJob(ctx, j.ID, 1); err != nil {
 		t.Fatal(err)
 	}
+	phase4Exec(t, s.db.raw, `UPDATE sites SET docroot='/other/public' WHERE id=?`, r.SiteID)
+	if err = s.BeginFreshWordPressRollback(ctx, j.ID, "agent_error"); err == nil {
+		t.Fatal("accepted rebound docroot")
+	}
+	phase4Exec(t, s.db.raw, `UPDATE sites SET docroot=? WHERE id=?`, site.Docroot, r.SiteID)
 	if err = s.BeginFreshWordPressRollback(ctx, j.ID, "agent_error"); err != nil {
 		t.Fatal(err)
 	}

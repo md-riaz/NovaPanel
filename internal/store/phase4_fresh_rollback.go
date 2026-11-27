@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 )
 
 const FreshWordPressRollbackStep = "wordpress_rollback"
@@ -22,7 +23,7 @@ func (s *Store) BeginFreshWordPressRollback(ctx context.Context, jid, code strin
 			return ErrSitePrecondition
 		}
 		w := op.Identity.WordPress
-		result, err := tx.ExecContext(ctx, `UPDATE sites SET status='failed' WHERE id=? AND name=? AND type='wordpress' AND lifetime_state='provisioning' AND status IN ('creating','failed') AND EXISTS(SELECT 1 FROM site_account_provenance p WHERE p.site_id=sites.id AND p.account_name=sites.name AND p.allocating_job=? AND p.uid=? AND p.gid=?)`, op.SiteID, w.Input.SiteName, jid, w.Input.UID, w.Input.GID)
+		result, err := tx.ExecContext(ctx, `UPDATE sites SET status='failed' WHERE id=? AND name=? AND docroot=? AND type='wordpress' AND lifetime_state='provisioning' AND status IN ('creating','failed') AND EXISTS(SELECT 1 FROM site_account_provenance p WHERE p.site_id=sites.id AND p.account_name=sites.name AND p.allocating_job=? AND p.uid=? AND p.gid=?)`, op.SiteID, w.Input.SiteName, filepath.Join(w.Input.SitesRoot, w.Input.SiteName, "public"), jid, w.Input.UID, w.Input.GID)
 		if err = affected(result, err); err != nil {
 			return err
 		}
@@ -45,7 +46,7 @@ func (s *Store) MarkFreshWordPressRollbackCleaned(ctx context.Context, jid strin
 		}
 		w := op.Identity.WordPress
 		var n int
-		err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sites s JOIN site_account_provenance p ON p.site_id=s.id WHERE s.id=? AND s.name=? AND s.status='failed' AND s.lifetime_state='provisioning' AND p.allocating_job=? AND p.uid=? AND p.gid=?`, op.SiteID, w.Input.SiteName, jid, w.Input.UID, w.Input.GID).Scan(&n)
+		err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sites s JOIN site_account_provenance p ON p.site_id=s.id WHERE s.id=? AND s.name=? AND s.docroot=? AND s.status='failed' AND s.lifetime_state='provisioning' AND p.allocating_job=? AND p.uid=? AND p.gid=?`, op.SiteID, w.Input.SiteName, filepath.Join(w.Input.SitesRoot, w.Input.SiteName, "public"), jid, w.Input.UID, w.Input.GID).Scan(&n)
 		if err != nil {
 			return err
 		}
@@ -69,7 +70,7 @@ func (s *Store) CompleteFreshWordPressRollback(ctx context.Context, jid string) 
 		}
 		w := op.Identity.WordPress
 		var n int
-		err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sites s JOIN site_account_provenance p ON p.site_id=s.id JOIN jobs j ON j.id=p.allocating_job WHERE s.id=? AND s.name=? AND s.status='failed' AND s.lifetime_state='provisioning' AND p.allocating_job=? AND p.uid=? AND p.gid=? AND j.state='running' AND j.step=?`, op.SiteID, w.Input.SiteName, jid, w.Input.UID, w.Input.GID, FreshWordPressRollbackCleanedStep).Scan(&n)
+		err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sites s JOIN site_account_provenance p ON p.site_id=s.id JOIN jobs j ON j.id=p.allocating_job WHERE s.id=? AND s.name=? AND s.docroot=? AND s.status='failed' AND s.lifetime_state='provisioning' AND p.allocating_job=? AND p.uid=? AND p.gid=? AND j.state='running' AND j.step=?`, op.SiteID, w.Input.SiteName, filepath.Join(w.Input.SitesRoot, w.Input.SiteName, "public"), jid, w.Input.UID, w.Input.GID, FreshWordPressRollbackCleanedStep).Scan(&n)
 		if err != nil {
 			return err
 		}

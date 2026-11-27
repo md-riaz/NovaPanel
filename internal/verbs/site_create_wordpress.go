@@ -32,7 +32,8 @@ func freshWordPressSiteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.J
 	if err != nil {
 		return err
 	}
-	if identity.AllocatingJob != j.ID || identity.UID != identity.GID || identity.UID < 2000000 || identity.UID > 2999999 {
+	in := op.Identity.WordPress.Input
+	if identity.AllocatingJob != j.ID || identity.Name != in.SiteName || in.SitesRoot != a.Cfg.SitesRoot || identity.Docroot != filepath.Join(in.SitesRoot, in.SiteName, "public") || identity.UID != in.UID || identity.GID != in.GID || identity.UID != identity.GID || identity.UID < 2000000 || identity.UID > 2999999 {
 		return rpc.Errf("precondition_failed", "Reserved site identity changed")
 	}
 	if j.Step == store.FreshWordPressRollbackStep || j.Step == store.FreshWordPressRollbackCleanedStep {

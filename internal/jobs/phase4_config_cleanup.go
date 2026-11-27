@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"errors"
+	"path/filepath"
 
 	"novapanel/internal/secret"
 	"novapanel/internal/store"
@@ -138,7 +139,7 @@ func (q *Queue) CleanupFreshWordPressRollbackConfig(ctx context.Context, jid str
 		return ErrRecoveryBlocked
 	}
 	w := op.Identity.WordPress
-	if identity.Name != w.Input.SiteName || identity.UID != w.Input.UID || identity.GID != w.Input.GID {
+	if identity.Name != w.Input.SiteName || identity.Docroot != filepath.Join(w.Input.SitesRoot, w.Input.SiteName, "public") || identity.UID != w.Input.UID || identity.GID != w.Input.GID {
 		return ErrRecoveryBlocked
 	}
 	q.mu.Lock()
