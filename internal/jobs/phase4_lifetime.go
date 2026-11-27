@@ -185,6 +185,9 @@ func withInstallLifetime(ctx context.Context, l *WordPressLifetime, operation fu
 			return
 		}
 		err = callServingRelease(l, release)
+		if err != nil {
+			err = errors.Join(ErrRetry, err)
+		}
 		l.mu.Lock()
 		released := l.released
 		l.successful = false
@@ -227,7 +230,10 @@ func replayActivatedLifetime(ctx context.Context, domain installLifetimeDomain, 
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	return callServingRelease(&WordPressLifetime{identity: identity, closed: true, released: true}, release)
+	if err = callServingRelease(&WordPressLifetime{identity: identity, closed: true, released: true}, release); err != nil {
+		return errors.Join(ErrRetry, err)
+	}
+	return nil
 }
 
 // WithFreshWordPressLifetime holds the existing operation locks and install

@@ -155,8 +155,8 @@ func TestFreshLifetimeSQLiteActivationReplay(t *testing.T) {
 		}
 		return errors.New("injected failure after activation")
 	}, verify, create)
-	if err == nil {
-		t.Fatal("interruption ignored")
+	if !errors.Is(err, ErrRetry) {
+		t.Fatalf("serving failure must retry: %v", err)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
@@ -175,13 +175,38 @@ func TestFreshLifetimeSQLiteActivationReplay(t *testing.T) {
 	if err := s.CheckOperation(ctx, jid); err != nil {
 		t.Fatalf("replay check: %v", err)
 	}
-	released := false
-	err = q.withFreshWordPressLifetime(worker, jid, identity, func(*WordPressLifetime) error { t.Error("replayed installation effects"); return nil }, func(*WordPressLifetime) error { released = true; return nil }, verify, create)
-	if err != nil || !released {
-		t.Fatalf("replay release: %v, released=%v", err, released)
+	if err = s.RecoverJobs(ctx, time.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
 	}
-	if err := s.CompleteOperation(ctx, jid, &store.JobClaim{Nonce: []byte{1}, Ciphertext: []byte{2}}); err != nil {
-		t.Fatalf("finish: %v", err)
+	j, err := s.GetJob(ctx, jid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releases := 0
+	q.SetRunner(func(run context.Context, j *Job) error {
+		return q.withFreshWordPressLifetime(run, jid, identity, func(*WordPressLifetime) error {
+			t.Error("replayed installation effects")
+			return nil
+		}, func(*WordPressLifetime) error {
+			releases++
+			if releases == 1 {
+				return errors.New("injected serving failure")
+			}
+			return nil
+		}, verify, create)
+	})
+	if err = q.execute(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	j, err = s.GetJob(ctx, jid)
+	if err != nil || j.State != "queued" {
+		t.Fatalf("serving failure was not queued: %+v %v", j, err)
+	}
+	if err = q.execute(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	if releases != 2 {
+		t.Fatalf("serving attempts: %d", releases)
 	}
 	finishedSite, err := s.SiteByID(ctx, siteID)
 	if err != nil || finishedSite.Status != "active" {
