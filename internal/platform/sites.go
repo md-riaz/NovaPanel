@@ -44,11 +44,11 @@ func EnsureSite(ctx context.Context, r runner.Runner, sites, _ /* ACME is owned 
 }
 
 // EnsureFreshSite creates only the durable reserved identity after path checks.
-func EnsureFreshSite(ctx context.Context, r runner.Runner, sites, logs, name, siteID string, uid uint32) error {
-	return ensureSite(ctx, r, sites, logs, name, siteID, &uid)
+func EnsureFreshSite(ctx context.Context, r runner.Runner, sites, logs, name, siteID, jobID string, uid uint32) error {
+	return ensureSite(ctx, r, sites, logs, name, siteID, &uid, jobID)
 }
 
-func ensureSite(ctx context.Context, r runner.Runner, sites, logs, name, siteID string, reservedUID *uint32) error {
+func ensureSite(ctx context.Context, r runner.Runner, sites, logs, name, siteID string, reservedUID *uint32, jobIDs ...string) error {
 	if e := (&validate.V{}).SiteName(name); e != nil {
 		return e
 	}
@@ -71,6 +71,16 @@ func ensureSite(ctx context.Context, r runner.Runner, sites, logs, name, siteID 
 			return e
 		}
 		roots = append(roots, root)
+	}
+	if reservedUID != nil {
+		if len(jobIDs) != 1 {
+			return errDomain
+		}
+		for _, root := range roots {
+			if err := prepareFreshMarker(root, name, siteID, jobIDs[0], *reservedUID); err != nil {
+				return err
+			}
+		}
 	}
 	for _, p := range []string{name, filepath.Join(name, "public")} {
 		info, e := roots[0].Lstat(p)

@@ -31,7 +31,7 @@ func TestEnsureFreshSiteRejectsUnownedContentBeforeAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := &accountRunner{home: filepath.Join(sites, "demo")}
-	if err := EnsureFreshSite(context.Background(), r, sites, logs, "demo", siteID, 2000000); err == nil {
+	if err := EnsureFreshSite(context.Background(), r, sites, logs, "demo", siteID, siteID, 2000000); err == nil {
 		t.Fatal("accepted unowned content")
 	}
 	for _, call := range r.calls {

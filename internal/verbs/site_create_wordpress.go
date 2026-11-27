@@ -54,7 +54,7 @@ func freshWordPressSiteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.J
 			}
 			return a.Store.CheckActivatedSiteLifetime(ctx, identity, j.ID)
 		}
-		if err = platform.EnsureFreshSite(ctx, a.Exec, a.Cfg.SitesRoot, a.Cfg.LogDir, identity.Name, identity.SiteID, identity.UID); err != nil {
+		if err = platform.EnsureFreshSite(ctx, a.Exec, a.Cfg.SitesRoot, a.Cfg.LogDir, identity.Name, identity.SiteID, identity.AllocatingJob, identity.UID); err != nil {
 			return err
 		}
 		if op.Checkpoint != "prepared" {
@@ -112,10 +112,13 @@ func rollbackFreshWordPress(ctx context.Context, a *agent.Agent, j *jobs.Job, op
 			return errors.Join(jobs.ErrRetry, err)
 		}
 		err = domain.WithEmpty(ctx, func(work context.Context) error {
+			if err := platform.VerifyFreshSitePaths(a.Cfg.SitesRoot, a.Cfg.LogDir, identity.Name, identity.SiteID, identity.AllocatingJob, identity.UID); err != nil {
+				return err
+			}
 			if err := php.DeleteReservedUser(work, a.Exec, a.Cfg.SitesRoot, identity.Name, identity.SiteID, identity.UID); err != nil {
 				return err
 			}
-			if err := platform.RemoveFreshSitePaths(a.Cfg.SitesRoot, a.Cfg.LogDir, identity.Name, identity.UID); err != nil {
+			if err := platform.RemoveFreshSitePaths(a.Cfg.SitesRoot, a.Cfg.LogDir, identity.Name, identity.SiteID, identity.AllocatingJob, identity.UID); err != nil {
 				return err
 			}
 			if err := databaseReady(work, a.Exec); err != nil {
