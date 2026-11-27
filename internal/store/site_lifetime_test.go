@@ -31,6 +31,36 @@ func TestReserveSiteAccountTx(t *testing.T) {
 	phase4Refuse(t, s.db.raw, `DELETE FROM site_account_provenance WHERE site_id='first'`, "retained provenance")
 }
 
+func TestReserveWordPressSiteTx(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	v := Site{ID: "site", Name: "example", Type: "wordpress", Docroot: "/sites/example/public"}
+	d := Domain{ID: "domain", FQDN: "example.test"}
+	reserve := func() error {
+		return s.Tx(ctx, func(tx *sql.Tx) error { _, err := s.ReserveWordPressSiteTx(ctx, tx, v, d, "allocation"); return err })
+	}
+	if err := reserve(); err == nil {
+		t.Fatal("reservation without job succeeded")
+	}
+	if phase4Count(t, s.db.raw, `SELECT count(*) FROM sites WHERE id='site'`) != 0 {
+		t.Fatal("failed reservation leaked site")
+	}
+	phase4Job(t, s.db.raw, "allocation", "queued")
+	if err := reserve(); err != nil {
+		t.Fatal(err)
+	}
+	if phase4Count(t, s.db.raw, `SELECT count(*) FROM sites s JOIN site_account_provenance p ON p.site_id=s.id WHERE s.id='site' AND s.status='creating' AND s.lifetime_state='provisioning' AND p.allocating_job='allocation' AND p.uid=2000000 AND p.gid=2000000`) != 1 {
+		t.Fatal("incorrect admission state")
+	}
+	if err := reserve(); !errors.Is(err, ErrSiteConflict) {
+		t.Fatalf("duplicate reservation: %v", err)
+	}
+}
+
 func TestDeleteRetiresSiteAccount(t *testing.T) {
 	for _, kind := range []string{"php", "wordpress"} {
 		t.Run(kind, func(t *testing.T) {
