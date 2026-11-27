@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -23,8 +24,7 @@ import (
 	"novapanel/internal/wordpress"
 )
 
-// The hook pauses only after a real transaction commits; cancellation models
-// a dead worker before it can advance to the next effect.
+// The hook terminates the worker only after a real checkpoint commits.
 func TestFreshWordPressWorkerCheckpointRecoveryOfflineE2E(t *testing.T) {
 	if os.Geteuid() != 0 || os.Getenv("NOVAPANEL_DISPOSABLE_UID_LAB") != "1" || os.Getenv("NOVAPANEL_FRESH_WP_MIRROR_LAB") != "1" {
 		t.Skip("requires disposable root container and offline dual mirror")
@@ -85,16 +85,16 @@ func TestFreshWordPressWorkerCheckpointRecoveryOfflineE2E(t *testing.T) {
 	start := func() (context.CancelFunc, <-chan error) {
 		run, cancel := context.WithCancel(ctx)
 		done := make(chan error, 1)
-		go func() { done <- a.Jobs.Run(run) }()
+		go func() { defer close(done); done <- a.Jobs.Run(run) }()
 		return cancel, done
 	}
 	pause := func(target string) <-chan string {
 		reached := make(chan string, 1)
-		store.SetFreshCheckpointTestHook(func(c context.Context, jid, checkpoint string) {
+		store.SetFreshCheckpointTestHook(func(_ context.Context, jid, checkpoint string) {
 			if checkpoint == target {
 				select {
 				case reached <- jid:
-					<-c.Done()
+					runtime.Goexit()
 				default:
 				}
 			}
@@ -111,20 +111,24 @@ func TestFreshWordPressWorkerCheckpointRecoveryOfflineE2E(t *testing.T) {
 		case <-time.After(180 * time.Second):
 			t.Fatal("checkpoint not reached")
 		}
-		cancel()
 		select {
 		case err := <-done:
 			if err != nil {
 				t.Fatal(err)
 			}
 		case <-time.After(30 * time.Second):
+			cancel()
 			t.Fatal("worker did not stop")
 		}
+		cancel()
 		store.SetFreshCheckpointTestHook(nil)
 	}
 	recoverWorker := func() {
 		t.Helper()
-		if err := a.Jobs.PrepareOperations(ctx); err != nil {
+		// A crashed worker loses its in-memory locks; construct its replacement.
+		server.ConfigureJobs()
+		a.Jobs.SetPostRecovery(nil)
+		if err := a.Jobs.PrepareStartup(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
