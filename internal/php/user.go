@@ -317,3 +317,90 @@ func DeleteOrphan(ctx context.Context, r runner.Runner, root, name, id string, h
 	// elsewhere. Keep the UID reserved until an operator can verify cleanup.
 	return rpcerr.Errf("precondition_failed", "orphan account requires manual UID-owned file cleanup")
 }
+
+// DeleteReservedUser removes only the reserved account and its marked group.
+// The caller holds site and OS-user locks and has drained its install domain.
+func DeleteReservedUser(ctx context.Context, r runner.Runner, root, name, id string, uid uint32) error {
+	if err := inputs(root, name, id); err != nil {
+		return err
+	}
+	if uid < 2000000 || uid > 2999999 {
+		return rpcerr.Errf("precondition_failed", "site identity outside reserved range")
+	}
+	account, err := lookup(ctx, r, root, name)
+	if err != nil {
+		return err
+	}
+	if account != nil && (account.gecos != marker+id || account.uid != uid || account.gid != uid) {
+		return rpcerr.Errf("conflict", "site account is not owned")
+	}
+	numeric := strconv.FormatUint(uint64(uid), 10)
+	get := func(database, key string) ([]byte, bool, error) {
+		out, _, code, err := r.Run(ctx, "/usr/bin/getent", []string{database, key}, runner.RunOpts{})
+		if code == 2 && ctx.Err() == nil {
+			return nil, false, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		if code != 0 {
+			return nil, false, rpcerr.Errf("agent_error", "cannot resolve site identity")
+		}
+		return out, true, nil
+	}
+	out, found, err := get("passwd", numeric)
+	if err != nil {
+		return err
+	}
+	if found {
+		fields := strings.Split(strings.TrimSpace(string(out)), ":")
+		if account == nil || len(fields) != 7 || fields[0] != name || fields[2] != numeric || fields[3] != numeric || fields[4] != marker+id || fields[5] != filepath.Join(root, name) || fields[6] != "/usr/sbin/nologin" {
+			return rpcerr.Errf("conflict", "site UID is not owned")
+		}
+	} else if account != nil {
+		return rpcerr.Errf("conflict", "site UID changed")
+	}
+	checkGroup := func() (bool, error) {
+		out, found, err := get("group", numeric)
+		if err != nil {
+			return false, err
+		}
+		if !found {
+			if _, taken, err := get("group", name); err != nil {
+				return false, err
+			} else if taken {
+				return false, rpcerr.Errf("conflict", "site group changed")
+			}
+			return false, nil
+		}
+		fields := strings.Split(strings.TrimSpace(string(out)), ":")
+		if len(fields) != 4 || fields[0] != name || fields[2] != numeric || fields[3] != "" {
+			return false, rpcerr.Errf("conflict", "site group is not owned")
+		}
+		shadow, found, err := get("gshadow", name)
+		if err != nil {
+			return false, err
+		}
+		fields = strings.Split(strings.TrimSpace(string(shadow)), ":")
+		if !found || len(fields) != 4 || fields[0] != name || fields[1] != "!"+marker+id || fields[2] != "" || fields[3] != "" {
+			return false, rpcerr.Errf("conflict", "site group is not owned")
+		}
+		return true, nil
+	}
+	if _, err = checkGroup(); err != nil {
+		return err
+	}
+	if account != nil {
+		if err = run(ctx, r, "/usr/sbin/userdel", "--", name); err != nil {
+			return err
+		}
+	}
+	group, err := checkGroup()
+	if err != nil {
+		return err
+	}
+	if group {
+		return run(ctx, r, "/usr/sbin/groupdel", "--", name)
+	}
+	return nil
+}

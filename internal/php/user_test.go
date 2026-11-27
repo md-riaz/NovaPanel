@@ -199,3 +199,73 @@ func TestPool(t *testing.T) {
 		t.Fatal("injection accepted")
 	}
 }
+
+type deleteReservedFake struct {
+	account, group, foreign bool
+	groupFailure            bool
+	calls                   []string
+}
+
+func (f *deleteReservedFake) Run(_ context.Context, p string, a []string, _ runner.RunOpts) ([]byte, []byte, int, error) {
+	f.calls = append(f.calls, p+" "+strings.Join(a, " "))
+	if p == "/usr/sbin/userdel" {
+		f.account = false
+		return nil, nil, 0, nil
+	}
+	if p == "/usr/sbin/groupdel" {
+		if f.groupFailure {
+			f.groupFailure = false
+			return nil, nil, 1, errors.New("temporary")
+		}
+		f.group = false
+		return nil, nil, 0, nil
+	}
+	if p != "/usr/bin/getent" {
+		return nil, nil, 1, errors.New("unexpected")
+	}
+	switch a[0] {
+	case "passwd":
+		if f.account {
+			m := marker + testID
+			if f.foreign {
+				m = "foreign"
+			}
+			return []byte("demo:x:2000000:2000000:" + m + ":/srv/sites/demo:/usr/sbin/nologin"), nil, 0, nil
+		}
+	case "group":
+		if f.group {
+			return []byte("demo:x:2000000:"), nil, 0, nil
+		}
+	case "gshadow":
+		if f.group {
+			return []byte("demo:!" + marker + testID + "::"), nil, 0, nil
+		}
+	}
+	return nil, nil, 2, errors.New("not found")
+}
+func TestDeleteReservedUserOwnershipAndReplay(t *testing.T) {
+	ctx := context.Background()
+	f := &deleteReservedFake{account: true, group: true, groupFailure: true}
+	if err := DeleteReservedUser(ctx, f, "/srv/sites", "demo", testID, 2000000); err == nil {
+		t.Fatal("group deletion failure ignored")
+	}
+	if f.account || !f.group {
+		t.Fatalf("unexpected first state: %+v", f)
+	}
+	if err := DeleteReservedUser(ctx, f, "/srv/sites", "demo", testID, 2000000); err != nil {
+		t.Fatal(err)
+	}
+	if f.account || f.group {
+		t.Fatalf("not removed: %+v", f)
+	}
+	if err := DeleteReservedUser(ctx, f, "/srv/sites", "demo", testID, 2000000); err != nil {
+		t.Fatal("replay", err)
+	}
+	bad := &deleteReservedFake{account: true, group: true, foreign: true}
+	if err := DeleteReservedUser(ctx, bad, "/srv/sites", "demo", testID, 2000000); err == nil {
+		t.Fatal("foreign account accepted")
+	}
+	if strings.Contains(strings.Join(bad.calls, "\n"), "userdel") {
+		t.Fatal("foreign account deleted")
+	}
+}
