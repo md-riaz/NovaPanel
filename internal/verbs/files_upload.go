@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"novapanel/internal/agent"
@@ -34,7 +34,26 @@ func init() {
 }
 
 func filesUpload(ctx context.Context, a *agent.Agent, args any) (any, error) {
-	return a.Jobs.Enqueue(ctx, "files.upload", args, "site:"+args.(*filesUploadArgs).SiteID)
+	v := args.(*filesUploadArgs)
+	if err := v.Validate(); err != nil {
+		return nil, err
+	}
+	a.UploadsMu.Lock()
+	defer a.UploadsMu.Unlock()
+	info, err := os.Lstat(filepath.Join(a.Cfg.UploadsDir, v.UploadID))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, rpc.Errf("not_found", "Upload not found")
+	}
+	if err != nil {
+		return nil, rpc.Errf("agent_error", "Upload unavailable")
+	}
+	if !info.Mode().IsRegular() {
+		return nil, rpc.Errf("invalid_argument", "Invalid upload")
+	}
+	if info.ModTime().Before(time.Now().Add(-fileop.UploadTTL)) {
+		return nil, rpc.Errf("not_found", "Upload expired")
+	}
+	return a.Jobs.Enqueue(ctx, "files.upload", args, "site:"+v.SiteID)
 }
 
 func filesUploadExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
@@ -68,9 +87,6 @@ func filesUploadExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	req := fileop.Request{Operation: "upload", Path: v.Path, Length: int(info.Size())}
 	if _, err := (fileopService{a}).invoke(ctx, v.SiteID, &req, f, "__fileop"); err != nil {
 		return err
-	}
-	if err := os.Remove(name); err != nil {
-		log.Printf("remove staged upload: %v", err)
 	}
 	j.Result = json.RawMessage(`{}`)
 	return nil

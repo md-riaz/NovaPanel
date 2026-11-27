@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 	"novapanel/internal/agent"
+	"novapanel/internal/audit"
 	runner "novapanel/internal/exec"
 	"novapanel/internal/fileop"
 	"novapanel/internal/id"
@@ -48,6 +49,66 @@ func (r uploadRunner) Run(_ context.Context, program string, _ []string, opts ru
 		return nil, nil, 1, err
 	}
 	return []byte(`{}`), nil, 0, nil
+}
+
+func TestUploadAdmissionSweepOrdering(t *testing.T) {
+	ctx := jobs.WithMetadata(context.Background(), jobs.Metadata{CreatedBy: "local-root", Role: "root"})
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	log, err := audit.Open(st, filepath.Join(t.TempDir(), "audit.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	a := agent.New()
+	a.Store = st
+	a.Jobs = jobs.NewQueue(st, nil, log)
+	a.Cfg.UploadsDir = t.TempDir()
+	sid, _ := id.New()
+	uid, _ := id.New()
+	v := &filesUploadArgs{SiteID: sid, Path: "file", UploadID: uid}
+	name := filepath.Join(a.Cfg.UploadsDir, uid)
+	if err := os.WriteFile(name, []byte("payload"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := filesUpload(ctx, a, v); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * fileop.UploadTTL)
+	if err := os.Chtimes(name, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := filesUpload(ctx, a, v); err == nil {
+		t.Fatal("admitted expired upload")
+	} else if e, ok := err.(*rpc.CodedError); !ok || e.Code != "not_found" {
+		t.Fatalf("expired admission: %v", err)
+	}
+	if err := a.SweepUploads(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(name); err != nil {
+		t.Fatalf("live staging removed: %v", err)
+	}
+	other, _ := id.New()
+	v.UploadID = other
+	name = filepath.Join(a.Cfg.UploadsDir, other)
+	if err := os.WriteFile(name, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(name, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SweepUploads(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := filesUpload(ctx, a, v); err == nil {
+		t.Fatal("admitted reaped upload")
+	} else if e, ok := err.(*rpc.CodedError); !ok || e.Code != "not_found" {
+		t.Fatalf("late admission: %v", err)
+	}
 }
 
 func TestUploadExec(t *testing.T) {
@@ -105,6 +166,16 @@ func TestUploadExec(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(sites, "demo", "public", "file"))
 	if err != nil || !bytes.Equal(data, []byte("payload")) || string(job.Result) != "{}" {
 		t.Fatalf("result %q %s %v", data, job.Result, err)
+	}
+	if err := filesUploadExec(timed, a, job); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	data, err = os.ReadFile(filepath.Join(sites, "demo", "public", "file"))
+	if err != nil || !bytes.Equal(data, []byte("payload")) {
+		t.Fatalf("replay content %q: %v", data, err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
 	}
 	check := func(want string) {
 		t.Helper()

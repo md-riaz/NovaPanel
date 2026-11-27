@@ -170,14 +170,18 @@ func serve(ctx context.Context, a *agent.Agent) (err error) {
 	go func() { serving <- s.ServeContext(ctx, l) }()
 	served := false
 	consumed := 0
-	fileop.SweepUploads(a.Cfg.UploadsDir, time.Now())
+	if err := a.SweepUploads(ctx, time.Now()); err != nil {
+		fmt.Fprintln(os.Stderr, "upload sweep failed:", err)
+	}
 	uploadSweep := time.NewTicker(15 * time.Minute)
 	defer uploadSweep.Stop()
 running:
 	for {
 		select {
 		case now := <-uploadSweep.C:
-			fileop.SweepUploads(a.Cfg.UploadsDir, now)
+			if err := a.SweepUploads(ctx, now); err != nil {
+				fmt.Fprintln(os.Stderr, "upload sweep failed:", err)
+			}
 		case e := <-results:
 			consumed++
 			// A worker may stop on sticky audit failure; reads must remain available.

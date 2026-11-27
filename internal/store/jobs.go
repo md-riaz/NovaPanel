@@ -108,6 +108,24 @@ func (s *Store) GetJob(ctx context.Context, id string) (Job, error) {
 func (s *Store) NextQueuedJob(ctx context.Context) (Job, error) {
 	return scanJob(s.db.QueryRowContext(ctx, "SELECT "+jobColumns+" FROM jobs WHERE state='queued' ORDER BY rowid LIMIT 1"))
 }
+
+// LiveJobArgs returns the arguments of all non-terminal jobs for a verb.
+func (s *Store) LiveJobArgs(ctx context.Context, verb string) ([]json.RawMessage, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT args_json FROM jobs WHERE verb=? AND (state IN ('queued','running') OR (state='failed' AND code='interrupted'))`, verb)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var args []json.RawMessage
+	for rows.Next() {
+		var arg string
+		if err := rows.Scan(&arg); err != nil {
+			return nil, err
+		}
+		args = append(args, json.RawMessage(arg))
+	}
+	return args, rows.Err()
+}
 func (s *Store) StartJob(ctx context.Context, id string, now int64) (j Job, e error) {
 	e = s.Tx(ctx, func(tx *sql.Tx) error {
 		r, e := tx.ExecContext(ctx, "UPDATE jobs SET state='running', attempts=attempts+1, updated=? WHERE id=? AND state='queued'", now, id)

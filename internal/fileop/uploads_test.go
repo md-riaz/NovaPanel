@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestUploadPlacement(t *testing.T) {
@@ -71,7 +73,7 @@ func (zeroReader) Read(p []byte) (int, error) { clear(p); return len(p), nil }
 func TestSweepUploads(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
-	for _, name := range []string{"old", "fresh"} {
+	for _, name := range []string{"old", "fresh", "live", "a-vanish"} {
 		if err := os.WriteFile(filepath.Join(dir, name), nil, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -80,11 +82,43 @@ func TestSweepUploads(t *testing.T) {
 	if err := os.Chtimes(old, now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	SweepUploads(dir, now)
+	if err := os.Chtimes(filepath.Join(dir, "live"), now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("safe"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(outside, now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mkfifo(filepath.Join(dir, "fifo"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "subdir"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	SweepUploads(dir, now, func(name string) bool {
+		if name == "a-vanish" {
+			_ = os.Remove(filepath.Join(dir, name))
+		}
+		return name == "live"
+	})
 	if _, err := os.Stat(old); !os.IsNotExist(err) {
 		t.Fatalf("old: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "fresh")); err != nil {
 		t.Fatal(err)
+	}
+	for _, name := range []string{"live", "link", "fifo", "subdir"} {
+		if _, err := os.Lstat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if data, err := os.ReadFile(outside); err != nil || string(data) != "safe" {
+		t.Fatalf("outside: %q %v", data, err)
 	}
 }
