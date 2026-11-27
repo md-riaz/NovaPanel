@@ -24,7 +24,6 @@ func TestInstallPlan(t *testing.T) {
 	want := []Step{
 		{Kind: Download, Program: "/usr/bin/php8.3", Args: []string{"-c", "/etc/novapanel/wordpress/php.ini", "/usr/local/lib/novapanel/wp-cli-2.12.0.phar", "core", "download", "--version=7.1.4", "--locale=en_US"}},
 		{Kind: VerifyChecksums, Program: "/usr/bin/php8.3", Args: []string{"-c", "/etc/novapanel/wordpress/php.ini", "/usr/local/lib/novapanel/wp-cli-2.12.0.phar", "core", "verify-checksums", "--version=7.1.4", "--locale=en_US"}},
-		{Kind: CreateConfig, Program: "/usr/bin/php8.3", Stdin: DatabasePassword, Args: []string{"-c", "/etc/novapanel/wordpress/php.ini", "/usr/local/lib/novapanel/wp-cli-2.12.0.phar", "config", "create", "--dbname=d_01arz3ndektsv4rrffq69g5fav", "--dbuser=u_01arz3ndektsv4rrffq69g5faw", "--dbhost=127.0.0.1", "--dbprefix=wp_", "--dbcharset=utf8mb4", "--skip-salts", "--prompt=dbpass"}},
 		{Kind: PublishProtectedConfig},
 		{Kind: IsInstalled, Program: "/usr/bin/php8.3", Args: []string{"-c", "/etc/novapanel/wordpress/php.ini", "/usr/local/lib/novapanel/wp-cli-2.12.0.phar", "core", "is-installed"}},
 		{Kind: InstallCore, Program: "/usr/bin/php8.3", Stdin: AdministratorPassword, Args: []string{"-c", "/etc/novapanel/wordpress/php.ini", "/usr/local/lib/novapanel/wp-cli-2.12.0.phar", "core", "install", "--url=https://example.test", "--title=Site title", "--admin_user=Editor.name-1", "--admin_email=owner@example.test", "--skip-email", "--prompt=admin_password"}},

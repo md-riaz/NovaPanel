@@ -43,7 +43,7 @@ build it.
    `--dbhost`/wp-config leg of row 4 is a **Step-3** check, as wp-config does not exist yet), 7.
 2. **PHP runtime** (Deliverables 1–2): per-site user + FPM pool with the socket-owner **502 fix**, then
    `php.set` / `php.list`. Closes Verification rows 1, 2, 7.
-3. **WordPress install** (Deliverable 4): `download → verify-checksums → config create → install`, run
+3. **WordPress install** (Deliverable 4): `download → verify-checksums → protected config publish → install`, run
    as the site user, wp-config 440/400, non-empty-docroot refusal; destructive ops stay `unsupported`
    (Deliverable 5 / row 6). Closes Verification rows 5, 6.
 
@@ -70,7 +70,7 @@ mergeable — not one 285-file mega-draft. Drive each with `docs/spec/PHASE-DRIV
    names + show-once passwords; the **agent authenticates to MariaDB as root via `unix_socket`** (no
    stored admin password anywhere).
 4. **WordPress install** (**Step 3**; `site.create type=wordpress` or `wp.install`): `wp core download` →
-   `wp core verify-checksums` → `wp config create` → `wp core install`, run **as the site user**,
+   `wp core verify-checksums` → protected config publish → `wp core install`, run **as the site user**,
    `wp-config.php` perms `440`/`400`, never over a non-empty docroot.
 5. **Guard** (Step 3): no destructive WordPress ops (update/clone/staging) until backups/restore land (Phase 6).
 
@@ -429,8 +429,7 @@ replay test against a simulated mid-op stop.
 ```
 wp core download --version=<v> --path=/srv/sites/{{site}}/public        # refuse if docroot non-empty → precondition_failed
 wp core verify-checksums --version=<v>                                   # mismatch → agent_error (tampered); NEVER --insecure
-wp config create --dbname={{db}} --dbuser={{dbuser}} --prompt=dbpass --skip-salts \
-    --dbhost=127.0.0.1 --dbprefix=wp_ --dbcharset=utf8mb4 --path=...     # salts unique per site
+# ComposeConfig in Go, then ConfigIsolation publishes site-owned 0400 wp-config.php
 wp core install --url=https://{{domain}} --title=... --admin_user=... \
     --admin_email=... --skip-email --prompt=admin_password --path=...    # independent stdin consumer
 # typed publisher installs site-owned 0400 wp-config.php with locally generated salts before core install
@@ -449,7 +448,7 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
   already uses — **not** new machinery): the non-empty-docroot check runs **only on first entry** (no
   journal row); `Run` writes the intent row **before** the first filesystem write, so on replay the
   docroot is proven **ours** and the job **resumes** — re-running the idempotent WP-CLI steps
-  (`core download`/`verify-checksums`/`config create`/`core install` are each re-runnable against a
+  (`core download`/`verify-checksums`/protected config publish/`core install` are each re-runnable against a
   partial tree) and **skipping** the non-empty refusal for its own in-progress install. Clear the intent
   row on terminal success. A docroot that is non-empty with **no** intent row is still a hard
   `precondition_failed` (never adopt unknown content).
@@ -480,8 +479,8 @@ The docroot is a **two-store** resource (files vs SQLite); these two windows are
   **site** DB user's password is generated, applied with `CREATE USER … IDENTIFIED BY` /
   `ALTER USER … IDENTIFIED BY` run through an admin connection (DDL, not argv), and delivered to the
   caller **show-once via the F6 job `claim`** — never stored in `jobs.result_json`, the DB, or audit.
-- **wp-config password off argv:** `wp config create … --prompt=dbpass` with the password on the
-  child's **stdin** (`RunOpts.Stdin`); never `--dbpass=<pw>` on the command line. `mysqldump`/`mysql`
+- **wp-config password off argv:** compose in Go from the sealed password and publish through
+  ConfigIsolation; WP-CLI does not write wp-config.php. `mysqldump`/`mysql`
   that need the site cred use `--defaults-extra-file=<root-0600 tmp>` written then removed, not `-p`.
 - **FPM socket dir:** `/run/php/novapanel/` created by a **tmpfiles** line
   (`d /run/php/novapanel 0755 root root -`) so it survives an fpm restart (same rationale as
@@ -654,7 +653,7 @@ Adopt WP-CLI 2.12.0 from `https://github.com/wp-cli/wp-cli/releases/download/v2.
 
 The approved bootstrap isolation and offline execution gate are specified in [WordPress offline trust contract](../../phase4-wordpress-offline-trust-contract.md). This clarification does not open runtime consumers; the concrete offline fixture adapter and reviewed CLI ini remain required before PHP execution.
 
-Generate eight independent WordPress keys/salts locally with crypto/rand and store them only in the sealed operation until protected config publication. Use WP-CLI config create with `--skip-salts` and stdin DB password, then add the generated constants with the agent's typed config publisher before core install. Do not use --extra-php stdin, PHP eval or the remote salt fallback. wp-config is a no-follow, atomically published site-owned 0400 regular file under the site lock. Refuse an existing/unmanaged or nonempty docroot; restart may resume only files bound to its own journal. Adopt WordPress 7.1.4, locale en_US, official ZIP https://downloads.wordpress.org/release/wordpress-7.1.4.zip, SHA-256 a147146c159362778ecbbbfb07bb20ddf4e85b130f971c824e656a8f938c5f87, 37239942 bytes. Pin the full official metadata from https://api.wordpress.org/core/checksums/1.0/?version=7.1.4&locale=en_US. The historical claim that the ZIP matched all 3782 entries is unverified here; the referenced artifacts are unavailable. The recorded full official checksum JSON SHA-256 is bb718bddf197e0098f05395dd9b228fad70b394926ee9d70a8c6a67cf20781e7; preserve its exact bytes as the offline fixture alongside the archive, and retain the official runtime verification path. This SHA is a locally computed pin over official HTTPS bytes, not an upstream signed SHA. Retain the unchanged official wp core verify-checksums command as an additional runtime gate; do not replace it with our ZIP scan, change checksum source files, use --insecure, or assume PHP/WP-CLI compatibility without the later real lab. Candidate grant allowlist stays exactly the phase spec's DB-scoped list until real install and upgrade/schema acceptance for that release passes. Failure blocks release; it does not justify global privileges or plugin-driven permission expansion.
+Generate eight independent WordPress keys/salts locally with crypto/rand and store them only in the sealed operation until protected config publication. Compose wp-config in Go from the sealed DB password and locally generated constants, then publish through ConfigIsolation custody before core install; WP-CLI does not write wp-config.php. Do not use --extra-php stdin, PHP eval or the remote salt fallback. wp-config is a no-follow, atomically published site-owned 0400 regular file under the site lock. Refuse an existing/unmanaged or nonempty docroot; restart may resume only files bound to its own journal. Adopt WordPress 7.1.4, locale en_US, official ZIP https://downloads.wordpress.org/release/wordpress-7.1.4.zip, SHA-256 a147146c159362778ecbbbfb07bb20ddf4e85b130f971c824e656a8f938c5f87, 37239942 bytes. Pin the full official metadata from https://api.wordpress.org/core/checksums/1.0/?version=7.1.4&locale=en_US. The historical claim that the ZIP matched all 3782 entries is unverified here; the referenced artifacts are unavailable. The recorded full official checksum JSON SHA-256 is bb718bddf197e0098f05395dd9b228fad70b394926ee9d70a8c6a67cf20781e7; preserve its exact bytes as the offline fixture alongside the archive, and retain the official runtime verification path. This SHA is a locally computed pin over official HTTPS bytes, not an upstream signed SHA. Retain the unchanged official wp core verify-checksums command as an additional runtime gate; do not replace it with our ZIP scan, change checksum source files, use --insecure, or assume PHP/WP-CLI compatibility without the later real lab. Candidate grant allowlist stays exactly the phase spec's DB-scoped list until real install and upgrade/schema acceptance for that release passes. Failure blocks release; it does not justify global privileges or plugin-driven permission expansion.
 
 Add only `d /run/php/novapanel 0755 root root -` and reviewed dependency metadata to packaging. make release-stage still builds binaries and maintenance.tar, not units/accounts/dependency installation. Remove phase-4's obsolete home 0750, `or wp.install`, secret argv example, nightly-admin_password claim and all-verbs-jobs language. Remove host secure-installation execution from Phase 4. Only Slow mutations queue; ssl.auto_set stays synchronous.
 

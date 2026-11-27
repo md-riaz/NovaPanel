@@ -209,15 +209,14 @@ Use these exact validation rules before resource creation: title is nonempty val
 WordPress job result remains `{site_id}`. One F19 claim contains exactly:
 
 ```json
-{"database":{"db_id":"<ULID>","name":"<generated>","username":"<generated>","host":"127.0.0.1","password":"<generated>"},"wordpress":{"admin_username":"<validated input>","admin_email":"<validated input>","admin_password":"<generated>"}}
+{"database":{"db_id":"<ULID>","password":"<generated>"},"wordpress":{"admin_username":"<validated input>","admin_password":"<generated>"}}
 ```
 
 DB create claim is `{password:<generated>}` and result is `{db_id,db_name,db_user}`. DB rotation claim is `{password:<generated>}` and result is `{}`. dbuser.create claim is `{password:<generated>}` and result is `{dbuser_id}`. Preserve the original owner-session/token-plus-claim-token check, publication-anchored TTL checked inside SQL, delete-on-first-read, memory-only browser token and already-consumed-claim completion-audit exception. No credential in result/events/audit/plaintext SQLite or WAL/browser persistence. The protected application wp-config necessarily retains its DB password; show-once governs panel delivery, not application storage.
 
-Separate calls use separate stdin consumers:
+NovaPanel composes wp-config in Go and publishes it through sealed ConfigIsolation custody; WP-CLI does not write the config file. The core install command receives the administrator password through stdin:
 
 ```text
-/usr/bin/php8.3 /usr/local/lib/novapanel/wp-cli-2.12.0.phar config create ... --prompt=dbpass
 /usr/bin/php8.3 /usr/local/lib/novapanel/wp-cli-2.12.0.phar core install ... --admin_user=<validated> --admin_email=<validated> --skip-email --prompt=admin_password
 ```
 

@@ -120,11 +120,8 @@ func TestFreshLifetimeSQLiteActivationReplay(t *testing.T) {
 		return domain, nil
 	}
 	operation := func(l *WordPressLifetime) error {
-		for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums, wordpress.CreateConfig} {
+		for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums} {
 			child := reviewedInstallChild{kind: kind}
-			if kind == wordpress.CreateConfig {
-				child.options.Stdin = strings.NewReader("db-secret")
-			}
 			if _, _, _, err := l.runReviewed(worker, child); err != nil {
 				return err
 			}

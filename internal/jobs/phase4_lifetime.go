@@ -63,12 +63,12 @@ func (l *WordPressLifetime) runReviewed(ctx context.Context, child reviewedInsta
 	stop := context.AfterFunc(ctx, cancel)
 	defer func() { stop(); cancel() }()
 	ctx = work
-	steps := []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums, wordpress.CreateConfig, wordpress.InstallCore}
+	steps := []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums, wordpress.InstallCore}
 	index := l.stage
-	if index > 3 {
+	if index > 2 {
 		index--
 	}
-	if l.stage == 3 || index >= len(steps) || child.kind != steps[index] {
+	if l.stage == 2 || index >= len(steps) || child.kind != steps[index] {
 		l.failed = true
 		return nil, nil, -1, errors.New("jobs: reviewed child out of order")
 	}
@@ -103,7 +103,7 @@ func (l *WordPressLifetime) runReviewed(ctx context.Context, child reviewedInsta
 func (l *WordPressLifetime) ConfigIsolation(ctx context.Context, binding configcustody.ConfigBinding, effect func(context.Context) error) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.closed || l.failed || l.successful || l.published || l.stage != 3 || binding != l.binding || effect == nil {
+	if l.closed || l.failed || l.successful || l.published || l.stage != 2 || binding != l.binding || effect == nil {
 		l.failed = true
 		return errors.New("jobs: lifetime config isolation refused")
 	}
@@ -160,7 +160,7 @@ func withInstallLifetime(ctx context.Context, l *WordPressLifetime, operation fu
 		l.mu.Lock()
 		l.closed = true
 		failed := l.failed
-		published := l.published && l.stage == 5
+		published := l.published && l.stage == 4
 		l.mu.Unlock()
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()

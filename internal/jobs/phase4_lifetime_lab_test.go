@@ -35,7 +35,7 @@ func TestWordPressLifetimeDomainLab(t *testing.T) {
 	activated := false
 	l := &WordPressLifetime{domain: d, binding: binding, identity: identity, plan: plan, check: func(context.Context) error { return nil }, activate: func(context.Context, store.SiteLifetime) error { activated = true; return nil }}
 	err = withInstallLifetime(context.Background(), l, func(l *WordPressLifetime) error {
-		for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums, wordpress.CreateConfig} {
+		for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums} {
 			if _, _, _, err := l.runReviewed(context.Background(), reviewedInstallChild{kind: kind}); err != nil {
 				return err
 			}

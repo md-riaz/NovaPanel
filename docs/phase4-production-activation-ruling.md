@@ -50,7 +50,7 @@ its obligations are discharged as follows:
    is no migration fallback). Assert the domain is empty after each step
    (`contract:28`). The reviewed children are exactly the wp-cli steps in §3.
 4. Call the config publish (`configcustody.PublishConfig`) once, synchronously, after the
-   download/verify/config-create steps, under the held admission (`contract:29`). `wp-config.php`
+   download and verify steps, under the held admission (`contract:29`). `wp-config.php`
    is the atomic temp+rename sealed-value write as the site user, mode 0400 (§5).
 5. On full success, perform the **explicit serving release** (`contract:32`): enable the site's
    FPM serving (§2). Until this release the account is not admitted to serve.
@@ -77,7 +77,8 @@ sites.
 Production fetches WordPress online with the spec's wp-cli sequence
 (`phase-4.md:428-436`), run as the site user inside the install domain:
 `wp core download --version=<pinned> --locale=<pinned>` → `wp core verify-checksums` →
-`wp config create --prompt=dbpass --skip-salts` → `wp core install --prompt=admin_password`.
+compose wp-config in Go and publish through ConfigIsolation custody → `wp core install --prompt=admin_password`.
+WP-CLI does not write wp-config.php; custody journals and publishes it atomically as 0400.
 - **Never `--insecure`.** A checksum-verify failure fails the job closed (no serving release, no
   partial publish).
 - `wp core download` delivers the **tar.gz**, not the ZIP. Amend the artifact trust contract

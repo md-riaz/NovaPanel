@@ -104,7 +104,7 @@ func (d *fakeInstallLifetime) Run(ctx context.Context, _ string, _ []string, o r
 func (d *fakeInstallLifetime) Close(context.Context) error { d.closed = true; return d.closeErr }
 
 func fakeLifetimePlan() wordpress.Plan {
-	return wordpress.Plan{Steps: []wordpress.Step{{Kind: wordpress.Download, Program: "/stub"}, {Kind: wordpress.VerifyChecksums, Program: "/stub"}, {Kind: wordpress.CreateConfig, Program: "/stub"}, {Kind: wordpress.InstallCore, Program: "/stub"}}}
+	return wordpress.Plan{Steps: []wordpress.Step{{Kind: wordpress.Download, Program: "/stub"}, {Kind: wordpress.VerifyChecksums, Program: "/stub"}, {Kind: wordpress.InstallCore, Program: "/stub"}}}
 }
 func TestHeldLifetimeIsolationAndRelease(t *testing.T) {
 	for _, mode := range []string{"success", "callback", "close", "early", "duplicate", "panic"} {
@@ -130,7 +130,7 @@ func TestHeldLifetimeIsolationAndRelease(t *testing.T) {
 				if mode == "panic" {
 					panic("fixture")
 				}
-				for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums, wordpress.CreateConfig} {
+				for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums} {
 					if _, _, _, err := l.runReviewed(context.Background(), reviewedInstallChild{kind: kind}); err != nil {
 						return err
 					}
@@ -164,7 +164,7 @@ func TestHeldLifetimeIsolationAndRelease(t *testing.T) {
 				t.Fatal("domain not closed")
 			}
 			if mode == "success" {
-				if err != nil || effects != 1 || releases != 1 || activated != 1 || domain.runs != 4 {
+				if err != nil || effects != 1 || releases != 1 || activated != 1 || domain.runs != 3 {
 					t.Fatalf("success: %v effects=%d release=%d activation=%d runs=%d", err, effects, releases, activated, domain.runs)
 				}
 			} else if err == nil || releases != 0 || activated != 0 {
@@ -255,7 +255,7 @@ func TestLifetimeReplayKeepsSiteIdentity(t *testing.T) {
 		return errors.New("injected interruption after commit")
 	}}
 	err = withInstallLifetime(ctx, l, func(l *WordPressLifetime) error {
-		for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums, wordpress.CreateConfig} {
+		for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums} {
 			if _, _, _, err := l.runReviewed(ctx, reviewedInstallChild{kind: kind}); err != nil {
 				return err
 			}
