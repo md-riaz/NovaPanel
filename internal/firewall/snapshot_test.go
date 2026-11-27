@@ -42,6 +42,9 @@ func TestSnapshotRestore(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		if err := os.WriteFile(filepath.Join(rules, "custom.rules"), []byte("custom"), 0600); err != nil {
+			t.Fatal(err)
+		}
 		r := &snapshotRunner{active: active}
 		if err := Snapshot(context.Background(), r, rules, snap); err != nil {
 			t.Fatal(err)
@@ -51,6 +54,9 @@ func TestSnapshotRestore(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		if err := os.WriteFile(filepath.Join(rules, "custom.rules"), []byte("changed"), 0600); err != nil {
+			t.Fatal(err)
+		}
 		if err := Restore(context.Background(), r, rules, snap); err != nil {
 			t.Fatal(err)
 		}
@@ -59,6 +65,9 @@ func TestSnapshotRestore(t *testing.T) {
 			if err != nil || string(b) != name {
 				t.Fatalf("%s: %q %v", name, b, err)
 			}
+		}
+		if b, err := os.ReadFile(filepath.Join(rules, "custom.rules")); err != nil || string(b) != "custom" {
+			t.Fatalf("custom: %q %v", b, err)
 		}
 		last := r.calls[len(r.calls)-1]
 		if active && last[1] != "reload" || !active && last[1] != "--force" {

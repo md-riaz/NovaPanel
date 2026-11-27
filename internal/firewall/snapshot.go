@@ -25,7 +25,11 @@ func Snapshot(ctx context.Context, runner exec.Runner, rulesDir, snapshotDir str
 	if err := os.Mkdir(filepath.Join(snapshotDir, "ufw"), 0700); err != nil {
 		return err
 	}
-	for _, name := range ruleFiles {
+	names, err := snapshotRuleNames(rulesDir)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
 		b, err := readRegular(filepath.Join(rulesDir, name))
 		if err != nil {
 			return err
@@ -81,6 +85,35 @@ func Snapshot(ctx context.Context, runner exec.Runner, rulesDir, snapshotDir str
 	return nil
 }
 
+func snapshotRuleNames(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".rules") {
+			if !entry.Type().IsRegular() {
+				return nil, errors.New("unsafe firewall file")
+			}
+			names = append(names, entry.Name())
+		}
+	}
+	for _, required := range ruleFiles {
+		found := false
+		for _, name := range names {
+			if name == required {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, errors.New("missing firewall rule file")
+		}
+	}
+	return names, nil
+}
+
 func readRegular(path string) ([]byte, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -126,14 +159,18 @@ func Restore(ctx context.Context, runner exec.Runner, rulesDir, snapshotDir stri
 	if string(enabled) != "0\n" && string(enabled) != "1\n" {
 		return errors.New("invalid firewall snapshot")
 	}
-	data := make([][]byte, len(ruleFiles))
-	for i, name := range ruleFiles {
+	names, err := snapshotRuleNames(filepath.Join(snapshotDir, "ufw"))
+	if err != nil {
+		return err
+	}
+	data := make([][]byte, len(names))
+	for i, name := range names {
 		data[i], err = readRegular(filepath.Join(snapshotDir, "ufw", name))
 		if err != nil {
 			return err
 		}
 	}
-	for i, name := range ruleFiles {
+	for i, name := range names {
 		tmp, e := os.CreateTemp(rulesDir, ".novapanel-fw-")
 		if e != nil {
 			return e
