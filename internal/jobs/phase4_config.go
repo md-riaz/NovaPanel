@@ -135,15 +135,13 @@ func (q *Queue) CreateWordPressConfig(ctx context.Context, jobID, custody string
 		if err := s.CheckOperation(effectCtx, jobID); err != nil {
 			return refuse
 		}
-		if err := configcustody.PublishConfig(effectCtx, custody, binding, raw, seal); err != nil {
-			return err
-		}
+		// Record the recovery obligation before publishing any config bytes.
 		if op.Checkpoint == "db_applied" {
 			if err := s.CheckpointOperation(effectCtx, jobID, "db_applied", "config_published"); err != nil {
 				return err
 			}
 		}
-		return nil
+		return configcustody.PublishConfig(effectCtx, custody, binding, raw, seal)
 	})
 }
 

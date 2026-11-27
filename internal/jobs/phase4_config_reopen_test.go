@@ -176,7 +176,7 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 		}
 	}
 
-	// Trigger a real SQL checkpoint failure after actual no-replace publication.
+	// A checkpoint failure must precede any config publication.
 	if err = s.Tx(ctx, func(tx *sql.Tx) error {
 		_, e := tx.ExecContext(ctx, `CREATE TRIGGER stop_config BEFORE UPDATE OF checkpoint ON phase4_operations WHEN NEW.checkpoint='config_published' BEGIN SELECT RAISE(ABORT,'injected'); END`)
 		return e
@@ -196,9 +196,23 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 		if err := s.CheckpointOperation(ctx, j.ID, "prepared", "db_applied"); err != nil {
 			return err
 		}
-		err := q.CreateWordPressConfig(ctx, j.ID, custody, isolate)
-		if err == nil {
+		if err := q.CreateWordPressConfig(ctx, j.ID, custody, isolate); err == nil {
 			t.Error("checkpoint failure ignored")
+		}
+		if _, err := os.Lstat(filepath.Join(docroot, "wp-config.php")); !os.IsNotExist(err) {
+			t.Error("config published before checkpoint", err)
+		}
+		if err := s.Tx(ctx, func(tx *sql.Tx) error { _, e := tx.ExecContext(ctx, "DROP TRIGGER stop_config"); return e }); err != nil {
+			return err
+		}
+		err := q.CreateWordPressConfig(ctx, j.ID, custody, func(ctx context.Context, b configcustody.ConfigBinding, effect func(context.Context) error) error {
+			if err := isolate(ctx, b, effect); err != nil {
+				return err
+			}
+			return errors.New("injected post-publication failure")
+		})
+		if err == nil {
+			t.Error("post-publication failure ignored")
 		}
 		close(published)
 		<-ctx.Done()
@@ -227,7 +241,7 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 		}
 	}
 	op, err := s.LoadOperation(ctx, en.Job.ID)
-	if err != nil || op.Checkpoint != "db_applied" || len(op.Ciphertext) == 0 {
+	if err != nil || op.Checkpoint != "config_published" || len(op.Ciphertext) == 0 {
 		t.Fatal("lost original recovery", err)
 	}
 	record, err := os.ReadFile(filepath.Join(custody, en.Job.ID+".sealed"))
@@ -242,9 +256,6 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 	}
 	s, err = store.Open(dbpath)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err = s.Tx(ctx, func(tx *sql.Tx) error { _, e := tx.ExecContext(ctx, "DROP TRIGGER stop_config"); return e }); err != nil {
 		t.Fatal(err)
 	}
 	if err = auditSink.Close(); err != nil {
