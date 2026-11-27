@@ -289,6 +289,15 @@ func (q *Queue) operationTerminal(ctx context.Context, j Job) (bool, error) {
 		return true, e
 	}
 	if j.State != "done" {
+		if op.Kind == store.WordPressInstall && j.Step == store.FreshWordPressRollbackCleanedStep {
+			clean, ok := q.store.(interface {
+				CompleteFreshWordPressRollback(context.Context, string) error
+			})
+			if !ok {
+				return true, ErrRecoveryBlocked
+			}
+			return true, clean.CompleteFreshWordPressRollback(ctx, j.ID)
+		}
 		if unapplied, _ := ctx.Value(operationUnappliedKey{}).(bool); unapplied {
 			if clean, ok := q.store.(interface {
 				FailUnappliedOperation(context.Context, string, string) error

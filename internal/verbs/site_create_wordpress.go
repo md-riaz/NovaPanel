@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"time"
 
 	"novapanel/internal/agent"
 	"novapanel/internal/database"
@@ -33,6 +34,9 @@ func freshWordPressSiteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.J
 	}
 	if identity.AllocatingJob != j.ID || identity.UID != identity.GID || identity.UID < 2000000 || identity.UID > 2999999 {
 		return rpc.Errf("precondition_failed", "Reserved site identity changed")
+	}
+	if j.Step == store.FreshWordPressRollbackStep || j.Step == store.FreshWordPressRollbackCleanedStep {
+		return rollbackFreshWordPress(ctx, a, j, op, identity)
 	}
 	if err = func() error {
 		unlock, err := a.Jobs.LockSiteOSUser(ctx, siteID, identity.Name)
@@ -88,4 +92,54 @@ func freshWordPressSiteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.J
 		version := "8.3"
 		return a.Nginx.Apply(ctx, nginx.Desired{Name: identity.Name, Domains: []string{op.Identity.WordPress.Input.PrimaryDomain}, Docroot: identity.Docroot, PHPVersion: &version, ACMERoot: filepath.Join(a.Cfg.ACMEWebroot, identity.Name)})
 	})
+}
+
+// rollbackFreshWordPress keeps site and account locks while all external stores
+// are torn down, then durably marks cleanup before removing custody material.
+func rollbackFreshWordPress(ctx context.Context, a *agent.Agent, j *jobs.Job, op store.Operation, identity store.SiteLifetime) error {
+	unlock, err := a.Jobs.LockSiteOSUser(ctx, identity.SiteID, identity.Name)
+	if err != nil {
+		return errors.Join(jobs.ErrRetry, err)
+	}
+	defer unlock()
+	if err = a.Store.CheckFreshSiteLifetime(ctx, identity); err != nil {
+		return errors.Join(jobs.ErrRetry, err)
+	}
+	if j.Step == store.FreshWordPressRollbackStep {
+		domain, err := platform.CreateInstallDomain(identity.SiteID)
+		if err != nil {
+			return errors.Join(jobs.ErrRetry, err)
+		}
+		err = domain.WithEmpty(ctx, func(work context.Context) error {
+			if err := php.DeleteReservedUser(work, a.Exec, a.Cfg.SitesRoot, identity.Name, identity.SiteID, identity.UID); err != nil {
+				return err
+			}
+			if err := platform.RemoveFreshSitePaths(a.Cfg.SitesRoot, a.Cfg.LogDir, identity.Name, identity.UID); err != nil {
+				return err
+			}
+			if err := databaseReady(work, a.Exec); err != nil {
+				return err
+			}
+			account := op.Identity.Accounts[0]
+			return database.RollbackFreshCreate(work, a.Exec, op.Identity.Database.Name, op.DatabaseID, account.Username, account.ID)
+		})
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		closeErr := domain.Close(closeCtx)
+		cancel()
+		if err = errors.Join(err, closeErr); err != nil {
+			return errors.Join(jobs.ErrRetry, err)
+		}
+		if err = a.Store.MarkFreshWordPressRollbackCleaned(ctx, j.ID); err != nil {
+			return errors.Join(jobs.ErrRetry, err)
+		}
+		j.Step = store.FreshWordPressRollbackCleanedStep
+	}
+	if err = a.Jobs.CleanupFreshWordPressRollbackConfig(ctx, j.ID); err != nil {
+		return errors.Join(jobs.ErrRetry, err)
+	}
+	code := j.Code
+	if code == "" {
+		code = "agent_error"
+	}
+	return rpc.Errf(code, "WordPress installation failed")
 }

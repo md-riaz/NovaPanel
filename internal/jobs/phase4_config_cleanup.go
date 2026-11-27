@@ -102,3 +102,51 @@ func (q *Queue) reconcileConfigRecords(ctx context.Context) error {
 	}
 	return nil
 }
+
+// CleanupFreshWordPressRollbackConfig authenticates the sealed record before
+// removal after the site-bound external teardown checkpoint is durable.
+func (q *Queue) CleanupFreshWordPressRollbackConfig(ctx context.Context, jid string) error {
+	lease, _ := ctx.Value(configWorkerKey{}).(*configWorkerLease)
+	if lease == nil || lease.queue != q || lease.job != jid || !lease.active.Load() {
+		return ErrRecoveryBlocked
+	}
+	s, ok := q.store.(interface {
+		LoadOperation(context.Context, string) (store.Operation, error)
+		LoadSiteLifetime(context.Context, string) (store.SiteLifetime, error)
+		CheckFreshSiteLifetime(context.Context, store.SiteLifetime) error
+	})
+	seal, hasSeal := q.sealer.(*secret.Sealer)
+	if !ok || !hasSeal {
+		return ErrRecoveryBlocked
+	}
+	op, err := s.LoadOperation(ctx, jid)
+	if err != nil || op.Kind != store.WordPressInstall || op.Identity.WordPress == nil {
+		return ErrRecoveryBlocked
+	}
+	held, _ := ctx.Value(heldLocksKey{}).(map[string]bool)
+	for _, key := range op.Keys() {
+		if !held[key] {
+			return ErrRecoveryBlocked
+		}
+	}
+	j, err := q.store.GetJob(ctx, jid)
+	if err != nil || j.State != "running" || j.Step != store.FreshWordPressRollbackCleanedStep {
+		return ErrRecoveryBlocked
+	}
+	identity, err := s.LoadSiteLifetime(ctx, op.SiteID)
+	if err != nil || identity.AllocatingJob != jid || s.CheckFreshSiteLifetime(ctx, identity) != nil {
+		return ErrRecoveryBlocked
+	}
+	w := op.Identity.WordPress
+	if identity.Name != w.Input.SiteName || identity.UID != w.Input.UID || identity.GID != w.Input.GID {
+		return ErrRecoveryBlocked
+	}
+	q.mu.Lock()
+	root := q.configCustody
+	q.mu.Unlock()
+	if root == "" {
+		return ErrRecoveryBlocked
+	}
+	b := configcustody.ConfigBinding{JobID: jid, SiteID: op.SiteID, DatabaseID: op.DatabaseID, AccountID: op.Identity.Database.PrimaryUserID, Docroot: identity.Docroot, UID: identity.UID, GID: identity.GID}
+	return configcustody.RemoveConfigRecord(ctx, root, b, seal)
+}

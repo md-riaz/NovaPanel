@@ -13,7 +13,7 @@ import (
 )
 
 // RemoveConfigRecord removes only authenticated recovery material. The operation
-// owner must first prove durable successful terminality and exclude root writers.
+// owner must first prove durable terminality or completed rollback and exclude root writers.
 // It never opens or deletes the live site configuration.
 func RemoveConfigRecord(ctx context.Context, custody string, b ConfigBinding, seal *secret.Sealer) error {
 	if b.UID == 0 || b.GID == 0 || b.UID == ^uint32(0) || b.GID == ^uint32(0) {
