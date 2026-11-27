@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	runner "novapanel/internal/exec"
@@ -51,5 +52,19 @@ func TestVerifyPackagedTool(t *testing.T) {
 	}
 	if err := verify(); err == nil {
 		t.Fatal("writable PHAR accepted")
+	}
+}
+
+func TestPackagedCLIWithReviewedINI(t *testing.T) {
+	if _, err := os.Stat("/usr/bin/php8.3"); os.IsNotExist(err) {
+		t.Skip("Ubuntu PHP 8.3 unavailable")
+	}
+	root, err := filepath.Abs(filepath.Join("..", "..", "packaging", "rootfs", "usr", "lib", "novapanel", "wpcli"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, stderr, code, err := (runner.Real{}).Run(context.Background(), "/usr/bin/php8.3", []string{"-c", filepath.Join(root, "php.ini"), filepath.Join(root, "wp-cli-2.12.0.phar"), "--info"}, runner.RunOpts{Dir: root, Env: []string{"PATH=/usr/bin:/bin", "PHP_INI_SCAN_DIR=/dev/null"}})
+	if err != nil || code != 0 || !strings.Contains(string(out), "WP-CLI version:\t2.12.0") {
+		t.Fatalf("packaged CLI failed: code=%d err=%v stderr=%s", code, err, stderr)
 	}
 }

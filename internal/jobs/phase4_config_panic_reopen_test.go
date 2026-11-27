@@ -310,7 +310,7 @@ func TestWordPressConfigIsolationPanicRetainsRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(claim) != 2 || len(claim["wordpress"].(map[string]any)) != 3 {
+	if len(claim) != 2 || len(claim["wordpress"].(map[string]any)) != 2 {
 		t.Fatal("claim leaked noncanonical fields")
 	}
 	if _, err = q.Claim(ctx, en.Job.ID, en.ClaimToken); err == nil {
