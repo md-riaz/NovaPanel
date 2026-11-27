@@ -71,7 +71,8 @@ func TestTLSPrimaryPublicationExecutor(t *testing.T) {
 							old, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "demo.test/current"))
 							target, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "alias.test/current"))
 							config, _ := os.ReadFile(filepath.Join(f.a.Nginx.Root, "sites-available/demo.conf"))
-							restored = old == f.oldPointer && target == f.targetPointer && string(config) == string(f.oldConfig)
+							domain, domainErr := f.st.DomainByID(context.Background(), f.oldID)
+							restored = domainErr == nil && domain.IsPrimary && old == f.oldPointer && target == f.targetPointer && string(config) == string(f.oldConfig)
 							cancel()
 						}
 					}
@@ -121,10 +122,16 @@ func TestTLSPrimaryPublicationExecutor(t *testing.T) {
 				if err != nil || strings.Contains(string(pending), "PRIVATE KEY") || strings.Contains(string(pending), "CERTIFICATE") {
 					t.Fatalf("invalid intent: %s %v", pending, err)
 				}
+				if failure != "success" {
+					domain, e := f.st.DomainByID(context.Background(), f.oldID)
+					if e != nil || !domain.IsPrimary {
+						t.Fatalf("primary committed after failure: %+v %v", domain, e)
+					}
+				}
 				if (failure == "-t" || failure == "reload" || failure == "probe" || failure == "database") && !restored {
 					t.Fatal("failed publication did not restore previous state before retry")
 				}
-				if (failure == "crash" || failure == "binding" || failure == "cancel") && len(pending) == 0 {
+				if failure == "cancel" || ((failure == "crash" || failure == "binding") && len(pending) == 0) {
 					old, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "demo.test/current"))
 					target, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "alias.test/current"))
 					config, _ := os.ReadFile(filepath.Join(f.a.Nginx.Root, "sites-available/demo.conf"))
