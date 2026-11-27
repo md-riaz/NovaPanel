@@ -292,6 +292,7 @@ CREATE TABLE sites (
   ssl_auto     INTEGER NOT NULL DEFAULT 1,  -- Let's Encrypt auto-renew; always ignored for a manual cert
   maintenance  INTEGER NOT NULL DEFAULT 0,
   status       TEXT NOT NULL DEFAULT 'creating' CHECK (status IN ('creating','active','failed','deleting')),  -- lifecycle (F6); site.list/get return it
+  lifetime_state TEXT NOT NULL DEFAULT 'served' CHECK (lifetime_state IN ('provisioning','served')), -- Phase 4: irreversible serving disposition
   config_hash  TEXT,                  -- hash of the last rendered nginx config (skip-reload compare)
   created      INTEGER NOT NULL,
   updated      INTEGER NOT NULL
@@ -317,6 +318,9 @@ CREATE TABLE redirects (
   code     INTEGER NOT NULL CHECK (code IN (301,302))
 );
 ```
+
+Existing sites and ordinary creations default to `served`; only the future fresh WordPress creation path may insert `provisioning`. The `provisioning` to `served` transition is committed before enabling serving, and a database trigger forbids reversal. `provisioning` is reserved for a never-served account bound to its original managed lifetime.
+
 ACME account key + registration are stored in `secrets` (name `acme:account`). TLS cert/key live on
 disk under `tls_dir/<fqdn>/` (versioned dir + symlink swap, B-D9), not in the DB.
 
