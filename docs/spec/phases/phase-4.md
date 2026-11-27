@@ -3,7 +3,7 @@
 ## Status (per step)
 - **Step 1 — MariaDB DB/user lifecycle:** merged (#109).
 - **Step 2 — PHP runtime (user marking/hardening + FPM pool, `php.set`/`php.list`):** merged (#129).
-- **Step 3 — WordPress install:** pending.
+- **Step 3 — WordPress install:** activated for fresh accounts; verification remains required.
 
 Every Verification row and DoD box below is tagged with its step.
 
@@ -69,7 +69,7 @@ mergeable — not one 285-file mega-draft. Drive each with `docs/spec/PHASE-DRIV
    per-site DB + dedicated user bound to loopback, **least-privilege grant** (never `*.*`), generated
    names + show-once passwords; the **agent authenticates to MariaDB as root via `unix_socket`** (no
    stored admin password anywhere).
-4. **WordPress install** (**Step 3**; `site.create type=wordpress`): `wp core download` →
+4. **WordPress install** (**Step 3**; `site.create type=wordpress`): pinned tarball download and confined extraction →
    `wp core verify-checksums` → protected config publish → `wp core install`, run **as the site user**,
    `wp-config.php` perms `0400`; refuse a non-empty docroot on the first attempt and resume only the same provisioning job.
 5. **Guard** (Step 3): no destructive WordPress ops (update/clone/staging) until backups/restore land (Phase 6).
@@ -427,7 +427,7 @@ replay test against a simulated mid-op stop.
 
 ### WordPress install (reference — fixed argv, run as the site user)
 ```
-wp core download --version=<v> --path=/srv/sites/{{site}}/public        # refuse if docroot non-empty → precondition_failed
+NovaPanel downloads the pinned tarball and extracts it as the site user        # refuse if docroot non-empty → precondition_failed
 wp core verify-checksums --version=<v>                                   # mismatch → agent_error (tampered); NEVER --insecure
 # ComposeConfig in Go, then ConfigIsolation publishes site-owned 0400 wp-config.php
 wp core install --url=https://{{domain}} --title=... --admin_user=... \
