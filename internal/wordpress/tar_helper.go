@@ -3,10 +3,12 @@ package wordpress
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +16,25 @@ import (
 
 	"golang.org/x/sys/unix"
 )
+
+// ErrDownloadRetry identifies a transport interruption, never verification failure.
+var ErrDownloadRetry = errors.New("wordpress: download interrupted")
+
+const ExtractRetryExit = 75
+
+func transientDownload(err error) bool {
+	if errors.Is(err, errStaged) {
+		return false
+	}
+	var unknown x509.UnknownAuthorityError
+	var hostname x509.HostnameError
+	var invalid x509.CertificateInvalidError
+	if errors.As(err, &unknown) || errors.As(err, &hostname) || errors.As(err, &invalid) {
+		return false
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) || errors.Is(err, unix.ECONNRESET) || errors.Is(err, unix.ECONNREFUSED)
+}
 
 // ExtractFreshCore downloads and extracts as the already-confined site UID.
 func ExtractFreshCore(ctx context.Context, docroot string) error {
@@ -68,9 +89,15 @@ func ExtractFreshCore(ctx context.Context, docroot string) error {
 		}
 		resp, e := client.Do(req)
 		if e != nil {
+			if transientDownload(e) {
+				return ErrDownloadRetry
+			}
 			return errStaged
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+			return ErrDownloadRetry
+		}
 		if resp.StatusCode != http.StatusOK || resp.ContentLength > 64<<20 {
 			return errStaged
 		}
@@ -90,6 +117,9 @@ func ExtractFreshCore(ctx context.Context, docroot string) error {
 		}
 		if e == nil {
 			_, e = io.Copy(f, io.LimitReader(resp.Body, (64<<20)+1))
+			if transientDownload(e) {
+				e = ErrDownloadRetry
+			}
 		}
 		if e == nil {
 			e = f.Sync()
@@ -101,6 +131,9 @@ func ExtractFreshCore(ctx context.Context, docroot string) error {
 			e = e2
 		}
 		if e != nil {
+			if errors.Is(e, ErrDownloadRetry) {
+				return e
+			}
 			return errStaged
 		}
 		if e = core.Rename(tmp, name); e != nil {

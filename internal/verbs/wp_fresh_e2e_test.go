@@ -5,6 +5,7 @@ package verbs_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,7 +27,10 @@ import (
 // The test binary also serves as the confined site-UID extraction child.
 func TestMain(m *testing.M) {
 	if len(os.Args) == 3 && os.Args[1] == "__wordpress-extract" {
-		if wordpress.ExtractFreshCore(context.Background(), os.Args[2]) != nil {
+		if err := wordpress.ExtractFreshCore(context.Background(), os.Args[2]); err != nil {
+			if errors.Is(err, wordpress.ErrDownloadRetry) {
+				os.Exit(wordpress.ExtractRetryExit)
+			}
 			os.Exit(1)
 		}
 		os.Exit(0)

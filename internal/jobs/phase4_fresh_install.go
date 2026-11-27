@@ -28,7 +28,10 @@ func runFreshInstall(ctx context.Context, lifetime *WordPressLifetime, artifacts
 		lifetime.mu.Unlock()
 	} else {
 		for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums} {
-			if _, _, code, err := lifetime.runReviewed(ctx, reviewedInstallChild{kind: kind}); err != nil || code != 0 {
+			if out, stderr, code, err := lifetime.runReviewed(ctx, reviewedInstallChild{kind: kind}); err != nil || code != 0 {
+				if (kind == wordpress.Download && code == wordpress.ExtractRetryExit) || (kind == wordpress.VerifyChecksums && code == 1 && len(out) == 0 && strings.TrimSpace(string(stderr)) == "Error: Couldn't get checksums from WordPress.org.") {
+					return ErrRetry
+				}
 				return errors.New("jobs: WordPress artifact step failed")
 			}
 			if kind == wordpress.Download {
