@@ -26,6 +26,9 @@ import (
 func TestACMERecoveryWithUnrelatedCompositeSnapshot(t *testing.T) {
 	f := newACMEWorkerFixture(t)
 	ctx := context.Background()
+	if err := f.a.Jobs.PrepareStartup(ctx); err != nil {
+		t.Fatal(err)
+	}
 	st := f.a.Store
 	sid, _ := id.New()
 	oldID, _ := id.New()
@@ -132,7 +135,9 @@ func TestACMERecoveryWithUnrelatedCompositeSnapshot(t *testing.T) {
 	f.server.ConfigureJobs()
 	startup, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	_ = f.a.Jobs.PrepareStartup(startup)
+	if err = f.a.Jobs.PrepareStartup(startup); !errors.Is(err, jobs.ErrRecoveryBlocked) {
+		t.Fatalf("pending composite must block its own startup: %v", err)
+	}
 	j, err := st.GetJob(ctx, issue)
 	if err != nil || j.State != "done" {
 		t.Fatalf("ACME recovery: %+v %v", j, err)
@@ -145,6 +150,10 @@ func TestACMERecoveryWithUnrelatedCompositeSnapshot(t *testing.T) {
 	}
 	if anomaly, err := st.Setting(ctx, "tls:publication:unreconciled:v1"); err == nil {
 		t.Fatalf("orphaned: %s", anomaly)
+	}
+	parentJob, err := st.GetJob(ctx, parent)
+	if err != nil || parentJob.State != "queued" {
+		t.Fatalf("composite not requeued: %+v %v", parentJob, err)
 	}
 	children, err := st.OperationChildren(ctx, parent)
 	if err != nil || len(children) != 2 || children[0].Status != "committed" || children[1].Status != "pending" {
