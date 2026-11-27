@@ -67,7 +67,7 @@ func runFreshInstall(ctx context.Context, lifetime *WordPressLifetime, artifacts
 }
 
 // InstallFreshWordPress holds the fresh-account lifetime through serving release.
-func (q *Queue) InstallFreshWordPress(ctx context.Context, jobID string, identity store.SiteLifetime, release func() error) error {
+func (q *Queue) InstallFreshWordPress(ctx context.Context, jobID string, identity store.SiteLifetime, resumeCheckpoint string, release func() error) error {
 	s, ok := q.store.(interface {
 		operationStore
 		CheckpointOperation(context.Context, string, string, string) error
@@ -81,8 +81,14 @@ func (q *Queue) InstallFreshWordPress(ctx context.Context, jobID string, identit
 	if err != nil {
 		return err
 	}
+	if resumeCheckpoint != "" {
+		if initial.Checkpoint != "verification_in_progress" || (resumeCheckpoint != "verified_resumable" && resumeCheckpoint != "config_published" && resumeCheckpoint != "verified") {
+			return rpcerr.Errf("precondition_failed", "WordPress preflight checkpoint changed")
+		}
+		initial.Checkpoint = resumeCheckpoint
+	}
 	activated := s.CheckActivatedSiteLifetime(ctx, identity, jobID) == nil
-	if !activated {
+	if !activated && resumeCheckpoint == "" {
 		if initial.Checkpoint != "db_applied" && initial.Checkpoint != "verified_resumable" && initial.Checkpoint != "config_published" && initial.Checkpoint != "verified" {
 			return rpcerr.Errf("precondition_failed", "WordPress install requires reconciliation")
 		}

@@ -39,12 +39,17 @@ func freshWordPressSiteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.J
 	if j.Step == store.FreshWordPressRollbackStep || j.Step == store.FreshWordPressRollbackCleanedStep {
 		return rollbackFreshWordPress(ctx, a, j, op, identity)
 	}
+	resumeCheckpoint := ""
 	if err = func() error {
 		unlock, err := a.Jobs.LockSiteOSUser(ctx, siteID, identity.Name)
 		if err != nil {
 			return err
 		}
 		defer unlock()
+		resumeCheckpoint, err = a.Store.BeginFreshSitePreflight(ctx, j.ID, identity)
+		if err != nil {
+			return err
+		}
 		if err = a.Store.CheckOperation(ctx, j.ID); err != nil {
 			return err
 		}
@@ -78,7 +83,7 @@ func freshWordPressSiteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.J
 	}(); err != nil {
 		return err
 	}
-	return a.Jobs.InstallFreshWordPress(ctx, j.ID, identity, func() error {
+	return a.Jobs.InstallFreshWordPress(ctx, j.ID, identity, resumeCheckpoint, func() error {
 		limits, err := a.Store.SitePHPLimits(ctx, siteID)
 		if err != nil {
 			return err

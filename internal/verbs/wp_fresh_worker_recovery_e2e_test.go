@@ -4,7 +4,9 @@ package verbs_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -24,6 +26,26 @@ import (
 	"novapanel/internal/wordpress"
 )
 
+type preflightFailureRunner struct {
+	base        runner.Real
+	armed       atomic.Bool
+	hit         atomic.Bool
+	name, jobID string
+	store       *store.Store
+}
+
+func (r *preflightFailureRunner) Run(ctx context.Context, program string, args []string, opts runner.RunOpts) ([]byte, []byte, int, error) {
+	if program == "/usr/bin/getent" && len(args) == 2 && args[0] == "passwd" && args[1] == r.name && r.armed.CompareAndSwap(true, false) {
+		op, err := r.store.LoadOperation(ctx, r.jobID)
+		if err != nil || op.Checkpoint != "verification_in_progress" {
+			return nil, nil, -1, errors.New("account preflight ran without invalidation")
+		}
+		r.hit.Store(true)
+		return nil, nil, -1, errors.New("injected account ownership preflight failure")
+	}
+	return r.base.Run(ctx, program, args, opts)
+}
+
 // The hook terminates the worker only after a real checkpoint commits.
 func TestFreshWordPressWorkerCheckpointRecoveryOfflineE2E(t *testing.T) {
 	if os.Geteuid() != 0 || os.Getenv("NOVAPANEL_DISPOSABLE_UID_LAB") != "1" || os.Getenv("NOVAPANEL_FRESH_WP_MIRROR_LAB") != "1" {
@@ -42,6 +64,8 @@ func TestFreshWordPressWorkerCheckpointRecoveryOfflineE2E(t *testing.T) {
 	}
 	defer log.Close()
 	a := agent.New()
+	fault := &preflightFailureRunner{store: st}
+	a.Exec = fault
 	a.Store = st
 	a.Audit = log
 	a.Secret, err = secret.New(make([]byte, 32))
@@ -165,14 +189,15 @@ func TestFreshWordPressWorkerCheckpointRecoveryOfflineE2E(t *testing.T) {
 		}
 		recoverWorker()
 	}
+	pinsAtActivation := pinChecks.Load()
 	cancel, done := start()
 	result := wait(first.Job.ID)
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if result.State != "done" || checksumRequests() != baseline+1 {
-		t.Fatalf("safe replay failed: %+v", result)
+	if result.State != "done" || checksumRequests() != baseline+1 || pinChecks.Load() != pinsAtActivation {
+		t.Fatalf("activated replay was not finalize-only: %+v", result)
 	}
 	site, err := st.SiteByName(ctx, name)
 	if err != nil || site.Status != "active" {
@@ -206,13 +231,39 @@ func TestFreshWordPressWorkerCheckpointRecoveryOfflineE2E(t *testing.T) {
 	cancel, done = start()
 	stop(cancel, done, reached, second.Job.ID)
 	recoverWorker()
-	// The next attempt invalidates its safe checkpoint before checking the pin/tool.
-	reached = pause("verification_in_progress")
+	// Fail a real account check after the committed invalidation, and refuse
+	// the rollback fence so startup must recover from the preflight state.
+	fault.name, fault.jobID = name2, second.Job.ID
+	if err = st.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `CREATE TRIGGER test_fail_preflight_fence BEFORE UPDATE OF step ON jobs WHEN NEW.step='wordpress_rollback_intent' BEGIN SELECT RAISE(FAIL,'injected rollback fence failure'); END`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fault.armed.Store(true)
 	cancel, done = start()
-	stop(cancel, done, reached, second.Job.ID)
+	select {
+	case err := <-done:
+		if !errors.Is(err, jobs.ErrRetry) {
+			t.Fatalf("preflight fence failure: %v", err)
+		}
+	case <-time.After(180 * time.Second):
+		cancel()
+		t.Fatal("preflight failure did not stop worker")
+	}
+	cancel()
+	if !fault.hit.Load() {
+		t.Fatal("account preflight was not exercised")
+	}
 	op, err := st.LoadOperation(ctx, second.Job.ID)
 	if err != nil || op.Checkpoint != "verification_in_progress" {
 		t.Fatalf("preflight checkpoint=%s err=%v", op.Checkpoint, err)
+	}
+	if err = st.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `DROP TRIGGER test_fail_preflight_fence`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
 	}
 	recoverWorker()
 	j, err := st.GetJob(ctx, second.Job.ID)

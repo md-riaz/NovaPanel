@@ -9,6 +9,43 @@ import (
 const FreshWordPressRollbackStep = "wordpress_rollback"
 const FreshWordPressRollbackIntentStep = "wordpress_rollback_intent"
 
+// BeginFreshSitePreflight invalidates a provisioning resume before account checks.
+func (s *Store) BeginFreshSitePreflight(ctx context.Context, jid string, l SiteLifetime) (string, error) {
+	var prior string
+	err := s.Tx(ctx, func(tx *sql.Tx) error {
+		op, err := loadOperation(ctx, tx, jid)
+		if err != nil {
+			return err
+		}
+		if op.Kind != WordPressInstall || op.SiteID != l.SiteID || l.AllocatingJob != jid {
+			return ErrSitePrecondition
+		}
+		if op.Checkpoint != "verified_resumable" && op.Checkpoint != "config_published" && op.Checkpoint != "verified" {
+			return nil
+		}
+		var state string
+		if err := tx.QueryRowContext(ctx, `SELECT lifetime_state FROM sites WHERE id=?`, l.SiteID).Scan(&state); err != nil {
+			return err
+		}
+		if state == "served" {
+			return nil
+		}
+		if state != "provisioning" {
+			return ErrSitePrecondition
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE phase4_operations SET checkpoint='verification_in_progress',updated=? WHERE job_id=? AND checkpoint=?`, s.clock.Now(), jid, op.Checkpoint)
+		if err = affected(result, err); err != nil {
+			return err
+		}
+		prior = op.Checkpoint
+		return nil
+	})
+	if err == nil && prior != "" {
+		freshCheckpointTestHook(ctx, jid, "verification_in_progress")
+	}
+	return prior, err
+}
+
 // PersistFreshWordPressRollbackIntent fences installation before rollback is entered.
 func (s *Store) PersistFreshWordPressRollbackIntent(ctx context.Context, jid, code string) error {
 	if code == "" {
