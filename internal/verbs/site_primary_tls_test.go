@@ -106,6 +106,17 @@ func TestTLSPrimaryPublicationExecutor(t *testing.T) {
 				if err != nil || strings.Contains(string(pending), "PRIVATE KEY") || strings.Contains(string(pending), "CERTIFICATE") {
 					t.Fatalf("invalid intent: %s %v", pending, err)
 				}
+				if failure != "success" && len(pending) == 0 {
+					job, e := f.st.GetJob(context.Background(), f.job)
+					if e == nil && job.State != "done" {
+						old, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "demo.test/current"))
+						target, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "alias.test/current"))
+						config, _ := os.ReadFile(filepath.Join(f.a.Nginx.Root, "sites-available/demo.conf"))
+						if old != f.oldPointer || target != f.targetPointer || string(config) != string(f.oldConfig) {
+							t.Fatal("failed publication did not restore previous state")
+						}
+					}
+				}
 				if failure == "crash" || failure == "binding" || failure == "cancel" {
 					if failure != "cancel" {
 						maintenance := false

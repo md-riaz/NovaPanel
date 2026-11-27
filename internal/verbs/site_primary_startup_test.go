@@ -171,62 +171,6 @@ func runPrimaryQueue(t *testing.T, a *agent.Agent, jid string) {
 		time.Sleep(time.Millisecond)
 	}
 }
-func (f *primaryRestart) check(t *testing.T, success bool) {
-	t.Helper()
-	ctx := context.Background()
-	j, err := f.st.GetJob(ctx, f.job)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if success && (j.State != "done" || j.Step != "tls_committed") {
-		t.Fatalf("original job not completed: %+v", j)
-	}
-	if !success && j.State != "failed" {
-		t.Fatalf("original job not failed: %+v", j)
-	}
-	ds, err := f.st.ListDomains(ctx, f.site)
-	if err != nil {
-		t.Fatal(err)
-	}
-	count := 0
-	for _, d := range ds {
-		if d.IsPrimary {
-			count++
-			if (success && d.ID != f.newID) || (!success && d.ID != f.oldID) {
-				t.Fatal("wrong primary")
-			}
-		}
-	}
-	if count != 1 {
-		t.Fatal("not exactly one primary")
-	}
-	old, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "demo.test/current"))
-	if old != f.oldPointer {
-		t.Fatal("old pointer changed")
-	}
-	config, err := os.ReadFile(filepath.Join(f.a.Nginx.Root, "sites-available/demo.conf"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if success {
-		cert, err := os.ReadFile(filepath.Join(f.a.Cfg.TLSDir, "alias.test/current/fullchain.pem"))
-		if err != nil || string(cert) != f.cert {
-			t.Fatal("certificate changed")
-		}
-		if !strings.Contains(string(config), "alias.test/current/") || !strings.Contains(string(config), "return 503") {
-			t.Fatal("wrong promoted config")
-		}
-	} else {
-		target, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "alias.test/current"))
-		if target != f.targetPointer || string(config) != string(f.oldConfig) {
-			t.Fatal("rollback did not restore config and target")
-		}
-	}
-	raw, err := f.st.TLSIntent(ctx)
-	if err != nil || len(raw) != 0 {
-		t.Fatalf("journal retained: %s %v", raw, err)
-	}
-}
 func TestPrimaryTLSActualQueueStartup(t *testing.T) {
 	for _, replacement := range []bool{false, true} {
 		for _, mode := range []string{"success", "probe", "cancel", "metadata"} {
