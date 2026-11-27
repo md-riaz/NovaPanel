@@ -5,10 +5,10 @@ import (
 	"database/sql"
 )
 
-// PendingOperations returns a bounded batch without adopting expired tombstones.
+// PendingOperations returns startup-blocking journals; fresh installs resume in the worker.
 // Unknown journal kinds fail when the queue loads their typed identities.
 func (s *Store) PendingOperations(ctx context.Context) ([]Job, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+jobColumns+" FROM jobs WHERE EXISTS(SELECT 1 FROM phase4_operations o WHERE o.job_id=jobs.id AND o.checkpoint NOT IN ('done','expired')) ORDER BY created,id LIMIT 100")
+	rows, err := s.db.QueryContext(ctx, "SELECT "+jobColumns+" FROM jobs WHERE EXISTS(SELECT 1 FROM phase4_operations o WHERE o.job_id=jobs.id AND o.checkpoint NOT IN ('done','expired') AND NOT(o.kind='wordpress_install' AND EXISTS (SELECT 1 FROM sites WHERE sites.id=o.site_id AND sites.lifetime_state='provisioning'))) ORDER BY created,id LIMIT 100")
 	if err != nil {
 		return nil, err
 	}
