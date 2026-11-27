@@ -59,7 +59,7 @@ func TestFreshLifetimeSQLiteActivationReplay(t *testing.T) {
 		}{
 			{`INSERT INTO sites(id,name,type,docroot,status,created,updated,lifetime_state) VALUES(?,'example','wordpress','/sites/example/public','creating',1,1,'provisioning')`, []any{siteID}},
 			{`INSERT INTO domains(id,site_id,fqdn,is_primary,created) VALUES(?,?,'example.test',1,1)`, []any{domainID, siteID}},
-			{`INSERT INTO jobs(id,verb,args_json,object_key,effectful,actor,role,created_by,state,created,updated) VALUES(?,'wp.install','{}',?,1,'fixture','owner','session','running',1,1)`, []any{jid, "site:" + siteID}},
+			{`INSERT INTO jobs(id,verb,args_json,object_key,effectful,actor,role,created_by,state,created,updated) VALUES(?,'site.create','{}',?,1,'fixture','owner','session','running',1,1)`, []any{jid, "site:" + siteID}},
 			{`INSERT INTO site_account_provenance(site_id,account_name,uid,gid,allocating_job,evidence) VALUES(?,'example',123,456,?,'owned')`, []any{siteID, jid}},
 			{`INSERT INTO phase4_operations(job_id,kind,site_id,db_id,checkpoint,identities_json,nonce,ciphertext,expires,updated) VALUES(?,'wordpress_install',?,?,'db_applied',?,?,?,?,1)`, []any{jid, siteID, dbID, string(identJSON), sealed.Nonce, sealed.Ciphertext, time.Now().Add(time.Hour).UnixMilli()}},
 			{`INSERT INTO job_claims(job_id,claim_hash,nonce,ciphertext,expires) VALUES(?,'fixture',x'',x'',0)`, []any{jid}},
@@ -138,7 +138,13 @@ func TestFreshLifetimeSQLiteActivationReplay(t *testing.T) {
 		if _, _, _, err := l.runReviewed(worker, reviewedInstallChild{kind: wordpress.InstallCore, options: runner.RunOpts{Stdin: strings.NewReader("admin-secret")}}); err != nil {
 			return err
 		}
-		return s.CheckpointOperation(worker, jid, "config_published", "verified")
+		if err := s.CheckpointOperation(worker, jid, "config_published", "verified"); err != nil {
+			return err
+		}
+		if err := s.CompleteOperation(worker, jid, &store.JobClaim{Nonce: []byte{1}, Ciphertext: []byte{2}}); err == nil {
+			return errors.New("terminal publication before activation was accepted")
+		}
+		return nil
 	}
 	err = q.withFreshWordPressLifetime(worker, jid, identity, operation, func(*WordPressLifetime) error {
 		if !domain.closed {
@@ -176,6 +182,10 @@ func TestFreshLifetimeSQLiteActivationReplay(t *testing.T) {
 	}
 	if err := s.CompleteOperation(ctx, jid, &store.JobClaim{Nonce: []byte{1}, Ciphertext: []byte{2}}); err != nil {
 		t.Fatalf("finish: %v", err)
+	}
+	finishedSite, err := s.SiteByID(ctx, siteID)
+	if err != nil || finishedSite.Status != "active" {
+		t.Fatalf("site terminal status: %+v %v", finishedSite, err)
 	}
 	job, err := s.GetJob(ctx, jid)
 	if err != nil || job.State != "done" {

@@ -216,6 +216,16 @@ func completeWordPress(ctx context.Context, tx *sql.Tx, op Operation, now int64,
 	if _, e = tx.ExecContext(ctx, "INSERT INTO wordpress_bindings(site_id,db_id) VALUES(?,?)", op.SiteID, db.ID); e != nil {
 		return e
 	}
+	var verb string
+	if e = tx.QueryRowContext(ctx, "SELECT verb FROM jobs WHERE id=?", op.JobID).Scan(&verb); e != nil {
+		return e
+	}
+	if verb == "site.create" {
+		result, err := tx.ExecContext(ctx, `UPDATE sites SET status='active',updated=? WHERE id=? AND status='creating' AND lifetime_state='served' AND EXISTS (SELECT 1 FROM site_account_provenance WHERE site_id=sites.id AND allocating_job=?)`, now, op.SiteID, op.JobID)
+		if err = affected(result, err); err != nil {
+			return err
+		}
+	}
 	result, e := tx.ExecContext(ctx, "UPDATE job_claims SET nonce=?,ciphertext=?,expires=? WHERE job_id=? AND length(ciphertext)=0 AND claimed=0", claim.Nonce, claim.Ciphertext, now+ClaimTTLMillis, op.JobID)
 	if e = affected(result, e); e != nil {
 		return e
