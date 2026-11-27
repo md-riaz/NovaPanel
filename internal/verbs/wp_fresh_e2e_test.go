@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -141,17 +142,16 @@ func TestFreshWordPressSiteCreateOfflineE2E(t *testing.T) {
 
 type retryRollbackRunner struct {
 	base                     runner.Real
-	accountDeletes, injected int
+	accountDeletes, injected atomic.Int32
 }
 
 func (r *retryRollbackRunner) Run(ctx context.Context, program string, args []string, opts runner.RunOpts) ([]byte, []byte, int, error) {
-	if program == "/usr/bin/mariadb" && r.accountDeletes > 0 && r.injected == 0 {
-		r.injected++
+	if program == "/usr/bin/mariadb" && r.accountDeletes.Load() > 0 && r.injected.CompareAndSwap(0, 1) {
 		return nil, nil, -1, errors.New("injected rollback database failure")
 	}
 	out, stderr, code, err := r.base.Run(ctx, program, args, opts)
 	if program == "/usr/sbin/userdel" && err == nil && code == 0 {
-		r.accountDeletes++
+		r.accountDeletes.Add(1)
 	}
 	return out, stderr, code, err
 }
@@ -243,8 +243,8 @@ func TestFreshWordPressRollbackOfflineE2E(t *testing.T) {
 	if failed.State != "failed" {
 		t.Fatalf("mismatch accepted: %+v", failed)
 	}
-	if failed.Attempts < 3 || fault.injected != 1 || fault.accountDeletes != 1 {
-		t.Fatalf("rollback retry did not converge safely: attempts=%d injected=%d userdel=%d", failed.Attempts, fault.injected, fault.accountDeletes)
+	if failed.Attempts < 3 || fault.injected.Load() != 1 || fault.accountDeletes.Load() != 1 {
+		t.Fatalf("rollback retry did not converge safely: attempts=%d injected=%d userdel=%d", failed.Attempts, fault.injected.Load(), fault.accountDeletes.Load())
 	}
 
 	op, err := st.LoadOperation(ctx, first.Job.ID)

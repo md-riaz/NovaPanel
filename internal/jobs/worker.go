@@ -470,6 +470,9 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 			return nil
 		}
 	}
+	if wordpressInstall && errors.Is(err, ErrRetry) {
+		return q.requeueWordPress(ctx, j.ID)
+	}
 	if freshInstall && j.Step == store.FreshWordPressRollbackCleanedStep && err != nil && !errors.Is(err, ErrRetry) {
 		return q.finish(ctx, j, err)
 	}
@@ -653,7 +656,11 @@ func (q *Queue) beginFreshRollback(ctx context.Context, j Job, code string) erro
 	if err := s.BeginFreshWordPressRollback(ctx, j.ID, code); err != nil {
 		return err
 	}
-	current, err := q.store.GetJob(ctx, j.ID)
+	return q.requeueWordPress(ctx, j.ID)
+}
+
+func (q *Queue) requeueWordPress(ctx context.Context, jid string) error {
+	current, err := q.store.GetJob(ctx, jid)
 	if err != nil {
 		return err
 	}

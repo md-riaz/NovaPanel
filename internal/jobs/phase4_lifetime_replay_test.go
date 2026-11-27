@@ -190,6 +190,9 @@ func TestFreshLifetimeSQLiteActivationReplay(t *testing.T) {
 		}, func(*WordPressLifetime) error {
 			releases++
 			if releases == 1 {
+				return context.DeadlineExceeded
+			}
+			if releases == 2 {
 				return store.ErrSitePrecondition
 			}
 			return nil
@@ -205,7 +208,14 @@ func TestFreshLifetimeSQLiteActivationReplay(t *testing.T) {
 	if err = q.execute(ctx, j); err != nil {
 		t.Fatal(err)
 	}
-	if releases != 2 {
+	j, err = s.GetJob(ctx, jid)
+	if err != nil || j.State != "queued" {
+		t.Fatalf("coded serving failure was not queued: %+v %v", j, err)
+	}
+	if err = q.execute(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	if releases != 3 {
 		t.Fatalf("serving attempts: %d", releases)
 	}
 	finishedSite, err := s.SiteByID(ctx, siteID)
