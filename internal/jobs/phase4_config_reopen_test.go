@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,12 +29,12 @@ func TestGeneratedWordPressCredentialsAreIndependent(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		dbRaw, err := hex.DecodeString(c.DatabasePassword)
-		if err != nil || len(dbRaw) != 24 || seen[c.DatabasePassword] {
+		dbRaw, err := base64.RawURLEncoding.DecodeString(c.DatabasePassword)
+		if err != nil || len(dbRaw) != 32 || seen[c.DatabasePassword] {
 			t.Fatal("invalid or repeated database password")
 		}
 		for _, ch := range c.DatabasePassword {
-			if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9') {
+			if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_') {
 				t.Fatal("database password is not accepted by ManagedCreate")
 			}
 		}
