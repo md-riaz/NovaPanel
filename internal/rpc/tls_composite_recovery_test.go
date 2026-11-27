@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	"novapanel/internal/agent"
@@ -101,7 +102,8 @@ func TestTLSRecoveryRecordsOrphanWithoutOwner(t *testing.T) {
 	for _, raw := range []string{`{"job_id":"01K8WMXZF57CGNZKX1FZ38DZMD"}`, `{"job_id":`} {
 		t.Run(raw, func(t *testing.T) {
 			ctx := context.Background()
-			s, err := store.Open(":memory:")
+			db := filepath.Join(t.TempDir(), "panel.db")
+			s, err := store.Open(db)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -120,6 +122,22 @@ func TestTLSRecoveryRecordsOrphanWithoutOwner(t *testing.T) {
 			intent, err := s.TLSIntent(ctx)
 			if err != nil || string(intent) != raw {
 				t.Fatalf("lost intent: %s %v", intent, err)
+			}
+			if err = s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			s, err = store.Open(db)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			anomaly, err = s.Setting(ctx, "tls:publication:unreconciled:v1")
+			if err != nil || string(anomaly) != "true" {
+				t.Fatalf("lost anomaly on restart: %s %v", anomaly, err)
+			}
+			intent, err = s.TLSIntent(ctx)
+			if err != nil || string(intent) != raw {
+				t.Fatalf("lost intent on restart: %s %v", intent, err)
 			}
 		})
 	}
