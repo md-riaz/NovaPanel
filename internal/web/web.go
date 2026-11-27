@@ -35,6 +35,7 @@ type RPCClient interface {
 }
 type Options struct {
 	Origin                       string
+	UploadsDir                   string
 	Dial                         func() (RPCClient, error)
 	RateLimitRPS, RateLimitBurst int
 	Now                          func() time.Time
@@ -60,6 +61,9 @@ func New(o Options) (http.Handler, error) {
 		return nil, fmt.Errorf("valid HTTPS origin and RPC dialer required")
 	}
 	defaults := config.Defaults()
+	if o.UploadsDir == "" {
+		o.UploadsDir = defaults.UploadsDir
+	}
 	if o.RateLimitRPS == 0 {
 		o.RateLimitRPS = defaults.RateLimitRPS
 	}
@@ -97,6 +101,7 @@ func New(o Options) (http.Handler, error) {
 		}
 		_, _ = w.Write(data)
 	})
+	r.Post("/uploads", s.upload)
 	for _, rt := range append(routes, consoleRoutes...) {
 		route := rt
 		r.MethodFunc(route.method, route.path, func(w http.ResponseWriter, r *http.Request) { s.serve(w, r, route) })
@@ -226,15 +231,8 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 	if rt.auth == "anonymous" {
 		identityVerb = "session.start"
 	}
-	data, ok := call(w, r, c, identityVerb, map[string]any{}, token)
+	v, ok := identity(w, r, c, identityVerb, token, v)
 	if !ok {
-		return
-	}
-	v.CSRF, _ = data["csrf_token"].(string)
-	v.User, _ = data["user"].(string)
-	v.Role, _ = data["role"].(string)
-	if v.CSRF == "" || (rt.auth != "anonymous" && v.Role != "owner" && v.Role != "admin" && v.Role != "read_only") {
-		http.Error(w, "Invalid agent identity", http.StatusBadGateway)
 		return
 	}
 	if r.Method != "GET" {
@@ -284,7 +282,7 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 			}
 			args["totp"] = code
 		}
-		data, ok = call(w, r, c, rt.verb, args, token)
+		data, ok := call(w, r, c, rt.verb, args, token)
 		if !ok {
 			return
 		}
@@ -328,6 +326,20 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, rt route) {
 		v.Metrics = readDashboard(r, c, "system.metrics", token)
 	}
 	render(w, 200, v)
+}
+func identity(w http.ResponseWriter, r *http.Request, c RPCClient, verb, token string, v view) (view, bool) {
+	data, ok := call(w, r, c, verb, map[string]any{}, token)
+	if !ok {
+		return v, false
+	}
+	v.CSRF, _ = data["csrf_token"].(string)
+	v.User, _ = data["user"].(string)
+	v.Role, _ = data["role"].(string)
+	if v.CSRF == "" || (verb != "session.start" && v.Role != "owner" && v.Role != "admin" && v.Role != "read_only") {
+		http.Error(w, "Invalid agent identity", http.StatusBadGateway)
+		return v, false
+	}
+	return v, true
 }
 func readDashboard(r *http.Request, c RPCClient, verb, token string) any {
 	reply, e := c.Call(r.Context(), verb, map[string]any{}, token)
