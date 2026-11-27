@@ -97,7 +97,7 @@ func TestWordPressReservationBeforeResourceRows(t *testing.T) {
 	}}
 	phase4Exec(t, s.db.raw, `INSERT INTO sites(id,name,type,docroot,php_version,status,created,updated) VALUES(?,?,'wordpress',?,'8.3','active',0,0)`, r.SiteID, r.WordPress.Input.SiteName, filepath.Join(r.WordPress.Input.SitesRoot, r.WordPress.Input.SiteName, "public"))
 	phase4Exec(t, s.db.raw, `INSERT INTO domains(id,site_id,fqdn,is_primary,created) VALUES(?,?,?,1,0)`, r.WordPress.DomainID, r.SiteID, r.WordPress.Input.PrimaryDomain)
-	j := Job{ID: "wp-job", Verb: "wp.install", CreatedBy: "session", Role: "owner", State: "queued", Args: []byte(`{}`)}
+	j := Job{ID: "wp-job", Verb: "site.create", CreatedBy: "session", Role: "owner", State: "queued", Args: []byte(`{}`)}
 	op, e := s.PrepareOperation(ctx, j, JobClaim{JobID: j.ID, ClaimHash: "hash"}, r, []byte{1}, []byte{2})
 	if e != nil {
 		t.Fatal(e)

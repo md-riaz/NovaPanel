@@ -240,7 +240,7 @@ func TestLifetimeReplayKeepsSiteIdentity(t *testing.T) {
 	identity := store.SiteLifetime{SiteID: siteID, Name: "example", Docroot: "/sites/example/public", AllocatingJob: jobID, UID: 123, GID: 456}
 	err = s.Tx(ctx, func(tx *sql.Tx) error {
 		for _, q := range []string{
-			`INSERT INTO jobs(id,verb,args_json,object_key,actor,created_by,state,created,updated) VALUES('` + jobID + `','wp.install','{}','site:example','fixture','owner','running',1,1)`,
+			`INSERT INTO jobs(id,verb,args_json,object_key,actor,created_by,state,created,updated) VALUES('` + jobID + `','site.create','{}','site:example','fixture','owner','running',1,1)`,
 			`INSERT INTO sites(id,name,type,docroot,status,created,updated,lifetime_state) VALUES('` + siteID + `','example','wordpress','/sites/example/public','creating',1,1,'provisioning')`,
 			`INSERT INTO site_account_provenance(site_id,account_name,uid,gid,allocating_job,evidence) VALUES('` + siteID + `','example',123,456,'` + jobID + `','owned')`,
 			`INSERT INTO phase4_operations(job_id,kind,site_id,checkpoint,identities_json,expires,updated) VALUES('` + jobID + `','wordpress_install','` + siteID + `','verified','{}',9999999999999,1)`,

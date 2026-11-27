@@ -130,7 +130,7 @@ func scanOperation(row scanner) (o Operation, err error) {
 		return
 	}
 	var extra any
-	if d.Decode(&extra) != io.EOF || (verb != operationVerb(o.Kind) && !(o.Kind == WordPressInstall && verb == "site.create")) || !validOperationIdentity(o) {
+	if d.Decode(&extra) != io.EOF || verb != operationVerb(o.Kind) || !validOperationIdentity(o) {
 		err = errors.New("operation identity corrupt")
 	}
 	return
@@ -192,7 +192,7 @@ func loadOperation(ctx context.Context, tx *sql.Tx, jid string) (Operation, erro
 func operationVerb(k OperationKind) string {
 	switch k {
 	case WordPressInstall:
-		return "wp.install"
+		return "site.create"
 	case SiteDelete:
 		return "site.delete"
 	case PHPSet:

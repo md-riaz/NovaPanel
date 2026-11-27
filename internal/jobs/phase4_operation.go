@@ -78,7 +78,7 @@ func (q *Queue) enqueueOperation(ctx context.Context, r store.OperationRequest, 
 	if e := q.healthy(); e != nil {
 		return out, e
 	}
-	verbs := map[store.OperationKind]string{store.PHPSet: "php.set", store.WordPressInstall: "wp.install", store.SiteDelete: "site.delete", store.DatabaseCreate: "database.create", store.DatabaseRotate: "database.rotate_password", store.DBUserCreate: "dbuser.create", store.DatabaseDelete: "database.delete", store.DBUserDelete: "dbuser.delete"}
+	verbs := map[store.OperationKind]string{store.PHPSet: "php.set", store.WordPressInstall: "site.create", store.SiteDelete: "site.delete", store.DatabaseCreate: "database.create", store.DatabaseRotate: "database.rotate_password", store.DBUserCreate: "dbuser.create", store.DatabaseDelete: "database.delete", store.DBUserDelete: "dbuser.delete"}
 	verb := verbs[r.Kind]
 	if verb == "" {
 		return out, rpcerr.Errf("invalid_argument", "operation kind unavailable")

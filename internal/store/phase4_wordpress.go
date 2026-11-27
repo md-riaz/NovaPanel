@@ -159,7 +159,7 @@ func checkWordPress(ctx context.Context, tx *sql.Tx, op Operation) error {
 
 func (s *Store) prepareWordPress(ctx context.Context, j Job, c JobClaim, r OperationRequest, nonce, ciphertext []byte) (op Operation, err error) {
 	err = s.Tx(ctx, func(tx *sql.Tx) error {
-		if j.Verb != "wp.install" || j.CreatedBy == "" || j.State != "queued" || r.WordPress == nil || len(nonce) == 0 || len(ciphertext) == 0 || c.JobID != j.ID || c.ClaimHash == "" || r.PurgeFiles || r.PurgeDatabases {
+		if j.Verb != "site.create" || j.CreatedBy == "" || j.State != "queued" || r.WordPress == nil || len(nonce) == 0 || len(ciphertext) == 0 || c.JobID != j.ID || c.ClaimHash == "" || r.PurgeFiles || r.PurgeDatabases {
 			return ErrSiteInvalid
 		}
 		w := *r.WordPress
@@ -216,11 +216,11 @@ func completeWordPress(ctx context.Context, tx *sql.Tx, op Operation, now int64,
 	if _, e = tx.ExecContext(ctx, "INSERT INTO wordpress_bindings(site_id,db_id) VALUES(?,?)", op.SiteID, db.ID); e != nil {
 		return e
 	}
-	var verb string
-	if e = tx.QueryRowContext(ctx, "SELECT verb FROM jobs WHERE id=?", op.JobID).Scan(&verb); e != nil {
+	var fresh bool
+	if e = tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM site_account_provenance WHERE site_id=? AND allocating_job=?)`, op.SiteID, op.JobID).Scan(&fresh); e != nil {
 		return e
 	}
-	if verb == "site.create" {
+	if fresh {
 		result, err := tx.ExecContext(ctx, `UPDATE sites SET status='active',updated=? WHERE id=? AND status='creating' AND lifetime_state='served' AND EXISTS (SELECT 1 FROM site_account_provenance WHERE site_id=sites.id AND allocating_job=?)`, now, op.SiteID, op.JobID)
 		if err = affected(result, err); err != nil {
 			return err
