@@ -18,9 +18,14 @@ type WordPressReservation struct {
 	Evidence wordpress.ArtifactEvidence
 }
 
+type FreshWordPressIdempotency struct {
+	Key, Payload string
+	SealedToken  []byte
+}
+
 // PrepareFreshWordPress creates the job before its account provenance, then
 // seals the allocated identity and credentials before committing the reservation.
-func (s *Store) PrepareFreshWordPress(ctx context.Context, j Job, c JobClaim, r WordPressReservation, site Site, domain Domain, limits PHPLimits, seal func(WordPressReservation) ([]byte, []byte, error)) (op Operation, err error) {
+func (s *Store) PrepareFreshWordPress(ctx context.Context, j Job, c JobClaim, r WordPressReservation, site Site, domain Domain, limits PHPLimits, seal func(WordPressReservation) ([]byte, []byte, error), idem ...FreshWordPressIdempotency) (op Operation, err error) {
 	err = s.Tx(ctx, func(tx *sql.Tx) error {
 		if j.Verb != "site.create" || j.CreatedBy == "" || j.State != "queued" || c.JobID != j.ID || c.ClaimHash == "" || seal == nil || r.SiteID != site.ID || r.DomainID != domain.ID || r.Input.SiteName != site.Name || r.Input.PrimaryDomain != domain.FQDN {
 			return ErrSiteInvalid
@@ -60,6 +65,20 @@ func (s *Store) PrepareFreshWordPress(ctx context.Context, j Job, c JobClaim, r 
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO phase4_operations(job_id,kind,site_id,db_id,checkpoint,identities_json,nonce,ciphertext,expires,updated) VALUES(?,?,?,?,'prepared',?,?,?,?,?)`, j.ID, WordPressInstall, r.SiteID, op.DatabaseID, string(raw), op.Nonce, op.Ciphertext, op.Expires, op.Updated); err != nil {
 			return err
+		}
+		if len(idem) > 1 {
+			return ErrSiteInvalid
+		}
+		if len(idem) == 1 && idem[0].Key != "" {
+			if idem[0].Payload == "" || len(idem[0].SealedToken) == 0 {
+				return ErrSiteInvalid
+			}
+			if _, err = tx.ExecContext(ctx, `DELETE FROM idempotency WHERE id=? AND created<=?`, idem[0].Key, s.clock.Now()-24*60*60*1000); err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, `INSERT INTO idempotency(id,job_id,result_json,payload_hash,created) VALUES(?,?,?,?,?)`, idem[0].Key, j.ID, string(idem[0].SealedToken), idem[0].Payload, s.clock.Now()); err != nil {
+				return err
+			}
 		}
 		return checkWordPress(ctx, tx, op)
 	})
