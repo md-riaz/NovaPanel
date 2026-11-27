@@ -2,6 +2,7 @@ package verbs
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -33,6 +34,12 @@ func TestCompositeExecutorCommitsParent(t *testing.T) {
 }
 
 func TestQuarantinedTLSAllowsMaintenanceFinalizer(t *testing.T) {
+	for _, mode := range []string{"intent", "request"} {
+		t.Run(mode, func(t *testing.T) { testQuarantinedTLSAllowsMaintenanceFinalizer(t, mode) })
+	}
+}
+
+func testQuarantinedTLSAllowsMaintenanceFinalizer(t *testing.T, mode string) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st, err := store.Open(filepath.Join(root, "panel.db"))
@@ -73,12 +80,22 @@ func TestQuarantinedTLSAllowsMaintenanceFinalizer(t *testing.T) {
 	if err = st.UpdateMaintenanceFinalizer(ctx, sid, jid, false); err == nil {
 		t.Fatal("valid pending intent allowed maintenance update")
 	}
-	if err = st.ClearTLSIntent(ctx, raw); err != nil {
-		t.Fatal(err)
-	}
-	changed := append(append([]byte{}, raw...), []byte(` {}`)...)
-	if err = st.BeginTLSIntent(ctx, changed); err != nil {
-		t.Fatal(err)
+	changed := raw
+	if mode == "intent" {
+		if err = st.ClearTLSIntent(ctx, raw); err != nil {
+			t.Fatal(err)
+		}
+		changed = append(append([]byte{}, raw...), []byte(` {}`)...)
+		if err = st.BeginTLSIntent(ctx, changed); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		if err = st.Tx(ctx, func(tx *sql.Tx) error {
+			_, e := tx.ExecContext(ctx, `UPDATE jobs SET args_json='{}' WHERE id=?`, jid)
+			return e
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if matched, changed, err := st.CheckCompositeTLSIntent(ctx, changed); err != nil || !matched || !changed {
 		t.Fatalf("quarantine: %v %v %v", matched, changed, err)
