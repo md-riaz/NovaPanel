@@ -233,57 +233,145 @@ func TestPrimaryTLSActualQueueStartup(t *testing.T) {
 			t.Run(fmt.Sprintf("replacement-%v/%s", replacement, mode), func(t *testing.T) {
 				root := t.TempDir()
 				f := newPrimaryRestart(t, root, replacement)
-				f.a.Nginx.Probe = func(context.Context, nginx.Desired) error { panic("interruption") }
-				runPrimaryQueue(t, f.a, f.job)
-				j, _ := f.st.GetJob(context.Background(), f.job)
-				if j.Code != "interrupted" {
-					t.Fatalf("not interrupted: %+v", j)
+				defer f.close(t)
+				interrupted, stop := context.WithCancel(context.Background())
+				f.a.Nginx.Probe = func(context.Context, nginx.Desired) error { stop(); panic("interruption") }
+				if err := f.a.Jobs.Run(interrupted); err != nil {
+					t.Fatal(err)
+				}
+				stop()
+				intent, err := f.st.TLSIntent(context.Background())
+				if err != nil || len(intent) == 0 {
+					t.Fatalf("missing interrupted intent: %s %v", intent, err)
 				}
 				f.close(t)
 				f.reopen(t, root)
-				defer f.close(t)
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
+				injected := false
 				f.a.Nginx.Probe = func(context.Context, nginx.Desired) error {
+					if injected {
+						return nil
+					}
+					injected = true
 					switch mode {
 					case "probe":
-						return errors.New("probe failure")
+						return errors.New("injected probe failure")
 					case "cancel":
 						cancel()
 						return context.Canceled
 					case "metadata":
 						return f.st.Tx(context.Background(), func(tx *sql.Tx) error {
-							_, err := tx.Exec("CREATE TRIGGER refuse_primary BEFORE UPDATE OF is_primary ON domains BEGIN SELECT RAISE(ABORT,'injected'); END")
-							return err
+							_, e := tx.Exec(`CREATE TRIGGER refuse_primary BEFORE UPDATE OF is_primary ON domains BEGIN SELECT RAISE(ABORT,'injected'); END`)
+							return e
 						})
 					}
 					return nil
 				}
 				done := make(chan error, 1)
 				go func() { done <- f.a.Jobs.Run(ctx) }()
-				deadline := time.Now().Add(5 * time.Second)
+				deadline := time.Now().Add(4 * time.Second)
+				var runErr error
+				stopped := false
 				for {
-					j, _ = f.st.GetJob(context.Background(), f.job)
-					if j.State == "done" || (j.State == "failed" && j.Code != "interrupted") {
+					select {
+					case runErr = <-done:
+						stopped = true
+					default:
+					}
+					if stopped {
 						break
 					}
-					select {
-					case err := <-done:
-						t.Fatalf("startup stopped: %v", err)
-					default:
+					j, e := f.st.GetJob(context.Background(), f.job)
+					if errors.Is(e, store.ErrPublicationPending) {
+						time.Sleep(5 * time.Millisecond)
+						continue
+					}
+					if e != nil {
+						cancel()
+						<-done
+						t.Fatal(e)
+					}
+					if j.State == "done" || j.State == "failed" || ctx.Err() != nil {
+						break
+					}
+					if mode == "metadata" && j.Attempts >= 2 {
+						if e = f.st.Tx(context.Background(), func(tx *sql.Tx) error { _, e := tx.Exec(`DROP TRIGGER IF EXISTS refuse_primary`); return e }); e != nil {
+							cancel()
+							<-done
+							t.Fatal(e)
+						}
 					}
 					if time.Now().After(deadline) {
 						cancel()
 						<-done
-						t.Fatalf("restart timeout: %+v", j)
+						t.Fatalf("startup recovery timed out: %+v", j)
 					}
-					time.Sleep(time.Millisecond)
+					time.Sleep(5 * time.Millisecond)
 				}
 				cancel()
-				if err := <-done; err != nil {
+				if !stopped {
+					runErr = <-done
+				}
+				if runErr != nil && !errors.Is(runErr, jobs.ErrRecoveryBlocked) {
+					t.Fatal(runErr)
+				}
+				if mode == "metadata" {
+					if err = f.st.Tx(context.Background(), func(tx *sql.Tx) error { _, e := tx.Exec(`DROP TRIGGER IF EXISTS refuse_primary`); return e }); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if mode == "cancel" || runErr != nil {
+					f.close(t)
+					f.reopen(t, root)
+				}
+				f.a.Nginx.Probe = func(context.Context, nginx.Desired) error { return nil }
+				j, err := f.st.GetJob(context.Background(), f.job)
+				if err != nil {
 					t.Fatal(err)
 				}
-				f.check(t, mode == "success")
+				if j.State != "done" {
+					runPrimaryQueue(t, f.a, f.job)
+				}
+				j, err = f.st.GetJob(context.Background(), f.job)
+				if err != nil || j.State != "done" || j.Step != "phase4_committed" {
+					t.Fatalf("recovered job: %+v %v", j, err)
+				}
+				if (mode == "probe" || mode == "metadata") && j.Attempts < 2 {
+					t.Fatalf("failure was not retried: %+v", j)
+				}
+				children, err := f.st.OperationChildren(context.Background(), f.job)
+				if err != nil || len(children) != 2 || children[0].Status != "committed" || children[1].Status != "committed" {
+					t.Fatalf("children: %+v %v", children, err)
+				}
+				op, err := f.st.LoadOperation(context.Background(), f.job)
+				if err != nil || op.Identity.PublicationAudit == nil || op.Identity.PublicationAudit.State != "acknowledged" {
+					t.Fatalf("audit: %+v %v", op, err)
+				}
+				intent, err = f.st.TLSIntent(context.Background())
+				if err != nil || len(intent) != 0 {
+					t.Fatalf("intent retained: %s %v", intent, err)
+				}
+				site, err := f.st.SiteByID(context.Background(), f.site)
+				if err != nil || !site.Maintenance {
+					t.Fatalf("maintenance: %+v %v", site, err)
+				}
+				domains, err := f.st.ListDomains(context.Background(), f.site)
+				if err != nil {
+					t.Fatal(err)
+				}
+				primaries := 0
+				for _, d := range domains {
+					if d.IsPrimary {
+						primaries++
+						if d.ID != f.newID {
+							t.Fatal("wrong primary")
+						}
+					}
+				}
+				if primaries != 1 {
+					t.Fatalf("primary count: %d", primaries)
+				}
 			})
 		}
 	}
