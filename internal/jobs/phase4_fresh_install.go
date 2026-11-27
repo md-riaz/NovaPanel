@@ -46,6 +46,7 @@ func (q *Queue) InstallFreshWordPress(ctx context.Context, jobID string, identit
 	s, ok := q.store.(interface {
 		operationStore
 		CheckpointOperation(context.Context, string, string, string) error
+		MarkWordPressDownloadStarted(context.Context, string) error
 	})
 	if !ok || release == nil {
 		return errors.New("jobs: WordPress install unavailable")
@@ -58,12 +59,17 @@ func (q *Queue) InstallFreshWordPress(ctx context.Context, jobID string, identit
 		if op.Checkpoint != "db_applied" {
 			return rpcerr.Errf("precondition_failed", "WordPress install requires reconciliation")
 		}
-		entries, err := os.ReadDir(identity.Docroot)
-		if err != nil {
-			return rpcerr.Errf("agent_error", "WordPress docroot unavailable")
-		}
-		if len(entries) != 0 {
-			return rpcerr.Errf("precondition_failed", "WordPress docroot is not empty")
+		if !op.Identity.DownloadStarted {
+			entries, err := os.ReadDir(identity.Docroot)
+			if err != nil {
+				return rpcerr.Errf("agent_error", "WordPress docroot unavailable")
+			}
+			if len(entries) != 0 {
+				return rpcerr.Errf("precondition_failed", "WordPress docroot is not empty")
+			}
+			if err := s.MarkWordPressDownloadStarted(ctx, jobID); err != nil {
+				return err
+			}
 		}
 		credentials, err := q.OpenWordPressCredentials(ctx, jobID)
 		if err != nil {
