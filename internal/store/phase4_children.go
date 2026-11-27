@@ -288,7 +288,8 @@ func (s *Store) CompleteCompositeOperation(ctx context.Context, jobID, outcomeCo
 				return err
 			}
 			_, err = tx.ExecContext(ctx, `INSERT INTO job_events(id,job_id,ts,msg) VALUES(?,?,?,?)`, terminalID, jobID, now, state)
+			return err
 		}
-		return err
+		return nil
 	})
 }
