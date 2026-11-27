@@ -370,12 +370,6 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 				}
 				return nil
 			}
-			if freshInstall && j.Step != store.FreshWordPressRollbackStep && j.Step != store.FreshWordPressRollbackCleanedStep && q.clock.Now() >= op.Expires {
-				if e := q.beginFreshRollback(ctx, j, "interrupted"); e != nil {
-					return e
-				}
-				return nil
-			}
 			rollback := freshInstall && (j.Step == store.FreshWordPressRollbackStep || j.Step == store.FreshWordPressRollbackCleanedStep)
 			if restoreExpiredPHP && (op.Kind != store.PHPSet || j.Verb != "php.set") {
 				return ErrRecoveryBlocked

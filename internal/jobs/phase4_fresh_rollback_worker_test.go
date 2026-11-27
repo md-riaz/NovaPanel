@@ -160,27 +160,20 @@ func TestFreshWordPressWorkerRollbackAndNameReuse(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err = q.PrepareOperations(ctx); err != nil {
+		t.Fatalf("fresh install blocked startup: %v", err)
+	}
+	q.SetRunner(func(_ context.Context, j *Job) error {
+		if j.Step != "" {
+			t.Fatal("TTL forced rollback of a job-driven install")
+		}
+		return ErrRetry
+	})
 	if err = q.execute(ctx, replacement.Job); err != nil {
 		t.Fatal(err)
 	}
 	j, err = s.GetJob(ctx, replacement.Job.ID)
-	if err != nil || j.State != "queued" || j.Step != store.FreshWordPressRollbackStep {
-		t.Fatalf("expired fresh job not queued for rollback: %+v %v", j, err)
-	}
-	if err = q.PrepareOperations(ctx); err != nil {
-		t.Fatalf("expired fresh rollback blocked startup: %v", err)
-	}
-	q.SetRunner(func(_ context.Context, j *Job) error {
-		if j.Step != store.FreshWordPressRollbackStep {
-			t.Fatal("lost rollback on restart")
-		}
-		return ErrRetry
-	})
-	if err = q.execute(ctx, j); err != nil {
-		t.Fatal(err)
-	}
-	j, err = s.GetJob(ctx, replacement.Job.ID)
-	if err != nil || j.State != "queued" || j.Step != store.FreshWordPressRollbackStep {
-		t.Fatalf("expired rollback lost: %+v %v", j, err)
+	if err != nil || j.State != "queued" || j.Step != "" {
+		t.Fatalf("install did not remain recoverable: %+v %v", j, err)
 	}
 }

@@ -415,6 +415,16 @@ func operationBlocked(ctx context.Context, tx *sql.Tx, op Operation) error {
 var ErrOperationLocked = errors.New("operation locked")
 var ErrOperationExpired = errors.New("operation interrupted by expiry")
 
+// freshInstallJobDriven identifies a journal owned by its reserved-account job.
+func freshInstallJobDriven(ctx context.Context, tx *sql.Tx, op Operation) (bool, error) {
+	if op.Kind != WordPressInstall || op.Checkpoint == "done" || op.Checkpoint == "expired" {
+		return false, nil
+	}
+	var exists bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM site_account_provenance WHERE site_id=? AND allocating_job=?)`, op.SiteID, op.JobID).Scan(&exists)
+	return exists, err
+}
+
 // CheckOperation must run under the complete lock set before each external mutation.
 func (s *Store) CheckOperation(ctx context.Context, jid string) error {
 	return s.checkOperation(ctx, jid, false)
@@ -439,7 +449,11 @@ func (s *Store) checkOperation(ctx context.Context, jid string, restoration bool
 			if op.Checkpoint == "done" {
 				return nil
 			}
-			if op.Checkpoint == "expired" || (s.clock.Now() >= op.Expires && !TeardownStarted(op)) {
+			jobDriven, err := freshInstallJobDriven(ctx, tx, op)
+			if err != nil {
+				return err
+			}
+			if op.Checkpoint == "expired" || (s.clock.Now() >= op.Expires && !TeardownStarted(op) && !jobDriven) {
 				return ErrOperationExpired
 			}
 		}
@@ -578,7 +592,11 @@ func (s *Store) CheckpointOperation(ctx context.Context, jid, from, to string) e
 		if !allowed || op.Checkpoint != from {
 			return ErrSiteConflict
 		}
-		if op.Checkpoint == "expired" || (s.clock.Now() >= op.Expires && !TeardownStarted(op)) {
+		jobDriven, err := freshInstallJobDriven(ctx, tx, op)
+		if err != nil {
+			return err
+		}
+		if op.Checkpoint == "expired" || (s.clock.Now() >= op.Expires && !TeardownStarted(op) && !jobDriven) {
 			return ErrOperationExpired
 		}
 		r, e := tx.ExecContext(ctx, "UPDATE phase4_operations SET checkpoint=?,updated=? WHERE job_id=? AND checkpoint=?", to, s.clock.Now(), jid, from)
@@ -601,7 +619,11 @@ func (s *Store) CompleteOperation(ctx context.Context, jid string, claim *JobCla
 			return nil
 		}
 		now := s.clock.Now()
-		if op.Checkpoint == "expired" || (now >= op.Expires && !TeardownStarted(op)) {
+		jobDriven, err := freshInstallJobDriven(ctx, tx, op)
+		if err != nil {
+			return err
+		}
+		if op.Checkpoint == "expired" || (now >= op.Expires && !TeardownStarted(op) && !jobDriven) {
 			return ErrOperationExpired
 		}
 		if op.Checkpoint != "verified" && !((op.Kind == DatabaseDelete || op.Kind == DBUserDelete || op.Kind == SiteDelete) && op.Checkpoint == "db_applied") {

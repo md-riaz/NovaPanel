@@ -158,6 +158,13 @@ func TestFreshLifetimeSQLiteActivationReplay(t *testing.T) {
 	if !errors.Is(err, ErrRetry) {
 		t.Fatalf("serving failure must retry: %v", err)
 	}
+	// The activation is durable; serving must replay after the journal's original TTL.
+	if err := s.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE phase4_operations SET expires=? WHERE job_id=?`, time.Now().UnixMilli()-store.OperationTTLMillis, jid)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
