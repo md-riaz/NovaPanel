@@ -93,6 +93,7 @@ func TestDroppedHelper(t *testing.T) {
 		content []byte
 	}{
 		{Request{Base: base, Name: "site", Operation: "write", Path: "large", Length: MaxWrite}, bytes.Repeat([]byte{'x'}, MaxWrite)},
+		{Request{Base: base, Name: "site", Operation: "upload", Path: "uploaded", Length: len(content)}, content},
 		{Request{Base: base, Name: "site", Operation: "mkdir", Path: "created"}, nil},
 		{Request{Base: base, Name: "site", Operation: "chmod", Path: "written", Mode: 0600}, nil},
 	} {
@@ -103,6 +104,10 @@ func TestDroppedHelper(t *testing.T) {
 		if err != nil || code != 0 || json.Unmarshal(out, &response) != nil || response.Code != "" {
 			t.Fatalf("%s: %d %s %v", tc.req.Operation, code, out, err)
 		}
+	}
+	got, err = os.ReadFile(filepath.Join(dir, "uploaded"))
+	if err != nil || !bytes.Equal(got, content) || unix.Stat(filepath.Join(dir, "uploaded"), &owner) != nil || owner.Uid != 65534 {
+		t.Fatalf("upload content or ownership: %q %v", got, err)
 	}
 	got, err = os.ReadFile(filepath.Join(dir, "large"))
 	if err != nil || !bytes.Equal(got, bytes.Repeat([]byte{'x'}, MaxWrite)) {

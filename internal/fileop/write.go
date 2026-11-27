@@ -1,9 +1,11 @@
 package fileop
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"io"
 	"os"
 	"path"
 
@@ -69,62 +71,7 @@ func applyWrite(root *os.Root, req Request, content []byte) error {
 		if len(content) > MaxWrite {
 			return unix.EINVAL
 		}
-		parent, err := root.OpenRoot(path.Dir(p))
-		if err != nil {
-			return err
-		}
-		defer parent.Close()
-		name := path.Base(p)
-		dir, err := parent.Open(".")
-		if err != nil {
-			return err
-		}
-		defer dir.Close()
-		var random [16]byte
-		if _, err = rand.Read(random[:]); err != nil {
-			return err
-		}
-		tmp := ".novapanel-" + hex.EncodeToString(random[:])
-		// Temp starts at 0600; only its site-user owner can access it before the final mode.
-		// Its owner bits may briefly exceed that mode; group/other bits never do.
-		f, err := parent.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
-		if err != nil {
-			return err
-		}
-		defer parent.Remove(tmp)
-		defer f.Close()
-		if _, err = f.Write(content); err != nil {
-			return err
-		}
-		if err = f.Sync(); err != nil {
-			return err
-		}
-		// Mode preservation applies to the file identified when overwrite begins.
-		// A site shell user replacing the path during the write is outside that guarantee.
-		// This cannot expose old bytes because the write replaces the content, and the
-		// site lock prevents concurrent API writes.
-		target, info, err := leaf(parent, name)
-		exists := err == nil
-		mode := os.FileMode(0644)
-		if exists {
-			target.Close()
-			if !info.Mode().IsRegular() {
-				return unix.EINVAL
-			}
-			mode = info.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if err = f.Chmod(mode); err != nil {
-			return err
-		}
-		if err = f.Close(); err != nil {
-			return err
-		}
-		if exists {
-			return parent.Rename(tmp, name)
-		}
-		return unix.Renameat2(int(dir.Fd()), tmp, int(dir.Fd()), name, unix.RENAME_NOREPLACE)
+		return place(root, p, bytes.NewReader(content), int64(len(content)), false)
 	case "move":
 		if ValidatePath(req.From) != nil || ValidatePath(req.To) != nil || path.Clean(req.From) == "." || path.Clean(req.To) == "." {
 			return unix.EINVAL
@@ -152,4 +99,70 @@ func applyWrite(root *os.Root, req Request, content []byte) error {
 		return unix.Renameat2(int(a.Fd()), path.Base(path.Clean(req.From)), int(b.Fd()), path.Base(path.Clean(req.To)), unix.RENAME_NOREPLACE)
 	}
 	return unix.EINVAL
+}
+
+func place(root *os.Root, p string, content io.Reader, length int64, rejectTrailing bool) error {
+	parent, err := root.OpenRoot(path.Dir(p))
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	name := path.Base(p)
+	dir, err := parent.Open(".")
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	var random [16]byte
+	if _, err = rand.Read(random[:]); err != nil {
+		return err
+	}
+	tmp := ".novapanel-" + hex.EncodeToString(random[:])
+	// Temp starts at 0600; only its site-user owner can access it before the final mode.
+	// Its owner bits may briefly exceed that mode; group/other bits never do.
+	f, err := parent.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
+	if err != nil {
+		return err
+	}
+	defer parent.Remove(tmp)
+	defer f.Close()
+	if _, err = io.CopyN(f, content, length); err != nil {
+		return err
+	}
+	if rejectTrailing {
+		var extra [1]byte
+		n, e := io.ReadFull(content, extra[:])
+		if n != 0 || (e != nil && e != io.EOF) {
+			return unix.EINVAL
+		}
+	}
+	if err = f.Sync(); err != nil {
+		return err
+	}
+	// Mode preservation applies to the file identified when overwrite begins.
+	// A site shell user replacing the path during the write is outside that guarantee.
+	// This cannot expose old bytes because the write replaces the content, and the
+	// site lock prevents concurrent API writes.
+	target, info, err := leaf(parent, name)
+	exists := err == nil
+	mode := os.FileMode(0644)
+	if exists {
+		target.Close()
+		if !info.Mode().IsRegular() {
+			return unix.EINVAL
+		}
+		mode = info.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err = f.Chmod(mode); err != nil {
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	if exists {
+		return parent.Rename(tmp, name)
+	}
+	return unix.Renameat2(int(dir.Fd()), tmp, int(dir.Fd()), name, unix.RENAME_NOREPLACE)
 }

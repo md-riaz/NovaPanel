@@ -17,6 +17,7 @@ import (
 	"novapanel/internal/secret"
 	"novapanel/internal/store"
 	"novapanel/internal/validate"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -36,6 +37,7 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Agent struct {
+	UploadsMu            sync.Mutex
 	mutationsBlocked     atomic.Bool
 	DurablePHP           *PHPDependencies
 	ProvisionSite        func(context.Context, string, string) error
