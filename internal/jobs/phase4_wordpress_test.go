@@ -193,6 +193,9 @@ func TestWordPressQueueRecoveryAndClaim(t *testing.T) {
 	}
 	db := claim["database"].(map[string]any)
 	admin := claim["wordpress"].(map[string]any)
+	if len(db) != 2 || len(admin) != 2 {
+		t.Fatal("unexpected combined claim fields")
+	}
 	if db["password"] != payload.DatabasePassword || admin["admin_password"] != payload.AdminPassword || admin["admin_username"] != "Admin" {
 		t.Fatal("wrong projection")
 	}
