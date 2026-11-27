@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
@@ -75,7 +76,7 @@ func TestMigration0009RealOpen(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer s.Close()
-			if phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations") != 13 {
+			if phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations") != 14 {
 				t.Fatal("migration count")
 			}
 			var h string
@@ -136,5 +137,71 @@ func TestMigration0009HashAndRollback(t *testing.T) {
 			phase4Job(t, db, "refused", "running")
 			phase4Refuse(t, db, "INSERT INTO phase4_operations(job_id,kind,checkpoint,identities_json,expires,updated) VALUES('refused','php_set','prepared','{}',1,1)", "CHECK")
 		})
+	}
+}
+
+func TestRetiredAccountNameMigrationPreservesHistory(t *testing.T) {
+	path := shippedV6(t)
+	db, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(ON)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := migrations.ReadDir("migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := migrations.ReadFile("migrations/hashes.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hashes map[string]string
+	if err = json.Unmarshal(raw, &hashes); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".sql") || name[:4] < "0009" || name[:4] > "0013" {
+			continue
+		}
+		b, e := migrations.ReadFile("migrations/" + name)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if _, e = db.Exec(string(b)); e != nil {
+			t.Fatal(e)
+		}
+		if _, e = db.Exec("INSERT INTO schema_migrations VALUES(?,?,1)", name[:4], hashes[name[:4]]); e != nil {
+			t.Fatal(e)
+		}
+	}
+	phase4Job(t, db, "old-account", "queued")
+	phase4Exec(t, db, `INSERT INTO sites(id,name,type,docroot,created,updated) VALUES('old-site','example','wordpress','/sites/example/public',1,1)`)
+	phase4Exec(t, db, `INSERT INTO site_account_provenance(site_id,account_name,uid,gid,allocating_job,evidence) VALUES('old-site','example',2000000,2000000,'old-account','reserved')`)
+	phase4Exec(t, db, `DELETE FROM sites WHERE id='old-site'`)
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if phase4Count(t, s.db.raw, `SELECT count(*) FROM site_account_provenance WHERE site_id IS NULL AND account_name='example' AND uid=2000000 AND allocating_job='old-account'`) != 1 {
+		t.Fatal("retired identity lost on upgrade")
+	}
+	phase4Job(t, s.db.raw, "new-account", "queued")
+	phase4Exec(t, s.db.raw, `INSERT INTO sites(id,name,type,docroot,created,updated) VALUES('new-site','example','wordpress','/sites/example/public',1,1)`)
+	err = s.Tx(context.Background(), func(tx *sql.Tx) error {
+		uid, e := s.ReserveSiteAccountTx(context.Background(), tx, "new-site", "example", "new-account")
+		if e == nil && uid != 2000001 {
+			t.Fatalf("UID reused: %d", uid)
+		}
+		return e
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if phase4Count(t, s.db.raw, "SELECT count(*) FROM pragma_foreign_key_check") != 0 {
+		t.Fatal("foreign keys changed")
 	}
 }

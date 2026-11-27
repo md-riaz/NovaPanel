@@ -82,11 +82,11 @@ func TestDeleteRetiresSiteAccount(t *testing.T) {
 			}
 			phase4Refuse(t, s.db.raw, `DELETE FROM site_account_provenance WHERE uid=2000000`, "retained provenance")
 			phase4Job(t, s.db.raw, "allocation2", "queued")
-			phase4Exec(t, s.db.raw, `INSERT INTO sites(id,name,type,docroot,created,updated) VALUES('site2','example2','wordpress','/site2',1,1)`)
+			phase4Exec(t, s.db.raw, `INSERT INTO sites(id,name,type,docroot,created,updated) VALUES('site2','example','wordpress','/site2',1,1)`)
 			var uid uint32
 			err = s.Tx(context.Background(), func(tx *sql.Tx) error {
 				var e error
-				uid, e = s.ReserveSiteAccountTx(context.Background(), tx, "site2", "example2", "allocation2")
+				uid, e = s.ReserveSiteAccountTx(context.Background(), tx, "site2", "example", "allocation2")
 				return e
 			})
 			if err != nil || uid != 2000001 {
