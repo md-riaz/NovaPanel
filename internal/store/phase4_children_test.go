@@ -206,4 +206,15 @@ func TestCompositeTLSIntentSnapshotAtomic(t *testing.T) {
 	if err != nil || string(intent) != string(first) {
 		t.Fatalf("intent changed: %s %v", intent, err)
 	}
+	phase4Exec(t, s.db.raw, `UPDATE phase4_operations SET expires=1 WHERE job_id='tls-child'`)
+	if n, err := s.ExpireOperations(ctx); err != nil || n != 0 {
+		t.Fatalf("pending intent must prevent expiry: %d %v", n, err)
+	}
+	phase4Exec(t, s.db.raw, `UPDATE jobs SET code='agent_error' WHERE id='tls-child'`)
+	if err = s.ClearTLSIntent(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.ExpireOperations(ctx); err != nil || n != 0 {
+		t.Fatalf("unreconciled disposition must prevent expiry: %d %v", n, err)
+	}
 }
