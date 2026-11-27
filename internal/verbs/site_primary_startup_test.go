@@ -648,4 +648,19 @@ func TestPrimaryTLSCommittedStartupFinishesOriginalJob(t *testing.T) {
 	if err != nil || !site.Maintenance {
 		t.Fatalf("maintenance finalizer: %+v %v", site, err)
 	}
+	f.close(t)
+	f.reopen(t, root)
+	calls = 0
+	f.a.Nginx.Probe = func(context.Context, nginx.Desired) error { calls++; return nil }
+	if err = f.a.Jobs.PrepareStartup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	job, err := f.st.GetJob(context.Background(), f.job)
+	if err != nil || job.State != "done" || calls != 0 {
+		t.Fatalf("terminal composite replayed: %+v calls=%d err=%v", job, calls, err)
+	}
+	site, err = f.st.SiteByID(context.Background(), f.site)
+	if err != nil || !site.Maintenance {
+		t.Fatalf("terminal maintenance changed: %+v %v", site, err)
+	}
 }
