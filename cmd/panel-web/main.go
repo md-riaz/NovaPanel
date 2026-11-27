@@ -42,7 +42,7 @@ func run() error {
 		}
 		timed.ServeHTTP(w, r)
 	})
-	return serveHTTP(&http.Server{Addr: env("NOVAPANEL_WEB_LISTEN", "127.0.0.1:8080"), Handler: dispatch, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10})
+	return serveHTTP(&http.Server{Addr: cfg.WebListen, Handler: dispatch, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10})
 }
 func main() {
 	if err := run(); err != nil {

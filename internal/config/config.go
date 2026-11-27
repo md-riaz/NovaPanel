@@ -15,8 +15,10 @@ import (
 )
 
 const DefaultPath = "/etc/novapanel/agent.toml"
+const DefaultWebListen = "127.0.0.1:8080"
 
 type Config struct {
+	WebListen            string `toml:"-"`
 	UploadsDir           string `toml:"uploads_dir"`
 	SocketPath           string `toml:"socket_path"`
 	DBPath               string `toml:"db_path"`
@@ -51,6 +53,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
+		WebListen:  DefaultWebListen,
 		UploadsDir: "/var/spool/novapanel/uploads", SocketPath: "/run/novapanel/agent.sock", DBPath: "/var/lib/novapanel/panel.db", SealKeyPath: "/var/lib/novapanel/seal.key", LogDir: "/var/log/novapanel", WebUser: "novapanel", ACMEWebroot: "/var/www/acme", SitesRoot: "/srv/sites", TLSDir: "/etc/novapanel/tls",
 		ACMEDirectoryProd: "https://acme-v02.api.letsencrypt.org/directory", ACMEDirectoryStaging: "https://acme-staging-v02.api.letsencrypt.org/directory", SSHPort: 22, FirewallWindowMin: 15, UpdateManifestURL: "https://releases.example/novapanel/stable/manifest.json", RateLimitRPS: 5, RateLimitBurst: 20, AnonMintRPS: 20, AnonMintBurst: 100, LoginMaxAttempts: 5, LoginWindowSec: 900, TOTPMaxAttempts: 5, WebhookBodyMaxKB: 512, ReauthWindowSec: 300, IdleSec: 600, AbsSec: 43200, DeadlineDefaultMs: 120000,
 	}
@@ -60,6 +63,9 @@ func Defaults() Config {
 // then explicitly supplied snake_case flag values. It does not resolve accounts.
 func Load(path string, flags map[string]string) (Config, error) {
 	c := Defaults()
+	if listen := os.Getenv("NOVAPANEL_WEB_LISTEN"); listen != "" {
+		c.WebListen = listen
+	}
 	if path == "" {
 		path = DefaultPath
 	}

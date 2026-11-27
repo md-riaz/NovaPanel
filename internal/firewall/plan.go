@@ -3,6 +3,7 @@ package firewall
 
 import (
 	"context"
+	"net"
 	"novapanel/internal/exec"
 	"novapanel/internal/rpcerr"
 	"novapanel/internal/validate"
@@ -18,9 +19,20 @@ type Rule struct {
 }
 
 // Plan validates the complete requested set and prepends the required TCP allows.
-func Plan(rules []Rule, sshPort, panelPort int) ([][]string, error) {
+func Plan(rules []Rule, sshPort int, webListen string) ([][]string, error) {
 	v := &validate.V{}
-	pinned := []int{sshPort, panelPort, 80, 443}
+	host, service, err := net.SplitHostPort(webListen)
+	if err != nil {
+		return nil, invalid("web listen address")
+	}
+	panelPort, err := net.LookupPort("tcp", service)
+	if err != nil || v.Port(panelPort) != nil {
+		return nil, invalid("web listen port")
+	}
+	pinned := []int{sshPort, 80, 443}
+	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+		pinned = append(pinned, panelPort)
+	}
 	seen := make(map[int]bool)
 	plan := make([][]string, 0, len(rules)+4)
 	for _, port := range pinned {
@@ -88,8 +100,8 @@ func ruleArgs(r Rule) []string {
 	return args
 }
 
-func DryRun(ctx context.Context, runner exec.Runner, rules []Rule, sshPort, panelPort int) error {
-	plan, err := Plan(rules, sshPort, panelPort)
+func DryRun(ctx context.Context, runner exec.Runner, rules []Rule, sshPort int, webListen string) error {
+	plan, err := Plan(rules, sshPort, webListen)
 	if err != nil {
 		return err
 	}
