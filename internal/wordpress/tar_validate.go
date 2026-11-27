@@ -16,7 +16,7 @@ func validateTarEntry(h *tar.Header) (string, error) {
 	if name == "" && h.Typeflag == tar.TypeDir {
 		return "", nil
 	}
-	if name == "" || path.Clean(name) != name || name == ".." || strings.HasPrefix(name, "../") || (h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA && h.Typeflag != tar.TypeDir) || h.Size < 0 || h.Size > 64<<20 {
+	if name == "" || path.Clean(name) != name || name == ".." || strings.HasPrefix(name, "../") || (h.Typeflag != tar.TypeReg && h.Typeflag != 0 && h.Typeflag != tar.TypeDir) || h.Size < 0 || h.Size > 64<<20 {
 		return "", errors.New("wordpress: unsafe archive entry")
 	}
 	return name, nil

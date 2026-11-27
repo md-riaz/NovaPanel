@@ -22,17 +22,6 @@ type wpInstallArgs struct {
 	AdminEmail    string `json:"admin_email"`
 }
 
-type wpInstallJobArgs struct {
-	SiteID string `json:"site_id"`
-}
-
-func (v *wpInstallJobArgs) Validate() error {
-	if !id.Valid(v.SiteID) {
-		return rpc.Errf("invalid_argument", "Invalid site ID")
-	}
-	return nil
-}
-
 func (v *wpInstallArgs) Validate() error {
 	if !id.Valid(v.SiteID) {
 		return rpc.Errf("invalid_argument", "Invalid site ID")
