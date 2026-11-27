@@ -2,6 +2,7 @@ package verbs_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -49,6 +50,36 @@ func TestCompositePrimaryTLSPublishesAndAcknowledgesAudit(t *testing.T) {
 	domain, err := f.st.DomainByID(ctx, f.newID)
 	if err != nil || !domain.IsPrimary {
 		t.Fatalf("primary: %+v %v", domain, err)
+	}
+}
+
+func TestCompositePrimaryTLSRejectsChangedRequest(t *testing.T) {
+	f := newPrimaryRestart(t, t.TempDir(), false)
+	defer f.close(t)
+	ctx := context.Background()
+	if err := f.st.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE jobs SET args_json='{}' WHERE id=?`, f.job)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	run, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- f.a.Jobs.Run(run) }()
+	select {
+	case err := <-done:
+		cancel()
+		if err == nil {
+			t.Fatal("changed request was accepted")
+		}
+	case <-time.After(5 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("changed request was not rejected")
+	}
+	intent, err := f.st.TLSIntent(ctx)
+	if err != nil || len(intent) != 0 {
+		t.Fatalf("TLS effect started: %s %v", intent, err)
 	}
 }
 
