@@ -66,15 +66,12 @@ func TestTLSPrimaryPublicationExecutor(t *testing.T) {
 				f.a.Jobs.SetRunner(func(ctx context.Context, j *jobs.Job) error {
 					err := f.server.ExecuteJob(ctx, j)
 					if err != nil && failure != "success" && failure != "crash" && failure != "binding" && failure != "cancel" {
-						pending, e := f.st.TLSIntent(context.Background())
-						if e == nil && len(pending) == 0 {
-							old, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "demo.test/current"))
-							target, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "alias.test/current"))
-							config, _ := os.ReadFile(filepath.Join(f.a.Nginx.Root, "sites-available/demo.conf"))
-							domain, domainErr := f.st.DomainByID(context.Background(), f.oldID)
-							restored = domainErr == nil && domain.IsPrimary && old == f.oldPointer && target == f.targetPointer && string(config) == string(f.oldConfig)
-							cancel()
-						}
+						old, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "demo.test/current"))
+						target, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "alias.test/current"))
+						config, _ := os.ReadFile(filepath.Join(f.a.Nginx.Root, "sites-available/demo.conf"))
+						domain, domainErr := f.st.DomainByID(context.Background(), f.oldID)
+						restored = domainErr == nil && domain.IsPrimary && old == f.oldPointer && target == f.targetPointer && string(config) == string(f.oldConfig)
+						cancel()
 					}
 					return err
 				})
