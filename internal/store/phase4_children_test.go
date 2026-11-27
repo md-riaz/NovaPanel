@@ -143,4 +143,10 @@ func TestCompositeReservationIncludesSnapshots(t *testing.T) {
 	if err != nil || len(children) != 2 || children[0].Kind != "php_change" || children[0].Identity.PHP == nil || children[1].Kind != "maintenance_off" {
 		t.Fatalf("children: %+v %v", children, err)
 	}
+	if err = s.CheckOperation(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.CheckpointOperation(ctx, j.ID, "prepared", "verified"); err != nil {
+		t.Fatal(err)
+	}
 }
