@@ -152,6 +152,19 @@ func (s *Store) CommitPHPChild(ctx context.Context, jobID string, ordinal int) e
 		if *site.PHPVersion != p.OriginalVersion || (limits != nil) != p.OriginalLimitsPresent || (limits != nil && *limits != p.OriginalLimits) {
 			return ErrSiteConflict
 		}
+		var savedRaw sql.NullString
+		if err = tx.QueryRowContext(ctx, `SELECT (SELECT value_json FROM settings WHERE key=?)`, phpLimitsKey(siteID)).Scan(&savedRaw); err != nil {
+			return err
+		}
+		if savedRaw.Valid {
+			var saved storedPHPLimits
+			if err = json.Unmarshal([]byte(savedRaw.String), &saved); err != nil {
+				return err
+			}
+			if saved.MaxChildren != nil && *saved.MaxChildren != p.OriginalCap {
+				return ErrSiteConflict
+			}
+		}
 		now := s.clock.Now()
 		if _, err = tx.ExecContext(ctx, `UPDATE sites SET php_version=?,updated=? WHERE id=?`, p.DesiredVersion, now, siteID); err != nil {
 			return err

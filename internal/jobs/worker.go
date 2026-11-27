@@ -10,6 +10,7 @@ import (
 	php "novapanel/internal/render/php"
 	"novapanel/internal/rpcerr"
 	"novapanel/internal/store"
+	"reflect"
 	"sort"
 	"time"
 )
@@ -406,6 +407,12 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 					if mergeErr != nil || merged != op.Identity.PHP.DesiredLimits {
 						err = rpcerr.Errf("invalid_argument", "PHP request does not match journal")
 					}
+				}
+			}
+			if op.Kind == store.SiteUpdate {
+				var request store.CompositeSiteUpdate
+				if json.Unmarshal(j.Args, &request) != nil || j.ObjectKey != "site:"+op.SiteID || !reflect.DeepEqual(&request, op.Identity.SiteUpdate) {
+					err = rpcerr.Errf("invalid_argument", "site update does not match journal")
 				}
 			}
 			if err == nil && !rollback {
