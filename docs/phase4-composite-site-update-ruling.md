@@ -12,21 +12,29 @@ of effect children, not separate jobs. The job and its `site:<site_id>` lock sta
 held while children commit. Generalize the held-lifetime ordered-child precedent
 in `internal/jobs/phase4_fresh_install.go` into a reusable composite driver.
 
-A composite exists only when `php_version` and at least one of
-`primary_domain_id`, `force_https`, or `hsts_max_age` are supplied. PHP alone
-still delegates to `php.set`, and a single domain/TLS dimension follows the
-existing `site.update` path; neither gets a maintenance bracket. Maintenance
-alone keeps its existing metadata apply. The bracket is composite-only.
+The disruptive dimensions are PHP and domain/TLS. PHP alone (no other mutable
+field) delegates to `php.set`; any single domain, force HTTPS, HSTS, or
+maintenance field keeps its existing `site.update` path. Every multi-field
+combination uses the composite driver. The auto-maintenance bracket is used only
+when both disruptive dimensions are present: `php_version` and at least one of
+`primary_domain_id`, `force_https`, or `hsts_max_age`. With fewer than two
+disruptive dimensions there is no auto-bracket. An explicit maintenance value is
+always applied as the terminal metadata state. For example, `php_version` plus
+`maintenance` uses a composite with a `php_change` child and terminal maintenance
+metadata application, without an auto-bracket.
 
 Instantiate composite children in order:
 
-1. `maintenance_on`, transient.
+1. `maintenance_on`, transient, only for the auto-bracket.
 2. `php_change` when `php_version` is supplied.
 3. `domain_tls` when `primary_domain_id`, `force_https`, or `hsts_max_age` is supplied.
 4. `maintenance_off`/restore when the bracket ran: restore to true only when
    the caller explicitly supplied `maintenance:true`, otherwise false.
+   Without a bracket, apply explicit maintenance as the terminal metadata step.
 
-Removing the composite refusal leaves the PHP-alone delegation unchanged.
+At the R9 refusal-removal gate, update phase-4.md to describe this routing,
+removing the combination refusal and retaining the PHP-alone delegation verbatim;
+do not edit that spec before the gate.
 
 ## Durable state and reusable effects
 
@@ -64,11 +72,19 @@ Transient child failure returns `ErrRetry`; replay skips terminal children.
 A permanent failure commits the child's `failed` status, typed error and journal
 durably in its own transaction before parent terminalization. Forward progress
 stops: no later pending effect child starts. On replay any failed child routes
-directly to failure finalization. Run the maintenance restore finalizer
-best-effort and idempotently; replay re-drives it while pending. Record the
-finalizer as committed or failed and each other pending child as failed with
-typed error `not_attempted` and its journal, so the aggregate identifies skipped
-work. Then terminalize with the typed error and child aggregate. Earlier committed changes
+directly to failure finalization. Record each other pending productive child as
+failed with typed error `not_attempted` and its journal, so the aggregate identifies
+skipped work. The restore finalizer is mandatory and idempotent: after
+`maintenance_on` commits, neither success nor failure may terminalize until the
+caller-desired maintenance state has been restored. A restore effect failure is
+transient: return `ErrRetry` and re-drive the pending finalizer. An unfinished
+restore remains in the roll-forward set and is exempt from terminal expiry using
+the same machinery as `teardown_started` in 02. If restore cannot be recovered,
+the operation remains unreconciled, blocks conflicting mutations, and is surfaced
+for authorized reconcile under the existing 02 unreconciled-recovery disposition;
+the known maintenance state is never silently abandoned. A permanent productive
+child failure terminalizes the parent only after restore commits, with the typed
+error and child aggregate. Earlier committed changes
 remain applied: a later failure does not undo them. Terminal audit aggregates
 `{ordinal, child_kind, status, typed_error}` and per-child journal entries remain.
 No child produces credentials or changes the no-secrets invariant.
