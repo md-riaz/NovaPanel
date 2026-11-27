@@ -229,6 +229,22 @@ func (s *Store) CompleteCompositeOperation(ctx context.Context, jobID string) er
 		if len(children) == 0 || !finalizer || children[len(children)-1].Kind != "maintenance_off" || (failed && code == "") {
 			return ErrSitePrecondition
 		}
+		op, err := loadOperation(ctx, tx, jobID)
+		if err != nil {
+			return err
+		}
+		if p := op.Identity.PublicationAudit; p != nil {
+			if p.State != "intent" {
+				return ErrSitePrecondition
+			}
+			if err = checkPublicationEvent(ctx, tx, op, p.IntentEventID, "intent"); err != nil {
+				return err
+			}
+			p.State = "committed"
+			if err = savePublication(ctx, tx, op); err != nil {
+				return err
+			}
+		}
 		raw, err := json.Marshal(children)
 		if err != nil {
 			return err

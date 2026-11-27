@@ -76,7 +76,25 @@ func (q *Queue) record(j Job, outcome, code, stage string) error {
 	if e := q.audit.Healthy(); e != nil {
 		return e
 	}
-	return q.audit.Record(audit.Event{Principal: audit.JobPrincipal(j.CreatedBy, j.Role, j.Scopes), Actor: j.Actor, Role: j.Role, Verb: j.Verb, ObjectKey: j.ObjectKey, Outcome: outcome, Code: code, Detail: map[string]any{"job_id": j.ID, "stage": stage}})
+	detail := map[string]any{"job_id": j.ID, "stage": stage}
+	if stage == "exec" && j.Verb == "site.update" {
+		if st, ok := q.store.(interface {
+			OperationChildren(context.Context, string) ([]store.OperationChild, error)
+		}); ok {
+			children, err := st.OperationChildren(context.Background(), j.ID)
+			if err != nil {
+				return err
+			}
+			if len(children) > 0 {
+				var aggregate []map[string]any
+				for _, child := range children {
+					aggregate = append(aggregate, map[string]any{"ordinal": child.Ordinal, "child_kind": child.Kind, "status": child.Status, "typed_error": child.TypedError})
+				}
+				detail["children"] = aggregate
+			}
+		}
+	}
+	return q.audit.Record(audit.Event{Principal: audit.JobPrincipal(j.CreatedBy, j.Role, j.Scopes), Actor: j.Actor, Role: j.Role, Verb: j.Verb, ObjectKey: j.ObjectKey, Outcome: outcome, Code: code, Detail: detail})
 }
 func (q *Queue) Enqueue(ctx context.Context, verb string, args any, objectKey string) (EnqueueResult, error) {
 	return q.enqueue(ctx, verb, args, objectKey, false, nil)

@@ -297,6 +297,15 @@ func (q *Queue) operationTerminal(ctx context.Context, j Job) (bool, error) {
 	if e != nil {
 		return true, e
 	}
+	if op.Kind == store.SiteUpdate {
+		composite, ok := q.store.(interface {
+			CompleteCompositeOperation(context.Context, string) error
+		})
+		if !ok {
+			return true, ErrRecoveryBlocked
+		}
+		return true, composite.CompleteCompositeOperation(ctx, j.ID)
+	}
 	if j.State != "done" {
 		if op.Kind == store.WordPressInstall && j.Step == store.FreshWordPressRollbackCleanedStep {
 			clean, ok := q.store.(interface {

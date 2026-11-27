@@ -15,7 +15,8 @@ func TestOperationChildrenAtomicJournalAndReplay(t *testing.T) {
 	}
 	defer s.Close()
 	phase4Job(t, s.db.raw, "child-job", "running")
-	phase4Exec(t, s.db.raw, `INSERT INTO phase4_operations(job_id,kind,checkpoint,identities_json,expires,updated) VALUES('child-job','site_update','prepared','{}',9999999999999,1)`)
+	phase4Exec(t, s.db.raw, `UPDATE jobs SET verb='site.update' WHERE id='child-job'`)
+	phase4Exec(t, s.db.raw, `INSERT INTO phase4_operations(job_id,kind,site_id,checkpoint,identities_json,expires,updated) VALUES('child-job','site_update','01K8WMXZF57CGNZKX1FZ38DZMA','prepared','{"Version":1,"SiteUpdate":{"site_id":"01K8WMXZF57CGNZKX1FZ38DZMA","force_https":true,"maintenance":true}}',9999999999999,1)`)
 	children := []OperationChild{{Ordinal: 0, Kind: "maintenance_on"}, {Ordinal: 1, Kind: "maintenance_off"}}
 	if err = s.PrepareOperationChildren(ctx, "child-job", children); err != nil {
 		t.Fatal(err)

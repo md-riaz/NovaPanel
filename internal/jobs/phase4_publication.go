@@ -36,7 +36,25 @@ func (q *Queue) publicationRecord(j Job, eid, publication, outcome, code string)
 	if err := q.healthy(); err != nil {
 		return err
 	}
-	err := a.RecordWithID(eid, audit.Event{Principal: audit.JobPrincipal(j.CreatedBy, j.Role, j.Scopes), Actor: j.Actor, Role: j.Role, Verb: j.Verb, ObjectKey: j.ObjectKey, Outcome: outcome, Code: code, Detail: map[string]any{"job_id": j.ID, "stage": "exec", "publication": publication}})
+	detail := map[string]any{"job_id": j.ID, "stage": "exec", "publication": publication}
+	if j.Verb == "site.update" {
+		if st, ok := q.store.(interface {
+			OperationChildren(context.Context, string) ([]store.OperationChild, error)
+		}); ok {
+			children, err := st.OperationChildren(context.Background(), j.ID)
+			if err != nil {
+				return q.latchPublication(err)
+			}
+			if len(children) > 0 {
+				var aggregate []map[string]any
+				for _, child := range children {
+					aggregate = append(aggregate, map[string]any{"ordinal": child.Ordinal, "child_kind": child.Kind, "status": child.Status, "typed_error": child.TypedError})
+				}
+				detail["children"] = aggregate
+			}
+		}
+	}
+	err := a.RecordWithID(eid, audit.Event{Principal: audit.JobPrincipal(j.CreatedBy, j.Role, j.Scopes), Actor: j.Actor, Role: j.Role, Verb: j.Verb, ObjectKey: j.ObjectKey, Outcome: outcome, Code: code, Detail: detail})
 	if err != nil {
 		return q.latchPublication(err)
 	}
