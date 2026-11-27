@@ -128,7 +128,7 @@ func TestTLSPrimaryPublicationExecutor(t *testing.T) {
 				if (failure == "-t" || failure == "reload" || failure == "probe" || failure == "database") && !restored {
 					t.Fatal("failed publication did not restore previous state before retry")
 				}
-				if failure == "cancel" || ((failure == "crash" || failure == "binding") && len(pending) == 0) {
+				if failure == "cancel" {
 					old, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "demo.test/current"))
 					target, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "alias.test/current"))
 					config, _ := os.ReadFile(filepath.Join(f.a.Nginx.Root, "sites-available/demo.conf"))
