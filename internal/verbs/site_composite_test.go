@@ -31,6 +31,98 @@ func TestCompositeExecutorCommitsParent(t *testing.T) {
 	t.Run("restore_retry_maintenance_off", func(t *testing.T) { testCompositeExecutorMaintenance(t, false, false, true, false) })
 }
 
+func TestQuarantinedTLSAllowsMaintenanceFinalizer(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, err := store.Open(filepath.Join(root, "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	sid, _ := id.New()
+	did, _ := id.New()
+	jid, _ := id.New()
+	if _, err = st.CreateSite(ctx, store.Site{ID: sid, Name: "demo", Type: "static", Docroot: "/srv/sites/demo/public"}, store.Domain{ID: did, FQDN: "demo.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.SetSiteStatus(ctx, sid, "active"); err != nil {
+		t.Fatal(err)
+	}
+	force, maintenance := true, false
+	request := &store.CompositeSiteUpdate{SiteID: sid, ForceHTTPS: &force, Maintenance: &maintenance}
+	j := store.Job{ID: jid, Verb: "site.update", ObjectKey: "site:" + sid, CreatedBy: "local-root", Role: "owner", State: "queued", Args: []byte(`{}`)}
+	if _, err = st.PrepareOperation(ctx, j, store.JobClaim{}, store.OperationRequest{Kind: store.SiteUpdate, SiteID: sid, SiteUpdate: request}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.StartJob(ctx, jid, time.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	on := true
+	if err = st.UpdateSite(ctx, sid, store.SitePatch{Maintenance: &on}); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(`{"job_id":"` + jid + `"}`)
+	if err = st.BeginCompositeTLSIntent(ctx, jid, raw); err != nil {
+		t.Fatal(err)
+	}
+	if blocked, err := st.FinalizerTLSBlocked(ctx, jid); err != nil || !blocked {
+		t.Fatalf("valid pending intent must block finalizer: %v %v", blocked, err)
+	}
+	if err = st.UpdateMaintenanceFinalizer(ctx, sid, jid, false); err == nil {
+		t.Fatal("valid pending intent allowed maintenance update")
+	}
+	if err = st.ClearTLSIntent(ctx, raw); err != nil {
+		t.Fatal(err)
+	}
+	changed := append(append([]byte{}, raw...), []byte(` {}`)...)
+	if err = st.BeginTLSIntent(ctx, changed); err != nil {
+		t.Fatal(err)
+	}
+	if matched, changed, err := st.CheckCompositeTLSIntent(ctx, changed); err != nil || !matched || !changed {
+		t.Fatalf("quarantine: %v %v %v", matched, changed, err)
+	}
+	a := agent.New()
+	a.Store = st
+	a.Nginx.Root = filepath.Join(root, "nginx")
+	a.Nginx.Runner = poolReplayRunner{}
+	a.Nginx.Probe = func(context.Context, nginx.Desired) error { return nil }
+	for _, dir := range []string{"sites-available", "sites-enabled"} {
+		if err = os.MkdirAll(filepath.Join(a.Nginx.Root, dir), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	children, err := st.OperationChildren(ctx, jid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := st.GetJob(ctx, jid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = runCompositeEffect(ctx, a, &job, siteUpdateArgs{SiteID: sid, Maintenance: &maintenance}, children[len(children)-1]); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.CommitOperationChild(ctx, jid, children[len(children)-1].Ordinal, "verified", "committed", ""); err != nil {
+		t.Fatal(err)
+	}
+	site, err := st.SiteByID(ctx, sid)
+	if err != nil || site.Maintenance {
+		t.Fatalf("maintenance: %+v %v", site, err)
+	}
+	op, err := st.LoadOperation(ctx, jid)
+	if err != nil || op.Reconciled || op.Checkpoint == "done" || op.Checkpoint == "expired" {
+		t.Fatalf("operation: %+v %v", op, err)
+	}
+	job, err = st.GetJob(ctx, jid)
+	if err != nil || job.Code != "agent_error" || job.State != "running" {
+		t.Fatalf("job: %+v %v", job, err)
+	}
+	intent, err := st.TLSIntent(ctx)
+	if err != nil || string(intent) != string(changed) {
+		t.Fatalf("intent: %s %v", intent, err)
+	}
+}
+
 type compositeRetryRunner struct{ calls atomic.Int32 }
 
 func (r *compositeRetryRunner) Run(ctx context.Context, program string, args []string, opts runnerexec.RunOpts) ([]byte, []byte, int, error) {

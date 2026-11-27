@@ -19,6 +19,43 @@ func (s *Store) TLSIntent(ctx context.Context) (json.RawMessage, error) {
 	}
 	return json.RawMessage(b), err
 }
+
+// FinalizerTLSBlocked permits only the quarantined owner's maintenance restore.
+func (s *Store) FinalizerTLSBlocked(ctx context.Context, jobID string) (bool, error) {
+	var blocked bool
+	err := s.Tx(ctx, func(tx *sql.Tx) error {
+		var err error
+		blocked, err = finalizerTLSBlocked(ctx, tx, jobID)
+		return err
+	})
+	return blocked, err
+}
+
+func finalizerTLSBlocked(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, jobID string) (bool, error) {
+	var raw string
+	err := q.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", tlsIntentKey).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	var identity string
+	err = q.QueryRowContext(ctx, `SELECT c.identities_json FROM phase4_operations o JOIN jobs j ON j.id=o.job_id JOIN phase4_operation_children c ON c.job_id=o.job_id AND c.child_kind='domain_tls' WHERE o.job_id=? AND o.kind='site_update' AND o.reconciled=0 AND o.checkpoint NOT IN ('done','expired') AND j.code='agent_error'`, jobID).Scan(&identity)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	var child OperationChildIdentity
+	if json.Unmarshal([]byte(identity), &child) != nil || len(child.TLS) == 0 || bytes.Equal([]byte(raw), child.TLS) {
+		return true, nil
+	}
+	return false, nil
+}
 func (s *Store) BeginTLSIntent(ctx context.Context, b json.RawMessage) error {
 	_, err := s.db.ExecContext(ctx, "INSERT INTO settings(key,value_json) VALUES(?,?)", tlsIntentKey, string(b))
 	return err

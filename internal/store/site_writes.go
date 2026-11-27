@@ -19,6 +19,21 @@ type SitePatch struct {
 	HSTSMaxAge                              *int64
 }
 
+// UpdateMaintenanceFinalizer restores only the owning composite's maintenance value.
+func (s *Store) UpdateMaintenanceFinalizer(ctx context.Context, siteID, jobID string, value bool) error {
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		blocked, err := finalizerTLSBlocked(ctx, tx, jobID)
+		if err != nil {
+			return err
+		}
+		if blocked {
+			return ErrSitePrecondition
+		}
+		r, err := tx.ExecContext(ctx, `UPDATE sites SET maintenance=?,updated=? WHERE id=? AND EXISTS(SELECT 1 FROM phase4_operations o JOIN jobs j ON j.id=o.job_id JOIN phase4_operation_children c ON c.job_id=o.job_id WHERE o.job_id=? AND o.site_id=sites.id AND o.kind='site_update' AND o.checkpoint NOT IN ('done','expired') AND j.state='running' AND c.child_kind='maintenance_off' AND c.status='pending')`, value, s.clock.Now(), siteID, jobID)
+		return affected(r, err)
+	})
+}
+
 // UpdateSite stores desired metadata. Certificate validity is checked at the
 // execution sink, not inferred from database certificate metadata.
 func (s *Store) UpdateSite(ctx context.Context, id string, p SitePatch) error {

@@ -13,6 +13,10 @@ import (
 // siteCompositeExec is kept behind admission until recovery is integrated.
 func siteCompositeExec(ctx context.Context, a *agent.Agent, j *jobs.Job, v siteUpdateArgs) error {
 	for {
+		durable, err := a.Store.GetJob(ctx, j.ID)
+		if err != nil {
+			return err
+		}
 		children, err := a.Store.OperationChildren(ctx, j.ID)
 		if err != nil {
 			return err
@@ -20,6 +24,12 @@ func siteCompositeExec(ctx context.Context, a *agent.Agent, j *jobs.Job, v siteU
 		next, err := jobs.NextCompositeChild(children)
 		if err != nil {
 			return err
+		}
+		if durable.Code == "agent_error" {
+			next = len(children) - 1
+			if children[next].Status != "pending" {
+				return jobs.ErrRetry
+			}
 		}
 		if next < 0 {
 			if err = a.Store.CheckpointOperation(ctx, j.ID, "prepared", "verified"); err != nil {
@@ -74,6 +84,9 @@ func runCompositeEffect(ctx context.Context, a *agent.Agent, j *jobs.Job, v site
 	switch child.Kind {
 	case "maintenance_on", "maintenance_off":
 		value := true
+		if child.Kind == "maintenance_off" {
+			ctx = agent.MaintenanceFinalizer(ctx, j.ID)
+		}
 		if child.Kind == "maintenance_on" {
 			if err := a.Store.EngageOperationBracket(ctx, j.ID); err != nil {
 				return err
@@ -88,6 +101,9 @@ func runCompositeEffect(ctx context.Context, a *agent.Agent, j *jobs.Job, v site
 				return err
 			}
 			value = site.Maintenance
+		}
+		if child.Kind == "maintenance_off" {
+			return (siteMutationState{a}).applyMaintenanceFinalizer(ctx, v.SiteID, j.ID, value, j)
 		}
 		return (siteMutationState{a}).applySitePatch(ctx, v.SiteID, store.SitePatch{Maintenance: &value}, j)
 	case "php_change":

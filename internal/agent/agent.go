@@ -61,6 +61,21 @@ type Agent struct {
 }
 
 func New() *Agent { return NewWithDependencies(config.Defaults(), exec.Real{}, &validate.V{}) }
+
+type maintenanceFinalizerKey struct{}
+
+func MaintenanceFinalizer(ctx context.Context, jobID string) context.Context {
+	return context.WithValue(ctx, maintenanceFinalizerKey{}, jobID)
+}
+
+func (a *Agent) TLSBlocksMutation(ctx context.Context) (bool, error) {
+	if jobID, ok := ctx.Value(maintenanceFinalizerKey{}).(string); ok {
+		return a.Store.FinalizerTLSBlocked(ctx, jobID)
+	}
+	b, err := a.Store.TLSIntent(ctx)
+	return len(b) > 0, err
+}
+
 func NewWithDependencies(cfg config.Config, runner exec.Runner, v *validate.V) *Agent {
 	c := realClock{}
 	a := &Agent{Cfg: cfg, Exec: runner, Validate: v, Clock: c, Started: c.Now(),
@@ -84,11 +99,11 @@ func NewWithDependencies(cfg config.Config, runner exec.Runner, v *validate.V) *
 		if a.Store == nil {
 			return nil
 		}
-		b, err := a.Store.TLSIntent(ctx)
+		blocked, err := a.TLSBlocksMutation(ctx)
 		if err != nil {
 			return err
 		}
-		if len(b) > 0 {
+		if blocked {
 			return rpcerr.Errf("precondition_failed", "Unresolved TLS publication")
 		}
 		return nil

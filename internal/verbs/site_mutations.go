@@ -116,9 +116,9 @@ type siteMutationState struct{ a *agent.Agent }
 
 func (m siteMutationState) mutableSite(ctx context.Context, sid string) (store.Site, error) {
 	a := m.a
-	if raw, err := a.Store.TLSIntent(ctx); err != nil {
+	if blocked, err := a.TLSBlocksMutation(ctx); err != nil {
 		return store.Site{}, err
-	} else if len(raw) > 0 {
+	} else if blocked {
 		return store.Site{}, rpc.Errf("precondition_failed", "Unresolved TLS publication")
 	}
 	s, e := a.Store.SiteByID(ctx, sid)
@@ -331,6 +331,13 @@ func siteUpdateEffect(ctx context.Context, a *agent.Agent, j *jobs.Job, v siteUp
 func (m siteMutationState) applySitePatch(ctx context.Context, siteID string, patch store.SitePatch, j *jobs.Job) error {
 	if e := m.a.Store.UpdateSite(ctx, siteID, patch); e != nil {
 		return siteError(e)
+	}
+	return m.applySite(ctx, siteID, j)
+}
+
+func (m siteMutationState) applyMaintenanceFinalizer(ctx context.Context, siteID, jobID string, value bool, j *jobs.Job) error {
+	if err := m.a.Store.UpdateMaintenanceFinalizer(ctx, siteID, jobID, value); err != nil {
+		return siteError(err)
 	}
 	return m.applySite(ctx, siteID, j)
 }
