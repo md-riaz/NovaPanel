@@ -62,3 +62,63 @@ func AbortCreate(ctx context.Context, runner exec.Runner, objects []AbortObject)
 	}
 	return nil
 }
+
+// RollbackFreshCreate tears down only resource-ID-owned confirmed objects and
+// removes empty reservations; an unconfirmed existing object stays a conflict.
+func RollbackFreshCreate(ctx context.Context, runner exec.Runner, db, dbID, user, userID string) error {
+	objects := []AbortObject{{Kind: "user", Name: user, ID: userID}, {Kind: "schema", Name: db, ID: dbID}}
+	type pending struct {
+		o             AbortObject
+		marker, phase string
+	}
+	states := make([]pending, 0, len(objects))
+	for _, o := range objects {
+		if runner == nil || !id.Valid(o.ID) || (&validate.V{}).DBName(o.Name) != nil || (o.Kind == "user" && len(o.Name) > 32) {
+			return errors.New("invalid database input")
+		}
+		marker := o.Name
+		exists := fmt.Sprintf("SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='%s'", o.Name)
+		if o.Kind == "user" {
+			marker += "@127.0.0.1"
+			exists = fmt.Sprintf("SELECT COUNT(*) FROM mysql.user WHERE User='%s' AND Host='127.0.0.1'", o.Name)
+		}
+		raw, err := runSQL(ctx, runner, fmt.Sprintf("SELECT COALESCE((SELECT phase FROM novapanel.managed_objects WHERE kind='%s' AND name='%s'),'none'),(%s),COALESCE((SELECT obj_id FROM novapanel.managed_objects WHERE kind='%s' AND name='%s'),'');", o.Kind, marker, exists, o.Kind, marker))
+		if err != nil {
+			return err
+		}
+		fields := strings.Split(raw, "\t")
+		if len(fields) != 3 {
+			return ErrConflict
+		}
+		phase, present, owner := fields[0], fields[1], fields[2]
+		if present != "0" && present != "1" {
+			return ErrConflict
+		}
+		if phase == "none" {
+			if owner != "" || present != "0" {
+				return ErrConflict
+			}
+			continue
+		}
+		if owner != o.ID {
+			return ErrOwnerMismatch
+		}
+		if phase == "reserved" && present != "0" {
+			return ErrConflict
+		}
+		if phase != "reserved" && phase != "created" && phase != "deleting" {
+			return ErrConflict
+		}
+		states = append(states, pending{o: o, marker: marker, phase: phase})
+	}
+	for _, state := range states {
+		if state.phase == "reserved" {
+			if _, err := runSQL(ctx, runner, fmt.Sprintf("DELETE FROM novapanel.managed_objects WHERE kind='%s' AND name='%s' AND obj_id='%s' AND phase='reserved';", state.o.Kind, state.marker, state.o.ID)); err != nil {
+				return err
+			}
+		} else if err := managedDrop(ctx, runner, state.o.Kind, state.o.Name, state.o.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
