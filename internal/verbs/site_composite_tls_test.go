@@ -1,6 +1,7 @@
 package verbs_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -93,6 +94,10 @@ func TestCompositePrimaryTLSReplayAfterInterruptedPublication(t *testing.T) {
 	intent, err := f.st.TLSIntent(context.Background())
 	if err != nil || len(intent) == 0 {
 		t.Fatalf("TLS intent missing: %s %v", intent, err)
+	}
+	children, err := f.st.OperationChildren(context.Background(), f.job)
+	if err != nil || len(children) != 2 || !bytes.Equal(children[0].Identity.TLS, intent) {
+		t.Fatalf("TLS child snapshot does not bind intent: %+v %v", children, err)
 	}
 	f.close(t)
 	f.reopen(t, root)
