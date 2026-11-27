@@ -3,6 +3,7 @@ package verbs
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -78,6 +79,25 @@ func (s sslPublication) publication(ctx context.Context, siteID string, j *jobs.
 			return err
 		}
 		if len(raw) > 0 {
+			op, loadErr := a.Store.LoadOperation(ctx, j.ID)
+			if loadErr != nil && !errors.Is(loadErr, sql.ErrNoRows) {
+				return loadErr
+			}
+			if loadErr == nil && op.Kind == store.SiteUpdate {
+				children, e := a.Store.OperationChildren(ctx, j.ID)
+				if e != nil {
+					return e
+				}
+				matched := false
+				for _, child := range children {
+					if child.Kind == "domain_tls" && bytes.Equal(child.Identity.TLS, raw) {
+						matched = true
+					}
+				}
+				if !matched {
+					return rpc.Errf("agent_error", "TLS recovery binding changed")
+				}
+			}
 			var intent tlsIntent
 			dec := json.NewDecoder(bytes.NewReader(raw))
 			dec.DisallowUnknownFields()
@@ -195,7 +215,15 @@ func (s sslPublication) publication(ctx context.Context, siteID string, j *jobs.
 			if err != nil {
 				return err
 			}
-			if err = a.Store.BeginTLSIntent(ctx, raw); err != nil {
+			op, loadErr := a.Store.LoadOperation(ctx, j.ID)
+			if loadErr == nil && op.Kind == store.SiteUpdate {
+				err = a.Store.BeginCompositeTLSIntent(ctx, j.ID, raw)
+			} else if loadErr == nil || errors.Is(loadErr, sql.ErrNoRows) {
+				err = a.Store.BeginTLSIntent(ctx, raw)
+			} else {
+				err = loadErr
+			}
+			if err != nil {
 				return err
 			}
 		}

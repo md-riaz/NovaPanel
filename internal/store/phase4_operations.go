@@ -23,6 +23,7 @@ const (
 	DatabaseDelete     OperationKind = "database_delete"
 	DBUserDelete       OperationKind = "dbuser_delete"
 	PHPSet             OperationKind = "php_set"
+	SiteUpdate         OperationKind = "site_update"
 	OperationTTLMillis int64         = 86400000
 )
 
@@ -35,6 +36,7 @@ type OperationRequest struct {
 	PurgeFiles, PurgeDatabases bool
 	WordPress                  *WordPressReservation
 	PHP                        *php.SetRequest
+	SiteUpdate                 *CompositeSiteUpdate
 }
 type OperationDatabase struct {
 	Database OperationDatabaseRecord
@@ -55,6 +57,7 @@ type OperationIdentity struct {
 	DownloadStarted            bool                  `json:",omitempty"`
 	WordPress                  *WordPressReservation `json:",omitempty"`
 	PHP                        *PHPOperationIdentity `json:",omitempty"`
+	SiteUpdate                 *CompositeSiteUpdate  `json:",omitempty"`
 }
 type Operation struct {
 	JobID, Owner                   string
@@ -146,6 +149,12 @@ func validOperationIdentity(o Operation) bool {
 	if o.Kind == PHPSet {
 		return validPHPSetIdentity(o)
 	}
+	if o.Kind == SiteUpdate {
+		return validCompositeSiteUpdate(o)
+	}
+	if o.Identity.SiteUpdate != nil {
+		return false
+	}
 	if o.Identity.PHP != nil {
 		return false
 	}
@@ -197,6 +206,8 @@ func operationVerb(k OperationKind) string {
 		return "site.delete"
 	case PHPSet:
 		return "php.set"
+	case SiteUpdate:
+		return "site.update"
 	case DatabaseCreate:
 		return "database.create"
 	case DatabaseRotate:
@@ -219,6 +230,9 @@ func operationSecrets(k OperationKind) bool {
 func (s *Store) PrepareOperation(ctx context.Context, j Job, c JobClaim, r OperationRequest, nonce, ciphertext []byte) (op Operation, err error) {
 	if r.Kind == PHPSet {
 		return s.preparePHPSet(ctx, j, r, nonce, ciphertext)
+	}
+	if r.Kind == SiteUpdate {
+		return s.prepareCompositeSiteUpdate(ctx, j, r, nonce, ciphertext)
 	}
 	if r.Kind == WordPressInstall {
 		return s.prepareWordPress(ctx, j, c, r, nonce, ciphertext)
@@ -415,8 +429,13 @@ func operationBlocked(ctx context.Context, tx *sql.Tx, op Operation) error {
 var ErrOperationLocked = errors.New("operation locked")
 var ErrOperationExpired = errors.New("operation interrupted by expiry")
 
-// freshInstallJobDriven identifies a journal owned by its reserved-account job.
-func freshInstallJobDriven(ctx context.Context, tx *sql.Tx, op Operation) (bool, error) {
+// operationExpiryExempt identifies active lifetimes that must roll forward.
+func operationExpiryExempt(ctx context.Context, tx *sql.Tx, op Operation) (bool, error) {
+	if op.Kind == SiteUpdate {
+		var engaged bool
+		err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM jobs j WHERE j.id=? AND j.code='agent_error' AND ?=0) OR (EXISTS(SELECT 1 FROM phase4_operation_children c WHERE c.job_id=? AND c.child_kind='maintenance_on' AND c.bracket_engaged=1) AND NOT EXISTS(SELECT 1 FROM phase4_operation_children c WHERE c.job_id=? AND c.child_kind='maintenance_off' AND c.status='committed'))`, op.JobID, op.Reconciled, op.JobID, op.JobID).Scan(&engaged)
+		return engaged, err
+	}
 	if op.Kind != WordPressInstall || op.Checkpoint == "done" || op.Checkpoint == "expired" {
 		return false, nil
 	}
@@ -446,10 +465,10 @@ func (s *Store) checkOperation(ctx context.Context, jid string, restoration bool
 				return ErrSitePrecondition
 			}
 		} else {
-			if op.Checkpoint == "done" {
+			if op.Checkpoint == "done" || (op.Kind == SiteUpdate && op.Checkpoint == "verified") {
 				return nil
 			}
-			jobDriven, err := freshInstallJobDriven(ctx, tx, op)
+			jobDriven, err := operationExpiryExempt(ctx, tx, op)
 			if err != nil {
 				return err
 			}
@@ -465,6 +484,16 @@ func (s *Store) checkOperation(ctx context.Context, jid string, restoration bool
 		}
 		if op.Kind == PHPSet {
 			return checkPHPSet(ctx, tx, op)
+		}
+		if op.Kind == SiteUpdate {
+			var status string
+			if e := tx.QueryRowContext(ctx, `SELECT status FROM sites WHERE id=?`, op.SiteID).Scan(&status); e != nil {
+				return e
+			}
+			if status != "active" {
+				return ErrSitePrecondition
+			}
+			return nil
 		}
 		if op.Kind == WordPressInstall {
 			return checkWordPress(ctx, tx, op)
@@ -588,16 +617,21 @@ func (s *Store) CheckpointOperation(ctx context.Context, jid, from, to string) e
 		if e != nil {
 			return e
 		}
-		allowed := from == "prepared" && to == "teardown_started" && (op.Kind == SiteDelete || op.Kind == DatabaseDelete || op.Kind == DBUserDelete) || from == "teardown_started" && to == "db_applied" && TeardownStarted(op) || from == "prepared" && to == "db_applied" && op.Kind != PHPSet || from == "prepared" && to == "config_published" && op.Kind == PHPSet || from == "db_applied" && to == "verified" || from == "db_applied" && to == "config_published" || from == "config_published" && to == "verified"
+		allowed := from == "prepared" && to == "teardown_started" && (op.Kind == SiteDelete || op.Kind == DatabaseDelete || op.Kind == DBUserDelete) || from == "teardown_started" && to == "db_applied" && TeardownStarted(op) || from == "prepared" && to == "db_applied" && op.Kind != PHPSet && op.Kind != SiteUpdate || from == "prepared" && to == "verified" && op.Kind == SiteUpdate || from == "prepared" && to == "config_published" && op.Kind == PHPSet || from == "db_applied" && to == "verified" || from == "db_applied" && to == "config_published" || from == "config_published" && to == "verified"
 		if op.Kind == WordPressInstall && ((from == "db_applied" && to == "verification_in_progress") || (from == "verification_in_progress" && (to == "verified_resumable" || to == "config_published" || to == "verified" || to == "security_failed" || to == "db_applied")) || (from == "verified_resumable" && (to == "verification_in_progress" || to == "config_published")) || ((from == "config_published" || from == "verified") && to == "verification_in_progress")) {
 			allowed = true
 		}
 		if !allowed || op.Checkpoint != from {
 			return ErrSiteConflict
 		}
-		jobDriven, err := freshInstallJobDriven(ctx, tx, op)
+		jobDriven, err := operationExpiryExempt(ctx, tx, op)
 		if err != nil {
 			return err
+		}
+		if op.Kind == SiteUpdate && from == "prepared" && to == "verified" && !jobDriven {
+			if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM phase4_operation_children WHERE job_id=? AND child_kind='maintenance_on' AND bracket_engaged=1) AND EXISTS(SELECT 1 FROM phase4_operation_children WHERE job_id=? AND child_kind='maintenance_off' AND status='committed')`, jid, jid).Scan(&jobDriven); err != nil {
+				return err
+			}
 		}
 		if op.Checkpoint == "expired" || (s.clock.Now() >= op.Expires && !TeardownStarted(op) && !jobDriven) {
 			return ErrOperationExpired
@@ -626,7 +660,7 @@ func (s *Store) CompleteOperation(ctx context.Context, jid string, claim *JobCla
 			return nil
 		}
 		now := s.clock.Now()
-		jobDriven, err := freshInstallJobDriven(ctx, tx, op)
+		jobDriven, err := operationExpiryExempt(ctx, tx, op)
 		if err != nil {
 			return err
 		}

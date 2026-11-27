@@ -93,7 +93,7 @@ func (s *Store) ExpireOperations(ctx context.Context) (count int, err error) {
 		if unresolved != 0 {
 			return ErrOperationLocked
 		}
-		rows, e := tx.QueryContext(ctx, `SELECT job_id FROM phase4_operations INDEXED BY idx_phase4_operations_expiry WHERE expires<=? AND checkpoint NOT IN ('done','expired') AND NOT(kind IN ('site_delete','database_delete','dbuser_delete') AND checkpoint IN ('teardown_started','db_applied')) AND NOT(kind='wordpress_install' AND EXISTS (SELECT 1 FROM site_account_provenance p WHERE p.site_id=phase4_operations.site_id AND p.allocating_job=phase4_operations.job_id)) ORDER BY expires,job_id LIMIT 100`, now)
+		rows, e := tx.QueryContext(ctx, `SELECT job_id FROM phase4_operations INDEXED BY idx_phase4_operations_expiry WHERE expires<=? AND checkpoint NOT IN ('done','expired') AND NOT(kind IN ('site_delete','database_delete','dbuser_delete') AND checkpoint IN ('teardown_started','db_applied')) AND NOT(kind='site_update' AND checkpoint='verified') AND NOT(kind='wordpress_install' AND EXISTS (SELECT 1 FROM site_account_provenance p WHERE p.site_id=phase4_operations.site_id AND p.allocating_job=phase4_operations.job_id)) AND NOT(kind='site_update' AND reconciled=0 AND (EXISTS (SELECT 1 FROM jobs j WHERE j.id=phase4_operations.job_id AND j.code='agent_error') OR (EXISTS (SELECT 1 FROM settings WHERE key='tls:publication:v1') AND EXISTS (SELECT 1 FROM phase4_operation_children c WHERE c.job_id=phase4_operations.job_id AND c.child_kind='domain_tls' AND json_extract(c.identities_json,'$.TLS') IS NOT NULL)))) AND NOT(kind='site_update' AND EXISTS (SELECT 1 FROM phase4_operation_children c WHERE c.job_id=phase4_operations.job_id AND c.child_kind='maintenance_on' AND c.bracket_engaged=1) AND NOT EXISTS (SELECT 1 FROM phase4_operation_children c WHERE c.job_id=phase4_operations.job_id AND c.child_kind='maintenance_off' AND c.status='committed')) ORDER BY expires,job_id LIMIT 100`, now)
 		if e != nil {
 			return e
 		}
@@ -132,7 +132,21 @@ func (s *Store) ExpireOperations(ctx context.Context) (count int, err error) {
 // set after the caller verifies consistent or explicitly non-serving disposition.
 func (s *Store) ReconcileOperation(ctx context.Context, jid string) error {
 	return s.Tx(ctx, func(tx *sql.Tx) error {
-		r, e := tx.ExecContext(ctx, "UPDATE phase4_operations SET reconciled=1,updated=? WHERE job_id=? AND checkpoint='expired' AND ciphertext IS NULL", s.clock.Now(), jid)
+		now := s.clock.Now()
+		r, e := tx.ExecContext(ctx, "UPDATE phase4_operations SET reconciled=1,updated=? WHERE job_id=? AND checkpoint='expired' AND ciphertext IS NULL", now, jid)
+		if e != nil {
+			return e
+		}
+		if n, e := r.RowsAffected(); e != nil {
+			return e
+		} else if n != 0 {
+			return nil
+		}
+		r, e = tx.ExecContext(ctx, `UPDATE phase4_operations SET checkpoint='expired',reconciled=1,updated=? WHERE job_id=? AND ciphertext IS NULL AND kind='site_update' AND checkpoint NOT IN ('done','expired') AND reconciled=0 AND EXISTS(SELECT 1 FROM jobs j WHERE j.id=phase4_operations.job_id AND j.code='agent_error' AND j.state IN ('queued','running')) AND EXISTS(SELECT 1 FROM phase4_operation_children c WHERE c.job_id=phase4_operations.job_id AND c.child_kind='maintenance_off' AND c.status='committed')`, now, jid)
+		if e = affected(r, e); e != nil {
+			return e
+		}
+		r, e = tx.ExecContext(ctx, `UPDATE jobs SET state='failed',finished=?,updated=? WHERE id=? AND code='agent_error' AND state IN ('queued','running')`, now, now, jid)
 		return affected(r, e)
 	})
 }

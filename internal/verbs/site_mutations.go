@@ -116,9 +116,9 @@ type siteMutationState struct{ a *agent.Agent }
 
 func (m siteMutationState) mutableSite(ctx context.Context, sid string) (store.Site, error) {
 	a := m.a
-	if raw, err := a.Store.TLSIntent(ctx); err != nil {
+	if blocked, err := a.TLSBlocksMutation(ctx); err != nil {
 		return store.Site{}, err
-	} else if len(raw) > 0 {
+	} else if blocked {
 		return store.Site{}, rpc.Errf("precondition_failed", "Unresolved TLS publication")
 	}
 	s, e := a.Store.SiteByID(ctx, sid)
@@ -223,9 +223,6 @@ func siteUpdate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	if v.PHPVersion != nil && v.PrimaryDomainID == nil && v.ForceHTTPS == nil && v.HSTSMaxAge == nil && v.Maintenance == nil {
 		return phpSet(ctx, a, &phpSetArgs{request: php.SetRequest{SiteID: v.SiteID, Version: *v.PHPVersion}})
 	}
-	if v.PHPVersion != nil {
-		return nil, rpc.Errf("unsupported", "Composite PHP updates unavailable")
-	}
 	if _, e := (siteMutationState{a}).mutableSite(ctx, v.SiteID); e != nil {
 		return nil, e
 	}
@@ -238,6 +235,19 @@ func siteUpdate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	if e := (siteMutationState{a}).primaryTarget(ctx, v.SiteID, v.PrimaryDomainID); e != nil {
 		return nil, e
 	}
+	fields := 0
+	for _, present := range []bool{v.PrimaryDomainID != nil, v.PHPVersion != nil, v.ForceHTTPS != nil, v.HSTSMaxAge != nil, v.Maintenance != nil} {
+		if present {
+			fields++
+		}
+	}
+	if fields > 1 {
+		if v.PHPVersion != nil && !(phpSetRuntime{a}).available() {
+			return nil, rpc.Errf("unsupported", "PHP execution unavailable")
+		}
+		request := &store.CompositeSiteUpdate{SiteID: v.SiteID, PrimaryDomainID: v.PrimaryDomainID, PHPVersion: v.PHPVersion, ForceHTTPS: v.ForceHTTPS, HSTSMaxAge: v.HSTSMaxAge, Maintenance: v.Maintenance}
+		return a.Jobs.EnqueueOperation(ctx, store.OperationRequest{Kind: store.SiteUpdate, SiteID: v.SiteID, SiteUpdate: request}, nil)
+	}
 	return a.Jobs.Enqueue(ctx, "site.update", v, "site:"+v.SiteID)
 }
 func siteUpdateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
@@ -248,6 +258,17 @@ func siteUpdateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if e := v.Validate(); e != nil {
 		return e
 	}
+	op, e := a.Store.LoadOperation(ctx, j.ID)
+	if e == nil && op.Kind == store.SiteUpdate {
+		return siteCompositeExec(ctx, a, j, v)
+	}
+	if e != nil && !errors.Is(e, sql.ErrNoRows) {
+		return e
+	}
+	return siteUpdateEffect(ctx, a, j, v)
+}
+
+func siteUpdateEffect(ctx context.Context, a *agent.Agent, j *jobs.Job, v siteUpdateArgs) error {
 	if v.PrimaryDomainID != nil {
 		durable, e := a.Store.GetJob(ctx, j.ID)
 		if e != nil {
@@ -304,10 +325,21 @@ func siteUpdateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if e := (siteMutationState{a}).primaryTarget(ctx, v.SiteID, v.PrimaryDomainID); e != nil {
 		return e
 	}
-	if e := a.Store.UpdateSite(ctx, v.SiteID, store.SitePatch{PrimaryDomainID: v.PrimaryDomainID, Maintenance: v.Maintenance, ForceHTTPS: v.ForceHTTPS, HSTSMaxAge: v.HSTSMaxAge}); e != nil {
+	return (siteMutationState{a}).applySitePatch(ctx, v.SiteID, store.SitePatch{PrimaryDomainID: v.PrimaryDomainID, Maintenance: v.Maintenance, ForceHTTPS: v.ForceHTTPS, HSTSMaxAge: v.HSTSMaxAge}, j)
+}
+
+func (m siteMutationState) applySitePatch(ctx context.Context, siteID string, patch store.SitePatch, j *jobs.Job) error {
+	if e := m.a.Store.UpdateSite(ctx, siteID, patch); e != nil {
 		return siteError(e)
 	}
-	return (siteMutationState{a}).applySite(ctx, v.SiteID, j)
+	return m.applySite(ctx, siteID, j)
+}
+
+func (m siteMutationState) applyMaintenanceFinalizer(ctx context.Context, siteID, jobID string, value bool, j *jobs.Job) error {
+	if err := m.a.Store.UpdateMaintenanceFinalizer(ctx, siteID, jobID, value); err != nil {
+		return siteError(err)
+	}
+	return m.applySite(ctx, siteID, j)
 }
 func domainAdd(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := *args.(*domainAddArgs)

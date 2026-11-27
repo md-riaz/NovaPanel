@@ -127,3 +127,30 @@ func TestFreshVerificationRecoveryDisposition(t *testing.T) {
 		})
 	}
 }
+
+func TestReconcileCompositeIntegrityRequiresFinalizer(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	phase4Job(t, s.db.raw, "integrity", "running")
+	phase4Exec(t, s.db.raw, `UPDATE jobs SET code='agent_error' WHERE id='integrity'`)
+	phase4Exec(t, s.db.raw, `INSERT INTO phase4_operations(job_id,kind,checkpoint,identities_json,expires,updated) VALUES('integrity','site_update','prepared','{}',1,1)`)
+	if err = s.PrepareOperationChildren(ctx, "integrity", []OperationChild{{Ordinal: 0, Kind: "maintenance_off"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ReconcileOperation(ctx, "integrity"); err == nil {
+		t.Fatal("reconciled before finalizer")
+	}
+	if err = s.CommitOperationChild(ctx, "integrity", 0, "verified", "committed", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ReconcileOperation(ctx, "integrity"); err != nil {
+		t.Fatal(err)
+	}
+	if phase4Count(t, s.db.raw, `SELECT count(*) FROM phase4_operations o JOIN jobs j ON j.id=o.job_id WHERE o.job_id='integrity' AND o.checkpoint='expired' AND o.reconciled=1 AND j.state='failed' AND j.code='agent_error'`) != 1 {
+		t.Fatal("missing reconciled disposition")
+	}
+}

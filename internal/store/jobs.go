@@ -231,7 +231,7 @@ func (s *Store) RecoverJobs(ctx context.Context, now int64) error {
 		// Locally contained post-effect failures finish as failed/interrupted,
 		// unlike process interruption's running row. Both retain the original
 		// active journal. Other terminal failures and expired journals never retry.
-		if _, e := tx.ExecContext(ctx, `UPDATE jobs SET state='queued',code=NULL,error=NULL,finished=NULL,updated=? WHERE (state='running' OR (state='failed' AND code='interrupted')) AND EXISTS(SELECT 1 FROM phase4_operations o WHERE o.job_id=jobs.id AND o.checkpoint NOT IN ('done','expired'))`, now); e != nil {
+		if _, e := tx.ExecContext(ctx, `UPDATE jobs SET state='queued',code=CASE WHEN code='agent_error' AND EXISTS(SELECT 1 FROM phase4_operations o WHERE o.job_id=jobs.id AND o.kind='site_update' AND o.reconciled=0) THEN code ELSE NULL END,error=CASE WHEN code='agent_error' AND EXISTS(SELECT 1 FROM phase4_operations o WHERE o.job_id=jobs.id AND o.kind='site_update' AND o.reconciled=0) THEN error ELSE NULL END,finished=NULL,updated=? WHERE (state='running' OR (state='failed' AND code='interrupted')) AND EXISTS(SELECT 1 FROM phase4_operations o WHERE o.job_id=jobs.id AND o.checkpoint NOT IN ('done','expired'))`, now); e != nil {
 			return e
 		}
 		_, e := tx.ExecContext(ctx, `UPDATE jobs SET state=CASE WHEN effectful=1 THEN 'failed' ELSE 'queued' END,code=CASE WHEN effectful=1 THEN 'interrupted' ELSE NULL END,error=CASE WHEN effectful=1 THEN 'execution interrupted by restart' ELSE NULL END,finished=CASE WHEN effectful=1 THEN ? ELSE NULL END,updated=? WHERE state='running'`, now, now)

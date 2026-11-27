@@ -78,7 +78,7 @@ func (q *Queue) enqueueOperation(ctx context.Context, r store.OperationRequest, 
 	if e := q.healthy(); e != nil {
 		return out, e
 	}
-	verbs := map[store.OperationKind]string{store.PHPSet: "php.set", store.WordPressInstall: "site.create", store.SiteDelete: "site.delete", store.DatabaseCreate: "database.create", store.DatabaseRotate: "database.rotate_password", store.DBUserCreate: "dbuser.create", store.DatabaseDelete: "database.delete", store.DBUserDelete: "dbuser.delete"}
+	verbs := map[store.OperationKind]string{store.PHPSet: "php.set", store.SiteUpdate: "site.update", store.WordPressInstall: "site.create", store.SiteDelete: "site.delete", store.DatabaseCreate: "database.create", store.DatabaseRotate: "database.rotate_password", store.DBUserCreate: "dbuser.create", store.DatabaseDelete: "database.delete", store.DBUserDelete: "dbuser.delete"}
 	verb := verbs[r.Kind]
 	if verb == "" {
 		return out, rpcerr.Errf("invalid_argument", "operation kind unavailable")
@@ -117,7 +117,7 @@ func (q *Queue) enqueueOperation(ctx context.Context, r store.OperationRequest, 
 	}
 	text := base64.RawURLEncoding.EncodeToString(token[:])
 	j := Job{ID: jid, Verb: verb, ObjectKey: "db:" + r.DatabaseID, Args: json.RawMessage(`{}`), CreatedBy: m.CreatedBy, Role: m.Role, Actor: m.Actor, Scopes: m.Scopes, Automation: m.Automation, State: "queued", Created: q.clock.Now(), Updated: q.clock.Now()}
-	if r.Kind == store.SiteDelete || r.Kind == store.PHPSet {
+	if r.Kind == store.SiteDelete || r.Kind == store.PHPSet || r.Kind == store.SiteUpdate {
 		j.ObjectKey = "site:" + r.SiteID
 	}
 	if r.Kind == store.DatabaseDelete {
@@ -165,6 +165,15 @@ func (q *Queue) enqueueOperation(ctx context.Context, r store.OperationRequest, 
 			return out, rpcerr.Errf("invalid_argument", "PHP request required")
 		}
 		j.Args, e = json.Marshal(r.PHP)
+		if e != nil {
+			return out, e
+		}
+	}
+	if r.Kind == store.SiteUpdate {
+		if r.SiteUpdate == nil {
+			return out, rpcerr.Errf("invalid_argument", "site update required")
+		}
+		j.Args, e = json.Marshal(r.SiteUpdate)
 		if e != nil {
 			return out, e
 		}
@@ -221,7 +230,7 @@ func (q *Queue) enqueueOperation(ctx context.Context, r store.OperationRequest, 
 	}
 	// Discover and snapshot attached identities while holding the same site lock
 	// used by attachment and the worker. The worker reacquires the full durable set.
-	if r.Kind == store.SiteDelete || r.Kind == store.PHPSet {
+	if r.Kind == store.SiteDelete || r.Kind == store.PHPSet || r.Kind == store.SiteUpdate {
 		release, err := q.locks.lockContext(ctx, "site:"+r.SiteID)
 		if err != nil {
 			return out, err
@@ -287,6 +296,15 @@ func (q *Queue) operationTerminal(ctx context.Context, j Job) (bool, error) {
 	}
 	if e != nil {
 		return true, e
+	}
+	if op.Kind == store.SiteUpdate {
+		composite, ok := q.store.(interface {
+			CompleteCompositeOperation(context.Context, string, string) error
+		})
+		if !ok {
+			return true, ErrRecoveryBlocked
+		}
+		return true, composite.CompleteCompositeOperation(ctx, j.ID, j.Code)
 	}
 	if j.State != "done" {
 		if op.Kind == store.WordPressInstall && j.Step == store.FreshWordPressRollbackCleanedStep {

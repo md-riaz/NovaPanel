@@ -23,7 +23,7 @@ func TestPhase4SchemaContract(t *testing.T) {
 					s.Close()
 				}
 			}()
-			if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations"); n != 15 {
+			if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations"); n != 16 {
 				t.Fatalf("production migrations: %d", n)
 			}
 			if upgrade {
@@ -79,7 +79,7 @@ func TestPhase4SchemaContract(t *testing.T) {
 			if upgrade && phase4Count(t, s.db.raw, "SELECT count(*) FROM settings WHERE key='preserved'") != 1 {
 				t.Fatal("upgrade lost existing data")
 			}
-			if phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations") != 15 {
+			if phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations") != 16 {
 				t.Fatal("missing production migration")
 			}
 			var integrity string

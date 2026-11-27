@@ -114,7 +114,7 @@ func (s *Store) MarkWordPressDownloadStarted(ctx context.Context, jobID string) 
 		if op.Kind != WordPressInstall || (op.Checkpoint != "db_applied" && op.Checkpoint != "verification_in_progress") || op.Identity.WordPress == nil {
 			return ErrSitePrecondition
 		}
-		jobDriven, err := freshInstallJobDriven(ctx, tx, op)
+		jobDriven, err := operationExpiryExempt(ctx, tx, op)
 		if err != nil {
 			return err
 		}

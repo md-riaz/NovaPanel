@@ -22,7 +22,7 @@ var ErrPublicationPending = errors.New("operation publication audit pending")
 
 // A legacy done journal without typed acknowledgement is also in doubt. A
 // historical pre-terminal success record alone cannot authorize delivery.
-const publicationPendingSQL = `EXISTS(SELECT 1 FROM phase4_operations po WHERE po.job_id=jobs.id AND po.checkpoint='done' AND (json_type(po.identities_json,'$.PublicationAudit') IS NOT NULL AND coalesce(json_extract(po.identities_json,'$.PublicationAudit.State'),'')<>'acknowledged' OR json_type(po.identities_json,'$.PublicationAudit') IS NULL AND (jobs.state<>'done' OR jobs.step<>'phase4_committed' OR length(coalesce(po.ciphertext,x''))>0 OR length(coalesce(po.nonce,x''))>0)))`
+const publicationPendingSQL = `EXISTS(SELECT 1 FROM phase4_operations po WHERE po.job_id=jobs.id AND po.checkpoint='done' AND (json_type(po.identities_json,'$.PublicationAudit') IS NOT NULL AND coalesce(json_extract(po.identities_json,'$.PublicationAudit.State'),'')<>'acknowledged' OR json_type(po.identities_json,'$.PublicationAudit') IS NULL AND (jobs.state<>'done' AND NOT(po.kind='site_update' AND jobs.state='failed') OR jobs.step<>'phase4_committed' OR length(coalesce(po.ciphertext,x''))>0 OR length(coalesce(po.nonce,x''))>0)))`
 
 type publicationScanner struct {
 	scanner
@@ -67,7 +67,7 @@ func (s *Store) PreparePublicationAudit(ctx context.Context, jid, intent, final 
 		if op.Checkpoint == "done" {
 			return ErrPublicationPending
 		}
-		if s.clock.Now() >= op.Expires && !TeardownStarted(op) {
+		if s.clock.Now() >= op.Expires && !TeardownStarted(op) && !(op.Kind == SiteUpdate && op.Checkpoint == "verified") {
 			return ErrOperationExpired
 		}
 		if op.Checkpoint != "verified" && !((op.Kind == DatabaseDelete || op.Kind == DBUserDelete || op.Kind == SiteDelete) && op.Checkpoint == "db_applied") {
@@ -78,6 +78,12 @@ func (s *Store) PreparePublicationAudit(ctx context.Context, jid, intent, final 
 		}
 		if op.Kind == PHPSet {
 			e = checkPHPSet(ctx, tx, op)
+		} else if op.Kind == SiteUpdate {
+			var incomplete, finalizers int
+			e = tx.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE status='pending'), count(*) FILTER (WHERE child_kind='maintenance_off' AND status='committed') FROM phase4_operation_children WHERE job_id=?`, op.JobID).Scan(&incomplete, &finalizers)
+			if e == nil && (incomplete != 0 || finalizers != 1) {
+				e = ErrSitePrecondition
+			}
 		} else if op.Kind == SiteDelete {
 			e = checkSiteDelete(ctx, tx, op)
 		} else if op.Kind == WordPressInstall {

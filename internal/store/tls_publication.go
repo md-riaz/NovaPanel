@@ -1,10 +1,12 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"reflect"
 )
 
 const tlsIntentKey = "tls:publication:v1"
@@ -18,10 +20,138 @@ func (s *Store) TLSIntent(ctx context.Context) (json.RawMessage, error) {
 	}
 	return json.RawMessage(b), err
 }
+
+func compositeRequestMatches(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, jobID string) (bool, error) {
+	var args, identity, objectKey, siteID string
+	if err := q.QueryRowContext(ctx, `SELECT j.args_json,o.identities_json,j.object_key,o.site_id FROM phase4_operations o JOIN jobs j ON j.id=o.job_id WHERE o.job_id=? AND o.kind='site_update'`, jobID).Scan(&args, &identity, &objectKey, &siteID); err != nil {
+		return false, err
+	}
+	var request CompositeSiteUpdate
+	var op OperationIdentity
+	if json.Unmarshal([]byte(args), &request) != nil || json.Unmarshal([]byte(identity), &op) != nil {
+		return false, nil
+	}
+	return objectKey == "site:"+siteID && reflect.DeepEqual(&request, op.SiteUpdate), nil
+}
+
+// FinalizerTLSBlocked permits only the quarantined owner's maintenance restore.
+func (s *Store) FinalizerTLSBlocked(ctx context.Context, jobID string) (bool, error) {
+	var blocked bool
+	err := s.Tx(ctx, func(tx *sql.Tx) error {
+		var err error
+		blocked, err = finalizerTLSBlocked(ctx, tx, jobID)
+		return err
+	})
+	return blocked, err
+}
+
+func finalizerTLSBlocked(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, jobID string) (bool, error) {
+	var raw string
+	err := q.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", tlsIntentKey).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	var identity string
+	err = q.QueryRowContext(ctx, `SELECT c.identities_json FROM phase4_operations o JOIN jobs j ON j.id=o.job_id JOIN phase4_operation_children c ON c.job_id=o.job_id AND c.child_kind='domain_tls' WHERE o.job_id=? AND o.kind='site_update' AND o.reconciled=0 AND o.checkpoint NOT IN ('done','expired') AND j.code='agent_error'`, jobID).Scan(&identity)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	var child OperationChildIdentity
+	if json.Unmarshal([]byte(identity), &child) != nil || len(child.TLS) == 0 {
+		return true, nil
+	}
+	matches, err := compositeRequestMatches(ctx, q, jobID)
+	if err != nil {
+		return true, err
+	}
+	return bytes.Equal([]byte(raw), child.TLS) && matches, nil
+}
 func (s *Store) BeginTLSIntent(ctx context.Context, b json.RawMessage) error {
 	_, err := s.db.ExecContext(ctx, "INSERT INTO settings(key,value_json) VALUES(?,?)", tlsIntentKey, string(b))
 	return err
 }
+
+// RecordOrphanTLSIntent retains an unresolved intent without assigning it an owner.
+func (s *Store) RecordOrphanTLSIntent(ctx context.Context, raw json.RawMessage) error {
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		var current string
+		if err := tx.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", tlsIntentKey).Scan(&current); err != nil {
+			return err
+		}
+		if current != string(raw) {
+			return ErrSiteConflict
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO settings(key,value_json) VALUES('tls:publication:unreconciled:v1','true') ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json`)
+		return err
+	})
+}
+
+// BeginCompositeTLSIntent binds the publication intent to its durable child in the same transaction.
+func (s *Store) BeginCompositeTLSIntent(ctx context.Context, jobID string, b json.RawMessage) error {
+	if !json.Valid(b) {
+		return ErrSiteInvalid
+	}
+	identity, err := json.Marshal(OperationChildIdentity{TLS: b})
+	if err != nil {
+		return err
+	}
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		r, err := tx.ExecContext(ctx, `UPDATE phase4_operation_children SET identities_json=?,updated=? WHERE job_id=? AND child_kind='domain_tls' AND checkpoint='prepared' AND status='pending' AND EXISTS(SELECT 1 FROM phase4_operations o JOIN jobs j ON j.id=o.job_id WHERE o.job_id=? AND o.kind='site_update' AND o.checkpoint='prepared' AND j.state='running')`, string(identity), s.clock.Now(), jobID, jobID)
+		if err = affected(r, err); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, "INSERT INTO settings(key,value_json) VALUES(?,?)", tlsIntentKey, string(b))
+		return err
+	})
+}
+
+// CheckCompositeTLSIntent records a binding mismatch against its durable owner.
+func (s *Store) CheckCompositeTLSIntent(ctx context.Context, raw json.RawMessage) (matched, changed bool, err error) {
+	var binding struct {
+		JobID string `json:"job_id"`
+	}
+	_ = json.NewDecoder(bytes.NewReader(raw)).Decode(&binding)
+	err = s.Tx(ctx, func(tx *sql.Tx) error {
+		var current string
+		if e := tx.QueryRowContext(ctx, `SELECT value_json FROM settings WHERE key=?`, tlsIntentKey).Scan(&current); e != nil {
+			return e
+		}
+		if current != string(raw) {
+			return ErrSiteConflict
+		}
+		var snapshot string
+		e := tx.QueryRowContext(ctx, `SELECT c.identities_json FROM phase4_operations o JOIN jobs j ON j.id=o.job_id JOIN phase4_operation_children c ON c.job_id=o.job_id AND c.child_kind='domain_tls' WHERE o.job_id=? AND o.kind='site_update' AND o.checkpoint NOT IN ('done','expired') AND (j.state IN ('queued','running') OR (j.state='failed' AND j.code='interrupted'))`, binding.JobID).Scan(&snapshot)
+		if errors.Is(e, sql.ErrNoRows) {
+			return nil
+		}
+		if e != nil {
+			return e
+		}
+		matched = true
+		var child OperationChildIdentity
+		requestMatches, e := compositeRequestMatches(ctx, tx, binding.JobID)
+		if e != nil {
+			return e
+		}
+		if json.Unmarshal([]byte(snapshot), &child) != nil || !bytes.Equal(child.TLS, raw) || !requestMatches {
+			changed = true
+			_, e = tx.ExecContext(ctx, `UPDATE jobs SET state=CASE WHEN state='failed' THEN 'queued' ELSE state END,finished=NULL,code='agent_error',error='TLS recovery binding changed',updated=? WHERE id=? AND (state IN ('queued','running') OR (state='failed' AND code='interrupted'))`, s.clock.Now(), binding.JobID)
+		}
+		return e
+	})
+	return
+}
+
 func (s *Store) ClearTLSIntent(ctx context.Context, b json.RawMessage) error {
 	r, err := s.db.ExecContext(ctx, "DELETE FROM settings WHERE key=? AND value_json=?", tlsIntentKey, string(b))
 	return affected(r, err)

@@ -89,8 +89,10 @@ func TestTLSAwareSiteMutations(t *testing.T) {
 			t.Fatalf("%s admission: %+v", verb, r)
 		}
 		j := jobs.Job(r.Data.(jobs.EnqueueResult).Job)
-		if e := rpc.Registry[verb].Exec(ctx, a, &j); e != nil {
-			t.Fatalf("%s execution: %v", verb, e)
+		runPrimaryQueue(t, a, j.ID)
+		j, err = st.GetJob(ctx, j.ID)
+		if err != nil || j.State != "done" {
+			t.Fatalf("%s execution: %+v %v", verb, j, err)
 		}
 		return j
 	}
