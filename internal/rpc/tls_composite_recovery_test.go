@@ -33,7 +33,7 @@ func TestTLSRecoveryDefersComposite(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(map[string]string{"job_id": jid})
-	if err = s.BeginTLSIntent(ctx, raw); err != nil {
+	if err = s.BeginCompositeTLSIntent(ctx, jid, raw); err != nil {
 		t.Fatal(err)
 	}
 	server := &Server{Agent: &agent.Agent{Store: s}}
@@ -41,6 +41,24 @@ func TestTLSRecoveryDefersComposite(t *testing.T) {
 		t.Fatalf("composite was recovered twice: %+v %v", got, err)
 	}
 	if pending, err := s.TLSIntent(ctx); err != nil || len(pending) == 0 {
+		t.Fatalf("intent lost: %s %v", pending, err)
+	}
+	if err = s.ClearTLSIntent(ctx, raw); err != nil {
+		t.Fatal(err)
+	}
+	changed := append(append([]byte(nil), raw...), []byte(` {}`)...)
+	if err = s.BeginTLSIntent(ctx, changed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = server.prepareTLSRecovery(ctx); err == nil {
+		t.Fatal("changed binding accepted")
+	}
+	job, err := s.GetJob(ctx, jid)
+	if err != nil || job.State != "running" || job.Code != "agent_error" {
+		t.Fatalf("disposition: %+v %v", job, err)
+	}
+	pending, err := s.TLSIntent(ctx)
+	if err != nil || string(pending) != string(changed) {
 		t.Fatalf("intent lost: %s %v", pending, err)
 	}
 }

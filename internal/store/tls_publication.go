@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -40,6 +41,52 @@ func (s *Store) BeginCompositeTLSIntent(ctx context.Context, jobID string, b jso
 		_, err = tx.ExecContext(ctx, "INSERT INTO settings(key,value_json) VALUES(?,?)", tlsIntentKey, string(b))
 		return err
 	})
+}
+
+// CheckCompositeTLSIntent records a binding mismatch against its durable owner.
+func (s *Store) CheckCompositeTLSIntent(ctx context.Context, raw json.RawMessage) (matched, changed bool, err error) {
+	var binding struct {
+		JobID string `json:"job_id"`
+	}
+	if json.NewDecoder(bytes.NewReader(raw)).Decode(&binding) != nil {
+		return false, false, nil
+	}
+	err = s.Tx(ctx, func(tx *sql.Tx) error {
+		var current string
+		if e := tx.QueryRowContext(ctx, `SELECT value_json FROM settings WHERE key=?`, tlsIntentKey).Scan(&current); e != nil {
+			return e
+		}
+		if current != string(raw) {
+			return ErrSiteConflict
+		}
+		rows, e := tx.QueryContext(ctx, `SELECT o.job_id,c.identities_json FROM phase4_operations o JOIN jobs j ON j.id=o.job_id JOIN phase4_operation_children c ON c.job_id=o.job_id AND c.child_kind='domain_tls' WHERE o.kind='site_update' AND o.checkpoint NOT IN ('done','expired') AND (j.state IN ('queued','running') OR (j.state='failed' AND j.code='interrupted'))`)
+		if e != nil {
+			return e
+		}
+		var snapshot string
+		for rows.Next() {
+			var jid, identity string
+			if e = rows.Scan(&jid, &identity); e != nil {
+				rows.Close()
+				return e
+			}
+			if jid == binding.JobID {
+				matched, snapshot = true, identity
+			}
+		}
+		e = rows.Err()
+		rows.Close()
+		if e != nil || !matched {
+			return e
+		}
+		var child OperationChildIdentity
+		if json.Unmarshal([]byte(snapshot), &child) != nil || !bytes.Equal(child.TLS, raw) {
+			changed = true
+			_, e = tx.ExecContext(ctx, `UPDATE jobs SET state=CASE WHEN state='failed' THEN 'queued' ELSE state END,finished=NULL,code='agent_error',error='TLS recovery binding changed',updated=? WHERE id=? AND (state IN ('queued','running') OR (state='failed' AND code='interrupted'))`, s.clock.Now(), binding.JobID)
+		}
+		return e
+	})
+	return
 }
 
 func (s *Store) ClearTLSIntent(ctx context.Context, b json.RawMessage) error {

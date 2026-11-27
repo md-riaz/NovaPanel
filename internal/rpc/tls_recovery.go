@@ -46,6 +46,13 @@ func (s *Server) prepareTLSRecovery(ctx context.Context) (*jobs.Job, error) {
 		}
 		return nil, nil
 	}
+	_, changed, err := s.Agent.Store.CheckCompositeTLSIntent(ctx, raw)
+	if err != nil {
+		return nil, err
+	}
+	if changed {
+		return nil, Errf("agent_error", "Composite TLS recovery binding changed")
+	}
 	var binding struct {
 		JobID string `json:"job_id"`
 	}
