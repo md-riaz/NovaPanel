@@ -71,7 +71,7 @@ mergeable — not one 285-file mega-draft. Drive each with `docs/spec/PHASE-DRIV
    stored admin password anywhere).
 4. **WordPress install** (**Step 3**; `site.create type=wordpress`): `wp core download` →
    `wp core verify-checksums` → protected config publish → `wp core install`, run **as the site user**,
-   `wp-config.php` perms `0400`, never over a non-empty docroot.
+   `wp-config.php` perms `0400`; refuse a non-empty docroot on the first attempt and resume only the same provisioning job.
 5. **Guard** (Step 3): no destructive WordPress ops (update/clone/staging) until backups/restore land (Phase 6).
 
 ## Blueprint
