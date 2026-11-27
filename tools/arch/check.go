@@ -97,12 +97,22 @@ func Check(root string) []string {
 				alias = im.Name.Name
 			}
 			imports[alias] = p
-			if !inExec && (p == "os/exec" || p == "syscall") {
+			if !inExec && (p == "os/exec" || (p == "syscall" && path != "internal/wordpress/tar_extract.go")) {
 				report(path, "process import outside internal/exec: "+p)
 			}
 			if client && (p == "novapanel/internal/exec" || p == "novapanel/internal/store" || p == "novapanel/internal/secret" || p == "golang.org/x/sys/unix") {
 				report(path, "privileged client import: "+p)
 			}
+		}
+		if path == "internal/wordpress/tar_extract.go" {
+			ast.Inspect(file, func(n ast.Node) bool {
+				if sel, ok := n.(*ast.SelectorExpr); ok {
+					if id, ok := sel.X.(*ast.Ident); ok && imports[id.Name] == "syscall" && sel.Sel.Name != "Stat_t" {
+						report(path, "process import outside internal/exec: syscall")
+					}
+				}
+				return true
+			})
 		}
 		registered := map[*ast.CompositeLit]bool{}
 		// Handler references are counted across the entire verbs package.
@@ -226,7 +236,7 @@ func Check(root string) []string {
 						}
 					}
 				}
-				if handler && references[filepath.Dir(path)+"/"+fn.Name.Name] != 1 {
+				if handler && len(fn.Type.Params.List) == 3 && references[filepath.Dir(path)+"/"+fn.Name.Name] != 1 {
 					report(path, "unregistered handler or multiply registered handler: "+fn.Name.Name)
 				}
 			}

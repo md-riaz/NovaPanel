@@ -34,8 +34,10 @@ func checkConfigRecordAbsent(ctx context.Context, custody, jobID string, owner u
 	if unix.Fstat(int(dir.Fd()), &st) != nil || st.Mode&07777 != 0700 {
 		return errConfigCustody
 	}
-	if err = unix.Fstatat(int(dir.Fd()), jobID+".sealed", &st, unix.AT_SYMLINK_NOFOLLOW); !errors.Is(err, unix.ENOENT) {
-		return errConfigCustody
+	for _, name := range []string{jobID + ".sealed", jobID + ".config"} {
+		if err = unix.Fstatat(int(dir.Fd()), name, &st, unix.AT_SYMLINK_NOFOLLOW); !errors.Is(err, unix.ENOENT) {
+			return errConfigCustody
+		}
 	}
 	if err = ops.check(ctx, "cleanup-dir-sync"); err != nil {
 		return err

@@ -238,8 +238,15 @@ func (s *Store) CreateSite(ctx context.Context, v Site, d Domain, limits ...PHPL
 	return
 }
 func (s *Store) createSiteTx(ctx context.Context, tx *sql.Tx, v Site, d Domain, limits ...PHPLimits) (out Site, err error) {
+	return s.createSiteLifetimeTx(ctx, tx, v, d, false, limits...)
+}
+
+func (s *Store) createSiteLifetimeTx(ctx context.Context, tx *sql.Tx, v Site, d Domain, fresh bool, limits ...PHPLimits) (out Site, err error) {
 	old, e := scanSite(tx.QueryRowContext(ctx, "SELECT "+siteColumns+" FROM sites WHERE name=?", v.Name))
 	if e == nil {
+		if fresh {
+			return out, ErrSiteConflict
+		}
 		if old.Status == "deleting" {
 			return out, ErrSitePrecondition
 		}
@@ -257,7 +264,11 @@ func (s *Store) createSiteTx(ctx context.Context, tx *sql.Tx, v Site, d Domain, 
 		return out, e
 	}
 	now := s.clock.Now()
-	if _, e = tx.ExecContext(ctx, "INSERT INTO sites(id,name,type,docroot,php_version,created,updated) VALUES(?,?,?,?,?,?,?)", v.ID, v.Name, v.Type, v.Docroot, v.PHPVersion, now, now); e != nil {
+	lifetime := "served"
+	if fresh {
+		lifetime = "provisioning"
+	}
+	if _, e = tx.ExecContext(ctx, "INSERT INTO sites(id,name,type,docroot,php_version,created,updated,lifetime_state) VALUES(?,?,?,?,?,?,?,?)", v.ID, v.Name, v.Type, v.Docroot, v.PHPVersion, now, now, lifetime); e != nil {
 		return out, siteWriteError(e)
 	}
 	if len(limits) == 1 {
@@ -274,6 +285,17 @@ func (s *Store) createSiteTx(ctx context.Context, tx *sql.Tx, v Site, d Domain, 
 	}
 	out, e = scanSite(tx.QueryRowContext(ctx, "SELECT "+siteColumns+" FROM sites WHERE id=?", v.ID))
 	return out, e
+}
+
+// ReserveWordPressSiteTx requires the allocating job to have been inserted in tx.
+func (s *Store) ReserveWordPressSiteTx(ctx context.Context, tx *sql.Tx, v Site, d Domain, jobID string, limits ...PHPLimits) (uint32, error) {
+	if v.ID == "" || v.Name == "" || v.Type != "wordpress" || v.Docroot == "" || d.ID == "" || d.FQDN == "" || jobID == "" {
+		return 0, ErrSiteInvalid
+	}
+	if _, err := s.createSiteLifetimeTx(ctx, tx, v, d, true, limits...); err != nil {
+		return 0, err
+	}
+	return s.ReserveSiteAccountTx(ctx, tx, v.ID, v.Name, jobID)
 }
 func (s *Store) ReserveSiteTx(ctx context.Context, tx *sql.Tx, v Site, d Domain, j *Job, args func(string) (json.RawMessage, error), limits ...PHPLimits) error {
 	if v.ID == "" || v.Name == "" || v.Type == "" || v.Docroot == "" || d.ID == "" || d.FQDN == "" {

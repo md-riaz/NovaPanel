@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"novapanel/internal/secret"
 	"novapanel/internal/store"
 	"novapanel/internal/wordpress"
@@ -10,6 +11,61 @@ import (
 	"testing"
 	"time"
 )
+
+func TestGeneratedWordPressPasswordsUse32Bytes(t *testing.T) {
+	c, err := GenerateWordPressCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, password := range []string{c.DatabasePassword, c.AdminPassword} {
+		decoded, err := base64.RawURLEncoding.DecodeString(password)
+		if err != nil || len(decoded) != 32 {
+			t.Fatal("incorrect generated password entropy")
+		}
+	}
+	if c.DatabasePassword == c.AdminPassword {
+		t.Fatal("passwords are not independent")
+	}
+}
+
+func TestEnqueueFreshWordPress(t *testing.T) {
+	ctx := WithMetadata(context.Background(), Metadata{CreatedBy: "session", Role: "owner", Actor: "label", Effectful: true})
+	ctx = WithIdempotency(ctx, "key", "hash")
+	s, err := store.Open(filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	sealer, err := secret.New(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := NewQueue(s, sealer, &fakeAudit{})
+	if err = q.PrepareOperations(ctx); err != nil {
+		t.Fatal(err)
+	}
+	m := wordpress.ApprovedArtifacts()
+	r := store.WordPressReservation{SiteID: "01K8WMXZF57CGNZKX1FZ38DZMA", DomainID: "01K8WMXZF57CGNZKX1FZ38DZMB", Input: wordpress.InstallInput{SitesRoot: "/scratch/sites", SiteName: "example", PrimaryDomain: "example.test", Locale: "en_US", Administrator: wordpress.Administrator{Title: "Example", Username: "Admin", Email: "owner@example.test"}}, Evidence: wordpress.ArtifactEvidence{CLISHA256: m.CLI.SHA256, WordPressSHA256: m.WordPress.SHA256, ChecksumsSHA256: m.ChecksumsSHA256, SignatureVerified: true, SignerFingerprint: m.CLISignerFingerprint}}
+	p := WordPressCredentials{DatabasePassword: "database-secret", AdminPassword: "admin-secret"}
+	for i := range p.Salts {
+		p.Salts[i] = "salt"
+	}
+	version := "8.3"
+	site := store.Site{ID: r.SiteID, Name: "example", Type: "wordpress", Docroot: "/scratch/sites/example/public", PHPVersion: &version}
+	domain := store.Domain{ID: r.DomainID, FQDN: "example.test"}
+	out, err := q.EnqueueFreshWordPress(ctx, r, site, domain, store.PHPLimits{}, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := q.OpenWordPressCredentials(ctx, out.Job.ID)
+	if err != nil || got != p {
+		t.Fatalf("credentials not bound: %v", err)
+	}
+	replayed, found, err := q.Replay(ctx)
+	if err != nil || !found || replayed.Job.ID != out.Job.ID || replayed.ClaimToken != out.ClaimToken {
+		t.Fatalf("replay: %+v %v %v", replayed, found, err)
+	}
+}
 
 func TestWordPressQueueRecoveryAndClaim(t *testing.T) {
 	ctx := WithMetadata(context.Background(), Metadata{CreatedBy: "session", Role: "owner", Actor: "label", Effectful: true})
@@ -154,6 +210,9 @@ func TestWordPressQueueRecoveryAndClaim(t *testing.T) {
 	}
 	db := claim["database"].(map[string]any)
 	admin := claim["wordpress"].(map[string]any)
+	if len(db) != 2 || len(admin) != 2 {
+		t.Fatal("unexpected combined claim fields")
+	}
 	if db["password"] != payload.DatabasePassword || admin["admin_password"] != payload.AdminPassword || admin["admin_username"] != "Admin" {
 		t.Fatal("wrong projection")
 	}

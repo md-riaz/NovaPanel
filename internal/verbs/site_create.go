@@ -67,8 +67,24 @@ func (v *siteCreateArgs) Validate() error {
 	}
 	return nil
 }
+
+type siteCreateJobArgs siteCreateArgs
+
+func (v *siteCreateJobArgs) Validate() error {
+	if v.Type == "" && v.Name == "" && v.PrimaryDomain == "" && v.PHPVersion == nil && v.WordPress == nil && id.Valid(v.SiteID) {
+		return nil
+	}
+	return (*siteCreateArgs)(v).Validate()
+}
+
 func init() {
-	rpc.Register(rpc.Verb{Name: "site.create", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, NewArgs: func() any { return &siteCreateArgs{} }, ObjectKey: func(args any) string { return "site:" + args.(*siteCreateArgs).Name }, Run: siteCreate, Exec: siteCreateExec})
+	rpc.Register(rpc.Verb{Name: "site.create", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, NewArgs: func() any { return &siteCreateArgs{} }, ObjectKey: func(args any) string { return "site:" + args.(*siteCreateArgs).Name }, NewJobArgs: func() any { return &siteCreateJobArgs{} }, JobObjectKey: func(args any) string {
+		v := args.(*siteCreateJobArgs)
+		if v.Type == "" {
+			return "site:" + v.SiteID
+		}
+		return "site:" + v.Name
+	}, Run: siteCreate, Exec: siteCreateExec})
 }
 func siteCreate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := *args.(*siteCreateArgs)
@@ -112,6 +128,22 @@ func siteCreate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 		cap := phpcapacity.ChildrenCap(phpcapacity.TotalMemoryMB(), active)
 		initial = append(initial, store.PHPLimits{MaxChildren: &cap})
 	}
+	if v.Type == "wordpress" {
+		evidence, ok := wpEvidence()
+		if !ok {
+			return nil, rpc.Errf("unsupported", "WordPress tool verification unavailable")
+		}
+		credentials, err := jobs.GenerateWordPressCredentials()
+		if err != nil {
+			return nil, err
+		}
+		reservation := store.WordPressReservation{SiteID: sid, DomainID: did, Input: wordpress.InstallInput{SitesRoot: a.Cfg.SitesRoot, SiteName: v.Name, PrimaryDomain: v.PrimaryDomain, Locale: wordpress.ApprovedArtifacts().Locale, Administrator: wordpress.Administrator{Title: v.WordPress.Title, Username: v.WordPress.AdminUsername, Email: v.WordPress.AdminEmail}}, Evidence: evidence}
+		result, err := a.Jobs.EnqueueFreshWordPress(ctx, reservation, store.Site{ID: sid, Name: v.Name, Type: v.Type, PHPVersion: v.PHPVersion, Docroot: filepath.Join(a.Cfg.SitesRoot, v.Name, "public")}, store.Domain{ID: did, FQDN: v.PrimaryDomain}, initial[0], credentials)
+		if err != nil {
+			return nil, siteError(err)
+		}
+		return result, nil
+	}
 	result, e := a.Jobs.EnqueueSiteCreate(ctx, &v, "site:"+v.Name, func(ctx context.Context, tx *sql.Tx, j *jobs.Job) error {
 		return a.Store.ReserveSiteTx(ctx, tx, store.Site{ID: sid, Name: v.Name, Type: v.Type, PHPVersion: v.PHPVersion, Docroot: filepath.Join(a.Cfg.SitesRoot, v.Name, "public")}, store.Domain{ID: did, FQDN: v.PrimaryDomain}, j, func(siteID string) (json.RawMessage, error) {
 			v.SiteID = siteID
@@ -127,6 +159,9 @@ func siteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) (err error
 	var v siteCreateArgs
 	if e := json.Unmarshal(j.Args, &v); e != nil {
 		return rpc.Errf("bad_request", "Invalid site arguments")
+	}
+	if v.Type == "" {
+		return freshWordPressSiteCreateExec(ctx, a, j, v.SiteID)
 	}
 	if e := v.Validate(); e != nil {
 		return e

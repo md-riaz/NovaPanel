@@ -48,13 +48,8 @@ func Delete(ctx context.Context, runner exec.Runner, db string, users []string) 
 var ErrRotateIndeterminate = errors.New("mariadb rotation outcome indeterminate")
 
 func Rotate(ctx context.Context, runner exec.Runner, user, password string) error {
-	if runner == nil || (&validate.V{}).DBName(user) != nil || len(user) > 32 || len(password) == 0 {
+	if runner == nil || (&validate.V{}).DBName(user) != nil || len(user) > 32 || !safePassword(password) {
 		return errors.New("invalid database input")
-	}
-	for _, c := range password {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
-			return errors.New("invalid password")
-		}
 	}
 	statement := fmt.Sprintf("ALTER USER '%s'@'127.0.0.1' IDENTIFIED BY '%s';\n", user, password)
 	_, _, code, err := runner.Run(ctx, "/usr/bin/mariadb", []string{"--no-defaults", "--protocol=socket", "--user=root", "--batch"}, exec.RunOpts{Stdin: strings.NewReader(statement)})

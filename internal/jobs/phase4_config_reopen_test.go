@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,12 +29,12 @@ func TestGeneratedWordPressCredentialsAreIndependent(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		dbRaw, err := hex.DecodeString(c.DatabasePassword)
-		if err != nil || len(dbRaw) != 24 || seen[c.DatabasePassword] {
+		dbRaw, err := base64.RawURLEncoding.DecodeString(c.DatabasePassword)
+		if err != nil || len(dbRaw) != 32 || seen[c.DatabasePassword] {
 			t.Fatal("invalid or repeated database password")
 		}
 		for _, ch := range c.DatabasePassword {
-			if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9') {
+			if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_') {
 				t.Fatal("database password is not accepted by ManagedCreate")
 			}
 		}
@@ -74,9 +73,11 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 		if err = os.WriteFile(filepath.Join(jail, "proc/sys/kernel/random/boot_id"), boot, 0400); err != nil {
 			t.Fatal(err)
 		}
-		out, stderr, code, err := (execboundary.Real{}).Run(context.Background(), exe, []string{"-test.run=^TestWordPressConfigQueueCancellationReopen$", "-test.v"}, execboundary.RunOpts{Env: append(os.Environ(), "NOVAPANEL_CONFIG_JAIL="+jail)})
-		if err != nil || code != 0 {
-			t.Fatalf("confined config test: %s %s %v", out, stderr, err)
+		for _, boundary := range []string{"before", "after"} {
+			out, stderr, code, err := (execboundary.Real{}).Run(context.Background(), exe, []string{"-test.run=^TestWordPressConfigQueueCancellationReopen$", "-test.v"}, execboundary.RunOpts{Env: append(os.Environ(), "NOVAPANEL_CONFIG_JAIL="+jail, "NOVAPANEL_CONFIG_BOUNDARY="+boundary)})
+			if err != nil || code != 0 {
+				t.Fatalf("confined config %s: %s %s %v", boundary, out, stderr, err)
+			}
 		}
 		return
 	}
@@ -205,7 +206,23 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 		if err := s.Tx(ctx, func(tx *sql.Tx) error { _, e := tx.ExecContext(ctx, "DROP TRIGGER stop_config"); return e }); err != nil {
 			return err
 		}
-		err := q.CreateWordPressConfig(ctx, j.ID, custody, func(ctx context.Context, b configcustody.ConfigBinding, effect func(context.Context) error) error {
+		// A failure opening custody occurs after the checkpoint and before publication.
+		if err := q.CreateWordPressConfig(ctx, j.ID, filepath.Join(custody, "missing"), isolate); err == nil {
+			t.Error("pre-publication failure ignored")
+		}
+		op, err := s.LoadOperation(ctx, j.ID)
+		if err != nil || op.Checkpoint != "config_published" {
+			t.Error("write-ahead checkpoint missing", err)
+		}
+		if _, err := os.Lstat(filepath.Join(docroot, "wp-config.php")); !os.IsNotExist(err) {
+			t.Error("config published before custody became available", err)
+		}
+		if os.Getenv("NOVAPANEL_CONFIG_BOUNDARY") == "before" {
+			close(published)
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		err = q.CreateWordPressConfig(ctx, j.ID, custody, func(ctx context.Context, b configcustody.ConfigBinding, effect func(context.Context) error) error {
 			if err := isolate(ctx, b, effect); err != nil {
 				return err
 			}
@@ -228,28 +245,21 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 	if err = <-done; err != nil {
 		t.Fatal(err)
 	}
-	first, err := os.ReadFile(filepath.Join(docroot, "wp-config.php"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Contains(first, []byte(c.DatabasePassword)) || bytes.Contains(first, []byte(c.AdminPassword)) {
-		t.Fatal("wrong password consumer")
-	}
-	for _, salt := range c.Salts {
-		if !bytes.Contains(first, []byte(salt)) {
-			t.Fatal("salt omitted")
+	beforePublish := os.Getenv("NOVAPANEL_CONFIG_BOUNDARY") == "before"
+	var first, record []byte
+	if !beforePublish {
+		first, err = os.ReadFile(filepath.Join(docroot, "wp-config.php"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		record, err = os.ReadFile(filepath.Join(custody, en.Job.ID+".sealed"))
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
 	op, err := s.LoadOperation(ctx, en.Job.ID)
 	if err != nil || op.Checkpoint != "config_published" || len(op.Ciphertext) == 0 {
 		t.Fatal("lost original recovery", err)
-	}
-	record, err := os.ReadFile(filepath.Join(custody, en.Job.ID+".sealed"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(record, []byte(c.DatabasePassword)) || bytes.Contains(record, []byte(c.Salts[0])) {
-		t.Fatal("plaintext custody")
 	}
 	if err = s.Close(); err != nil {
 		t.Fatal(err)
@@ -289,6 +299,27 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 	case <-recovered:
 	case <-time.After(5 * time.Second):
 		t.Fatal("recovery not reached")
+	}
+	if beforePublish {
+		first, err = os.ReadFile(filepath.Join(docroot, "wp-config.php"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		record, err = os.ReadFile(filepath.Join(custody, en.Job.ID+".sealed"))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !bytes.Contains(first, []byte(c.DatabasePassword)) || bytes.Contains(first, []byte(c.AdminPassword)) {
+		t.Fatal("wrong password consumer")
+	}
+	for _, salt := range c.Salts {
+		if !bytes.Contains(first, []byte(salt)) {
+			t.Fatal("salt omitted")
+		}
+	}
+	if bytes.Contains(record, []byte(c.DatabasePassword)) || bytes.Contains(record, []byte(c.Salts[0])) {
+		t.Fatal("plaintext custody")
 	}
 	deadline := time.After(5 * time.Second)
 	for {
@@ -372,7 +403,7 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 		t.Fatal("record removed without audit", e)
 	}
 	if err = s.Tx(ctx, func(tx *sql.Tx) error {
-		_, e := tx.ExecContext(ctx, `UPDATE events SET detail_json=? WHERE detail_json='{}' AND verb='wp.install' AND outcome='ok'`, saved)
+		_, e := tx.ExecContext(ctx, `UPDATE events SET detail_json=? WHERE detail_json='{}' AND verb='site.create' AND outcome='ok'`, saved)
 		return e
 	}); err != nil {
 		t.Fatal(err)
@@ -459,7 +490,7 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(claim) != 2 || len(claim["wordpress"].(map[string]any)) != 3 {
+	if len(claim) != 2 || len(claim["wordpress"].(map[string]any)) != 2 {
 		t.Fatal("claim leaked noncanonical fields")
 	}
 	if _, err = q.Claim(ctx, en.Job.ID, en.ClaimToken); err == nil {
@@ -539,7 +570,7 @@ func TestWordPressConfigQueueCancellationReopen(t *testing.T) {
 	}
 	stopAudit()
 	if err = s.Tx(ctx, func(tx *sql.Tx) error {
-		_, e := tx.ExecContext(ctx, `UPDATE events SET detail_json=? WHERE detail_json='{}' AND verb='wp.install' AND outcome='ok'`, saved)
+		_, e := tx.ExecContext(ctx, `UPDATE events SET detail_json=? WHERE detail_json='{}' AND verb='site.create' AND outcome='ok'`, saved)
 		return e
 	}); err != nil {
 		t.Fatal(err)

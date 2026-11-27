@@ -41,12 +41,12 @@ No consumer may execute this plan until the following gates exist and pass:
   refusal, journal-bound restart exceptions and root-owned PHAR 0644 custody outside
   site homes. Resolve UID/GID from the matched non-login account. Pass the explicitly
   empty supplementary group list through the existing `internal/exec.Runner`.
-- Provision isolated per-site bootstrap, home, cache, packages and empty-ini paths
-  under `/var/lib/novapanel/wordpress/<site>`, outside site homes. Check ownership,
-  permissions and no symlinks before use. Bootstrap and every ancestor up to `/`
-  must be agent-controlled and contain no `wp-cli.local.yml` or `wp-cli.yml`.
+- Provision isolated per-site home, cache and packages under the reserved site home
+  at `.novapanel-wpcli`. Check ownership, permissions and no symlinks before use.
+  The bootstrap cwd and empty ini scan directory are root-controlled under
+  `/usr/lib/novapanel/wpcli`; cwd and every ancestor must contain no WP-CLI YAML.
   WP-CLI 2.12.0 searches from cwd upward, not from the explicit `--path`.
-- Provide the reviewed root-owned `/etc/novapanel/wordpress/php.ini` and unwritable
+- Provide the reviewed root-owned `/usr/lib/novapanel/wpcli/php.ini` and unwritable
   ancestors. PHP's `-c` is not proof that the file exists or is safe. Explicitly
   reject absence. Use a reviewed required-extension allowlist, no auto_prepend_file,
   auto_append_file or arbitrary bootstrap code, and an agent-controlled empty scan

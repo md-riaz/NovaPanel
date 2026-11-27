@@ -93,7 +93,7 @@ func (s *Store) ExpireOperations(ctx context.Context) (count int, err error) {
 		if unresolved != 0 {
 			return ErrOperationLocked
 		}
-		rows, e := tx.QueryContext(ctx, `SELECT job_id FROM phase4_operations INDEXED BY idx_phase4_operations_expiry WHERE expires<=? AND checkpoint NOT IN ('done','expired') AND NOT(kind IN ('site_delete','database_delete','dbuser_delete') AND checkpoint IN ('teardown_started','db_applied')) ORDER BY expires,job_id LIMIT 100`, now)
+		rows, e := tx.QueryContext(ctx, `SELECT job_id FROM phase4_operations INDEXED BY idx_phase4_operations_expiry WHERE expires<=? AND checkpoint NOT IN ('done','expired') AND NOT(kind IN ('site_delete','database_delete','dbuser_delete') AND checkpoint IN ('teardown_started','db_applied')) AND NOT(kind='wordpress_install' AND EXISTS (SELECT 1 FROM site_account_provenance p WHERE p.site_id=phase4_operations.site_id AND p.allocating_job=phase4_operations.job_id)) ORDER BY expires,job_id LIMIT 100`, now)
 		if e != nil {
 			return e
 		}

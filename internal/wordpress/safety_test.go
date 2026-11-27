@@ -85,7 +85,7 @@ func TestSecretFreeContract(t *testing.T) {
 	if strings.Contains(string(b), secret) || strings.Contains(fmt.Sprintf("%#v", in), secret) {
 		t.Fatal("input retained unknown password")
 	}
-	if p.Steps[2].Stdin == p.Steps[5].Stdin || p.Steps[2].Stdin != DatabasePassword || p.Steps[5].Stdin != AdministratorPassword {
+	if p.Steps[2].Kind != PublishProtectedConfig || p.Steps[2].Stdin != "" || p.Steps[4].Stdin != AdministratorPassword {
 		t.Fatal("shared secret channel")
 	}
 }

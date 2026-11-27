@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -28,6 +29,7 @@ type lifetimeStore interface {
 	CheckFreshSiteLifetime(context.Context, store.SiteLifetime) error
 	CheckActivatedSiteLifetime(context.Context, store.SiteLifetime, string) error
 	ActivateSiteLifetime(context.Context, store.SiteLifetime) error
+	CheckpointOperation(context.Context, string, string, string) error
 }
 
 // WordPressLifetime remains held until the operation and its serving decision finish.
@@ -38,7 +40,9 @@ type WordPressLifetime struct {
 	identity                                        store.SiteLifetime
 	activate                                        func(context.Context, store.SiteLifetime) error
 	closed, failed, published, successful, released bool
+	finalizeOnly                                    bool
 	stage                                           int
+	verified                                        func() error
 	plan                                            wordpress.Plan
 	check                                           func(context.Context) error
 	parent                                          context.Context
@@ -56,19 +60,19 @@ type reviewedInstallChild struct {
 func (l *WordPressLifetime) runReviewed(ctx context.Context, child reviewedInstallChild) ([]byte, []byte, int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.closed || l.failed || l.successful || child.options.Cgroup != nil || child.options.Uid != 0 || child.options.Gid != 0 || len(child.options.Groups) != 0 {
+	if l.finalizeOnly || l.closed || l.failed || l.successful || child.options.Cgroup != nil || child.options.Uid != 0 || child.options.Gid != 0 || len(child.options.Groups) != 0 {
 		return nil, nil, -1, errors.New("jobs: reviewed child refused")
 	}
 	work, cancel := context.WithCancel(l.ctx)
 	stop := context.AfterFunc(ctx, cancel)
 	defer func() { stop(); cancel() }()
 	ctx = work
-	steps := []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums, wordpress.CreateConfig, wordpress.InstallCore}
+	steps := []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums, wordpress.IsInstalled, wordpress.InstallCore}
 	index := l.stage
-	if index > 3 {
+	if index > 2 {
 		index--
 	}
-	if l.stage == 3 || index >= len(steps) || child.kind != steps[index] {
+	if l.stage == 2 || index >= len(steps) || child.kind != steps[index] {
 		l.failed = true
 		return nil, nil, -1, errors.New("jobs: reviewed child out of order")
 	}
@@ -90,8 +94,13 @@ func (l *WordPressLifetime) runReviewed(ctx context.Context, child reviewedInsta
 	child.options.Dir, child.options.Env = l.plan.Dir, l.plan.Env
 	child.options.Uid, child.options.Gid, child.options.Groups = l.identity.UID, l.identity.GID, []uint32{}
 	out, stderr, code, err := l.domain.Run(ctx, step.Program, step.Args, child.options)
-	if err != nil || code != 0 {
+	if child.kind == wordpress.IsInstalled && code == 1 && runner.NormalExit(err, code) {
+		err = nil
+	}
+	if err != nil || (code != 0 && !(child.kind == wordpress.IsInstalled && code == 1)) {
 		l.failed = true
+	} else if child.kind == wordpress.IsInstalled && code == 0 {
+		l.stage += 2
 	} else {
 		l.stage++
 	}
@@ -103,7 +112,7 @@ func (l *WordPressLifetime) runReviewed(ctx context.Context, child reviewedInsta
 func (l *WordPressLifetime) ConfigIsolation(ctx context.Context, binding configcustody.ConfigBinding, effect func(context.Context) error) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.closed || l.failed || l.successful || l.published || l.stage != 3 || binding != l.binding || effect == nil {
+	if l.finalizeOnly || l.closed || l.failed || l.successful || l.published || l.stage != 2 || binding != l.binding || effect == nil {
 		l.failed = true
 		return errors.New("jobs: lifetime config isolation refused")
 	}
@@ -179,6 +188,9 @@ func withInstallLifetime(ctx context.Context, l *WordPressLifetime, operation fu
 			return
 		}
 		err = callServingRelease(l, release)
+		if err != nil {
+			err = errors.Join(ErrRetry, err)
+		}
 		l.mu.Lock()
 		released := l.released
 		l.successful = false
@@ -221,7 +233,10 @@ func replayActivatedLifetime(ctx context.Context, domain installLifetimeDomain, 
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	return callServingRelease(&WordPressLifetime{identity: identity, closed: true, released: true}, release)
+	if err = callServingRelease(&WordPressLifetime{identity: identity, closed: true, released: true, finalizeOnly: true}, release); err != nil {
+		return errors.Join(ErrRetry, err)
+	}
+	return nil
 }
 
 // WithFreshWordPressLifetime holds the existing operation locks and install
@@ -229,7 +244,13 @@ func replayActivatedLifetime(ctx context.Context, domain installLifetimeDomain, 
 // idempotently, because activation may have committed before a crash.
 func (q *Queue) WithFreshWordPressLifetime(ctx context.Context, jid string, identity store.SiteLifetime, operation func(*WordPressLifetime) error, release func(*WordPressLifetime) error) error {
 	return q.withFreshWordPressLifetime(ctx, jid, identity, operation, release, func(ctx context.Context, root string, identity store.SiteLifetime) error {
+		if err := verifyWordPressTool(ctx); err != nil {
+			return err
+		}
 		if err := php.VerifyUser(ctx, runner.Real{}, root, identity.Name, identity.SiteID); err != nil {
+			return err
+		}
+		if err := wordpress.EnsureToolWorkspace(root, identity.Name, identity.UID, identity.GID); err != nil {
 			return err
 		}
 		_, err := platform.NewSiteRunner(ctx, runner.Real{}, root, identity.Name, identity.UID, identity.GID)
@@ -311,11 +332,22 @@ func (q *Queue) withFreshWordPressLifetime(ctx context.Context, jid string, iden
 	if err != nil {
 		return err
 	}
+	program, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	for i := range plan.Steps {
+		if plan.Steps[i].Kind == wordpress.Download {
+			plan.Steps[i].Program = program
+			plan.Steps[i].Args = []string{"__wordpress-extract", identity.Docroot}
+		}
+	}
 	domain, err := createDomain(identity.SiteID)
 	if err != nil {
 		return err
 	}
 	if replay {
+		// docs/phase4-production-activation-ruling.md: activated replay is finalize-only.
 		return replayActivatedLifetime(ctx, domain, identity, func(ctx context.Context) error {
 			if err := q.healthy(); err != nil {
 				return err
@@ -331,7 +363,27 @@ func (q *Queue) withFreshWordPressLifetime(ctx context.Context, jid string, iden
 		if err := q.healthy(); err != nil {
 			return err
 		}
-		return s.CheckOperation(checkCtx, jid)
+		if err := s.CheckOperation(checkCtx, jid); err != nil {
+			return err
+		}
+		current, err := s.LoadOperation(checkCtx, jid)
+		if err != nil {
+			return err
+		}
+		checkpoint := current.Checkpoint
+		resumable := checkpoint == "verified_resumable" || checkpoint == "config_published" || checkpoint == "verified"
+		if resumable {
+			if err := s.CheckpointOperation(checkCtx, jid, checkpoint, "verification_in_progress"); err != nil {
+				return err
+			}
+		}
+		if err := verify(checkCtx, in.SitesRoot, identity); err != nil {
+			return err
+		}
+		if resumable {
+			return s.CheckpointOperation(checkCtx, jid, "verification_in_progress", checkpoint)
+		}
+		return nil
 	}}
 	return withInstallLifetime(ctx, l, operation, release)
 }

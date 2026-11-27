@@ -68,8 +68,8 @@ func TestPhase4ProductionMigration(t *testing.T) {
 			s.Close()
 		}
 	}()
-	if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations"); n != 12 {
-		t.Fatalf("want eleven production migrations, got %d", n)
+	if n := phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations"); n != 15 {
+		t.Fatalf("want fifteen production migrations, got %d", n)
 	}
 	phase4JournalKinds(t, s)
 	var recordedHash string

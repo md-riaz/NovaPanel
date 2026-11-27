@@ -79,6 +79,14 @@ func publishConfig(ctx context.Context, custody string, b ConfigBinding, config 
 	if unix.Fstat(int(journal.Fd()), &js) != nil || js.Mode&07777 != 0700 {
 		return errConfigCustody
 	}
+	if err = removeConfigTemp(journal, b, owner); err != nil {
+		return err
+	}
+	defer func() {
+		if e := removeConfigTemp(journal, b, owner); e != nil {
+			err = errors.Join(err, e)
+		}
+	}()
 	target, err := openConfigDir(b.Docroot, owner, &b, ops.fixtureAncestors)
 	if err != nil {
 		return err
@@ -170,20 +178,6 @@ func publishConfig(ctx context.Context, custody string, b ConfigBinding, config 
 		}
 	} else {
 		temp := b.JobID + ".config"
-		// A process may die before chmod, chown or write completes. Only the
-		// authenticated record permits discarding its private temporary inode.
-		var st unix.Stat_t
-		e := unix.Fstatat(int(journal.Fd()), temp, &st, unix.AT_SYMLINK_NOFOLLOW)
-		if e == nil {
-			if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Nlink != 1 || (st.Uid != owner && st.Uid != b.UID) || (st.Mode&07777 != 0600 && st.Mode&07777 != 0400) {
-				return errConfigCustody
-			}
-			if e = unix.Unlinkat(int(journal.Fd()), temp, 0); e != nil {
-				return e
-			}
-		} else if !errors.Is(e, unix.ENOENT) {
-			return e
-		}
 		if err = writeConfigFile(ctx, journal, temp, config, b.UID, b.GID, 0400, ops, "config"); err != nil {
 			return err
 		}
@@ -332,4 +326,29 @@ func writeConfigFile(ctx context.Context, dir *os.File, name string, data []byte
 	}
 	complete = true
 	return nil
+}
+
+// removeConfigTemp removes only a private, singly linked job-bound temporary inode.
+func removeConfigTemp(dir *os.File, b ConfigBinding, owner uint32) error {
+	name := b.JobID + ".config"
+	fd, err := unix.Openat(int(dir.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if errors.Is(err, unix.ENOENT) {
+		return nil
+	}
+	if err != nil {
+		return errConfigCustody
+	}
+	f := os.NewFile(uintptr(fd), name)
+	defer f.Close()
+	var held, current unix.Stat_t
+	if unix.Fstat(fd, &held) != nil || held.Mode&unix.S_IFMT != unix.S_IFREG || held.Nlink != 1 || (held.Uid != owner && held.Uid != b.UID) || (held.Mode&07777 != 0600 && held.Mode&07777 != 0400) {
+		return errConfigCustody
+	}
+	if unix.Fstatat(int(dir.Fd()), name, &current, unix.AT_SYMLINK_NOFOLLOW) != nil || current.Dev != held.Dev || current.Ino != held.Ino || current.Nlink != 1 {
+		return errConfigCustody
+	}
+	if err = unix.Unlinkat(int(dir.Fd()), name, 0); err != nil {
+		return err
+	}
+	return dir.Sync()
 }

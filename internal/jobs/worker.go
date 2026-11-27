@@ -22,6 +22,14 @@ var ErrRetry = rpcerr.ErrRetry
 // ErrRecoveryRequired marks a journaled publication requiring dedicated recovery.
 var ErrRecoveryRequired = errors.New("jobs: recovery required")
 
+type freshResumeCheckpointKey struct{}
+
+// FreshResumeCheckpoint carries the original checkpoint only within this locked attempt.
+func FreshResumeCheckpoint(ctx context.Context) string {
+	value, _ := ctx.Value(freshResumeCheckpointKey{}).(string)
+	return value
+}
+
 // Run owns one worker. SQL transactions never span the external runner.
 func (q *Queue) Run(ctx context.Context) error {
 	q.mu.Lock()
@@ -348,10 +356,43 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 	// Caller identity is restored exclusively from durable trusted columns.
 	err = nil
 	isOperation := false
+	wordpressInstall := false
+	freshInstall := false
 	phpRecovery := false
 	if s, ok := q.store.(operationStore); ok {
 		if op, loadErr := s.LoadOperation(ctx, j.ID); loadErr == nil {
 			isOperation = true
+			wordpressInstall = op.Kind == store.WordPressInstall && j.Verb == "site.create"
+			if op.Kind == store.WordPressInstall && j.Verb == "site.create" {
+				if fresh, ok := q.store.(interface {
+					LoadSiteLifetime(context.Context, string) (store.SiteLifetime, error)
+					CheckFreshSiteLifetime(context.Context, store.SiteLifetime) error
+					BeginFreshSitePreflight(context.Context, string, store.SiteLifetime) (string, error)
+				}); ok {
+					identity, e := fresh.LoadSiteLifetime(ctx, op.SiteID)
+					if e == nil && identity.AllocatingJob == j.ID {
+						previous := ""
+						if j.Step != store.FreshWordPressRollbackIntentStep && j.Step != store.FreshWordPressRollbackStep && j.Step != store.FreshWordPressRollbackCleanedStep {
+							var preflightErr error
+							previous, preflightErr = fresh.BeginFreshSitePreflight(ctx, j.ID, identity)
+							if preflightErr != nil {
+								return errors.Join(ErrRetry, preflightErr)
+							}
+							if previous != "" {
+								attemptCtx = context.WithValue(attemptCtx, freshResumeCheckpointKey{}, previous)
+							}
+						}
+						freshInstall = previous != "" || fresh.CheckFreshSiteLifetime(ctx, identity) == nil
+					}
+				}
+			}
+			if freshInstall && j.Step == store.FreshWordPressRollbackIntentStep {
+				if e := q.beginFreshRollback(ctx, j, j.Code); e != nil {
+					return e
+				}
+				return nil
+			}
+			rollback := freshInstall && (j.Step == store.FreshWordPressRollbackStep || j.Step == store.FreshWordPressRollbackCleanedStep)
 			if restoreExpiredPHP && (op.Kind != store.PHPSet || j.Verb != "php.set") {
 				return ErrRecoveryBlocked
 			}
@@ -367,7 +408,7 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 					}
 				}
 			}
-			if err == nil {
+			if err == nil && !rollback {
 				if restoreExpiredPHP {
 					check, ok := q.store.(interface {
 						CheckExpiredPHPRestoration(context.Context, string) error
@@ -380,7 +421,7 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 					err = s.CheckOperation(ctx, j.ID)
 				}
 			}
-			if err == nil && len(op.Ciphertext) > 0 {
+			if err == nil && !rollback && len(op.Ciphertext) > 0 {
 				if op.Kind == store.WordPressInstall {
 					_, err = q.OpenWordPressCredentials(ctx, j.ID)
 				} else {
@@ -420,7 +461,11 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 		return q.latchPublication(errors.Join(ErrRecoveryBlocked, err))
 	}
 	if isOperation {
+		retryFresh := wordpressInstall && errors.Is(err, ErrRetry)
 		err = operationError(err)
+		if retryFresh && !errors.Is(err, ErrRetry) {
+			err = errors.Join(err, ErrRetry)
+		}
 		if err != nil {
 			if journal, ok := q.store.(operationStore); ok {
 				if op, e := journal.LoadOperation(ctx, j.ID); e == nil && store.TeardownStarted(op) {
@@ -428,6 +473,30 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 				}
 			}
 		}
+	}
+	if freshInstall && err != nil && !errors.Is(err, ErrRetry) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		switch j.Step {
+		case store.FreshWordPressRollbackStep:
+			err = errors.Join(err, ErrRetry)
+		case store.FreshWordPressRollbackCleanedStep:
+			// The rollback executor has finished external teardown and custody cleanup.
+		default:
+			code := "agent_error"
+			var coded *rpcerr.CodedError
+			if errors.As(err, &coded) {
+				code = coded.Code
+			}
+			if e := q.beginFreshRollback(ctx, j, code); e != nil {
+				return e
+			}
+			return nil
+		}
+	}
+	if wordpressInstall && errors.Is(err, ErrRetry) {
+		return q.requeueWordPress(ctx, j.ID)
+	}
+	if freshInstall && j.Step == store.FreshWordPressRollbackCleanedStep && err != nil && !errors.Is(err, ErrRetry) {
+		return q.finish(ctx, j, err)
 	}
 	if errors.Is(err, nginx.ErrPHPOriginalRestored) {
 		if e := q.finish(ctx, j, err); e != nil {
@@ -597,4 +666,33 @@ func invoke(ctx context.Context, run func(context.Context, *Job) error, j *Job) 
 		return errors.New("jobs: runner not configured")
 	}
 	return run(ctx, j)
+}
+
+func (q *Queue) beginFreshRollback(ctx context.Context, j Job, code string) error {
+	if code == "" {
+		code = "agent_error"
+	}
+	s, ok := q.store.(interface {
+		PersistFreshWordPressRollbackIntent(context.Context, string, string) error
+		BeginFreshWordPressRollback(context.Context, string, string) error
+	})
+	if !ok {
+		return ErrRetry
+	}
+	if err := s.PersistFreshWordPressRollbackIntent(ctx, j.ID, code); err != nil {
+		return errors.Join(ErrRetry, err)
+	}
+	// The durable fence prevents the install from running again on retry or restart.
+	_ = s.BeginFreshWordPressRollback(ctx, j.ID, code)
+	return q.requeueWordPress(ctx, j.ID)
+}
+
+func (q *Queue) requeueWordPress(ctx context.Context, jid string) error {
+	current, err := q.store.GetJob(ctx, jid)
+	if err != nil {
+		return err
+	}
+	current.State = "queued"
+	current.Updated = q.clock.Now()
+	return q.store.UpdateJob(ctx, current)
 }

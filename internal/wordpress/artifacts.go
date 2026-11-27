@@ -15,11 +15,18 @@ type Manifest struct {
 func ApprovedArtifacts() Manifest {
 	return Manifest{
 		CLI:       Artifact{"2.12.0", "https://github.com/wp-cli/wp-cli/releases/download/v2.12.0/wp-cli-2.12.0.phar", "ce34ddd838f7351d6759068d09793f26755463b4a4610a5a5c0a97b68220d85c"},
-		WordPress: Artifact{"7.1.4", "https://downloads.wordpress.org/release/wordpress-7.1.4.zip", "a147146c159362778ecbbbfb07bb20ddf4e85b130f971c824e656a8f938c5f87"},
+		WordPress: Artifact{"7.1.4", "https://wordpress.org/wordpress-7.1.4.tar.gz", "881e53a4681ff2cd911651b11cccdede5ae477ddf0765af5d6a1a8b219a1d835"},
 		Locale:    "en_US", CLISignerFingerprint: "63AF7AA15067C05616FDDD88A3A2E8F226F0BC06",
 		ChecksumsURL:    "https://api.wordpress.org/core/checksums/1.0/?version=7.1.4&locale=en_US",
 		ChecksumsSHA256: "bb718bddf197e0098f05395dd9b228fad70b394926ee9d70a8c6a67cf20781e7", ChecksumEntries: 3782,
 	}
+}
+
+// stagedZIPArtifacts retains the separate ZIP-only staging and lab fixture path.
+func stagedZIPArtifacts() Manifest {
+	m := ApprovedArtifacts()
+	m.WordPress = Artifact{"7.1.4", "https://downloads.wordpress.org/release/wordpress-7.1.4.zip", "a147146c159362778ecbbbfb07bb20ddf4e85b130f971c824e656a8f938c5f87"}
+	return m
 }
 
 // ArtifactEvidence is public verification metadata supplied by the trusted custody

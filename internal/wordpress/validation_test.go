@@ -97,7 +97,7 @@ func TestAdministratorBoundaryValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.Join(p.Steps[5].Args, "\x00"), "--title="+in.Administrator.Title) {
+	if !strings.Contains(strings.Join(p.Steps[4].Args, "\x00"), "--title="+in.Administrator.Title) {
 		t.Fatal("title changed")
 	}
 	// Option-shaped data remains exactly one named value, never another flag.
@@ -107,7 +107,7 @@ func TestAdministratorBoundaryValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	found := false
-	for _, a := range p.Steps[5].Args {
+	for _, a := range p.Steps[4].Args {
 		if a == "--title="+in.Administrator.Title {
 			found = true
 		}

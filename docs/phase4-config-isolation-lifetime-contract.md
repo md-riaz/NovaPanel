@@ -35,7 +35,7 @@ The next consumer must expose one operation-scoped held lifetime, not independen
 
 Ruling 9 selects dedicated per-site supervised FPM domains, and restricts initial IO support to a fresh, never-executed backend with the minimum surface required by the offline fixture operation. It does not establish that this backend or its launchers exist, or that earlier asynchronous writes have retired. Unsupported or previously executed lifetimes must fail closed until the required protections and independent review are complete.
 
-The follow-up UID ruling retains the existing `useradd` allocation and `novapanel-site=<ULID>` GECOS provenance; it adds no UID reservation table or numeric range. Lab retirement retains the same account and UID under `novapanel-retained=<ULID>` and never calls `userdel`; reclamation remains an explicitly authorized operator action. A disposable-container test exercises account creation, site-UID file ownership and retained-account refusal, but does not establish the missing restricted-IO backend or managed FPM lifetime.
+The production activation ruling reserves the paired UID/GID allocation band 2000000–2999999 for collision avoidance and known-before-creation identity, distinct from isolation, which is provided by the per-site cgroup domain. NovaPanel durably allocates identities monotonically without reuse before explicit account creation, and retains `novapanel-site=<ULID>` GECOS provenance. Lab retirement retains the same account and UID under `novapanel-retained=<ULID>` and never calls `userdel`; reclamation remains an explicitly authorized operator action. A disposable-container test exercises account creation, site-UID file ownership and retained-account refusal, but does not establish the missing restricted-IO backend or managed FPM lifetime.
 
 The current shared `php8.3-fpm.service` master can fork workers for several UIDs from one cgroup. It cannot supply at-birth per-site cgroup membership without another trusted mechanism. Moving discovered workers afterward leaves the fork-before-migration hole.
 
@@ -52,3 +52,11 @@ Safe numeric-child probes use only internal/exec, injected account data and pre-
 Required end-to-end acceptance remains the handoff's complete failure matrix: pre-existing non-FPM writer, concurrent fork during acquisition, changed UID/GID/home, managed relocation exclusion, hostile-root limitation, retained asynchronous invocation on return/panic/cancel, blocked acquisition/drain cancellation, missing/unquiesceable dependency before effect, original-ID SQLite/audit reopen recovery and unchanged secret projections. Existing worker-drain tests cover only worker-owned admissions, not all-site-UID isolation. New mechanism tests must start RED at the agreed lifetime/operation seam before implementation; characterization of current limitations is not GREEN for the future mechanism.
 
 Sources: Linux cgroup v2 documentation, https://docs.kernel.org/admin-guide/cgroup-v2.html, sections Processes, Delegation, cgroup.freeze, cgroup.kill and cgroup.events; `clone(2)` CLONE_INTO_CGROUP, https://man7.org/linux/man-pages/man2/clone3.2.html; `io_uring_setup(2)`, https://man7.org/linux/man-pages/man2/io_uring_setup.2.html. These define process membership/control and asynchronous submission, not an all-filesystem drain guarantee.
+
+## Activated replay
+
+For `verified_resumable` and `config_published`, recheck the pinned archive
+SHA-256 before resuming an installation effect. Activated replay only releases
+serving and records completion; it cannot download, extract or install core and
+does not recheck the archive, as ruled in
+`docs/phase4-production-activation-ruling.md`.

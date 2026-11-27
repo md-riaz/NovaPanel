@@ -94,17 +94,22 @@ func (d *fakeInstallLifetime) WithEmpty(ctx context.Context, fn func(context.Con
 	}
 	return fn(ctx)
 }
-func (d *fakeInstallLifetime) Run(ctx context.Context, _ string, _ []string, o runner.RunOpts) ([]byte, []byte, int, error) {
+func (d *fakeInstallLifetime) Run(ctx context.Context, _ string, args []string, o runner.RunOpts) ([]byte, []byte, int, error) {
 	if !d.held || !d.empty || d.closed || o.Uid != 123 || o.Gid != 456 || len(o.Groups) != 0 {
 		return nil, nil, -1, errors.New("unsafe admission")
 	}
 	d.runs++
+	for _, arg := range args {
+		if arg == "is-installed" {
+			return nil, nil, 1, nil
+		}
+	}
 	return nil, nil, 0, nil
 }
 func (d *fakeInstallLifetime) Close(context.Context) error { d.closed = true; return d.closeErr }
 
 func fakeLifetimePlan() wordpress.Plan {
-	return wordpress.Plan{Steps: []wordpress.Step{{Kind: wordpress.Download, Program: "/stub"}, {Kind: wordpress.VerifyChecksums, Program: "/stub"}, {Kind: wordpress.CreateConfig, Program: "/stub"}, {Kind: wordpress.InstallCore, Program: "/stub"}}}
+	return wordpress.Plan{Steps: []wordpress.Step{{Kind: wordpress.Download, Program: "/stub"}, {Kind: wordpress.VerifyChecksums, Program: "/stub"}, {Kind: wordpress.IsInstalled, Program: "/stub", Args: []string{"is-installed"}}, {Kind: wordpress.InstallCore, Program: "/stub"}}}
 }
 func TestHeldLifetimeIsolationAndRelease(t *testing.T) {
 	for _, mode := range []string{"success", "callback", "close", "early", "duplicate", "panic"} {
@@ -130,7 +135,7 @@ func TestHeldLifetimeIsolationAndRelease(t *testing.T) {
 				if mode == "panic" {
 					panic("fixture")
 				}
-				for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums, wordpress.CreateConfig} {
+				for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums} {
 					if _, _, _, err := l.runReviewed(context.Background(), reviewedInstallChild{kind: kind}); err != nil {
 						return err
 					}
@@ -150,6 +155,9 @@ func TestHeldLifetimeIsolationAndRelease(t *testing.T) {
 				}
 				if mode == "duplicate" {
 					_ = l.ConfigIsolation(context.Background(), binding, func(context.Context) error { effects++; return nil })
+				}
+				if _, _, _, err = l.runReviewed(context.Background(), reviewedInstallChild{kind: wordpress.IsInstalled}); err != nil {
+					return err
 				}
 				_, _, _, err = l.runReviewed(context.Background(), reviewedInstallChild{kind: wordpress.InstallCore})
 				return err
@@ -232,7 +240,7 @@ func TestLifetimeReplayKeepsSiteIdentity(t *testing.T) {
 	identity := store.SiteLifetime{SiteID: siteID, Name: "example", Docroot: "/sites/example/public", AllocatingJob: jobID, UID: 123, GID: 456}
 	err = s.Tx(ctx, func(tx *sql.Tx) error {
 		for _, q := range []string{
-			`INSERT INTO jobs(id,verb,args_json,object_key,actor,created_by,state,created,updated) VALUES('` + jobID + `','wp.install','{}','site:example','fixture','owner','running',1,1)`,
+			`INSERT INTO jobs(id,verb,args_json,object_key,actor,created_by,state,created,updated) VALUES('` + jobID + `','site.create','{}','site:example','fixture','owner','running',1,1)`,
 			`INSERT INTO sites(id,name,type,docroot,status,created,updated,lifetime_state) VALUES('` + siteID + `','example','wordpress','/sites/example/public','creating',1,1,'provisioning')`,
 			`INSERT INTO site_account_provenance(site_id,account_name,uid,gid,allocating_job,evidence) VALUES('` + siteID + `','example',123,456,'` + jobID + `','owned')`,
 			`INSERT INTO phase4_operations(job_id,kind,site_id,checkpoint,identities_json,expires,updated) VALUES('` + jobID + `','wordpress_install','` + siteID + `','verified','{}',9999999999999,1)`,
@@ -255,12 +263,15 @@ func TestLifetimeReplayKeepsSiteIdentity(t *testing.T) {
 		return errors.New("injected interruption after commit")
 	}}
 	err = withInstallLifetime(ctx, l, func(l *WordPressLifetime) error {
-		for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums, wordpress.CreateConfig} {
+		for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums} {
 			if _, _, _, err := l.runReviewed(ctx, reviewedInstallChild{kind: kind}); err != nil {
 				return err
 			}
 		}
 		if err := l.ConfigIsolation(ctx, binding, func(context.Context) error { return nil }); err != nil {
+			return err
+		}
+		if _, _, _, err := l.runReviewed(ctx, reviewedInstallChild{kind: wordpress.IsInstalled}); err != nil {
 			return err
 		}
 		_, _, _, err := l.runReviewed(ctx, reviewedInstallChild{kind: wordpress.InstallCore})
@@ -294,6 +305,14 @@ func TestLifetimeReplayKeepsSiteIdentity(t *testing.T) {
 	err = replayActivatedLifetime(ctx, d, reloaded, func(ctx context.Context) error { return s.CheckActivatedSiteLifetime(ctx, reloaded, jobID) }, func(l *WordPressLifetime) error {
 		if !d.closed || l.identity != reloaded {
 			t.Error("incorrect replay release")
+		}
+		for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums, wordpress.IsInstalled, wordpress.InstallCore} {
+			if _, _, _, err := l.runReviewed(ctx, reviewedInstallChild{kind: kind}); err == nil {
+				t.Errorf("activated replay admitted %s", kind)
+			}
+		}
+		if err := l.ConfigIsolation(ctx, configcustody.ConfigBinding{}, func(context.Context) error { t.Error("config effect ran"); return nil }); err == nil {
+			t.Error("activated replay admitted config effect")
 		}
 		released = true
 		return nil

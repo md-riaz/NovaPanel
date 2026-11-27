@@ -22,12 +22,11 @@ func TestInstallPlan(t *testing.T) {
 		t.Fatalf("bad context: %+v", p)
 	}
 	want := []Step{
-		{Kind: Download, Program: "/usr/bin/php8.3", Args: []string{"-c", "/etc/novapanel/wordpress/php.ini", "/usr/local/lib/novapanel/wp-cli-2.12.0.phar", "core", "download", "--version=7.1.4", "--locale=en_US"}},
-		{Kind: VerifyChecksums, Program: "/usr/bin/php8.3", Args: []string{"-c", "/etc/novapanel/wordpress/php.ini", "/usr/local/lib/novapanel/wp-cli-2.12.0.phar", "core", "verify-checksums", "--version=7.1.4", "--locale=en_US"}},
-		{Kind: CreateConfig, Program: "/usr/bin/php8.3", Stdin: DatabasePassword, Args: []string{"-c", "/etc/novapanel/wordpress/php.ini", "/usr/local/lib/novapanel/wp-cli-2.12.0.phar", "config", "create", "--dbname=d_01arz3ndektsv4rrffq69g5fav", "--dbuser=u_01arz3ndektsv4rrffq69g5faw", "--dbhost=127.0.0.1", "--dbprefix=wp_", "--dbcharset=utf8mb4", "--skip-salts", "--prompt=dbpass"}},
+		{Kind: Download},
+		{Kind: VerifyChecksums, Program: "/usr/bin/php8.3", Args: []string{"-c", "/usr/lib/novapanel/wpcli/php.ini", "/usr/lib/novapanel/wpcli/wp-cli-2.12.0.phar", "core", "verify-checksums", "--version=7.1.4", "--locale=en_US"}},
 		{Kind: PublishProtectedConfig},
-		{Kind: IsInstalled, Program: "/usr/bin/php8.3", Args: []string{"-c", "/etc/novapanel/wordpress/php.ini", "/usr/local/lib/novapanel/wp-cli-2.12.0.phar", "core", "is-installed"}},
-		{Kind: InstallCore, Program: "/usr/bin/php8.3", Stdin: AdministratorPassword, Args: []string{"-c", "/etc/novapanel/wordpress/php.ini", "/usr/local/lib/novapanel/wp-cli-2.12.0.phar", "core", "install", "--url=https://example.test", "--title=Site title", "--admin_user=Editor.name-1", "--admin_email=owner@example.test", "--skip-email", "--prompt=admin_password"}},
+		{Kind: IsInstalled, Program: "/usr/bin/php8.3", Args: []string{"-c", "/usr/lib/novapanel/wpcli/php.ini", "/usr/lib/novapanel/wpcli/wp-cli-2.12.0.phar", "core", "is-installed"}},
+		{Kind: InstallCore, Program: "/usr/bin/php8.3", Stdin: AdministratorPassword, Args: []string{"-c", "/usr/lib/novapanel/wpcli/php.ini", "/usr/lib/novapanel/wpcli/wp-cli-2.12.0.phar", "core", "install", "--url=https://example.test", "--title=Site title", "--admin_user=Editor.name-1", "--admin_email=owner@example.test", "--skip-email", "--prompt=admin_password"}},
 	}
 	for i := range want {
 		if want[i].Program != "" {
@@ -37,10 +36,10 @@ func TestInstallPlan(t *testing.T) {
 	if !reflect.DeepEqual(p.Steps, want) {
 		t.Fatalf("steps differ: %#v", p.Steps)
 	}
-	if p.Dir != "/var/lib/novapanel/wordpress/example/bootstrap" {
+	if p.Dir != "/usr/lib/novapanel/wpcli" {
 		t.Fatalf("unsafe cwd: %s", p.Dir)
 	}
-	wantEnv := []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8", "HOME=/var/lib/novapanel/wordpress/example/home", "WP_CLI_CONFIG_PATH=/dev/null", "WP_CLI_CACHE_DIR=/var/lib/novapanel/wordpress/example/cache", "WP_CLI_PACKAGES_DIR=/var/lib/novapanel/wordpress/example/packages", "PHP_INI_SCAN_DIR=/var/lib/novapanel/wordpress/example/empty-ini"}
+	wantEnv := []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8", "HOME=/srv/sites/example/.novapanel-wpcli/home", "WP_CLI_CONFIG_PATH=/dev/null", "WP_CLI_CACHE_DIR=/srv/sites/example/.novapanel-wpcli/cache", "WP_CLI_PACKAGES_DIR=/srv/sites/example/.novapanel-wpcli/packages", "PHP_INI_SCAN_DIR=/usr/lib/novapanel/wpcli/empty-ini"}
 	if !reflect.DeepEqual(p.Env, wantEnv) {
 		t.Fatalf("environment: %#v", p.Env)
 	}
@@ -51,9 +50,9 @@ func TestInstallPlan(t *testing.T) {
 	}
 	// No mutable singleton slices or input aliasing.
 	p.Env[0] = "poison"
-	p.Steps[0].Args[0] = "poison"
+	p.Steps[1].Args[0] = "poison"
 	p2, err := BuildInstall(validInput(), artifactEvidence(t))
-	if err != nil || p2.Env[0] != "PATH=/usr/bin:/bin" || p2.Steps[0].Args[0] != "-c" {
+	if err != nil || p2.Env[0] != "PATH=/usr/bin:/bin" || p2.Steps[1].Args[0] != "-c" {
 		t.Fatal("shared plan state")
 	}
 	b, err := json.Marshal(p2)

@@ -37,6 +37,9 @@ func (q *Queue) LockSite(ctx context.Context, siteID string) (func(), error) {
 // reconcile. Call before inspecting mutable site/account state and hold until
 // the operation finishes. The order is always site ID, then OS username.
 // Worker callers yield instead of waiting, so a single worker cannot starve.
+// Participants: site.delete (including account retention and removal), PHP
+// startup migration, orphan reconciliation, and fresh WordPress installation.
+// UID/GID/home replacement and managed-root relocation have no managed mutator.
 func (q *Queue) LockSiteOSUser(ctx context.Context, siteID, username string) (func(), error) {
 	if !id.Valid(siteID) {
 		return nil, errors.New("jobs: invalid site ID")

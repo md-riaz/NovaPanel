@@ -78,7 +78,7 @@ func (q *Queue) enqueueOperation(ctx context.Context, r store.OperationRequest, 
 	if e := q.healthy(); e != nil {
 		return out, e
 	}
-	verbs := map[store.OperationKind]string{store.PHPSet: "php.set", store.WordPressInstall: "wp.install", store.SiteDelete: "site.delete", store.DatabaseCreate: "database.create", store.DatabaseRotate: "database.rotate_password", store.DBUserCreate: "dbuser.create", store.DatabaseDelete: "database.delete", store.DBUserDelete: "dbuser.delete"}
+	verbs := map[store.OperationKind]string{store.PHPSet: "php.set", store.WordPressInstall: "site.create", store.SiteDelete: "site.delete", store.DatabaseCreate: "database.create", store.DatabaseRotate: "database.rotate_password", store.DBUserCreate: "dbuser.create", store.DatabaseDelete: "database.delete", store.DBUserDelete: "dbuser.delete"}
 	verb := verbs[r.Kind]
 	if verb == "" {
 		return out, rpcerr.Errf("invalid_argument", "operation kind unavailable")
@@ -289,6 +289,15 @@ func (q *Queue) operationTerminal(ctx context.Context, j Job) (bool, error) {
 		return true, e
 	}
 	if j.State != "done" {
+		if op.Kind == store.WordPressInstall && j.Step == store.FreshWordPressRollbackCleanedStep {
+			clean, ok := q.store.(interface {
+				CompleteFreshWordPressRollback(context.Context, string) error
+			})
+			if !ok {
+				return true, ErrRecoveryBlocked
+			}
+			return true, clean.CompleteFreshWordPressRollback(ctx, j.ID)
+		}
 		if unapplied, _ := ctx.Value(operationUnappliedKey{}).(bool); unapplied {
 			if clean, ok := q.store.(interface {
 				FailUnappliedOperation(context.Context, string, string) error

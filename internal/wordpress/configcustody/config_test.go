@@ -264,3 +264,42 @@ func TestProtectedConfigRenameNeverOverwritesConcurrentDestination(t *testing.T)
 		t.Fatal(e)
 	}
 }
+func TestConfigTempCleanupOnRecoveryAndRollback(t *testing.T) {
+	for _, mode := range []string{"recovery", "rollback", "ordinary-error"} {
+		t.Run(mode, func(t *testing.T) {
+			b, dir, seal := configFixture(t)
+			plain := []byte("<?php /* private password */")
+			ops := configOps{fixtureAncestors: true}
+			if mode == "ordinary-error" {
+				ops.boundary = func(stage string) error {
+					if stage == "config-rename" {
+						return errors.New("injected")
+					}
+					return nil
+				}
+				if err := publishConfig(context.Background(), dir, b, plain, seal, uint32(os.Geteuid()), ops); err == nil {
+					t.Fatal("injected failure ignored")
+				}
+			} else {
+				if err := publishConfig(context.Background(), dir, b, plain, seal, uint32(os.Geteuid()), ops); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, b.JobID+".config"), plain, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if mode == "recovery" {
+					if err := publishConfig(context.Background(), dir, b, plain, seal, uint32(os.Geteuid()), ops); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					if err := removeConfigRecord(context.Background(), dir, b, seal, uint32(os.Geteuid()), ops); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if _, err := os.Lstat(filepath.Join(dir, b.JobID+".config")); !os.IsNotExist(err) {
+				t.Fatalf("plaintext temp remains: %v", err)
+			}
+		})
+	}
+}

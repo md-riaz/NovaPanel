@@ -50,7 +50,7 @@ its obligations are discharged as follows:
    is no migration fallback). Assert the domain is empty after each step
    (`contract:28`). The reviewed children are exactly the wp-cli steps in §3.
 4. Call the config publish (`configcustody.PublishConfig`) once, synchronously, after the
-   download/verify/config-create steps, under the held admission (`contract:29`). `wp-config.php`
+   download and verify steps, under the held admission (`contract:29`). `wp-config.php`
    is the atomic temp+rename sealed-value write as the site user, mode 0400 (§5).
 5. On full success, perform the **explicit serving release** (`contract:32`): enable the site's
    FPM serving (§2). Until this release the account is not admitted to serve.
@@ -77,7 +77,8 @@ sites.
 Production fetches WordPress online with the spec's wp-cli sequence
 (`phase-4.md:428-436`), run as the site user inside the install domain:
 `wp core download --version=<pinned> --locale=<pinned>` → `wp core verify-checksums` →
-`wp config create --prompt=dbpass --skip-salts` → `wp core install --prompt=admin_password`.
+compose wp-config in Go and publish through ConfigIsolation custody → `wp core install --prompt=admin_password`.
+WP-CLI does not write wp-config.php; custody journals and publishes it atomically as 0400.
 - **Never `--insecure`.** A checksum-verify failure fails the job closed (no serving release, no
   partial publish).
 - `wp core download` delivers the **tar.gz**, not the ZIP. Amend the artifact trust contract
@@ -85,7 +86,10 @@ Production fetches WordPress online with the spec's wp-cli sequence
   sha256, replacing the ZIP pin. The offline lab fixtures keep serving their ZIP by URL for the
   lab build only; the production pin is the tar.gz the wp.org endpoint actually returns.
 - Egress for the download is permitted from within the install domain. Pins are reviewed values,
-  updated deliberately (same discipline as other pinned deps).
+  updated deliberately (same discipline as other pinned deps). The WordPress 7.1.4 en_US tarball at
+  `https://downloads.wordpress.org/release/wordpress-7.1.4.tar.gz` has locally computed SHA-256
+  `881e53a4681ff2cd911651b11cccdede5ae477ddf0765af5d6a1a8b219a1d835` over the official HTTPS bytes.
+  WP-CLI 2.12.0's [pinned core-command](https://github.com/wp-cli/core-command/blob/83e4692784a815bb7f5df10b72204f237b5224b9/src/Core_Command.php) constructs `https://wordpress.org/wordpress-7.1.4.tar.gz` for this version and locale; the offline mirror must resolve and serve that hostname and URL too. The official HTTPS bytes at that URL have the same SHA-256. Checksum verification also requires a local response for `api.wordpress.org`.
 
 ## 4. Verb reconciliation (registry wins)
 
@@ -170,3 +174,11 @@ container stays offline (`--network none`). The gate stands up a pinned local mi
 `downloads.wordpress.org` resolves to (hosts/DNS override inside the container), serving the pinned
 tar.gz by the exact URL wp-cli requests. This tests the online codepath against a controlled
 endpoint while keeping the gate offline and host-safe. No real egress to wp.org.
+
+## Activated replay and archive verification
+
+A provisioning replay at `verified_resumable` or `config_published` rechecks the
+pinned archive SHA-256 before any remaining installation effect. An activated
+replay is finalize-only: it may enable serving and complete the committed job,
+but cannot download, extract, verify or install core, so it does not recheck
+the archive.

@@ -100,6 +100,105 @@ func EnsureUser(ctx context.Context, r runner.Runner, root, name, id string) err
 	return run(ctx, r, "/usr/sbin/useradd", "-r", "-U", "-s", "/usr/sbin/nologin", "-m", "-d", filepath.Join(root, name), "-K", "UMASK=0027", "-c", marker+id, "--", name)
 }
 
+// EnsureReservedUser requires a durable reservation and the site and OS-user locks.
+// The locked group password field carries the ownership marker across crashes.
+func EnsureReservedUser(ctx context.Context, r runner.Runner, root, name, id string, uid uint32) error {
+	if err := inputs(root, name, id); err != nil {
+		return err
+	}
+	if uid < 2000000 || uid > 2999999 {
+		return rpcerr.Errf("precondition_failed", "site identity outside reserved range")
+	}
+	account, err := lookup(ctx, r, root, name)
+	if err != nil {
+		return err
+	}
+	if account != nil && (account.gecos != marker+id || account.uid != uid || account.gid != uid) {
+		return rpcerr.Errf("conflict", "site account is not owned")
+	}
+	numeric := strconv.FormatUint(uint64(uid), 10)
+	get := func(database, key string) ([]byte, bool, error) {
+		out, _, code, err := r.Run(ctx, "/usr/bin/getent", []string{database, key}, runner.RunOpts{})
+		if code == 2 && ctx.Err() == nil {
+			return nil, false, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		if code != 0 {
+			return nil, false, rpcerr.Errf("agent_error", "cannot resolve site identity")
+		}
+		return out, true, nil
+	}
+	web, found, err := get("passwd", "www-data")
+	if err != nil {
+		return err
+	}
+	webFields := strings.Split(strings.TrimSpace(string(web)), ":")
+	if !found || len(webFields) != 7 || webFields[0] != "www-data" || webFields[2] == numeric || webFields[3] == numeric {
+		return rpcerr.Errf("precondition_failed", "web identity unavailable or colliding")
+	}
+	for _, value := range webFields[2:4] {
+		n, e := strconv.ParseUint(value, 10, 32)
+		if e != nil || n == 0 || n == uint64(uid) {
+			return rpcerr.Errf("precondition_failed", "web identity unavailable or colliding")
+		}
+	}
+	webGroup, found, err := get("group", "www-data")
+	if err != nil {
+		return err
+	}
+	groupFields := strings.Split(strings.TrimSpace(string(webGroup)), ":")
+	if !found || len(groupFields) != 4 || groupFields[0] != "www-data" || groupFields[2] == numeric {
+		return rpcerr.Errf("precondition_failed", "web group unavailable or colliding")
+	}
+	webGID, err := strconv.ParseUint(groupFields[2], 10, 32)
+	if err != nil || webGID == 0 || webGID == uint64(uid) {
+		return rpcerr.Errf("precondition_failed", "web group unavailable or colliding")
+	}
+	if _, exists, e := get("passwd", numeric); e != nil {
+		return e
+	} else if exists && account == nil {
+		return rpcerr.Errf("conflict", "site UID already allocated")
+	} else if !exists && account != nil {
+		return rpcerr.Errf("conflict", "site UID changed")
+	}
+	out, exists, err := get("group", numeric)
+	if err != nil {
+		return err
+	}
+	if exists {
+		fields := strings.Split(strings.TrimSpace(string(out)), ":")
+		if len(fields) != 4 || fields[0] != name || fields[2] != numeric || fields[3] != "" {
+			return rpcerr.Errf("conflict", "site group is not owned")
+		}
+		shadow, found, err := get("gshadow", name)
+		if err != nil {
+			return err
+		}
+		parts := strings.Split(strings.TrimSpace(string(shadow)), ":")
+		if !found || len(parts) != 4 || parts[0] != name || parts[1] != "!"+marker+id || parts[2] != "" || parts[3] != "" {
+			return rpcerr.Errf("conflict", "site group is not owned")
+		}
+	} else {
+		if account != nil {
+			return rpcerr.Errf("conflict", "site group missing")
+		}
+		if _, taken, e := get("group", name); e != nil {
+			return e
+		} else if taken {
+			return rpcerr.Errf("conflict", "site group name already allocated")
+		}
+		if err = run(ctx, r, "/usr/sbin/groupadd", "-g", numeric, "-p", "!"+marker+id, "--", name); err != nil {
+			return err
+		}
+	}
+	if account != nil {
+		return nil
+	}
+	return run(ctx, r, "/usr/sbin/useradd", "-u", numeric, "-g", numeric, "-s", "/usr/sbin/nologin", "-m", "-d", filepath.Join(root, name), "-K", "UMASK=0027", "-c", marker+id, "--", name)
+}
+
 // MigrateUser is only for a bounded startup enumeration of live Phase-3 rows.
 // The caller must prove the frozen 1:1 mapping and hold the shared locks.
 func MigrateUser(ctx context.Context, r runner.Runner, root, name, id string) error {
@@ -217,4 +316,91 @@ func DeleteOrphan(ctx context.Context, r runner.Runner, root, name, id string, h
 	// Absence of managed paths cannot establish that this UID owns no files
 	// elsewhere. Keep the UID reserved until an operator can verify cleanup.
 	return rpcerr.Errf("precondition_failed", "orphan account requires manual UID-owned file cleanup")
+}
+
+// DeleteReservedUser removes only the reserved account and its marked group.
+// The caller holds site and OS-user locks and has drained its install domain.
+func DeleteReservedUser(ctx context.Context, r runner.Runner, root, name, id string, uid uint32) error {
+	if err := inputs(root, name, id); err != nil {
+		return err
+	}
+	if uid < 2000000 || uid > 2999999 {
+		return rpcerr.Errf("precondition_failed", "site identity outside reserved range")
+	}
+	account, err := lookup(ctx, r, root, name)
+	if err != nil {
+		return err
+	}
+	if account != nil && (account.gecos != marker+id || account.uid != uid || account.gid != uid) {
+		return rpcerr.Errf("conflict", "site account is not owned")
+	}
+	numeric := strconv.FormatUint(uint64(uid), 10)
+	get := func(database, key string) ([]byte, bool, error) {
+		out, _, code, err := r.Run(ctx, "/usr/bin/getent", []string{database, key}, runner.RunOpts{})
+		if code == 2 && ctx.Err() == nil {
+			return nil, false, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		if code != 0 {
+			return nil, false, rpcerr.Errf("agent_error", "cannot resolve site identity")
+		}
+		return out, true, nil
+	}
+	out, found, err := get("passwd", numeric)
+	if err != nil {
+		return err
+	}
+	if found {
+		fields := strings.Split(strings.TrimSpace(string(out)), ":")
+		if account == nil || len(fields) != 7 || fields[0] != name || fields[2] != numeric || fields[3] != numeric || fields[4] != marker+id || fields[5] != filepath.Join(root, name) || fields[6] != "/usr/sbin/nologin" {
+			return rpcerr.Errf("conflict", "site UID is not owned")
+		}
+	} else if account != nil {
+		return rpcerr.Errf("conflict", "site UID changed")
+	}
+	checkGroup := func() (bool, error) {
+		out, found, err := get("group", numeric)
+		if err != nil {
+			return false, err
+		}
+		if !found {
+			if _, taken, err := get("group", name); err != nil {
+				return false, err
+			} else if taken {
+				return false, rpcerr.Errf("conflict", "site group changed")
+			}
+			return false, nil
+		}
+		fields := strings.Split(strings.TrimSpace(string(out)), ":")
+		if len(fields) != 4 || fields[0] != name || fields[2] != numeric || fields[3] != "" {
+			return false, rpcerr.Errf("conflict", "site group is not owned")
+		}
+		shadow, found, err := get("gshadow", name)
+		if err != nil {
+			return false, err
+		}
+		fields = strings.Split(strings.TrimSpace(string(shadow)), ":")
+		if !found || len(fields) != 4 || fields[0] != name || fields[1] != "!"+marker+id || fields[2] != "" || fields[3] != "" {
+			return false, rpcerr.Errf("conflict", "site group is not owned")
+		}
+		return true, nil
+	}
+	if _, err = checkGroup(); err != nil {
+		return err
+	}
+	if account != nil {
+		if err = run(ctx, r, "/usr/sbin/userdel", "--", name); err != nil {
+			return err
+		}
+	}
+	group, err := checkGroup()
+	if err != nil {
+		return err
+	}
+	if group {
+		return run(ctx, r, "/usr/sbin/groupdel", "--", name)
+	}
+	return nil
 }

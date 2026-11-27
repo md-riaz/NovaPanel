@@ -12,6 +12,26 @@ type SiteLifetime struct {
 	UID, GID                             uint32
 }
 
+const siteUIDMin = 2000000
+const siteUIDMax = 2999999
+
+// ReserveSiteAccountTx records the next identity after its site and job exist.
+// The immutable provenance row retains every allocation, including failed jobs.
+func (s *Store) ReserveSiteAccountTx(ctx context.Context, tx *sql.Tx, siteID, name, jobID string) (uint32, error) {
+	var next int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(uid), ?-1)+1 FROM site_account_provenance WHERE uid BETWEEN ? AND ?`, siteUIDMin, siteUIDMin, siteUIDMax).Scan(&next); err != nil {
+		return 0, err
+	}
+	if next > siteUIDMax {
+		return 0, ErrSitePrecondition
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO site_account_provenance(site_id,account_name,uid,gid,allocating_job,evidence) VALUES(?,?,?,?,?,'reserved')`, siteID, name, next, next, jobID)
+	if err != nil {
+		return 0, err
+	}
+	return uint32(next), nil
+}
+
 const freshLifetimeWhere = `id=? AND name=? AND docroot=? AND type='wordpress' AND lifetime_state='provisioning' AND EXISTS (SELECT 1 FROM site_account_provenance p WHERE p.site_id=sites.id AND p.account_name=? AND p.uid=? AND p.gid=? AND p.allocating_job=?)`
 
 func lifetimeArgs(l SiteLifetime) []any {
@@ -62,5 +82,6 @@ func (s *Store) ActivateSiteLifetime(ctx context.Context, l SiteLifetime) error 
 	if n != 1 {
 		return ErrSitePrecondition
 	}
+	freshCheckpointTestHook(ctx, l.AllocatingJob, "activated")
 	return nil
 }

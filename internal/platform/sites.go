@@ -40,6 +40,15 @@ func ensureDirectory(root *os.Root, path string) (*os.File, error) {
 
 // EnsureSite only touches validated directories through held, no-follow descriptors.
 func EnsureSite(ctx context.Context, r runner.Runner, sites, _ /* ACME is owned by ssl */, logs, name, siteID string) error {
+	return ensureSite(ctx, r, sites, logs, name, siteID, nil)
+}
+
+// EnsureFreshSite creates only the durable reserved identity after path checks.
+func EnsureFreshSite(ctx context.Context, r runner.Runner, sites, logs, name, siteID, jobID string, uid uint32) error {
+	return ensureSite(ctx, r, sites, logs, name, siteID, &uid, jobID)
+}
+
+func ensureSite(ctx context.Context, r runner.Runner, sites, logs, name, siteID string, reservedUID *uint32, jobIDs ...string) error {
 	if e := (&validate.V{}).SiteName(name); e != nil {
 		return e
 	}
@@ -62,6 +71,16 @@ func EnsureSite(ctx context.Context, r runner.Runner, sites, _ /* ACME is owned 
 			return e
 		}
 		roots = append(roots, root)
+	}
+	if reservedUID != nil {
+		if len(jobIDs) != 1 {
+			return errDomain
+		}
+		for _, root := range roots {
+			if err := prepareFreshMarker(root, name, siteID, jobIDs[0], *reservedUID); err != nil {
+				return err
+			}
+		}
 	}
 	for _, p := range []string{name, filepath.Join(name, "public")} {
 		info, e := roots[0].Lstat(p)
@@ -103,7 +122,13 @@ func EnsureSite(ctx context.Context, r runner.Runner, sites, _ /* ACME is owned 
 			}
 		}
 	}
-	if e := php.EnsureUser(ctx, r, sites, name, siteID); e != nil {
+	var accountErr error
+	if reservedUID != nil {
+		accountErr = php.EnsureReservedUser(ctx, r, sites, name, siteID, *reservedUID)
+	} else {
+		accountErr = php.EnsureUser(ctx, r, sites, name, siteID)
+	}
+	if e := accountErr; e != nil {
 		return e
 	}
 	home := filepath.Join(sites, name)

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"novapanel/internal/jobs"
+	"path/filepath"
 	"slices"
 	"time"
 )
@@ -169,6 +170,7 @@ func AuthorizeSchedule(ctx context.Context, name string) error {
 func (s *Server) ConfigureJobs() {
 	a := s.Agent
 	a.Jobs = jobs.NewQueue(a.Store, a.Secret, a.Audit)
+	a.Jobs.SetConfigCustody(filepath.Join(filepath.Dir(a.Cfg.DBPath), "wordpress-config"))
 	a.Jobs.SetMutationAdmission(a.CheckMutationAdmission)
 	a.Jobs.SetRunner(s.ExecuteJob)
 	a.Jobs.SetAttemptDeadline(func(name string) time.Duration {

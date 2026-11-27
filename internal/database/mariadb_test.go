@@ -36,6 +36,9 @@ func TestRotateUsesSocketAndNoArgvSecret(t *testing.T) {
 	if strings.Contains(strings.Join(r.args, " "), "abc123") || !strings.Contains(r.input, "ALTER USER 'u_test'@'127.0.0.1'") {
 		t.Fatal("invalid rotation command")
 	}
+	if err := Rotate(context.Background(), &recorder{}, "u_test", "base64url-_value"); err != nil {
+		t.Fatalf("valid generated password refused: %v", err)
+	}
 	if err := Rotate(context.Background(), &recorder{}, "u_test", "x';DROP"); err == nil {
 		t.Fatal("accepted unsafe password")
 	}

@@ -10,6 +10,104 @@ import (
 	"testing"
 )
 
+func TestPrepareFreshWordPress(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "panel.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { s.Close() }()
+	m := wordpress.ApprovedArtifacts()
+	r := WordPressReservation{SiteID: "01K8WMXZF57CGNZKX1FZ38DZMA", DomainID: "01K8WMXZF57CGNZKX1FZ38DZMB", Input: wordpress.InstallInput{SitesRoot: "/scratch/sites", SiteName: "example", PrimaryDomain: "example.test", DatabaseID: "01K8WMXZF57CGNZKX1FZ38DZMQ", DatabaseUserID: "01K8WMXZF57CGNZKX1FZ38DZMR", Locale: "en_US", Administrator: wordpress.Administrator{Title: "Example", Username: "Admin", Email: "owner@example.test"}}, Evidence: wordpress.ArtifactEvidence{CLISHA256: m.CLI.SHA256, WordPressSHA256: m.WordPress.SHA256, ChecksumsSHA256: m.ChecksumsSHA256, SignatureVerified: true, SignerFingerprint: m.CLISignerFingerprint}}
+	version := "8.3"
+	site := Site{ID: r.SiteID, Name: r.Input.SiteName, Type: "wordpress", Docroot: "/scratch/sites/example/public", PHPVersion: &version}
+	domain := Domain{ID: r.DomainID, FQDN: r.Input.PrimaryDomain}
+	j := Job{ID: "job", Verb: "site.create", ObjectKey: "site:" + r.SiteID, CreatedBy: "session", Role: "owner", State: "queued", Args: []byte(`{}`)}
+	claim := JobClaim{JobID: j.ID, ClaimHash: "hash"}
+	_, err = s.PrepareFreshWordPress(ctx, j, claim, r, site, domain, PHPLimits{}, func(WordPressReservation) ([]byte, []byte, error) { return nil, nil, errors.New("seal failed") })
+	if err == nil || phase4Count(t, s.db.raw, `SELECT count(*) FROM sites`) != 0 || phase4Count(t, s.db.raw, `SELECT count(*) FROM jobs`) != 0 {
+		t.Fatal("failed sealing did not roll back admission")
+	}
+	op, err := s.PrepareFreshWordPress(ctx, j, claim, r, site, domain, PHPLimits{}, func(got WordPressReservation) ([]byte, []byte, error) {
+		if got.Input.UID != 2000000 || got.Input.GID != 2000000 {
+			t.Fatalf("identity: %+v", got.Input)
+		}
+		return []byte{1}, []byte{2}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.CheckOperation(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	if op.Identity.WordPress.Input.UID != 2000000 {
+		t.Fatal("UID not bound")
+	}
+	if phase4Count(t, s.db.raw, `SELECT count(*) FROM sites s JOIN site_account_provenance p ON p.site_id=s.id JOIN jobs j ON j.id=p.allocating_job WHERE s.status='creating' AND s.lifetime_state='provisioning' AND j.verb='site.create'`) != 1 {
+		t.Fatal("reservation missing")
+	}
+	if err = s.MarkWordPressDownloadStarted(ctx, j.ID); !errors.Is(err, ErrSitePrecondition) {
+		t.Fatalf("early marker: %v", err)
+	}
+	if _, err = s.StartJob(ctx, j.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.CheckpointOperation(ctx, j.ID, "prepared", "db_applied"); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh job remains valid even if its first download starts after the journal TTL.
+	if err = s.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE phase4_operations SET expires=1 WHERE job_id=?`, j.ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.MarkWordPressDownloadStarted(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.MarkWordPressDownloadStarted(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	op, err = s.LoadOperation(ctx, j.ID)
+	if err != nil || !op.Identity.DownloadStarted {
+		t.Fatalf("marker missing after reload: %v", err)
+	}
+	identity, err := s.LoadSiteLifetime(ctx, r.SiteID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range [][2]string{{"db_applied", "config_published"}, {"config_published", "verified"}} {
+		if err = s.CheckpointOperation(ctx, j.ID, step[0], step[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publishedClaim := &JobClaim{Nonce: []byte{3}, Ciphertext: []byte{4}}
+	if err = s.CompleteOperation(ctx, j.ID, publishedClaim); err == nil {
+		t.Fatal("fresh operation completed before lifetime activation")
+	}
+	if err = s.ActivateSiteLifetime(ctx, identity); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.CompleteOperation(ctx, j.ID, publishedClaim); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := s.SiteByID(ctx, r.SiteID)
+	if err != nil || completed.Status != "active" {
+		t.Fatalf("fresh completion: %+v %v", completed, err)
+	}
+	if err = s.MarkWordPressDownloadStarted(ctx, j.ID); !errors.Is(err, ErrSitePrecondition) {
+		t.Fatalf("accepted served lifetime: %v", err)
+	}
+}
+
 func TestWordPressReservationBeforeResourceRows(t *testing.T) {
 	ctx := context.Background()
 	s, e := Open(filepath.Join(t.TempDir(), "panel.db"))
@@ -25,7 +123,7 @@ func TestWordPressReservationBeforeResourceRows(t *testing.T) {
 	}}
 	phase4Exec(t, s.db.raw, `INSERT INTO sites(id,name,type,docroot,php_version,status,created,updated) VALUES(?,?,'wordpress',?,'8.3','active',0,0)`, r.SiteID, r.WordPress.Input.SiteName, filepath.Join(r.WordPress.Input.SitesRoot, r.WordPress.Input.SiteName, "public"))
 	phase4Exec(t, s.db.raw, `INSERT INTO domains(id,site_id,fqdn,is_primary,created) VALUES(?,?,?,1,0)`, r.WordPress.DomainID, r.SiteID, r.WordPress.Input.PrimaryDomain)
-	j := Job{ID: "wp-job", Verb: "wp.install", CreatedBy: "session", Role: "owner", State: "queued", Args: []byte(`{}`)}
+	j := Job{ID: "wp-job", Verb: "site.create", CreatedBy: "session", Role: "owner", State: "queued", Args: []byte(`{}`)}
 	op, e := s.PrepareOperation(ctx, j, JobClaim{JobID: j.ID, ClaimHash: "hash"}, r, []byte{1}, []byte{2})
 	if e != nil {
 		t.Fatal(e)

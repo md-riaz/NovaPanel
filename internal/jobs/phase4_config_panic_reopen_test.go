@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,8 +27,8 @@ func TestConfigPanicRecoveryEntropy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		db, err := hex.DecodeString(c.DatabasePassword)
-		if err != nil || len(db) != 24 || seen[c.DatabasePassword] {
+		db, err := base64.RawURLEncoding.DecodeString(c.DatabasePassword)
+		if err != nil || len(db) != 32 || seen[c.DatabasePassword] {
 			t.Fatal("invalid or repeated database entropy")
 		}
 		seen[c.DatabasePassword] = true
@@ -311,7 +310,7 @@ func TestWordPressConfigIsolationPanicRetainsRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(claim) != 2 || len(claim["wordpress"].(map[string]any)) != 3 {
+	if len(claim) != 2 || len(claim["wordpress"].(map[string]any)) != 2 {
 		t.Fatal("claim leaked noncanonical fields")
 	}
 	if _, err = q.Claim(ctx, en.Job.ID, en.ClaimToken); err == nil {

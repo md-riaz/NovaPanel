@@ -89,7 +89,6 @@ func (q *Queue) openWordPressCredentials(ctx context.Context, op store.Operation
 }
 func wordPressClaim(op store.Operation, c WordPressCredentials) map[string]any {
 	db := op.Identity.Database
-	a := op.Identity.Accounts[0]
 	admin := op.Identity.WordPress.Input.Administrator
-	return map[string]any{"database": map[string]string{"db_id": db.ID, "name": db.Name, "username": a.Username, "host": a.Host, "password": c.DatabasePassword}, "wordpress": map[string]string{"admin_username": admin.Username, "admin_email": admin.Email, "admin_password": c.AdminPassword}}
+	return map[string]any{"database": map[string]string{"db_id": db.ID, "password": c.DatabasePassword}, "wordpress": map[string]string{"admin_username": admin.Username, "admin_password": c.AdminPassword}}
 }

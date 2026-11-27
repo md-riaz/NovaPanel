@@ -13,7 +13,7 @@ import (
 )
 
 // RemoveConfigRecord removes only authenticated recovery material. The operation
-// owner must first prove durable successful terminality and exclude root writers.
+// owner must first prove durable terminality or completed rollback and exclude root writers.
 // It never opens or deletes the live site configuration.
 func RemoveConfigRecord(ctx context.Context, custody string, b ConfigBinding, seal *secret.Sealer) error {
 	if b.UID == 0 || b.GID == 0 || b.UID == ^uint32(0) || b.GID == ^uint32(0) {
@@ -62,6 +62,9 @@ func removeConfigRecord(ctx context.Context, custody string, b ConfigBinding, se
 	var ds unix.Stat_t
 	if unix.Fstat(int(dir.Fd()), &ds) != nil || ds.Mode&07777 != 0700 {
 		return errConfigCustody
+	}
+	if err = removeConfigTemp(dir, b, owner); err != nil {
+		return err
 	}
 	name := b.JobID + ".sealed"
 	fd, e := unix.Openat(int(dir.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)

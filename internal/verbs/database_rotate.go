@@ -133,7 +133,7 @@ func databaseRotateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error 
 			return jobs.ErrRetry
 		}
 		if err == nil && bound == d.ID {
-			// shortcut: existing-site isolation is unavailable, upgrade when #90 supplies the lifetime.
+			// shortcut: existing-site isolation is unavailable, upgrade when Slice 2 of docs/phase4-production-activation-ruling.md lands.
 			if durable.Step == "rotation_started" {
 				return jobs.ErrRetry
 			}
