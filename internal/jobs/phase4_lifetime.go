@@ -235,7 +235,7 @@ func replayActivatedLifetime(ctx context.Context, domain installLifetimeDomain, 
 // idempotently, because activation may have committed before a crash.
 func (q *Queue) WithFreshWordPressLifetime(ctx context.Context, jid string, identity store.SiteLifetime, operation func(*WordPressLifetime) error, release func(*WordPressLifetime) error) error {
 	return q.withFreshWordPressLifetime(ctx, jid, identity, operation, release, func(ctx context.Context, root string, identity store.SiteLifetime) error {
-		if _, err := wordpress.VerifyTool(ctx, runner.Real{}); err != nil {
+		if err := verifyWordPressTool(ctx); err != nil {
 			return err
 		}
 		if err := php.VerifyUser(ctx, runner.Real{}, root, identity.Name, identity.SiteID); err != nil {
