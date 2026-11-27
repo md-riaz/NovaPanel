@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"reflect"
 )
 
 const tlsIntentKey = "tls:publication:v1"
@@ -18,6 +19,21 @@ func (s *Store) TLSIntent(ctx context.Context) (json.RawMessage, error) {
 		return nil, nil
 	}
 	return json.RawMessage(b), err
+}
+
+func compositeRequestMatches(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, jobID string) (bool, error) {
+	var args, identity, objectKey, siteID string
+	if err := q.QueryRowContext(ctx, `SELECT j.args_json,o.identities_json,j.object_key,o.site_id FROM phase4_operations o JOIN jobs j ON j.id=o.job_id WHERE o.job_id=? AND o.kind='site_update'`, jobID).Scan(&args, &identity, &objectKey, &siteID); err != nil {
+		return false, err
+	}
+	var request CompositeSiteUpdate
+	var op OperationIdentity
+	if json.Unmarshal([]byte(args), &request) != nil || json.Unmarshal([]byte(identity), &op) != nil {
+		return false, nil
+	}
+	return objectKey == "site:"+siteID && reflect.DeepEqual(&request, op.SiteUpdate), nil
 }
 
 // FinalizerTLSBlocked permits only the quarantined owner's maintenance restore.
@@ -51,10 +67,14 @@ func finalizerTLSBlocked(ctx context.Context, q interface {
 		return true, err
 	}
 	var child OperationChildIdentity
-	if json.Unmarshal([]byte(identity), &child) != nil || len(child.TLS) == 0 || bytes.Equal([]byte(raw), child.TLS) {
+	if json.Unmarshal([]byte(identity), &child) != nil || len(child.TLS) == 0 {
 		return true, nil
 	}
-	return false, nil
+	matches, err := compositeRequestMatches(ctx, q, jobID)
+	if err != nil {
+		return true, err
+	}
+	return bytes.Equal([]byte(raw), child.TLS) && matches, nil
 }
 func (s *Store) BeginTLSIntent(ctx context.Context, b json.RawMessage) error {
 	_, err := s.db.ExecContext(ctx, "INSERT INTO settings(key,value_json) VALUES(?,?)", tlsIntentKey, string(b))
@@ -143,7 +163,11 @@ func (s *Store) CheckCompositeTLSIntent(ctx context.Context, raw json.RawMessage
 			return nil
 		}
 		var child OperationChildIdentity
-		if json.Unmarshal([]byte(snapshot), &child) != nil || !bytes.Equal(child.TLS, raw) {
+		requestMatches, e := compositeRequestMatches(ctx, tx, binding.JobID)
+		if e != nil {
+			return e
+		}
+		if json.Unmarshal([]byte(snapshot), &child) != nil || !bytes.Equal(child.TLS, raw) || !requestMatches {
 			changed = true
 			_, e = tx.ExecContext(ctx, `UPDATE jobs SET state=CASE WHEN state='failed' THEN 'queued' ELSE state END,finished=NULL,code='agent_error',error='TLS recovery binding changed',updated=? WHERE id=? AND (state IN ('queued','running') OR (state='failed' AND code='interrupted'))`, s.clock.Now(), binding.JobID)
 		}

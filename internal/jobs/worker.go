@@ -412,6 +412,12 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 				}
 			}
 			if op.Kind == store.SiteUpdate {
+				if j.Code == "agent_error" && op.Identity.SiteUpdate != nil {
+					j.Args, err = json.Marshal(op.Identity.SiteUpdate)
+					if err != nil {
+						return err
+					}
+				}
 				var request store.CompositeSiteUpdate
 				if json.Unmarshal(j.Args, &request) != nil || j.ObjectKey != "site:"+op.SiteID || !reflect.DeepEqual(&request, op.Identity.SiteUpdate) {
 					err = rpcerr.Errf("invalid_argument", "site update does not match journal")

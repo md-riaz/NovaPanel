@@ -26,7 +26,8 @@ func TestTLSRecoveryDefersComposite(t *testing.T) {
 	}
 	force, maintenance := true, true
 	v := &store.CompositeSiteUpdate{SiteID: sid, ForceHTTPS: &force, Maintenance: &maintenance}
-	j := store.Job{ID: jid, Verb: "site.update", ObjectKey: "site:" + sid, CreatedBy: "local-root", Role: "owner", Args: []byte(`{}`), State: "queued"}
+	args, _ := json.Marshal(v)
+	j := store.Job{ID: jid, Verb: "site.update", ObjectKey: "site:" + sid, CreatedBy: "local-root", Role: "owner", Args: args, State: "queued"}
 	if _, err = s.PrepareOperation(ctx, j, store.JobClaim{}, store.OperationRequest{Kind: store.SiteUpdate, SiteID: sid, SiteUpdate: v}, nil, nil); err != nil {
 		t.Fatal(err)
 	}

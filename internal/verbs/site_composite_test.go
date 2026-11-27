@@ -2,6 +2,7 @@ package verbs
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -50,7 +51,8 @@ func TestQuarantinedTLSAllowsMaintenanceFinalizer(t *testing.T) {
 	}
 	force, maintenance := true, false
 	request := &store.CompositeSiteUpdate{SiteID: sid, ForceHTTPS: &force, Maintenance: &maintenance}
-	j := store.Job{ID: jid, Verb: "site.update", ObjectKey: "site:" + sid, CreatedBy: "local-root", Role: "owner", State: "queued", Args: []byte(`{}`)}
+	args, _ := json.Marshal(request)
+	j := store.Job{ID: jid, Verb: "site.update", ObjectKey: "site:" + sid, CreatedBy: "local-root", Role: "owner", State: "queued", Args: args}
 	if _, err = st.PrepareOperation(ctx, j, store.JobClaim{}, store.OperationRequest{Kind: store.SiteUpdate, SiteID: sid, SiteUpdate: request}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
