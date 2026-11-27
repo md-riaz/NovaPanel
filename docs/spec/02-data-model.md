@@ -430,6 +430,8 @@ WHERE expires <= ? AND checkpoint NOT IN ('done','expired')
 ORDER BY expires,job_id LIMIT 100;
 ```
 
+A composite `site_update` with an unreconciled `agent_error` integrity disposition remains non-terminal and expiry-exempt until its maintenance finalizer commits. After an authorized verifier establishes a consistent or explicitly failed non-serving disposition under the journal locks, reconcile may atomically mark it failed and set its journal to `expired`, `reconciled=1`; the existing expired-operation path is unchanged.
+
 Preparation expiry is exactly now + 86400000 ms. Claim delivery TTL starts at actual atomic publication per F19, not preparation. An expired operation cannot continue old external mutations; begun destructive teardown and a composite with write-ahead bracket intent and unfinished restore remain unexpired and roll forward. A fresh authorized operation may reconcile only after resolving the old blocker under the complete lock set.
 
 ## Phase 5 — deploys, cron, ssh

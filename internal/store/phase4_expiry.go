@@ -132,7 +132,21 @@ func (s *Store) ExpireOperations(ctx context.Context) (count int, err error) {
 // set after the caller verifies consistent or explicitly non-serving disposition.
 func (s *Store) ReconcileOperation(ctx context.Context, jid string) error {
 	return s.Tx(ctx, func(tx *sql.Tx) error {
-		r, e := tx.ExecContext(ctx, "UPDATE phase4_operations SET reconciled=1,updated=? WHERE job_id=? AND checkpoint='expired' AND ciphertext IS NULL", s.clock.Now(), jid)
+		now := s.clock.Now()
+		r, e := tx.ExecContext(ctx, "UPDATE phase4_operations SET reconciled=1,updated=? WHERE job_id=? AND checkpoint='expired' AND ciphertext IS NULL", now, jid)
+		if e != nil {
+			return e
+		}
+		if n, e := r.RowsAffected(); e != nil {
+			return e
+		} else if n != 0 {
+			return nil
+		}
+		r, e = tx.ExecContext(ctx, `UPDATE phase4_operations SET checkpoint='expired',reconciled=1,updated=? WHERE job_id=? AND ciphertext IS NULL AND kind='site_update' AND checkpoint NOT IN ('done','expired') AND reconciled=0 AND EXISTS(SELECT 1 FROM jobs j WHERE j.id=phase4_operations.job_id AND j.code='agent_error' AND j.state IN ('queued','running')) AND EXISTS(SELECT 1 FROM phase4_operation_children c WHERE c.job_id=phase4_operations.job_id AND c.child_kind='maintenance_off' AND c.status='committed')`, now, jid)
+		if e = affected(r, e); e != nil {
+			return e
+		}
+		r, e = tx.ExecContext(ctx, `UPDATE jobs SET state='failed',finished=?,updated=? WHERE id=? AND code='agent_error' AND state IN ('queued','running')`, now, now, jid)
 		return affected(r, e)
 	})
 }
