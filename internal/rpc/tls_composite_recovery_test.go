@@ -46,7 +46,12 @@ func TestTLSRecoveryDefersComposite(t *testing.T) {
 	if err = s.ClearTLSIntent(ctx, raw); err != nil {
 		t.Fatal(err)
 	}
-	orphan := []byte(`{"job_id":"01K8WMXZF57CGNZKX1FZ38DZMD"}`)
+	otherID := "01K8WMXZF57CGNZKX1FZ38DZMD"
+	other := store.Job{ID: otherID, Verb: "ssl.upload", ObjectKey: "site:" + sid, CreatedBy: "local-root", Role: "owner", Args: []byte(`{}`), State: "running"}
+	if err = s.CreateJob(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	orphan := []byte(`{"job_id":"` + otherID + `"}`)
 	if err = s.BeginTLSIntent(ctx, orphan); err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +61,10 @@ func TestTLSRecoveryDefersComposite(t *testing.T) {
 	job, err := s.GetJob(ctx, jid)
 	if err != nil || job.Code != "" {
 		t.Fatalf("orphan altered composite: %+v %v", job, err)
+	}
+	otherAfter, err := s.GetJob(ctx, otherID)
+	if err != nil || otherAfter.State != other.State || otherAfter.Code != other.Code || otherAfter.Attempts != other.Attempts {
+		t.Fatalf("orphan altered unrelated job: %+v %v", otherAfter, err)
 	}
 	anomaly, err := s.Setting(ctx, "tls:publication:unreconciled:v1")
 	if err != nil || string(anomaly) != "true" {
