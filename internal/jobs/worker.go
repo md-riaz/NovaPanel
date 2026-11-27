@@ -22,6 +22,14 @@ var ErrRetry = rpcerr.ErrRetry
 // ErrRecoveryRequired marks a journaled publication requiring dedicated recovery.
 var ErrRecoveryRequired = errors.New("jobs: recovery required")
 
+type freshResumeCheckpointKey struct{}
+
+// FreshResumeCheckpoint carries the original checkpoint only within this locked attempt.
+func FreshResumeCheckpoint(ctx context.Context) string {
+	value, _ := ctx.Value(freshResumeCheckpointKey{}).(string)
+	return value
+}
+
 // Run owns one worker. SQL transactions never span the external runner.
 func (q *Queue) Run(ctx context.Context) error {
 	q.mu.Lock()
@@ -359,9 +367,21 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 				if fresh, ok := q.store.(interface {
 					LoadSiteLifetime(context.Context, string) (store.SiteLifetime, error)
 					CheckFreshSiteLifetime(context.Context, store.SiteLifetime) error
+					BeginFreshSitePreflight(context.Context, string, store.SiteLifetime) (string, error)
 				}); ok {
 					identity, e := fresh.LoadSiteLifetime(ctx, op.SiteID)
-					freshInstall = e == nil && identity.AllocatingJob == j.ID && fresh.CheckFreshSiteLifetime(ctx, identity) == nil
+					if e == nil && identity.AllocatingJob == j.ID {
+						if j.Step != store.FreshWordPressRollbackIntentStep && j.Step != store.FreshWordPressRollbackStep && j.Step != store.FreshWordPressRollbackCleanedStep {
+							previous, preflightErr := fresh.BeginFreshSitePreflight(ctx, j.ID, identity)
+							if preflightErr != nil {
+								return errors.Join(ErrRetry, preflightErr)
+							}
+							if previous != "" {
+								attemptCtx = context.WithValue(attemptCtx, freshResumeCheckpointKey{}, previous)
+							}
+						}
+						freshInstall = fresh.CheckFreshSiteLifetime(ctx, identity) == nil
+					}
 				}
 			}
 			if freshInstall && j.Step == store.FreshWordPressRollbackIntentStep {

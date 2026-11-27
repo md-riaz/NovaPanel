@@ -39,16 +39,18 @@ func freshWordPressSiteCreateExec(ctx context.Context, a *agent.Agent, j *jobs.J
 	if j.Step == store.FreshWordPressRollbackStep || j.Step == store.FreshWordPressRollbackCleanedStep {
 		return rollbackFreshWordPress(ctx, a, j, op, identity)
 	}
-	resumeCheckpoint := ""
+	resumeCheckpoint := jobs.FreshResumeCheckpoint(ctx)
 	if err = func() error {
 		unlock, err := a.Jobs.LockSiteOSUser(ctx, siteID, identity.Name)
 		if err != nil {
 			return err
 		}
 		defer unlock()
-		resumeCheckpoint, err = a.Store.BeginFreshSitePreflight(ctx, j.ID, identity)
-		if err != nil {
-			return err
+		if resumeCheckpoint == "" {
+			resumeCheckpoint, err = a.Store.BeginFreshSitePreflight(ctx, j.ID, identity)
+			if err != nil {
+				return err
+			}
 		}
 		if err = a.Store.CheckOperation(ctx, j.ID); err != nil {
 			return err
