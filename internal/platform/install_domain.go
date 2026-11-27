@@ -198,12 +198,14 @@ func (d *InstallDomain) Close(ctx context.Context) error {
 		if err := d.domain.Close(); err != nil {
 			return err
 		}
-		err := d.parent.Close()
+		if err := d.parent.Close(); err != nil {
+			return err
+		}
 		installOwners.Lock()
 		if installOwners.sites[d.name] == d {
 			delete(installOwners.sites, d.name)
 		}
 		installOwners.Unlock()
-		return err
+		return nil
 	})
 }
