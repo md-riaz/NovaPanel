@@ -107,6 +107,17 @@ func TestTLSPrimaryPublicationExecutor(t *testing.T) {
 					t.Fatalf("invalid intent: %s %v", pending, err)
 				}
 				if failure == "crash" || failure == "binding" || failure == "cancel" {
+					if failure != "cancel" {
+						maintenance := false
+						if err = f.st.UpdateSite(context.Background(), f.site, store.SitePatch{Maintenance: &maintenance}); err == nil {
+							t.Fatal("store mutation bypassed unresolved intent")
+						}
+						raw, _ := json.Marshal(map[string]any{"site_id": f.site, "maintenance": false})
+						reply := f.server.Dispatch(rpc.WithCaller(context.Background(), rpc.RootCaller(0)), rpc.Request{Verb: "site.update", Args: raw})
+						if reply.OK {
+							t.Fatal("competing mutation admitted during recovery")
+						}
+					}
 					if failure != "cancel" && len(pending) == 0 {
 						t.Fatal("interruption lost intent")
 					}
