@@ -57,9 +57,12 @@ func (s *Server) prepareTLSRecovery(ctx context.Context) (*jobs.Job, error) {
 		JobID string `json:"job_id"`
 	}
 	if json.Unmarshal(raw, &binding) != nil || !id.Valid(binding.JobID) {
-		return nil, Errf("precondition_failed", "Invalid TLS recovery journal")
+		return nil, s.Agent.Store.RecordOrphanTLSIntent(ctx, raw)
 	}
 	j, err := s.Agent.Store.GetJob(ctx, binding.JobID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, s.Agent.Store.RecordOrphanTLSIntent(ctx, raw)
+	}
 	if err != nil {
 		return nil, err
 	}

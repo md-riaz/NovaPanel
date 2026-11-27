@@ -61,6 +61,21 @@ func (s *Store) BeginTLSIntent(ctx context.Context, b json.RawMessage) error {
 	return err
 }
 
+// RecordOrphanTLSIntent retains an unresolved intent without assigning it an owner.
+func (s *Store) RecordOrphanTLSIntent(ctx context.Context, raw json.RawMessage) error {
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		var current string
+		if err := tx.QueryRowContext(ctx, "SELECT value_json FROM settings WHERE key=?", tlsIntentKey).Scan(&current); err != nil {
+			return err
+		}
+		if current != string(raw) {
+			return ErrSiteConflict
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO settings(key,value_json) VALUES('tls:publication:unreconciled:v1','true') ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json`)
+		return err
+	})
+}
+
 // BeginCompositeTLSIntent binds the publication intent to its durable child in the same transaction.
 func (s *Store) BeginCompositeTLSIntent(ctx context.Context, jobID string, b json.RawMessage) error {
 	if !json.Valid(b) {

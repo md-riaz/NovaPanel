@@ -87,3 +87,31 @@ func TestTLSRecoveryDefersComposite(t *testing.T) {
 		t.Fatalf("intent lost: %s %v", pending, err)
 	}
 }
+
+func TestTLSRecoveryRecordsOrphanWithoutOwner(t *testing.T) {
+	for _, raw := range []string{`{"job_id":"01K8WMXZF57CGNZKX1FZ38DZMD"}`, `{"job_id":`} {
+		t.Run(raw, func(t *testing.T) {
+			ctx := context.Background()
+			s, err := store.Open(":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			if err = s.BeginTLSIntent(ctx, []byte(raw)); err != nil {
+				t.Fatal(err)
+			}
+			server := &Server{Agent: &agent.Agent{Store: s}}
+			if job, err := server.prepareTLSRecovery(ctx); err != nil || job != nil {
+				t.Fatalf("orphan dispatched: %+v %v", job, err)
+			}
+			anomaly, err := s.Setting(ctx, "tls:publication:unreconciled:v1")
+			if err != nil || string(anomaly) != "true" {
+				t.Fatalf("missing anomaly: %s %v", anomaly, err)
+			}
+			intent, err := s.TLSIntent(ctx)
+			if err != nil || string(intent) != raw {
+				t.Fatalf("lost intent: %s %v", intent, err)
+			}
+		})
+	}
+}
