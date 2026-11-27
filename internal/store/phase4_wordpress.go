@@ -38,7 +38,7 @@ func validWordPressIdentity(op Operation) bool {
 func checkWordPress(ctx context.Context, tx *sql.Tx, op Operation) error {
 	w := op.Identity.WordPress
 	var n int
-	if e := tx.QueryRowContext(ctx, `SELECT count(*) FROM sites s JOIN domains d ON d.site_id=s.id WHERE s.id=? AND s.name=? AND s.type='wordpress' AND s.status='active' AND s.docroot=? AND d.id=? AND d.fqdn=? AND d.is_primary=1`, op.SiteID, w.Input.SiteName, filepath.Join(w.Input.SitesRoot, w.Input.SiteName, "public"), w.DomainID, w.Input.PrimaryDomain).Scan(&n); e != nil {
+	if e := tx.QueryRowContext(ctx, `SELECT count(*) FROM sites s JOIN domains d ON d.site_id=s.id WHERE s.id=? AND s.name=? AND s.type='wordpress' AND s.docroot=? AND d.id=? AND d.fqdn=? AND d.is_primary=1 AND (s.status='active' OR (s.status='creating' AND s.lifetime_state IN ('provisioning','served') AND EXISTS (SELECT 1 FROM site_account_provenance p JOIN phase4_operations o ON o.job_id=p.allocating_job JOIN jobs j ON j.id=o.job_id WHERE p.site_id=s.id AND p.account_name=s.name AND p.uid=? AND p.gid=? AND p.allocating_job=? AND o.site_id=s.id AND o.kind='wordpress_install' AND o.reconciled=0 AND o.checkpoint NOT IN ('done','expired') AND j.state IN ('queued','running'))))`, op.SiteID, w.Input.SiteName, filepath.Join(w.Input.SitesRoot, w.Input.SiteName, "public"), w.DomainID, w.Input.PrimaryDomain, w.Input.UID, w.Input.GID, op.JobID).Scan(&n); e != nil {
 		return e
 	}
 	if n != 1 {

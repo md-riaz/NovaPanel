@@ -228,6 +228,16 @@ func replayActivatedLifetime(ctx context.Context, domain installLifetimeDomain, 
 // domain for the complete callback. The serving callback must ensure its state
 // idempotently, because activation may have committed before a crash.
 func (q *Queue) WithFreshWordPressLifetime(ctx context.Context, jid string, identity store.SiteLifetime, operation func(*WordPressLifetime) error, release func(*WordPressLifetime) error) error {
+	return q.withFreshWordPressLifetime(ctx, jid, identity, operation, release, func(ctx context.Context, root string, identity store.SiteLifetime) error {
+		if err := php.VerifyUser(ctx, runner.Real{}, root, identity.Name, identity.SiteID); err != nil {
+			return err
+		}
+		_, err := platform.NewSiteRunner(ctx, runner.Real{}, root, identity.Name, identity.UID, identity.GID)
+		return err
+	}, func(siteID string) (installLifetimeDomain, error) { return platform.CreateInstallDomain(siteID) })
+}
+
+func (q *Queue) withFreshWordPressLifetime(ctx context.Context, jid string, identity store.SiteLifetime, operation func(*WordPressLifetime) error, release func(*WordPressLifetime) error, verify func(context.Context, string, store.SiteLifetime) error, createDomain func(string) (installLifetimeDomain, error)) error {
 	lease, _ := ctx.Value(configWorkerKey{}).(*configWorkerLease)
 	if lease == nil || lease.queue != q || lease.job != jid || !lease.active.Load() || q.healthy() != nil {
 		return errors.New("jobs: lifetime worker refused")
@@ -292,10 +302,7 @@ func (q *Queue) WithFreshWordPressLifetime(ctx context.Context, jid string, iden
 	if _, err = q.OpenWordPressCredentials(ctx, jid); err != nil {
 		return err
 	}
-	if err = php.VerifyUser(ctx, runner.Real{}, in.SitesRoot, identity.Name, identity.SiteID); err != nil {
-		return err
-	}
-	if _, err = platform.NewSiteRunner(ctx, runner.Real{}, in.SitesRoot, identity.Name, identity.UID, identity.GID); err != nil {
+	if err = verify(ctx, in.SitesRoot, identity); err != nil {
 		return err
 	}
 	// A fresh account has no managed launchers until its explicit serving release;
@@ -304,7 +311,7 @@ func (q *Queue) WithFreshWordPressLifetime(ctx context.Context, jid string, iden
 	if err != nil {
 		return err
 	}
-	domain, err := platform.CreateInstallDomain(identity.SiteID)
+	domain, err := createDomain(identity.SiteID)
 	if err != nil {
 		return err
 	}
