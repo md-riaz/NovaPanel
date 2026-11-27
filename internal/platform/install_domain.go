@@ -10,11 +10,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"golang.org/x/sys/unix"
 	runner "novapanel/internal/exec"
 	"novapanel/internal/id"
+	"novapanel/internal/installgate"
 )
 
 var installOwners = struct {
@@ -25,13 +25,10 @@ var installOwners = struct {
 // InstallDomain holds an install cgroup; it does not attest account freshness,
 // close other launchers or exclude account and filesystem changes.
 type InstallDomain struct {
-	mu      sync.Mutex
-	closeMu sync.Mutex
-	closing atomic.Bool
-	domain  *ExecutionDomain
-	parent  *os.File
-	name    string
-	closed  bool
+	gate   installgate.Gate
+	domain *ExecutionDomain
+	parent *os.File
+	name   string
 }
 
 // CreateInstallDomain creates or reopens the site's empty domain below the
@@ -148,14 +145,9 @@ func ownCgroup(raw string) (string, error) {
 
 // Empty is an emptiness assertion for fresh accounts, not an IO-retirement proof.
 func (d *InstallDomain) Empty() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.empty()
+	return d.gate.Check(d.empty)
 }
 func (d *InstallDomain) empty() error {
-	if d.closed || d.closing.Load() {
-		return errDomain
-	}
 	empty, err := d.domain.empty()
 	if err != nil {
 		return err
@@ -172,59 +164,46 @@ func (d *InstallDomain) WithEmpty(ctx context.Context, effect func(context.Conte
 	if effect == nil {
 		return errDomain
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := d.empty(); err != nil {
-		return err
-	}
-	work, done, err := d.domain.admit(ctx)
-	if err != nil {
-		return err
-	}
-	defer done()
-	err = effect(work)
-	return errors.Join(err, work.Err(), d.empty())
+	return d.gate.Do(d.empty, func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		work, done, err := d.domain.admit(ctx)
+		if err != nil {
+			return err
+		}
+		defer done()
+		return errors.Join(effect(work), work.Err())
+	})
 }
 
 // Run admits one reviewed child at birth and checks recursive emptiness around it.
 func (d *InstallDomain) Run(ctx context.Context, program string, args []string, opts runner.RunOpts) ([]byte, []byte, int, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if err := d.empty(); err != nil {
-		return nil, nil, -1, err
-	}
-	out, stderr, code, err := d.domain.Run(ctx, program, args, opts)
-	return out, stderr, code, errors.Join(err, d.empty())
+	var out, stderr []byte
+	code := -1
+	err := d.gate.Do(d.empty, func() error {
+		var err error
+		out, stderr, code, err = d.domain.Run(ctx, program, args, opts)
+		return err
+	})
+	return out, stderr, code, err
 }
 
 // Close drains before removing the site domain. An unsuccessful drain retains it.
 func (d *InstallDomain) Close(ctx context.Context) error {
-	d.closeMu.Lock()
-	defer d.closeMu.Unlock()
-	d.closing.Store(true)
-	if d.closed {
-		return errDomain
-	}
-	if err := d.domain.Drain(ctx); err != nil {
+	return d.gate.Close(func() error { return d.domain.Drain(ctx) }, func() error {
+		if err := unix.Unlinkat(int(d.parent.Fd()), d.name, unix.AT_REMOVEDIR); err != nil {
+			return err
+		}
+		if err := d.domain.Close(); err != nil {
+			return err
+		}
+		err := d.parent.Close()
+		installOwners.Lock()
+		if installOwners.sites[d.name] == d {
+			delete(installOwners.sites, d.name)
+		}
+		installOwners.Unlock()
 		return err
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if err := unix.Unlinkat(int(d.parent.Fd()), d.name, unix.AT_REMOVEDIR); err != nil {
-		return err
-	}
-	if err := d.domain.Close(); err != nil {
-		return err
-	}
-	d.closed = true
-	err := d.parent.Close()
-	installOwners.Lock()
-	if installOwners.sites[d.name] == d {
-		delete(installOwners.sites, d.name)
-	}
-	installOwners.Unlock()
-	return err
+	})
 }

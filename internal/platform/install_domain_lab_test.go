@@ -53,8 +53,9 @@ func TestInstallDomainLab(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	closed := false
 	defer func() {
-		if !d.closed {
+		if !closed {
 			_ = d.Close(ctx)
 		}
 	}()
@@ -155,6 +156,7 @@ func TestInstallDomainLab(t *testing.T) {
 	if err := d.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
+	closed = true
 	if _, err := os.Stat(filepath.Join("/sys/fs/cgroup", own, "novapanel-install", site)); !os.IsNotExist(err) {
 		t.Fatalf("domain remains: %v", err)
 	}
