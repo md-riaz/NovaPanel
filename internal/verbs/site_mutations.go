@@ -304,10 +304,14 @@ func siteUpdateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if e := (siteMutationState{a}).primaryTarget(ctx, v.SiteID, v.PrimaryDomainID); e != nil {
 		return e
 	}
-	if e := a.Store.UpdateSite(ctx, v.SiteID, store.SitePatch{PrimaryDomainID: v.PrimaryDomainID, Maintenance: v.Maintenance, ForceHTTPS: v.ForceHTTPS, HSTSMaxAge: v.HSTSMaxAge}); e != nil {
+	return (siteMutationState{a}).applySitePatch(ctx, v.SiteID, store.SitePatch{PrimaryDomainID: v.PrimaryDomainID, Maintenance: v.Maintenance, ForceHTTPS: v.ForceHTTPS, HSTSMaxAge: v.HSTSMaxAge}, j)
+}
+
+func (m siteMutationState) applySitePatch(ctx context.Context, siteID string, patch store.SitePatch, j *jobs.Job) error {
+	if e := m.a.Store.UpdateSite(ctx, siteID, patch); e != nil {
 		return siteError(e)
 	}
-	return (siteMutationState{a}).applySite(ctx, v.SiteID, j)
+	return m.applySite(ctx, siteID, j)
 }
 func domainAdd(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	v := *args.(*domainAddArgs)

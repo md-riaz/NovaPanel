@@ -62,17 +62,10 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 		return err
 	}
 	site, p := op.Identity.Site, op.Identity.PHP
-	if err = mainphp.VerifyUser(ctx, a.Exec, a.Cfg.SitesRoot, site.Name, site.ID); err != nil {
+	old, desired, err := phpEffectStates(ctx, a, *site, *p)
+	if err != nil {
 		return err
 	}
-	if err = phpAvailable(ctx, a.Exec); err != nil {
-		return err
-	}
-	toLimits := func(v php.Limits, cap int) store.PHPLimits {
-		return store.PHPLimits{MemoryMB: &v.MemoryMB, UploadMB: &v.UploadMB, MaxExecSec: &v.MaxExecSec, MaxChildren: &cap}
-	}
-	old := mainphp.PoolState{SiteID: site.ID, Exists: true, MaxChildren: p.OriginalCap, Limits: toLimits(p.OriginalLimits, p.OriginalCap)}
-	desired := mainphp.PoolState{SiteID: site.ID, Exists: true, MaxChildren: p.DesiredCap, Limits: toLimits(p.DesiredLimits, p.DesiredCap)}
 	restore := func() error {
 		recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
@@ -87,7 +80,7 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if op.Checkpoint != "prepared" {
 		return restore()
 	}
-	if err = a.PHP.ApplyCommitted(ctx, site.Name, desired, old); err != nil {
+	if err = phpPublishEffect(ctx, a, site.Name, desired, old); err != nil {
 		if errors.Is(err, jobs.ErrRetry) {
 			return errors.Join(nginx.ErrPHPRecoveryRequired, err)
 		}
@@ -107,6 +100,26 @@ func phpSetExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	}
 	j.Result = json.RawMessage(`{}`)
 	return nil
+}
+
+func phpPublishEffect(ctx context.Context, a *agent.Agent, siteName string, desired, old mainphp.PoolState) error {
+	return a.PHP.ApplyCommitted(ctx, siteName, desired, old)
+}
+
+// phpEffectStates validates the runtime and reconstructs the durable pool snapshots.
+func phpEffectStates(ctx context.Context, a *agent.Agent, site store.Site, p store.PHPOperationIdentity) (mainphp.PoolState, mainphp.PoolState, error) {
+	if err := mainphp.VerifyUser(ctx, a.Exec, a.Cfg.SitesRoot, site.Name, site.ID); err != nil {
+		return mainphp.PoolState{}, mainphp.PoolState{}, err
+	}
+	if err := phpAvailable(ctx, a.Exec); err != nil {
+		return mainphp.PoolState{}, mainphp.PoolState{}, err
+	}
+	toLimits := func(v php.Limits, cap int) store.PHPLimits {
+		return store.PHPLimits{MemoryMB: &v.MemoryMB, UploadMB: &v.UploadMB, MaxExecSec: &v.MaxExecSec, MaxChildren: &cap}
+	}
+	old := mainphp.PoolState{SiteID: site.ID, Exists: true, MaxChildren: p.OriginalCap, Limits: toLimits(p.OriginalLimits, p.OriginalCap)}
+	desired := mainphp.PoolState{SiteID: site.ID, Exists: true, MaxChildren: p.DesiredCap, Limits: toLimits(p.DesiredLimits, p.DesiredCap)}
+	return old, desired, nil
 }
 
 var _ json.Unmarshaler = (*phpSetArgs)(nil)
