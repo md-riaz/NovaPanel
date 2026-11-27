@@ -117,11 +117,53 @@ func (s *Store) CommitOperationChild(ctx context.Context, jobID string, ordinal 
 	}
 	return s.Tx(ctx, func(tx *sql.Tx) error {
 		now := s.clock.Now()
-		r, err := tx.ExecContext(ctx, `UPDATE phase4_operation_children SET checkpoint=?,status=?,typed_error=?,journal_ref=?,updated=? WHERE job_id=? AND ordinal=? AND status='pending' AND EXISTS(SELECT 1 FROM jobs WHERE id=? AND state='running')`, checkpoint, status, nullableString(code), eventID, now, jobID, ordinal, jobID)
+		r, err := tx.ExecContext(ctx, `UPDATE phase4_operation_children SET checkpoint=?,status=?,typed_error=?,journal_ref=?,updated=? WHERE job_id=? AND ordinal=? AND status='pending' AND (child_kind<>'php_change' OR ?='failed') AND EXISTS(SELECT 1 FROM jobs WHERE id=? AND state='running')`, checkpoint, status, nullableString(code), eventID, now, jobID, ordinal, status, jobID)
 		if err = affected(r, err); err != nil {
 			return err
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO job_events(id,job_id,ts,msg) VALUES(?,?,?,?)`, eventID, jobID, now, fmt.Sprintf("child %d %s", ordinal, status))
+		return err
+	})
+}
+
+// CommitPHPChild publishes PHP metadata and its child journal in one transaction.
+func (s *Store) CommitPHPChild(ctx context.Context, jobID string, ordinal int) error {
+	eventID, err := id.New()
+	if err != nil {
+		return err
+	}
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		var siteID, raw string
+		err := tx.QueryRowContext(ctx, `SELECT o.site_id,c.identities_json FROM phase4_operations o JOIN jobs j ON j.id=o.job_id JOIN phase4_operation_children c ON c.job_id=o.job_id WHERE o.job_id=? AND o.kind='site_update' AND j.state='running' AND c.ordinal=? AND c.child_kind='php_change' AND c.status='pending' AND c.checkpoint='verified'`, jobID, ordinal).Scan(&siteID, &raw)
+		if err != nil {
+			return err
+		}
+		var identity OperationChildIdentity
+		decoder := json.NewDecoder(bytes.NewBufferString(raw))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&identity) != nil || decoder.Decode(new(any)) != io.EOF || !validChildIdentity("php_change", identity) {
+			return ErrSiteInvalid
+		}
+		site, limits, err := phpSnapshot(ctx, tx, siteID)
+		if err != nil {
+			return err
+		}
+		p := identity.PHP
+		if *site.PHPVersion != p.OriginalVersion || (limits != nil) != p.OriginalLimitsPresent || (limits != nil && *limits != p.OriginalLimits) {
+			return ErrSiteConflict
+		}
+		now := s.clock.Now()
+		if _, err = tx.ExecContext(ctx, `UPDATE sites SET php_version=?,updated=? WHERE id=?`, p.DesiredVersion, now, siteID); err != nil {
+			return err
+		}
+		if err = writePhase4PHPLimits(ctx, tx, siteID, p.DesiredLimits, p.DesiredCap); err != nil {
+			return err
+		}
+		r, err := tx.ExecContext(ctx, `UPDATE phase4_operation_children SET status='committed',journal_ref=?,updated=? WHERE job_id=? AND ordinal=? AND status='pending' AND checkpoint='verified'`, eventID, now, jobID, ordinal)
+		if err = affected(r, err); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO job_events(id,job_id,ts,msg) VALUES(?,?,?,?)`, eventID, jobID, now, fmt.Sprintf("child %d committed", ordinal))
 		return err
 	})
 }
