@@ -218,3 +218,41 @@ func TestCompositeTLSIntentSnapshotAtomic(t *testing.T) {
 		t.Fatalf("unreconciled disposition must prevent expiry: %d %v", n, err)
 	}
 }
+
+func TestCompositeTLSRequestMismatchQuarantined(t *testing.T) {
+	for _, args := range []string{`{"site_id":"site","maintenance":false}`, `{"site_id":"site","primary_domain_id":"old","maintenance":true}`, `{"site_id":"site","primary_domain_id":"old","maintenance":false,"hsts_max_age":300}`} {
+		t.Run(args, func(t *testing.T) {
+			ctx := context.Background()
+			s, err := Open(":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			phase4Job(t, s.db.raw, "binding", "running")
+			phase4Exec(t, s.db.raw, `UPDATE jobs SET verb='site.update',object_key='site:site',args_json=? WHERE id='binding'`, args)
+			phase4Exec(t, s.db.raw, `INSERT INTO phase4_operations(job_id,kind,site_id,checkpoint,identities_json,expires,updated) VALUES('binding','site_update','site','prepared','{"Version":1,"SiteUpdate":{"site_id":"site","primary_domain_id":"old","maintenance":false}}',1,1)`)
+			if err = s.PrepareOperationChildren(ctx, "binding", []OperationChild{{Ordinal: 0, Kind: "domain_tls"}, {Ordinal: 1, Kind: "maintenance_off"}}); err != nil {
+				t.Fatal(err)
+			}
+			raw := []byte(`{"job_id":"binding"}`)
+			if err = s.BeginCompositeTLSIntent(ctx, "binding", raw); err != nil {
+				t.Fatal(err)
+			}
+			matched, changed, err := s.CheckCompositeTLSIntent(ctx, raw)
+			if err != nil || !matched || !changed {
+				t.Fatalf("request not quarantined: %v %v %v", matched, changed, err)
+			}
+			blocked, err := s.FinalizerTLSBlocked(ctx, "binding")
+			if err != nil || blocked {
+				t.Fatalf("finalizer blocked: %v %v", blocked, err)
+			}
+			if n, err := s.ExpireOperations(ctx); err != nil || n != 0 {
+				t.Fatalf("quarantine expired: %d %v", n, err)
+			}
+			job, err := s.GetJob(ctx, "binding")
+			if err != nil || job.Code != "agent_error" || job.State != "running" {
+				t.Fatalf("disposition: %+v %v", job, err)
+			}
+		})
+	}
+}
