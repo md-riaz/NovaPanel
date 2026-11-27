@@ -105,10 +105,12 @@ func TestTLSPrimaryPublicationExecutor(t *testing.T) {
 					}
 					return j
 				}
-				init := enqueue(map[string]any{"site_id": sid, "maintenance": false})
-				if e = server.ExecuteJob(ctx, &init); e != nil {
-					t.Fatal(e)
+				initialArgs, _ := json.Marshal(map[string]any{"site_id": sid, "maintenance": false})
+				initial := server.Dispatch(rpc.WithCaller(ctx, rpc.RootCaller(0)), rpc.Request{Verb: "site.update", Args: initialArgs})
+				if !initial.OK {
+					t.Fatal(initial)
 				}
+				runPrimaryQueue(t, a, initial.Data.(jobs.EnqueueResult).Job.ID)
 				oldConfig, _ := os.ReadFile(filepath.Join(ng, "sites-available/demo.conf"))
 				oldPointer, _ := os.Readlink(filepath.Join(a.Cfg.TLSDir, "demo.test/current"))
 				targetPointer, _ := os.Readlink(filepath.Join(a.Cfg.TLSDir, "alias.test/current"))
