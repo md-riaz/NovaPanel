@@ -50,6 +50,9 @@ func TestPrepareFreshWordPress(t *testing.T) {
 	if err = s.MarkWordPressDownloadStarted(ctx, j.ID); !errors.Is(err, ErrSitePrecondition) {
 		t.Fatalf("early marker: %v", err)
 	}
+	if _, err = s.StartJob(ctx, j.ID, 1); err != nil {
+		t.Fatal(err)
+	}
 	if err = s.CheckpointOperation(ctx, j.ID, "prepared", "db_applied"); err != nil {
 		t.Fatal(err)
 	}
@@ -74,8 +77,24 @@ func TestPrepareFreshWordPress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, step := range [][2]string{{"db_applied", "config_published"}, {"config_published", "verified"}} {
+		if err = s.CheckpointOperation(ctx, j.ID, step[0], step[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publishedClaim := &JobClaim{Nonce: []byte{3}, Ciphertext: []byte{4}}
+	if err = s.CompleteOperation(ctx, j.ID, publishedClaim); err == nil {
+		t.Fatal("fresh operation completed before lifetime activation")
+	}
 	if err = s.ActivateSiteLifetime(ctx, identity); err != nil {
 		t.Fatal(err)
+	}
+	if err = s.CompleteOperation(ctx, j.ID, publishedClaim); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := s.SiteByID(ctx, r.SiteID)
+	if err != nil || completed.Status != "active" {
+		t.Fatalf("fresh completion: %+v %v", completed, err)
 	}
 	if err = s.MarkWordPressDownloadStarted(ctx, j.ID); !errors.Is(err, ErrSitePrecondition) {
 		t.Fatalf("accepted served lifetime: %v", err)
