@@ -85,9 +85,7 @@ func (s *Store) CheckCompositeTLSIntent(ctx context.Context, raw json.RawMessage
 	var binding struct {
 		JobID string `json:"job_id"`
 	}
-	if json.NewDecoder(bytes.NewReader(raw)).Decode(&binding) != nil {
-		return false, false, nil
-	}
+	_ = json.NewDecoder(bytes.NewReader(raw)).Decode(&binding)
 	err = s.Tx(ctx, func(tx *sql.Tx) error {
 		var current string
 		if e := tx.QueryRowContext(ctx, `SELECT value_json FROM settings WHERE key=?`, tlsIntentKey).Scan(&current); e != nil {
@@ -101,11 +99,16 @@ func (s *Store) CheckCompositeTLSIntent(ctx context.Context, raw json.RawMessage
 			return e
 		}
 		var snapshot string
+		var pendingSnapshot bool
 		for rows.Next() {
 			var jid, identity string
 			if e = rows.Scan(&jid, &identity); e != nil {
 				rows.Close()
 				return e
+			}
+			var child OperationChildIdentity
+			if json.Unmarshal([]byte(identity), &child) == nil && len(child.TLS) != 0 {
+				pendingSnapshot = true
 			}
 			if jid == binding.JobID {
 				matched, snapshot = true, identity
@@ -113,8 +116,16 @@ func (s *Store) CheckCompositeTLSIntent(ctx context.Context, raw json.RawMessage
 		}
 		e = rows.Err()
 		rows.Close()
-		if e != nil || !matched {
+		if e != nil {
 			return e
+		}
+		if !matched && pendingSnapshot {
+			changed = true
+			_, e = tx.ExecContext(ctx, `INSERT INTO settings(key,value_json) VALUES('tls:publication:unreconciled:v1','true') ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json`)
+			return e
+		}
+		if !matched {
+			return nil
 		}
 		var child OperationChildIdentity
 		if json.Unmarshal([]byte(snapshot), &child) != nil || !bytes.Equal(child.TLS, raw) {

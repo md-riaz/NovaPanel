@@ -46,6 +46,24 @@ func TestTLSRecoveryDefersComposite(t *testing.T) {
 	if err = s.ClearTLSIntent(ctx, raw); err != nil {
 		t.Fatal(err)
 	}
+	orphan := []byte(`{"job_id":"01K8WMXZF57CGNZKX1FZ38DZMD"}`)
+	if err = s.BeginTLSIntent(ctx, orphan); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := server.prepareTLSRecovery(ctx); err != nil || got != nil {
+		t.Fatalf("orphan intent dispatched: %+v %v", got, err)
+	}
+	job, err := s.GetJob(ctx, jid)
+	if err != nil || job.Code != "" {
+		t.Fatalf("orphan altered composite: %+v %v", job, err)
+	}
+	anomaly, err := s.Setting(ctx, "tls:publication:unreconciled:v1")
+	if err != nil || string(anomaly) != "true" {
+		t.Fatalf("orphan anomaly missing: %s %v", anomaly, err)
+	}
+	if err = s.ClearTLSIntent(ctx, orphan); err != nil {
+		t.Fatal(err)
+	}
 	changed := append(append([]byte(nil), raw...), []byte(` {}`)...)
 	if err = s.BeginTLSIntent(ctx, changed); err != nil {
 		t.Fatal(err)
@@ -53,7 +71,7 @@ func TestTLSRecoveryDefersComposite(t *testing.T) {
 	if got, err := server.prepareTLSRecovery(ctx); err != nil || got != nil {
 		t.Fatalf("quarantined composite must reach its finalizer: %+v %v", got, err)
 	}
-	job, err := s.GetJob(ctx, jid)
+	job, err = s.GetJob(ctx, jid)
 	if err != nil || job.State != "running" || job.Code != "agent_error" {
 		t.Fatalf("disposition: %+v %v", job, err)
 	}
