@@ -89,6 +89,7 @@ WP-CLI does not write wp-config.php; custody journals and publishes it atomicall
   updated deliberately (same discipline as other pinned deps). The WordPress 7.1.4 en_US tarball at
   `https://downloads.wordpress.org/release/wordpress-7.1.4.tar.gz` has locally computed SHA-256
   `881e53a4681ff2cd911651b11cccdede5ae477ddf0765af5d6a1a8b219a1d835` over the official HTTPS bytes.
+  WP-CLI 2.12.0's [pinned core-command](https://github.com/wp-cli/core-command/blob/83e4692784a815bb7f5df10b72204f237b5224b9/src/Core_Command.php) constructs `https://wordpress.org/wordpress-7.1.4.tar.gz` for this version and locale; the offline mirror must resolve and serve that hostname and URL too. The official HTTPS bytes at that URL have the same SHA-256. Checksum verification also requires a local response for `api.wordpress.org`.
 
 ## 4. Verb reconciliation (registry wins)
 
