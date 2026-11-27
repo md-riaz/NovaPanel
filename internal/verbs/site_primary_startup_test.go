@@ -159,10 +159,10 @@ func runPrimaryQueue(t *testing.T, a *agent.Agent, jid string) {
 	}()
 	for {
 		j, err := a.Store.GetJob(ctx, jid)
-		if err != nil {
+		if err != nil && !errors.Is(err, store.ErrPublicationPending) {
 			t.Fatal(err)
 		}
-		if j.State == "done" || j.State == "failed" {
+		if err == nil && (j.State == "done" || j.State == "failed") {
 			return
 		}
 		if ctx.Err() != nil {
@@ -366,10 +366,29 @@ func TestPrimaryTLSSIGKILLQueueStartup(t *testing.T) {
 			if err != nil || j.State != "running" {
 				t.Fatalf("not original running job: %+v %v", j, err)
 			}
+			intent, err := f.st.TLSIntent(context.Background())
+			var staged struct {
+				Token certs.Recovery `json:"token"`
+			}
+			if err != nil || json.Unmarshal(intent, &staged) != nil || staged.Token.Version == "" {
+				t.Fatalf("missing staged TLS intent: %v", err)
+			}
 			runPrimaryQueue(t, a, f.job)
+			current, err := certs.CurrentRecovery(a.Cfg.TLSDir, "alias.test")
+			if err != nil || current.Version != staged.Token.Version {
+				t.Fatalf("recovery did not reuse staged TLS version: %+v %v", current, err)
+			}
 			j, err = f.st.GetJob(context.Background(), f.job)
-			if err != nil || j.State != "done" || j.Step != "tls_committed" {
+			if err != nil || j.State != "done" || j.Step != "phase4_committed" {
 				t.Fatalf("original job not recovered: %+v %v", j, err)
+			}
+			children, err := f.st.OperationChildren(context.Background(), f.job)
+			if err != nil || len(children) != 2 || children[0].Kind != "domain_tls" || children[0].Status != "committed" || children[1].Kind != "maintenance_off" || children[1].Status != "committed" {
+				t.Fatalf("composite children: %+v %v", children, err)
+			}
+			op, err := f.st.LoadOperation(context.Background(), f.job)
+			if err != nil || op.Identity.PublicationAudit == nil || op.Identity.PublicationAudit.State != "acknowledged" {
+				t.Fatalf("publication audit: %+v %v", op, err)
 			}
 			var args struct {
 				SiteID string `json:"site_id"`
@@ -377,6 +396,10 @@ func TestPrimaryTLSSIGKILLQueueStartup(t *testing.T) {
 			}
 			if err = json.Unmarshal(j.Args, &args); err != nil {
 				t.Fatal(err)
+			}
+			site, err := f.st.SiteByID(context.Background(), args.SiteID)
+			if err != nil || !site.Maintenance {
+				t.Fatalf("maintenance finalizer: %+v %v", site, err)
 			}
 			ds, err := f.st.ListDomains(context.Background(), args.SiteID)
 			if err != nil {
