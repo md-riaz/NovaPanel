@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +16,11 @@ import (
 	runner "novapanel/internal/exec"
 	"novapanel/internal/id"
 )
+
+var installOwners = struct {
+	sync.Mutex
+	sites map[string]*InstallDomain
+}{sites: make(map[string]*InstallDomain)}
 
 // InstallDomain holds an install cgroup; it does not attest account freshness,
 // close other launchers or exclude account and filesystem changes.
@@ -33,6 +40,21 @@ func CreateInstallDomain(siteID string) (*InstallDomain, error) {
 	if !id.Valid(siteID) {
 		return nil, errDomain
 	}
+	installOwners.Lock()
+	if _, exists := installOwners.sites[siteID]; exists {
+		installOwners.Unlock()
+		return nil, fmt.Errorf("%w: site install domain already owned", errDomain)
+	}
+	installOwners.sites[siteID] = nil
+	installOwners.Unlock()
+	owned := false
+	defer func() {
+		if !owned {
+			installOwners.Lock()
+			delete(installOwners.sites, siteID)
+			installOwners.Unlock()
+		}
+	}()
 	raw, err := os.ReadFile("/proc/self/cgroup")
 	if err != nil {
 		return nil, err
@@ -50,7 +72,10 @@ func CreateInstallDomain(siteID string) (*InstallDomain, error) {
 	var st unix.Stat_t
 	var fs unix.Statfs_t
 	if unix.Fstat(fd, &st) != nil || st.Uid != 0 || st.Mode&0022 != 0 || unix.Fstatfs(fd, &fs) != nil || fs.Type != unix.CGROUP2_SUPER_MAGIC {
-		return nil, errDomain
+		return nil, fmt.Errorf("%w: delegated cgroup ownership, mode or filesystem invalid", errDomain)
+	}
+	if !cgroupContainsSelf(fd) {
+		return nil, fmt.Errorf("%w: discovered cgroup does not contain agent", errDomain)
 	}
 	if err := unix.Mkdirat(fd, "novapanel-install", 0755); err != nil && !errors.Is(err, unix.EEXIST) {
 		return nil, fmt.Errorf("%w: delegated cgroup is not writable: %v", errDomain, err)
@@ -62,18 +87,47 @@ func CreateInstallDomain(siteID string) (*InstallDomain, error) {
 	parent := os.NewFile(uintptr(pfd), "novapanel-install")
 	if unix.Fstat(pfd, &st) != nil || st.Uid != 0 || st.Mode&0022 != 0 {
 		parent.Close()
-		return nil, errDomain
+		return nil, fmt.Errorf("%w: install parent ownership or mode invalid", errDomain)
 	}
-	if err := unix.Mkdirat(pfd, siteID, 0755); err != nil && !errors.Is(err, unix.EEXIST) {
-		parent.Close()
-		return nil, fmt.Errorf("%w: create install domain: %v", errDomain, err)
+	if err := unix.Mkdirat(pfd, siteID, 0755); err != nil {
+		if !errors.Is(err, unix.EEXIST) {
+			parent.Close()
+			return nil, fmt.Errorf("%w: create install domain: %v", errDomain, err)
+		}
+		// A crash remnant is usable only after OpenExecutionDomain validates
+		// root ownership, control files, domain type and recursive emptiness.
 	}
 	d, err := OpenExecutionDomain(filepath.Join(path, "novapanel-install", siteID))
 	if err != nil {
 		parent.Close()
 		return nil, err
 	}
-	return &InstallDomain{domain: d, parent: parent, name: siteID}, nil
+	handle := &InstallDomain{domain: d, parent: parent, name: siteID}
+	installOwners.Lock()
+	installOwners.sites[siteID] = handle
+	installOwners.Unlock()
+	owned = true
+	return handle, nil
+}
+
+func cgroupContainsSelf(fd int) bool {
+	cfd, err := unix.Openat(fd, "cgroup.procs", unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return false
+	}
+	f := os.NewFile(uintptr(cfd), "cgroup.procs")
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, 1<<20))
+	if err != nil {
+		return false
+	}
+	pid := strconv.Itoa(os.Getpid())
+	for _, entry := range strings.Fields(string(raw)) {
+		if entry == pid {
+			return true
+		}
+	}
+	return false
 }
 
 func ownCgroup(raw string) (string, error) {
@@ -86,8 +140,8 @@ func ownCgroup(raw string) (string, error) {
 			path = strings.TrimPrefix(line, "0::")
 		}
 	}
-	if path == "" || !strings.HasPrefix(path, "/") || filepath.Clean(path) != path || strings.ContainsAny(path, "\x00\r\n") {
-		return "", errDomain
+	if path == "" || path == "/" || !strings.HasPrefix(path, "/") || filepath.Clean(path) != path || strings.ContainsAny(path, "\x00\r\n") {
+		return "", fmt.Errorf("%w: invalid or root agent cgroup", errDomain)
 	}
 	return path, nil
 }
@@ -166,5 +220,11 @@ func (d *InstallDomain) Close(ctx context.Context) error {
 		return err
 	}
 	d.closed = true
-	return d.parent.Close()
+	err := d.parent.Close()
+	installOwners.Lock()
+	if installOwners.sites[d.name] == d {
+		delete(installOwners.sites, d.name)
+	}
+	installOwners.Unlock()
+	return err
 }
