@@ -98,6 +98,7 @@ func (l *WordPressLifetime) runReviewed(ctx context.Context, child reviewedInsta
 }
 
 // ConfigIsolation executes the effect synchronously inside the held empty window.
+// The effect must not re-enter this lifetime: it runs under its mutex.
 func (l *WordPressLifetime) ConfigIsolation(ctx context.Context, binding configcustody.ConfigBinding, effect func(context.Context) error) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -123,9 +124,8 @@ func (l *WordPressLifetime) ConfigIsolation(ctx context.Context, binding configc
 	return err
 }
 
-// ReleaseServing is the Slice 1b serving-enable seam. The caller may invoke it
-// only after the operation has returned successfully and teardown has succeeded.
-func (l *WordPressLifetime) ReleaseServing(ctx context.Context) error {
+// activateServing commits the disposition before the owner calls serving enable.
+func (l *WordPressLifetime) activateServing(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if !l.closed || !l.successful || l.failed || l.released {
@@ -174,6 +174,9 @@ func withInstallLifetime(ctx context.Context, l *WordPressLifetime, operation fu
 		l.mu.Lock()
 		l.successful = true
 		l.mu.Unlock()
+		if err = l.activateServing(ctx); err != nil {
+			return
+		}
 		err = func() (releaseErr error) {
 			defer func() {
 				if recover() != nil {

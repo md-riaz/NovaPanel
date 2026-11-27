@@ -54,7 +54,7 @@ func TestHeldLifetimeIsolationAndRelease(t *testing.T) {
 			}}
 			err := withInstallLifetime(context.Background(), l, func(l *WordPressLifetime) error {
 				if mode == "early" {
-					return l.ReleaseServing(context.Background())
+					return l.activateServing(context.Background())
 				}
 				if mode == "panic" {
 					panic("fixture")
@@ -82,7 +82,13 @@ func TestHeldLifetimeIsolationAndRelease(t *testing.T) {
 				}
 				_, _, _, err = l.runReviewed(context.Background(), reviewedInstallChild{kind: wordpress.InstallCore})
 				return err
-			}, func(l *WordPressLifetime) error { releases++; return l.ReleaseServing(context.Background()) })
+			}, func(l *WordPressLifetime) error {
+				releases++
+				if activated != 1 {
+					t.Error("serving before activation")
+				}
+				return nil
+			})
 			if !domain.closed {
 				t.Fatal("domain not closed")
 			}
@@ -96,7 +102,7 @@ func TestHeldLifetimeIsolationAndRelease(t *testing.T) {
 			if effects > 1 {
 				t.Fatal("callback executed twice")
 			}
-			if err := l.ReleaseServing(context.Background()); err == nil {
+			if err := l.activateServing(context.Background()); err == nil {
 				t.Fatal("release after lifetime")
 			}
 		})
@@ -138,7 +144,7 @@ func TestLifetimeReturnCancelsRetainedChild(t *testing.T) {
 		}()
 		<-d.started
 		return nil
-	}, func(l *WordPressLifetime) error { return l.ReleaseServing(context.Background()) })
+	}, func(l *WordPressLifetime) error { return nil })
 	if err == nil || !d.closed || activated {
 		t.Fatalf("retained child: %v closed=%v activated=%v", err, d.closed, activated)
 	}
@@ -171,7 +177,7 @@ func TestLifetimeReplayKeepsSiteIdentity(t *testing.T) {
 			}
 			_, _, _, err := l.runReviewed(context.Background(), reviewedInstallChild{kind: wordpress.InstallCore})
 			return err
-		}, func(l *WordPressLifetime) error { return l.ReleaseServing(context.Background()) })
+		}, func(l *WordPressLifetime) error { return nil })
 		if !d.closed || (attempt == 0 && err == nil) || (attempt == 1 && err != nil) {
 			t.Fatalf("attempt %d: %v", attempt, err)
 		}
