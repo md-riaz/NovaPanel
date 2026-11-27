@@ -25,15 +25,31 @@ func siteCompositeExec(ctx context.Context, a *agent.Agent, j *jobs.Job, v siteU
 		if err != nil {
 			return err
 		}
-		if durable.Code == "agent_error" {
+		op, err := a.Store.LoadOperation(ctx, j.ID)
+		if err != nil {
+			return err
+		}
+		if (op.Checkpoint == "verified" || op.Checkpoint == "done") && next >= 0 {
+			return jobs.ErrRetry
+		}
+		if durable.Code == "agent_error" && next >= 0 {
 			next = len(children) - 1
 			if children[next].Status != "pending" {
 				return jobs.ErrRetry
 			}
 		}
 		if next < 0 {
-			if err = a.Store.CheckpointOperation(ctx, j.ID, "prepared", "verified"); err != nil {
-				return err
+			for _, child := range children {
+				if child.Status == "pending" || (child.Kind == "maintenance_off" && child.Status != "committed") {
+					return jobs.ErrRetry
+				}
+			}
+			if op.Checkpoint == "prepared" {
+				if err = a.Store.CheckpointOperation(ctx, j.ID, "prepared", "verified"); err != nil {
+					return err
+				}
+			} else if op.Checkpoint != "verified" && op.Checkpoint != "done" {
+				return store.ErrSiteConflict
 			}
 			for _, child := range children {
 				if child.Status == "failed" && child.TypedError != "not_attempted" {
