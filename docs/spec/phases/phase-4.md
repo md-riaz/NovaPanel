@@ -44,7 +44,7 @@ build it.
 2. **PHP runtime** (Deliverables 1–2): per-site user + FPM pool with the socket-owner **502 fix**, then
    `php.set` / `php.list`. Closes Verification rows 1, 2, 7.
 3. **WordPress install** (Deliverable 4): `download → verify-checksums → protected config publish → install`, run
-   as the site user, wp-config 440/400, non-empty-docroot refusal; destructive ops stay `unsupported`
+   as the site user, wp-config 0400, non-empty-docroot refusal; destructive ops stay `unsupported`
    (Deliverable 5 / row 6). Closes Verification rows 5, 6.
 
 **Ruling — `site.create` types and `php_version`.** The Phase-3 `site.create type=php|wordpress`
@@ -69,9 +69,9 @@ mergeable — not one 285-file mega-draft. Drive each with `docs/spec/PHASE-DRIV
    per-site DB + dedicated user bound to loopback, **least-privilege grant** (never `*.*`), generated
    names + show-once passwords; the **agent authenticates to MariaDB as root via `unix_socket`** (no
    stored admin password anywhere).
-4. **WordPress install** (**Step 3**; `site.create type=wordpress` or `wp.install`): `wp core download` →
+4. **WordPress install** (**Step 3**; `site.create type=wordpress`): `wp core download` →
    `wp core verify-checksums` → protected config publish → `wp core install`, run **as the site user**,
-   `wp-config.php` perms `440`/`400`, never over a non-empty docroot.
+   `wp-config.php` perms `0400`, never over a non-empty docroot.
 5. **Guard** (Step 3): no destructive WordPress ops (update/clone/staging) until backups/restore land (Phase 6).
 
 ## Blueprint
@@ -173,8 +173,8 @@ GRANT SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,ALTER,INDEX,CREATE TEMPORARY TABLE
   ON `{{grant_pattern_escaped_then_identifier_quoted_db}}`.* TO '{{dbuser}}'@'127.0.0.1';          -- NEVER *.*, NEVER GRANT OPTION/FILE/SUPER
 ```
 - **Transport decision (locked here):** **app/site connections use TCP `127.0.0.1`**; the DB user is
-  `'{{dbuser}}'@'127.0.0.1'`, the Go/WordPress DSN uses `127.0.0.1`, and `wp config create --dbhost`
-  = `127.0.0.1`. The three **must** match or installs fail "Access denied". The **agent's own admin**
+  `'{{dbuser}}'@'127.0.0.1'`, and the Go/WordPress DSN and generated wp-config use `127.0.0.1`.
+  These **must** match or installs fail "Access denied". The **agent's own admin**
   connection uses the **`unix_socket`** plugin (root over the socket, no password).
 - **`bind-address = 127.0.0.1`** in server config (no network exposure). Rotation:
   `ALTER USER '{{dbuser}}'@'127.0.0.1' IDENTIFIED BY '{{new}}'`; when the database backs a WordPress
