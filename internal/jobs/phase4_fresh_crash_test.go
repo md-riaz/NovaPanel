@@ -162,3 +162,22 @@ func TestFreshArtifactFailureWorkerRetry(t *testing.T) {
 		})
 	}
 }
+
+func TestFreshInstallRecoveryRechecksChecksumMismatch(t *testing.T) {
+	d := &crashInstallDomain{stop: wordpress.VerifyChecksums, runs: map[wordpress.StepKind]int{}}
+	plan := wordpress.Plan{Steps: []wordpress.Step{{Kind: wordpress.VerifyChecksums, Program: "/stub", Args: []string{string(wordpress.VerifyChecksums)}}}}
+	pins := 0
+	for attempt := 0; attempt < 2; attempt++ {
+		d.fired = false
+		l := &WordPressLifetime{domain: d, identity: store.SiteLifetime{UID: 123, GID: 456}, plan: plan, check: func(context.Context) error { return nil }}
+		err := withInstallLifetime(context.Background(), l, func(l *WordPressLifetime) error {
+			return runFreshInstall(context.Background(), l, true, func() error { pins++; return nil }, func() error { t.Fatal("published after mismatch"); return nil }, "admin")
+		}, func(*WordPressLifetime) error { t.Fatal("served after mismatch"); return nil })
+		if err == nil || errors.Is(err, ErrRetry) {
+			t.Fatalf("checksum mismatch must fail terminally: %v", err)
+		}
+	}
+	if pins != 2 || d.runs[wordpress.VerifyChecksums] != 2 || d.runs[wordpress.InstallCore] != 0 {
+		t.Fatalf("recovery did not fail closed: pins=%d runs=%v", pins, d.runs)
+	}
+}

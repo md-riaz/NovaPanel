@@ -13,7 +13,16 @@ import (
 
 type rollbackIntentFailStore struct {
 	*store.Store
-	fail bool
+	fail        bool
+	failPersist bool
+}
+
+func (s *rollbackIntentFailStore) PersistFreshWordPressRollbackIntent(ctx context.Context, jid, code string) error {
+	if s.failPersist {
+		s.failPersist = false
+		return errors.New("injected intent write failure")
+	}
+	return s.Store.PersistFreshWordPressRollbackIntent(ctx, jid, code)
 }
 
 func (s *rollbackIntentFailStore) BeginFreshWordPressRollback(ctx context.Context, jid, code string) error {
@@ -42,23 +51,23 @@ func TestFreshWordPressWorkerRollbackAndNameReuse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	q.store = &rollbackIntentFailStore{Store: s, fail: true}
+	q.store = &rollbackIntentFailStore{Store: s, fail: true, failPersist: true}
 	attempts := 0
 	q.SetRunner(func(run context.Context, j *Job) error {
 		if j.ID != en.Job.ID {
 			return nil
 		}
 		attempts++
-		if attempts == 1 {
+		if attempts <= 2 {
 			return errors.New("checksum mismatch")
 		}
-		if attempts == 2 {
+		if attempts == 3 {
 			if j.Step != store.FreshWordPressRollbackStep {
 				t.Fatalf("missing rollback intent: %+v", j)
 			}
 			return errors.Join(ErrRetry, errors.New("injected teardown failure"))
 		}
-		if attempts == 3 {
+		if attempts == 4 {
 			if err := s.MarkFreshWordPressRollbackCleaned(run, j.ID); err != nil {
 				return err
 			}
@@ -70,10 +79,24 @@ func TestFreshWordPressWorkerRollbackAndNameReuse(t *testing.T) {
 		}
 		return rpcerr.Errf("agent_error", "installation failed")
 	})
-	if err = q.execute(ctx, en.Job); err != nil {
-		t.Fatal(err)
+	if err = q.execute(ctx, en.Job); !errors.Is(err, ErrRetry) {
+		t.Fatalf("intent write failure must retry: %v", err)
 	}
 	j, err := s.GetJob(ctx, en.Job.ID)
+	if err != nil || j.State != "running" || j.Step != "" {
+		t.Fatalf("failed intent must not requeue install: %+v %v", j, err)
+	}
+	if err = s.RecoverJobs(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	j, err = s.GetJob(ctx, en.Job.ID)
+	if err != nil || j.State != "queued" {
+		t.Fatalf("recovery did not queue re-verification: %+v %v", j, err)
+	}
+	if err = q.execute(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	j, err = s.GetJob(ctx, en.Job.ID)
 	if err != nil || j.State != "queued" || j.Step != store.FreshWordPressRollbackIntentStep {
 		t.Fatalf("intent refusal stopped worker: %+v %v", j, err)
 	}
