@@ -63,3 +63,7 @@ This is real Chromium against a fake RPC backend, not real site provisioning or 
 - `styles/input.css` is the Tailwind 4.1.18 build input. Rebuild using scratch-installed `@tailwindcss/cli` 4.1.18 with this directory as the project source, resolving `tailwindcss` from that scratch installation, and emit `assets/app.css`. No CDN or Node runtime is needed by panel-web.
 
 Real Chromium acceptance verifies the isolated auth-agent flow, anonymous reload/login, HTMX submits, enrollment/confirmation, backup show-once/replay, reauthentication rotation, timeout, role refusal, CSRF/Origin/Fetch Metadata refusal, and logout. The audit check verifies successful and failed login events and rejects known secret shapes. Final privileged VM acceptance remains unverified. Dashboard metrics are read-only placeholders until their later-phase agent verbs exist.
+
+`POST /uploads` accepts a raw request body up to 100 MiB with a writable session,
+same-origin request and `X-CSRF-Token` header. It returns `201` JSON containing
+`upload_id`; pass that ID with `site_id` and `path` to `files.upload`.

@@ -30,11 +30,19 @@ func run() error {
 		return err
 	}
 	socket := cfg.SocketPath
-	handler, err := web.New(web.Options{RateLimitRPS: cfg.RateLimitRPS, RateLimitBurst: cfg.RateLimitBurst, Origin: env("NOVAPANEL_WEB_ORIGIN", "https://localhost"), Dial: func() (web.RPCClient, error) { return rpc.Dial(socket) }, LogOnlyOrigin: os.Getenv("NOVAPANEL_WEB_ORIGIN_LOG_ONLY") == "true", OriginViolation: func() { log.Print("request origin policy violation") }})
+	handler, err := web.New(web.Options{UploadsDir: cfg.UploadsDir, RateLimitRPS: cfg.RateLimitRPS, RateLimitBurst: cfg.RateLimitBurst, Origin: env("NOVAPANEL_WEB_ORIGIN", "https://localhost"), Dial: func() (web.RPCClient, error) { return rpc.Dial(socket) }, LogOnlyOrigin: os.Getenv("NOVAPANEL_WEB_ORIGIN_LOG_ONLY") == "true", OriginViolation: func() { log.Print("request origin policy violation") }})
 	if err != nil {
 		return err
 	}
-	return serveHTTP(&http.Server{Addr: env("NOVAPANEL_WEB_LISTEN", "127.0.0.1:8080"), Handler: http.TimeoutHandler(handler, 15*time.Second, "Request timed out"), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10})
+	timed := http.TimeoutHandler(handler, 15*time.Second, "Request timed out")
+	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/uploads" && r.Method == http.MethodPost {
+			handler.ServeHTTP(w, r)
+			return
+		}
+		timed.ServeHTTP(w, r)
+	})
+	return serveHTTP(&http.Server{Addr: env("NOVAPANEL_WEB_LISTEN", "127.0.0.1:8080"), Handler: dispatch, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10})
 }
 func main() {
 	if err := run(); err != nil {
