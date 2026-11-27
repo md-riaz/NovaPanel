@@ -27,10 +27,11 @@ func TestCompositeExecutorCommitsParent(t *testing.T) {
 	t.Run("productive_failure", func(t *testing.T) { testCompositeExecutor(t, false, true, false) })
 	t.Run("failure_replay", func(t *testing.T) { testCompositeExecutor(t, true, true, false) })
 	t.Run("restore_retry", func(t *testing.T) { testCompositeExecutor(t, false, false, true) })
-	t.Run("success_maintenance_off", func(t *testing.T) { testCompositeExecutorMaintenance(t, false, false, false, false) })
-	t.Run("failure_maintenance_off", func(t *testing.T) { testCompositeExecutorMaintenance(t, false, true, false, false) })
-	t.Run("failure_replay_maintenance_off", func(t *testing.T) { testCompositeExecutorMaintenance(t, true, true, false, false) })
-	t.Run("restore_retry_maintenance_off", func(t *testing.T) { testCompositeExecutorMaintenance(t, false, false, true, false) })
+	t.Run("restore_failure_unreconciled", func(t *testing.T) { testCompositeExecutorMaintenance(t, false, true, true, false, true) })
+	t.Run("success_maintenance_off", func(t *testing.T) { testCompositeExecutorMaintenance(t, false, false, false, false, false) })
+	t.Run("failure_maintenance_off", func(t *testing.T) { testCompositeExecutorMaintenance(t, false, true, false, false, false) })
+	t.Run("failure_replay_maintenance_off", func(t *testing.T) { testCompositeExecutorMaintenance(t, true, true, false, false, false) })
+	t.Run("restore_retry_maintenance_off", func(t *testing.T) { testCompositeExecutorMaintenance(t, false, false, true, false, false) })
 }
 
 func TestQuarantinedTLSAllowsMaintenanceFinalizer(t *testing.T) {
@@ -142,10 +143,13 @@ func testQuarantinedTLSAllowsMaintenanceFinalizer(t *testing.T, mode string) {
 	}
 }
 
-type compositeRetryRunner struct{ calls atomic.Int32 }
+type compositeRetryRunner struct {
+	calls   atomic.Int32
+	forever bool
+}
 
 func (r *compositeRetryRunner) Run(ctx context.Context, program string, args []string, opts runnerexec.RunOpts) ([]byte, []byte, int, error) {
-	if program == "/usr/sbin/nginx" && r.calls.Add(1) == 1 {
+	if program == "/usr/sbin/nginx" && (r.calls.Add(1) == 1 || r.forever) {
 		return nil, nil, 1, nil
 	}
 	return nil, nil, 0, nil
@@ -300,10 +304,10 @@ func testCompositeBracketCrash(t *testing.T, stop int) {
 }
 
 func testCompositeExecutor(t *testing.T, replay, failure, retry bool) {
-	testCompositeExecutorMaintenance(t, replay, failure, retry, true)
+	testCompositeExecutorMaintenance(t, replay, failure, retry, true, false)
 }
 
-func testCompositeExecutorMaintenance(t *testing.T, replay, failure, retry, maintenance bool) {
+func testCompositeExecutorMaintenance(t *testing.T, replay, failure, retry, maintenance, forever bool) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st, err := store.Open(filepath.Join(root, "panel.db"))
@@ -334,7 +338,7 @@ func testCompositeExecutorMaintenance(t *testing.T, replay, failure, retry, main
 	a.Store = st
 	a.Nginx = &nginx.Applier{Root: ngroot, Runner: poolReplayRunner{}, Probe: func(context.Context, nginx.Desired) error { return nil }}
 	if retry {
-		a.Nginx.Runner = &compositeRetryRunner{}
+		a.Nginx.Runner = &compositeRetryRunner{forever: forever}
 	}
 	a.Jobs = jobs.NewQueue(st, nil, log)
 	request := &store.CompositeSiteUpdate{SiteID: sid, PrimaryDomainID: &did, Maintenance: &maintenance}
@@ -382,6 +386,14 @@ func testCompositeExecutorMaintenance(t *testing.T, replay, failure, retry, main
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		j, err := st.GetJob(ctx, result.Job.ID)
+		if forever && err == nil && j.Attempts >= 2 {
+			op, e := st.LoadOperation(ctx, j.ID)
+			children, ce := st.OperationChildren(ctx, j.ID)
+			if e != nil || ce != nil || op.Reconciled || op.Checkpoint == "done" || op.Checkpoint == "expired" || j.State == "done" || j.State == "failed" || len(children) != 2 || children[0].Status != "failed" || children[1].Status != "pending" {
+				t.Fatalf("restore failure stranded operation: job=%+v op=%+v children=%+v errors=%v %v", j, op, children, e, ce)
+			}
+			return
+		}
 		if err == nil && (j.State == "done" || failure && j.State == "failed") {
 			if retry && j.Attempts < 2 {
 				t.Fatalf("restore was not retried: %+v", j)
