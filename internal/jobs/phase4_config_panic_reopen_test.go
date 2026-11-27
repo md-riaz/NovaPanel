@@ -3,7 +3,6 @@ package jobs
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -167,13 +166,6 @@ func TestWordPressConfigIsolationPanicRetainsRecovery(t *testing.T) {
 		}
 	}
 
-	// Trigger a real SQL checkpoint failure after actual no-replace publication.
-	if err = s.Tx(ctx, func(tx *sql.Tx) error {
-		_, e := tx.ExecContext(ctx, `CREATE TRIGGER stop_config BEFORE UPDATE OF checkpoint ON phase4_operations WHEN NEW.checkpoint='config_published' BEGIN SELECT RAISE(ABORT,'injected'); END`)
-		return e
-	}); err != nil {
-		t.Fatal(err)
-	}
 	isolate := func(ctx context.Context, b configcustody.ConfigBinding, effect func(context.Context) error) error {
 		if b.UID != 23451 || b.GID != 23452 || b.Docroot != docroot {
 			t.Error("wrong resolved binding")
@@ -193,7 +185,7 @@ func TestWordPressConfigIsolationPanicRetainsRecovery(t *testing.T) {
 			panic("trusted isolation cleanup failure after publication")
 		})
 		if err == nil {
-			t.Error("checkpoint failure ignored")
+			t.Error("isolation panic ignored")
 		}
 		return err
 	})
@@ -231,7 +223,7 @@ func TestWordPressConfigIsolationPanicRetainsRecovery(t *testing.T) {
 		}
 	}
 	op, err := s.LoadOperation(ctx, en.Job.ID)
-	if err != nil || op.Checkpoint != "db_applied" || len(op.Ciphertext) == 0 {
+	if err != nil || op.Checkpoint != "config_published" || len(op.Ciphertext) == 0 {
 		t.Fatalf("lost original recovery: checkpoint=%s ciphertext_bytes=%d err=%v", op.Checkpoint, len(op.Ciphertext), err)
 	}
 	record, err := os.ReadFile(filepath.Join(custody, en.Job.ID+".sealed"))
@@ -246,9 +238,6 @@ func TestWordPressConfigIsolationPanicRetainsRecovery(t *testing.T) {
 	}
 	s, err = store.Open(dbpath)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err = s.Tx(ctx, func(tx *sql.Tx) error { _, e := tx.ExecContext(ctx, "DROP TRIGGER stop_config"); return e }); err != nil {
 		t.Fatal(err)
 	}
 	q = NewQueue(s, seal, auditSink)

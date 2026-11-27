@@ -45,7 +45,7 @@ func TestWordPressLifetimeDomainLab(t *testing.T) {
 		}
 		_, _, _, err := l.runReviewed(context.Background(), reviewedInstallChild{kind: wordpress.InstallCore})
 		return err
-	}, func(l *WordPressLifetime) error { return l.ReleaseServing(context.Background()) })
+	}, func(l *WordPressLifetime) error { return nil })
 	if err != nil || !activated {
 		t.Fatalf("lifetime: %v activated=%v", err, activated)
 	}

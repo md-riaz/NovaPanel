@@ -28,6 +28,27 @@ func (s *Store) CheckFreshSiteLifetime(ctx context.Context, l SiteLifetime) erro
 	return err
 }
 
+// LoadSiteLifetime reloads the durable account identity for an interrupted job.
+func (s *Store) LoadSiteLifetime(ctx context.Context, siteID string) (SiteLifetime, error) {
+	var l SiteLifetime
+	err := s.db.QueryRowContext(ctx, `SELECT s.id, s.name, s.docroot, p.allocating_job, p.uid, p.gid FROM sites s JOIN site_account_provenance p ON p.site_id=s.id AND p.account_name=s.name WHERE s.id=?`, siteID).Scan(&l.SiteID, &l.Name, &l.Docroot, &l.AllocatingJob, &l.UID, &l.GID)
+	return l, err
+}
+
+// CheckActivatedSiteLifetime accepts only the original unfinished install job.
+func (s *Store) CheckActivatedSiteLifetime(ctx context.Context, l SiteLifetime, jobID string) error {
+	if l.AllocatingJob != jobID {
+		return ErrSitePrecondition
+	}
+	var found int
+	args := append(lifetimeArgs(l), jobID)
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM sites WHERE id=? AND name=? AND docroot=? AND type='wordpress' AND lifetime_state='served' AND EXISTS (SELECT 1 FROM site_account_provenance p WHERE p.site_id=sites.id AND p.account_name=? AND p.uid=? AND p.gid=? AND p.allocating_job=?) AND EXISTS (SELECT 1 FROM phase4_operations o JOIN jobs j ON j.id=o.job_id WHERE o.job_id=? AND o.site_id=sites.id AND o.kind='wordpress_install' AND o.reconciled=0 AND o.checkpoint NOT IN ('done','expired') AND j.state IN ('queued','running'))`, args...).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrSitePrecondition
+	}
+	return err
+}
+
 // ActivateSiteLifetime records serving disposition before serving is enabled.
 func (s *Store) ActivateSiteLifetime(ctx context.Context, l SiteLifetime) error {
 	result, err := s.db.ExecContext(ctx, `UPDATE sites SET lifetime_state='served' WHERE `+freshLifetimeWhere, lifetimeArgs(l)...)
