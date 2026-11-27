@@ -85,7 +85,9 @@ Production fetches WordPress online with the spec's wp-cli sequence
   sha256, replacing the ZIP pin. The offline lab fixtures keep serving their ZIP by URL for the
   lab build only; the production pin is the tar.gz the wp.org endpoint actually returns.
 - Egress for the download is permitted from within the install domain. Pins are reviewed values,
-  updated deliberately (same discipline as other pinned deps).
+  updated deliberately (same discipline as other pinned deps). The WordPress 7.1.4 en_US tarball at
+  `https://downloads.wordpress.org/release/wordpress-7.1.4.tar.gz` has locally computed SHA-256
+  `881e53a4681ff2cd911651b11cccdede5ae477ddf0765af5d6a1a8b219a1d835` over the official HTTPS bytes.
 
 ## 4. Verb reconciliation (registry wins)
 
