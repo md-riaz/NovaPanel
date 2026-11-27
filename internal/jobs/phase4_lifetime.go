@@ -63,7 +63,7 @@ func (l *WordPressLifetime) runReviewed(ctx context.Context, child reviewedInsta
 	stop := context.AfterFunc(ctx, cancel)
 	defer func() { stop(); cancel() }()
 	ctx = work
-	steps := []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums, wordpress.InstallCore}
+	steps := []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums, wordpress.IsInstalled, wordpress.InstallCore}
 	index := l.stage
 	if index > 2 {
 		index--
@@ -90,8 +90,13 @@ func (l *WordPressLifetime) runReviewed(ctx context.Context, child reviewedInsta
 	child.options.Dir, child.options.Env = l.plan.Dir, l.plan.Env
 	child.options.Uid, child.options.Gid, child.options.Groups = l.identity.UID, l.identity.GID, []uint32{}
 	out, stderr, code, err := l.domain.Run(ctx, step.Program, step.Args, child.options)
-	if err != nil || code != 0 {
+	if child.kind == wordpress.IsInstalled && code == 1 && runner.NormalExit(err, code) {
+		err = nil
+	}
+	if err != nil || (code != 0 && !(child.kind == wordpress.IsInstalled && code == 1)) {
 		l.failed = true
+	} else if child.kind == wordpress.IsInstalled && code == 0 {
+		l.stage += 2
 	} else {
 		l.stage++
 	}
@@ -160,7 +165,7 @@ func withInstallLifetime(ctx context.Context, l *WordPressLifetime, operation fu
 		l.mu.Lock()
 		l.closed = true
 		failed := l.failed
-		published := l.published && l.stage == 4
+		published := l.published && l.stage == 5
 		l.mu.Unlock()
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()

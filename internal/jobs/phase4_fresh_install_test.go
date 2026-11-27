@@ -22,11 +22,11 @@ func TestFreshInstallSequence(t *testing.T) {
 	l := &WordPressLifetime{domain: d, binding: b, identity: store.SiteLifetime{SiteID: "site", UID: 123, GID: 456}, plan: plan, check: func(context.Context) error { return nil }, activate: func(context.Context, store.SiteLifetime) error { return nil }}
 	published, released := false, false
 	err := withInstallLifetime(context.Background(), l, func(l *WordPressLifetime) error {
-		return runFreshInstall(context.Background(), l, func() error { return nil }, func() error {
+		return runFreshInstall(context.Background(), l, false, func() error { return nil }, func() error {
 			return l.ConfigIsolation(context.Background(), b, func(context.Context) error { published = true; return nil })
 		}, "admin-password")
 	}, func(*WordPressLifetime) error { released = true; return nil })
-	if err != nil || !published || !released || d.runs != 3 {
+	if err != nil || !published || !released || d.runs != 4 {
 		t.Fatalf("sequence failed: %v", err)
 	}
 }
@@ -36,7 +36,7 @@ func TestFreshInstallRejectsArchiveMismatch(t *testing.T) {
 	l := &WordPressLifetime{domain: d, identity: store.SiteLifetime{UID: 123, GID: 456}, plan: fakeLifetimePlan(), check: func(context.Context) error { return nil }}
 	published := false
 	err := withInstallLifetime(context.Background(), l, func(l *WordPressLifetime) error {
-		return runFreshInstall(context.Background(), l, func() error { return errors.New("digest mismatch") }, func() error { published = true; return nil }, "admin-password")
+		return runFreshInstall(context.Background(), l, false, func() error { return errors.New("digest mismatch") }, func() error { published = true; return nil }, "admin-password")
 	}, func(*WordPressLifetime) error { t.Error("released on mismatch"); return nil })
 	if err == nil || published || d.runs != 1 {
 		t.Fatalf("mismatch did not fail closed: %v", err)

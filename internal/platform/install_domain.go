@@ -232,13 +232,19 @@ func (d *InstallDomain) WithEmpty(ctx context.Context, effect func(context.Conte
 // Run admits one reviewed child at birth and checks recursive emptiness around it.
 func (d *InstallDomain) Run(ctx context.Context, program string, args []string, opts runner.RunOpts) ([]byte, []byte, int, error) {
 	var out, stderr []byte
+	var childErr error
 	code := -1
 	err := d.gate.Do(d.empty, func() error {
-		var err error
-		out, stderr, code, err = d.domain.Run(ctx, program, args, opts)
-		return err
+		out, stderr, code, childErr = d.domain.Run(ctx, program, args, opts)
+		if runner.NormalExit(childErr, code) {
+			return nil
+		}
+		return childErr
 	})
-	return out, stderr, code, err
+	if err != nil {
+		return out, stderr, code, err
+	}
+	return out, stderr, code, childErr
 }
 
 // Close drains before removing the site domain. An unsuccessful drain retains it.

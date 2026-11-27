@@ -43,7 +43,7 @@ func TestWordPressLifetimeDomainLab(t *testing.T) {
 		if err := l.ConfigIsolation(context.Background(), binding, func(context.Context) error { return nil }); err != nil {
 			return err
 		}
-		_, _, _, err := l.runReviewed(context.Background(), reviewedInstallChild{kind: wordpress.InstallCore})
+		_, _, _, err := l.runReviewed(context.Background(), reviewedInstallChild{kind: wordpress.IsInstalled})
 		return err
 	}, func(l *WordPressLifetime) error { return nil })
 	if err != nil || !activated {

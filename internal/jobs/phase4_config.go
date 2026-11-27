@@ -110,7 +110,7 @@ func (q *Queue) CreateWordPressConfig(ctx context.Context, jobID, custody string
 		return refuse
 	}
 	op, err := s.LoadOperation(ctx, jobID)
-	if err != nil || op.Kind != store.WordPressInstall || (op.Checkpoint != "db_applied" && op.Checkpoint != "config_published") {
+	if err != nil || op.Kind != store.WordPressInstall || (op.Checkpoint != "db_applied" && op.Checkpoint != "config_published" && op.Checkpoint != "verified") {
 		return refuse
 	}
 	w := op.Identity.WordPress

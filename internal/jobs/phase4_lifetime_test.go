@@ -94,17 +94,22 @@ func (d *fakeInstallLifetime) WithEmpty(ctx context.Context, fn func(context.Con
 	}
 	return fn(ctx)
 }
-func (d *fakeInstallLifetime) Run(ctx context.Context, _ string, _ []string, o runner.RunOpts) ([]byte, []byte, int, error) {
+func (d *fakeInstallLifetime) Run(ctx context.Context, _ string, args []string, o runner.RunOpts) ([]byte, []byte, int, error) {
 	if !d.held || !d.empty || d.closed || o.Uid != 123 || o.Gid != 456 || len(o.Groups) != 0 {
 		return nil, nil, -1, errors.New("unsafe admission")
 	}
 	d.runs++
+	for _, arg := range args {
+		if arg == "is-installed" {
+			return nil, nil, 1, nil
+		}
+	}
 	return nil, nil, 0, nil
 }
 func (d *fakeInstallLifetime) Close(context.Context) error { d.closed = true; return d.closeErr }
 
 func fakeLifetimePlan() wordpress.Plan {
-	return wordpress.Plan{Steps: []wordpress.Step{{Kind: wordpress.Download, Program: "/stub"}, {Kind: wordpress.VerifyChecksums, Program: "/stub"}, {Kind: wordpress.InstallCore, Program: "/stub"}}}
+	return wordpress.Plan{Steps: []wordpress.Step{{Kind: wordpress.Download, Program: "/stub"}, {Kind: wordpress.VerifyChecksums, Program: "/stub"}, {Kind: wordpress.IsInstalled, Program: "/stub", Args: []string{"is-installed"}}, {Kind: wordpress.InstallCore, Program: "/stub"}}}
 }
 func TestHeldLifetimeIsolationAndRelease(t *testing.T) {
 	for _, mode := range []string{"success", "callback", "close", "early", "duplicate", "panic"} {
@@ -151,6 +156,9 @@ func TestHeldLifetimeIsolationAndRelease(t *testing.T) {
 				if mode == "duplicate" {
 					_ = l.ConfigIsolation(context.Background(), binding, func(context.Context) error { effects++; return nil })
 				}
+				if _, _, _, err = l.runReviewed(context.Background(), reviewedInstallChild{kind: wordpress.IsInstalled}); err != nil {
+					return err
+				}
 				_, _, _, err = l.runReviewed(context.Background(), reviewedInstallChild{kind: wordpress.InstallCore})
 				return err
 			}, func(l *WordPressLifetime) error {
@@ -164,7 +172,7 @@ func TestHeldLifetimeIsolationAndRelease(t *testing.T) {
 				t.Fatal("domain not closed")
 			}
 			if mode == "success" {
-				if err != nil || effects != 1 || releases != 1 || activated != 1 || domain.runs != 3 {
+				if err != nil || effects != 1 || releases != 1 || activated != 1 || domain.runs != 4 {
 					t.Fatalf("success: %v effects=%d release=%d activation=%d runs=%d", err, effects, releases, activated, domain.runs)
 				}
 			} else if err == nil || releases != 0 || activated != 0 {
@@ -261,6 +269,9 @@ func TestLifetimeReplayKeepsSiteIdentity(t *testing.T) {
 			}
 		}
 		if err := l.ConfigIsolation(ctx, binding, func(context.Context) error { return nil }); err != nil {
+			return err
+		}
+		if _, _, _, err := l.runReviewed(ctx, reviewedInstallChild{kind: wordpress.IsInstalled}); err != nil {
 			return err
 		}
 		_, _, _, err := l.runReviewed(ctx, reviewedInstallChild{kind: wordpress.InstallCore})

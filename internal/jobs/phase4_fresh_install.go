@@ -14,22 +14,39 @@ import (
 )
 
 // runFreshInstall admits only fixed reviewed children while config custody is held.
-func runFreshInstall(ctx context.Context, lifetime *WordPressLifetime, verifyArchive, publish func() error, adminPassword string) error {
+func runFreshInstall(ctx context.Context, lifetime *WordPressLifetime, artifactsReady bool, verifyArchive, publish func() error, adminPassword string) error {
 	if lifetime == nil || verifyArchive == nil || publish == nil || adminPassword == "" {
 		return errors.New("jobs: WordPress install unavailable")
 	}
-	for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums} {
-		if _, _, code, err := lifetime.runReviewed(ctx, reviewedInstallChild{kind: kind}); err != nil || code != 0 {
-			return errors.New("jobs: WordPress artifact step failed")
+	if artifactsReady {
+		lifetime.mu.Lock()
+		if lifetime.closed || lifetime.failed || lifetime.stage != 0 {
+			lifetime.mu.Unlock()
+			return errors.New("jobs: WordPress artifact replay refused")
 		}
-		if kind == wordpress.Download {
-			if err := verifyArchive(); err != nil {
-				return err
+		lifetime.stage = 2
+		lifetime.mu.Unlock()
+	} else {
+		for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums} {
+			if _, _, code, err := lifetime.runReviewed(ctx, reviewedInstallChild{kind: kind}); err != nil || code != 0 {
+				return errors.New("jobs: WordPress artifact step failed")
+			}
+			if kind == wordpress.Download {
+				if err := verifyArchive(); err != nil {
+					return err
+				}
 			}
 		}
 	}
 	if err := publish(); err != nil {
 		return err
+	}
+	_, _, installed, err := lifetime.runReviewed(ctx, reviewedInstallChild{kind: wordpress.IsInstalled})
+	if err != nil || (installed != 0 && installed != 1) {
+		return errors.New("jobs: WordPress installation check failed")
+	}
+	if installed == 0 {
+		return nil
 	}
 	if _, _, code, err := lifetime.runReviewed(ctx, reviewedInstallChild{kind: wordpress.InstallCore, options: runner.RunOpts{Stdin: strings.NewReader(adminPassword + "\n")}}); err != nil || code != 0 {
 		return errors.New("jobs: WordPress core installation failed")
@@ -39,10 +56,6 @@ func runFreshInstall(ctx context.Context, lifetime *WordPressLifetime, verifyArc
 
 // InstallFreshWordPress holds the fresh-account lifetime through serving release.
 func (q *Queue) InstallFreshWordPress(ctx context.Context, jobID string, identity store.SiteLifetime, release func() error) error {
-	// shortcut: archive pinning and crash replay are not wired, remove this refusal after both are enforced.
-	if !freshWordPressAcquisitionReady() {
-		return rpcerr.Errf("unsupported", "WordPress acquisition is unavailable")
-	}
 	s, ok := q.store.(interface {
 		operationStore
 		CheckpointOperation(context.Context, string, string, string) error
@@ -56,7 +69,7 @@ func (q *Queue) InstallFreshWordPress(ctx context.Context, jobID string, identit
 		if err != nil {
 			return err
 		}
-		if op.Checkpoint != "db_applied" {
+		if op.Checkpoint != "db_applied" && op.Checkpoint != "config_published" && op.Checkpoint != "verified" {
 			return rpcerr.Errf("precondition_failed", "WordPress install requires reconciliation")
 		}
 		if !op.Identity.DownloadStarted {
@@ -77,11 +90,29 @@ func (q *Queue) InstallFreshWordPress(ctx context.Context, jobID string, identit
 		}
 		manifest := wordpress.ApprovedArtifacts()
 		archive := filepath.Join(filepath.Dir(l.plan.Dir), "cache", "core", "wordpress-"+manifest.WordPress.Version+"-"+manifest.Locale+".tar.gz")
-		if err = runFreshInstall(ctx, l, func() error { return wordpress.VerifyDownloadedArchive(archive, identity.UID) }, func() error { return q.CreateWordPressConfig(ctx, jobID, q.configCustody, l.ConfigIsolation) }, credentials.AdminPassword); err != nil {
+		archivePresent := false
+		if _, err := os.Lstat(archive); err == nil {
+			if err := wordpress.VerifyDownloadedArchive(archive, identity.UID); err != nil {
+				return err
+			}
+			archivePresent = true
+		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		return s.CheckpointOperation(ctx, jobID, "config_published", "verified")
+		artifactsReady := op.Checkpoint != "db_applied" && archivePresent
+		if !artifactsReady && op.Identity.DownloadStarted {
+			for i := range l.plan.Steps {
+				if l.plan.Steps[i].Kind == wordpress.Download {
+					l.plan.Steps[i].Args = append(l.plan.Steps[i].Args, "--force")
+				}
+			}
+		}
+		if err = runFreshInstall(ctx, l, artifactsReady, func() error { return wordpress.VerifyDownloadedArchive(archive, identity.UID) }, func() error { return q.CreateWordPressConfig(ctx, jobID, q.configCustody, l.ConfigIsolation) }, credentials.AdminPassword); err != nil {
+			return err
+		}
+		if op.Checkpoint != "verified" {
+			return s.CheckpointOperation(ctx, jobID, "config_published", "verified")
+		}
+		return nil
 	}, func(*WordPressLifetime) error { return release() })
 }
-
-func freshWordPressAcquisitionReady() bool { return false }

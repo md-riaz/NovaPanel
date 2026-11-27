@@ -132,6 +132,9 @@ func TestFreshLifetimeSQLiteActivationReplay(t *testing.T) {
 		if err := s.CheckpointOperation(worker, jid, "db_applied", "config_published"); err != nil {
 			return err
 		}
+		if _, _, _, err := l.runReviewed(worker, reviewedInstallChild{kind: wordpress.IsInstalled}); err != nil {
+			return err
+		}
 		if _, _, _, err := l.runReviewed(worker, reviewedInstallChild{kind: wordpress.InstallCore, options: runner.RunOpts{Stdin: strings.NewReader("admin-secret")}}); err != nil {
 			return err
 		}
