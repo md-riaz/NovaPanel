@@ -19,7 +19,7 @@ const (
 	ToolSignaturePath = ToolPath + ".asc"
 	ToolKeyringPath   = "/usr/lib/novapanel/wpcli/wp-cli-release.gpg"
 	ToolINIPath       = "/usr/lib/novapanel/wpcli/php.ini"
-	toolINIHash       = "85fbf24d39ff1fc334b5ad17272c624c3b1d085b8169007b15ae31d33b7139bc"
+	toolINIHash       = "4fb0a2f93e23f8b6170b5bb089d3b6d182e220106811086d16a503cd6072080a"
 	toolKeyringHash   = "fd1efb9e77bc9a2b6e207e0e731f5360d2bb0d83c8065383875ea60919c6cbf6"
 )
 
