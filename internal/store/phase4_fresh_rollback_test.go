@@ -56,4 +56,37 @@ func TestFreshWordPressRollbackIntentSurvivesRecovery(t *testing.T) {
 	if phase4Count(t, s.db.raw, `SELECT count(*) FROM site_account_provenance WHERE site_id IS NOT NULL AND uid=2000000`) != 1 {
 		t.Fatal("provenance retired before teardown")
 	}
+	if _, err = s.StartJob(ctx, j.ID, s.clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.CompleteFreshWordPressRollback(ctx, j.ID); err == nil {
+		t.Fatal("finished before teardown")
+	}
+	if err = s.MarkFreshWordPressRollbackCleaned(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.CompleteFreshWordPressRollback(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.SiteByID(ctx, r.SiteID); err == nil {
+		t.Fatal("site not removed")
+	}
+	if phase4Count(t, s.db.raw, `SELECT count(*) FROM site_account_provenance WHERE site_id IS NULL AND uid=2000000`) != 1 {
+		t.Fatal("UID history lost")
+	}
+	if phase4Count(t, s.db.raw, `SELECT count(*) FROM phase4_operations WHERE job_id='rollback-job' AND checkpoint='expired' AND reconciled=1 AND ciphertext IS NULL`) != 1 {
+		t.Fatal("journal not retired")
+	}
+	r.SiteID = "01K8WMXZF57CGNZKX1FZ38DZMC"
+	r.DomainID = "01K8WMXZF57CGNZKX1FZ38DZMD"
+	r.Input.DatabaseID = "01K8WMXZF57CGNZKX1FZ38DZME"
+	r.Input.DatabaseUserID = "01K8WMXZF57CGNZKX1FZ38DZMF"
+	site.ID = r.SiteID
+	domain.ID = r.DomainID
+	j.ID = "replacement-job"
+	j.ObjectKey = "site:" + r.SiteID
+	newOp, err := s.PrepareFreshWordPress(ctx, j, JobClaim{JobID: j.ID, ClaimHash: "hash2"}, r, site, domain, PHPLimits{}, func(WordPressReservation) ([]byte, []byte, error) { return []byte{1}, []byte{2}, nil })
+	if err != nil || newOp.Identity.WordPress.Input.UID != 2000001 {
+		t.Fatalf("name reuse: %+v %v", newOp, err)
+	}
 }

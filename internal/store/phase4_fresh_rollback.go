@@ -30,3 +30,68 @@ func (s *Store) BeginFreshWordPressRollback(ctx context.Context, jid, code strin
 		return affected(result, err)
 	})
 }
+
+const FreshWordPressRollbackCleanedStep = "wordpress_rollback_cleaned"
+
+// MarkFreshWordPressRollbackCleaned follows confirmed external teardown.
+func (s *Store) MarkFreshWordPressRollbackCleaned(ctx context.Context, jid string) error {
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		op, err := loadOperation(ctx, tx, jid)
+		if err != nil {
+			return err
+		}
+		if op.Kind != WordPressInstall || op.Identity.WordPress == nil {
+			return ErrSitePrecondition
+		}
+		w := op.Identity.WordPress
+		var n int
+		err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sites s JOIN site_account_provenance p ON p.site_id=s.id WHERE s.id=? AND s.name=? AND s.status='failed' AND s.lifetime_state='provisioning' AND p.allocating_job=? AND p.uid=? AND p.gid=?`, op.SiteID, w.Input.SiteName, jid, w.Input.UID, w.Input.GID).Scan(&n)
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return ErrSitePrecondition
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE jobs SET step=?,updated=? WHERE id=? AND state='running' AND step=?`, FreshWordPressRollbackCleanedStep, s.clock.Now(), jid, FreshWordPressRollbackStep)
+		return affected(result, err)
+	})
+}
+
+// CompleteFreshWordPressRollback finalizes only after teardown and custody cleanup.
+func (s *Store) CompleteFreshWordPressRollback(ctx context.Context, jid string) error {
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		op, err := loadOperation(ctx, tx, jid)
+		if err != nil {
+			return err
+		}
+		if op.Kind != WordPressInstall || op.Identity.WordPress == nil || op.Checkpoint == "done" || op.Checkpoint == "expired" {
+			return ErrSitePrecondition
+		}
+		w := op.Identity.WordPress
+		var n int
+		err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sites s JOIN site_account_provenance p ON p.site_id=s.id JOIN jobs j ON j.id=p.allocating_job WHERE s.id=? AND s.name=? AND s.status='failed' AND s.lifetime_state='provisioning' AND p.allocating_job=? AND p.uid=? AND p.gid=? AND j.state='running' AND j.step=?`, op.SiteID, w.Input.SiteName, jid, w.Input.UID, w.Input.GID, FreshWordPressRollbackCleanedStep).Scan(&n)
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return ErrSitePrecondition
+		}
+		now := s.clock.Now()
+		if _, err = tx.ExecContext(ctx, `DELETE FROM job_claims WHERE job_id=?`, jid); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `DELETE FROM settings WHERE key=?`, phpLimitsKey(op.SiteID)); err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE phase4_operations SET checkpoint='expired',reconciled=1,nonce=NULL,ciphertext=NULL,updated=? WHERE job_id=? AND checkpoint NOT IN ('done','expired')`, now, jid)
+		if err = affected(result, err); err != nil {
+			return err
+		}
+		result, err = tx.ExecContext(ctx, `DELETE FROM sites WHERE id=? AND status='failed' AND lifetime_state='provisioning'`, op.SiteID)
+		if err = affected(result, err); err != nil {
+			return err
+		}
+		result, err = tx.ExecContext(ctx, `UPDATE jobs SET state='failed',error='job execution failed',updated=?,finished=? WHERE id=? AND state='running' AND step=?`, now, now, jid, FreshWordPressRollbackCleanedStep)
+		return affected(result, err)
+	})
+}
