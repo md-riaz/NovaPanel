@@ -56,6 +56,13 @@ func TestPrepareFreshWordPress(t *testing.T) {
 	if err = s.CheckpointOperation(ctx, j.ID, "prepared", "db_applied"); err != nil {
 		t.Fatal(err)
 	}
+	// A fresh job remains valid even if its first download starts after the journal TTL.
+	if err = s.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE phase4_operations SET expires=1 WHERE job_id=?`, j.ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err = s.MarkWordPressDownloadStarted(ctx, j.ID); err != nil {
 		t.Fatal(err)
 	}
