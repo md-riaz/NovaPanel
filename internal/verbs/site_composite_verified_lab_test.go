@@ -5,6 +5,7 @@ package verbs
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -95,6 +96,15 @@ func TestCompositeVerifiedRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			beforeEffects := effects
+			if err = st.Tx(ctx, func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `UPDATE phase4_operations SET expires=1 WHERE job_id=?`, result.Job.ID)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = st.ExpireOperations(ctx); err != nil {
+				t.Fatal(err)
+			}
 			if err = st.RecoverJobs(ctx, time.Now().UnixMilli()); err != nil {
 				t.Fatal(err)
 			}
