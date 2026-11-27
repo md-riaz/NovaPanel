@@ -37,8 +37,8 @@ func (r *compositeRetryRunner) Run(ctx context.Context, program string, args []s
 }
 
 func TestCompositeBracketCrashBeforeChildCommit(t *testing.T) {
-	for _, stop := range []int{0, 1, 2, 3, 4} {
-		t.Run([]string{"maintenance_effect", "maintenance_committed", "php_committed", "domain_committed", "restore_committed"}[stop], func(t *testing.T) { testCompositeBracketCrash(t, stop) })
+	for _, stop := range []int{0, 1, 2, 3, 4, 5} {
+		t.Run([]string{"maintenance_effect", "maintenance_committed", "php_committed", "domain_committed", "restore_committed", "productive_failure"}[stop], func(t *testing.T) { testCompositeBracketCrash(t, stop) })
 	}
 }
 
@@ -115,7 +115,12 @@ func testCompositeBracketCrash(t *testing.T, stop int) {
 			t.Fatal(err)
 		}
 	}
-	if stop >= 2 {
+	if stop == 5 {
+		if err = st.CommitOperationChild(ctx, result.Job.ID, 1, "prepared", "failed", "precondition_failed"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if stop >= 2 && stop < 5 {
 		if err = st.CheckpointOperationChild(ctx, result.Job.ID, 1, "prepared", "config_published"); err != nil {
 			t.Fatal(err)
 		}
@@ -126,12 +131,12 @@ func testCompositeBracketCrash(t *testing.T, stop int) {
 			t.Fatal(err)
 		}
 	}
-	if stop >= 3 {
+	if stop >= 3 && stop < 5 {
 		if err = st.CommitOperationChild(ctx, result.Job.ID, 2, "verified", "committed", ""); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if stop >= 4 {
+	if stop == 4 {
 		maintenance = false
 		if err = st.UpdateSite(ctx, sid, store.SitePatch{Maintenance: &maintenance}); err != nil {
 			t.Fatal(err)
@@ -148,7 +153,11 @@ func testCompositeBracketCrash(t *testing.T, stop int) {
 		t.Fatal(err)
 	}
 	j, err := st.GetJob(ctx, result.Job.ID)
-	if err != nil || j.State != "done" {
+	wantState := "done"
+	if stop == 5 {
+		wantState = "failed"
+	}
+	if err != nil || j.State != wantState {
 		t.Fatalf("job: %+v %v", j, err)
 	}
 	site, err := st.SiteByID(ctx, sid)
@@ -160,7 +169,13 @@ func testCompositeBracketCrash(t *testing.T, stop int) {
 		t.Fatalf("children: %+v %v", children, err)
 	}
 	for i, child := range children {
-		if child.Status != "committed" {
+		wantStatus, wantError := "committed", ""
+		if stop == 5 && i == 1 {
+			wantStatus, wantError = "failed", "precondition_failed"
+		} else if stop == 5 && i == 2 {
+			wantStatus, wantError = "failed", "not_attempted"
+		}
+		if child.Status != wantStatus || child.TypedError != wantError {
 			t.Fatalf("child: %+v", child)
 		}
 		if before[i].Status == "committed" && before[i].JournalRef != child.JournalRef {
