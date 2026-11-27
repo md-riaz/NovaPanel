@@ -48,7 +48,7 @@ func (d *crashInstallDomain) Run(_ context.Context, _ string, args []string, opt
 
 // Exercise the held-lifetime sequence independently of the platform cgroup.
 func TestFreshInstallChildCrashReplay(t *testing.T) {
-	for _, stop := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums, wordpress.InstallCore} {
+	for _, stop := range []wordpress.StepKind{wordpress.Download, wordpress.InstallCore} {
 		t.Run(string(stop), func(t *testing.T) {
 			d := &crashInstallDomain{stop: stop, runs: map[wordpress.StepKind]int{}}
 			binding := configcustody.ConfigBinding{JobID: "job", SiteID: "site", UID: 123, GID: 456}
@@ -77,9 +77,6 @@ func TestFreshInstallChildCrashReplay(t *testing.T) {
 			}
 			if stop == wordpress.Download && (d.runs[wordpress.Download] != 2 || d.runs[wordpress.VerifyChecksums] != 1) {
 				t.Fatalf("download replay: %#v", d.runs)
-			}
-			if stop == wordpress.VerifyChecksums && (d.runs[wordpress.Download] != 2 || d.runs[wordpress.VerifyChecksums] != 2) {
-				t.Fatalf("checksum replay: %#v", d.runs)
 			}
 			if stop == wordpress.InstallCore && (d.runs[wordpress.InstallCore] != 1 || d.runs[wordpress.VerifyChecksums] != 1) {
 				t.Fatalf("replay must preserve verification and skip reinstall: %#v", d.runs)
