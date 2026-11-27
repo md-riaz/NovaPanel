@@ -223,9 +223,6 @@ func siteUpdate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	if v.PHPVersion != nil && v.PrimaryDomainID == nil && v.ForceHTTPS == nil && v.HSTSMaxAge == nil && v.Maintenance == nil {
 		return phpSet(ctx, a, &phpSetArgs{request: php.SetRequest{SiteID: v.SiteID, Version: *v.PHPVersion}})
 	}
-	if v.PHPVersion != nil {
-		return nil, rpc.Errf("unsupported", "Composite PHP updates unavailable")
-	}
 	if _, e := (siteMutationState{a}).mutableSite(ctx, v.SiteID); e != nil {
 		return nil, e
 	}
@@ -238,6 +235,19 @@ func siteUpdate(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	if e := (siteMutationState{a}).primaryTarget(ctx, v.SiteID, v.PrimaryDomainID); e != nil {
 		return nil, e
 	}
+	fields := 0
+	for _, present := range []bool{v.PrimaryDomainID != nil, v.PHPVersion != nil, v.ForceHTTPS != nil, v.HSTSMaxAge != nil, v.Maintenance != nil} {
+		if present {
+			fields++
+		}
+	}
+	if fields > 1 {
+		if v.PHPVersion != nil && !(phpSetRuntime{a}).available() {
+			return nil, rpc.Errf("unsupported", "PHP execution unavailable")
+		}
+		request := &store.CompositeSiteUpdate{SiteID: v.SiteID, PrimaryDomainID: v.PrimaryDomainID, PHPVersion: v.PHPVersion, ForceHTTPS: v.ForceHTTPS, HSTSMaxAge: v.HSTSMaxAge, Maintenance: v.Maintenance}
+		return a.Jobs.EnqueueOperation(ctx, store.OperationRequest{Kind: store.SiteUpdate, SiteID: v.SiteID, SiteUpdate: request}, nil)
+	}
 	return a.Jobs.Enqueue(ctx, "site.update", v, "site:"+v.SiteID)
 }
 func siteUpdateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
@@ -246,6 +256,13 @@ func siteUpdateExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 		return e
 	}
 	if e := v.Validate(); e != nil {
+		return e
+	}
+	op, e := a.Store.LoadOperation(ctx, j.ID)
+	if e == nil && op.Kind == store.SiteUpdate {
+		return siteCompositeExec(ctx, a, j, v)
+	}
+	if e != nil && !errors.Is(e, sql.ErrNoRows) {
 		return e
 	}
 	return siteUpdateEffect(ctx, a, j, v)

@@ -50,9 +50,10 @@ build it.
 **Ruling — `site.create` types and `php_version`.** The Phase-3 `site.create type=php|wordpress`
 `unsupported` refusal is **lifted for `php` in Step 2** and **for `wordpress` in Step 3**. `php_version` on
 `site.create`/`site.update` is **sugar** that delegates to the `php.set` computed-cap path (one code path;
-no separate version/limit logic). For `site.update`, `php_version` must currently be supplied alone;
-combining it with other mutable fields returns `unsupported`. Use separate updates until composite
-recovery is implemented.
+no separate version/limit logic). For `site.update`, `php_version` alone delegates to `php.set`.
+Every multi-field update runs ordered children under one parent job. A PHP plus domain/TLS update
+uses a maintenance bracket; other combinations have no auto-bracket. The terminal maintenance
+step applies the caller's explicit value on success or failure.
 
 **One PR per step** (steps 1 and 2 may each ship on their own), each small and independently
 mergeable — not one 285-file mega-draft. Drive each with `docs/spec/PHASE-DRIVER-PROMPT.md`

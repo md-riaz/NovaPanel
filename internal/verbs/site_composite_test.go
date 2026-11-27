@@ -4,11 +4,13 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"novapanel/internal/agent"
 	"novapanel/internal/audit"
+	runnerexec "novapanel/internal/exec"
 	"novapanel/internal/id"
 	"novapanel/internal/jobs"
 	"novapanel/internal/php"
@@ -18,12 +20,29 @@ import (
 
 func TestCompositeExecutorCommitsParent(t *testing.T) {
 	for _, replay := range []bool{false, true} {
-		t.Run(map[bool]string{false: "fresh", true: "replay"}[replay], func(t *testing.T) { testCompositeExecutor(t, replay, false) })
+		t.Run(map[bool]string{false: "fresh", true: "replay"}[replay], func(t *testing.T) { testCompositeExecutor(t, replay, false, false) })
 	}
-	t.Run("productive_failure", func(t *testing.T) { testCompositeExecutor(t, false, true) })
+	t.Run("productive_failure", func(t *testing.T) { testCompositeExecutor(t, false, true, false) })
+	t.Run("failure_replay", func(t *testing.T) { testCompositeExecutor(t, true, true, false) })
+	t.Run("restore_retry", func(t *testing.T) { testCompositeExecutor(t, false, false, true) })
+}
+
+type compositeRetryRunner struct{ calls atomic.Int32 }
+
+func (r *compositeRetryRunner) Run(ctx context.Context, program string, args []string, opts runnerexec.RunOpts) ([]byte, []byte, int, error) {
+	if program == "/usr/sbin/nginx" && r.calls.Add(1) == 1 {
+		return nil, nil, 1, nil
+	}
+	return nil, nil, 0, nil
 }
 
 func TestCompositeBracketCrashBeforeChildCommit(t *testing.T) {
+	for _, stop := range []int{0, 1, 2, 3, 4} {
+		t.Run([]string{"maintenance_effect", "maintenance_committed", "php_committed", "domain_committed", "restore_committed"}[stop], func(t *testing.T) { testCompositeBracketCrash(t, stop) })
+	}
+}
+
+func testCompositeBracketCrash(t *testing.T, stop int) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st, err := store.Open(filepath.Join(root, "panel.db"))
@@ -68,16 +87,19 @@ func TestCompositeBracketCrashBeforeChildCommit(t *testing.T) {
 	a.PHP = &php.PoolApplier{Dir: pool, Runner: runner, Probe: func(context.Context) error { return nil }}
 	a.Nginx = &nginx.Applier{Root: ngroot, Runner: runner, Probe: func(context.Context, nginx.Desired) error { return nil }}
 	a.Jobs = jobs.NewQueue(st, nil, log)
-	v := siteUpdateArgs{SiteID: sid, PHPVersion: &version, PrimaryDomainID: &did}
-	a.Jobs.SetRunner(func(ctx context.Context, j *jobs.Job) error { return siteCompositeExec(ctx, a, j, v) })
+	a.Jobs.SetRunner(func(ctx context.Context, j *jobs.Job) error { return siteUpdateExec(ctx, a, j) })
 	if err = a.Jobs.PrepareOperations(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if err = a.Jobs.PrepareStartup(ctx); err != nil {
+		t.Fatal(err)
+	}
 	owner := jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: "owner", Role: "owner"})
-	result, err := a.Jobs.EnqueueOperation(owner, store.OperationRequest{Kind: store.SiteUpdate, SiteID: sid, SiteUpdate: &store.CompositeSiteUpdate{SiteID: sid, PHPVersion: &version, PrimaryDomainID: &did}}, nil)
+	admitted, err := siteUpdate(owner, a, &siteUpdateArgs{SiteID: sid, PHPVersion: &version, PrimaryDomainID: &did})
 	if err != nil {
 		t.Fatal(err)
 	}
+	result := admitted.(jobs.EnqueueResult)
 	if _, err = st.StartJob(ctx, result.Job.ID, time.Now().UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
@@ -86,6 +108,40 @@ func TestCompositeBracketCrashBeforeChildCommit(t *testing.T) {
 	}
 	maintenance := true
 	if err = st.UpdateSite(ctx, sid, store.SitePatch{Maintenance: &maintenance}); err != nil {
+		t.Fatal(err)
+	}
+	if stop >= 1 {
+		if err = st.CommitOperationChild(ctx, result.Job.ID, 0, "verified", "committed", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if stop >= 2 {
+		if err = st.CheckpointOperationChild(ctx, result.Job.ID, 1, "prepared", "config_published"); err != nil {
+			t.Fatal(err)
+		}
+		if err = st.CheckpointOperationChild(ctx, result.Job.ID, 1, "config_published", "verified"); err != nil {
+			t.Fatal(err)
+		}
+		if err = st.CommitPHPChild(ctx, result.Job.ID, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if stop >= 3 {
+		if err = st.CommitOperationChild(ctx, result.Job.ID, 2, "verified", "committed", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if stop >= 4 {
+		maintenance = false
+		if err = st.UpdateSite(ctx, sid, store.SitePatch{Maintenance: &maintenance}); err != nil {
+			t.Fatal(err)
+		}
+		if err = st.CommitOperationChild(ctx, result.Job.ID, 3, "verified", "committed", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, err := st.OperationChildren(ctx, result.Job.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err = a.Jobs.PrepareOperations(ctx); err != nil {
@@ -103,14 +159,17 @@ func TestCompositeBracketCrashBeforeChildCommit(t *testing.T) {
 	if err != nil || len(children) != 4 {
 		t.Fatalf("children: %+v %v", children, err)
 	}
-	for _, child := range children {
+	for i, child := range children {
 		if child.Status != "committed" {
 			t.Fatalf("child: %+v", child)
+		}
+		if before[i].Status == "committed" && before[i].JournalRef != child.JournalRef {
+			t.Fatalf("child %d reran", i)
 		}
 	}
 }
 
-func testCompositeExecutor(t *testing.T, replay, failure bool) {
+func testCompositeExecutor(t *testing.T, replay, failure, retry bool) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st, err := store.Open(filepath.Join(root, "panel.db"))
@@ -140,17 +199,21 @@ func testCompositeExecutor(t *testing.T, replay, failure bool) {
 	a := agent.New()
 	a.Store = st
 	a.Nginx = &nginx.Applier{Root: ngroot, Runner: poolReplayRunner{}, Probe: func(context.Context, nginx.Desired) error { return nil }}
+	if retry {
+		a.Nginx.Runner = &compositeRetryRunner{}
+	}
 	a.Jobs = jobs.NewQueue(st, nil, log)
 	maintenance := true
-	v := siteUpdateArgs{SiteID: sid, PrimaryDomainID: &did, Maintenance: &maintenance}
 	request := &store.CompositeSiteUpdate{SiteID: sid, PrimaryDomainID: &did, Maintenance: &maintenance}
 	if failure {
 		force := true
-		v.PrimaryDomainID, v.ForceHTTPS = nil, &force
 		request.PrimaryDomainID, request.ForceHTTPS = nil, &force
 	}
-	a.Jobs.SetRunner(func(ctx context.Context, j *jobs.Job) error { return siteCompositeExec(ctx, a, j, v) })
+	a.Jobs.SetRunner(func(ctx context.Context, j *jobs.Job) error { return siteUpdateExec(ctx, a, j) })
 	if err = a.Jobs.PrepareOperations(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = a.Jobs.PrepareStartup(ctx); err != nil {
 		t.Fatal(err)
 	}
 	owner := jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: "owner", Role: "owner"})
@@ -163,7 +226,11 @@ func testCompositeExecutor(t *testing.T, replay, failure bool) {
 		if _, err = st.StartJob(ctx, result.Job.ID, time.Now().UnixMilli()); err != nil {
 			t.Fatal(err)
 		}
-		if err = st.CommitOperationChild(ctx, result.Job.ID, 0, "verified", "committed", ""); err != nil {
+		status, code := "committed", ""
+		if failure {
+			status, code = "failed", "precondition_failed"
+		}
+		if err = st.CommitOperationChild(ctx, result.Job.ID, 0, "verified", status, code); err != nil {
 			t.Fatal(err)
 		}
 		children, err := st.OperationChildren(ctx, result.Job.ID)
@@ -183,6 +250,9 @@ func testCompositeExecutor(t *testing.T, replay, failure bool) {
 	for time.Now().Before(deadline) {
 		j, err := st.GetJob(ctx, result.Job.ID)
 		if err == nil && (j.State == "done" || failure && j.State == "failed") {
+			if retry && j.Attempts < 2 {
+				t.Fatalf("restore was not retried: %+v", j)
+			}
 			site, err := st.SiteByID(ctx, sid)
 			if err != nil || !site.Maintenance {
 				t.Fatalf("maintenance: %+v %v", site, err)
@@ -205,5 +275,7 @@ func testCompositeExecutor(t *testing.T, replay, failure bool) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("composite did not finish")
+	j, err := st.GetJob(ctx, result.Job.ID)
+	children, childErr := st.OperationChildren(ctx, result.Job.ID)
+	t.Fatalf("composite did not finish: job=%+v err=%v children=%+v childErr=%v", j, err, children, childErr)
 }
