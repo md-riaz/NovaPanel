@@ -371,8 +371,10 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 				}); ok {
 					identity, e := fresh.LoadSiteLifetime(ctx, op.SiteID)
 					if e == nil && identity.AllocatingJob == j.ID {
+						previous := ""
 						if j.Step != store.FreshWordPressRollbackIntentStep && j.Step != store.FreshWordPressRollbackStep && j.Step != store.FreshWordPressRollbackCleanedStep {
-							previous, preflightErr := fresh.BeginFreshSitePreflight(ctx, j.ID, identity)
+							var preflightErr error
+							previous, preflightErr = fresh.BeginFreshSitePreflight(ctx, j.ID, identity)
 							if preflightErr != nil {
 								return errors.Join(ErrRetry, preflightErr)
 							}
@@ -380,7 +382,7 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 								attemptCtx = context.WithValue(attemptCtx, freshResumeCheckpointKey{}, previous)
 							}
 						}
-						freshInstall = fresh.CheckFreshSiteLifetime(ctx, identity) == nil
+						freshInstall = previous != "" || fresh.CheckFreshSiteLifetime(ctx, identity) == nil
 					}
 				}
 			}
