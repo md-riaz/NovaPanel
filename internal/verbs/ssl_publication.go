@@ -79,6 +79,25 @@ func (s sslPublication) publication(ctx context.Context, siteID string, j *jobs.
 			return err
 		}
 		if len(raw) > 0 {
+			op, loadErr := a.Store.LoadOperation(ctx, j.ID)
+			if loadErr != nil && !errors.Is(loadErr, sql.ErrNoRows) {
+				return loadErr
+			}
+			if loadErr == nil && op.Kind == store.SiteUpdate {
+				children, e := a.Store.OperationChildren(ctx, j.ID)
+				if e != nil {
+					return e
+				}
+				matched := false
+				for _, child := range children {
+					if child.Kind == "domain_tls" && bytes.Equal(child.Identity.TLS, raw) {
+						matched = true
+					}
+				}
+				if !matched {
+					return rpc.Errf("agent_error", "TLS recovery binding changed")
+				}
+			}
 			var intent tlsIntent
 			dec := json.NewDecoder(bytes.NewReader(raw))
 			dec.DisallowUnknownFields()
