@@ -130,6 +130,32 @@ func EnsureReservedUser(ctx context.Context, r runner.Runner, root, name, id str
 		}
 		return out, true, nil
 	}
+	web, found, err := get("passwd", "www-data")
+	if err != nil {
+		return err
+	}
+	webFields := strings.Split(strings.TrimSpace(string(web)), ":")
+	if !found || len(webFields) != 7 || webFields[0] != "www-data" || webFields[2] == numeric || webFields[3] == numeric {
+		return rpcerr.Errf("precondition_failed", "web identity unavailable or colliding")
+	}
+	for _, value := range webFields[2:4] {
+		n, e := strconv.ParseUint(value, 10, 32)
+		if e != nil || n == 0 || n == uint64(uid) {
+			return rpcerr.Errf("precondition_failed", "web identity unavailable or colliding")
+		}
+	}
+	webGroup, found, err := get("group", "www-data")
+	if err != nil {
+		return err
+	}
+	groupFields := strings.Split(strings.TrimSpace(string(webGroup)), ":")
+	if !found || len(groupFields) != 4 || groupFields[0] != "www-data" || groupFields[2] == numeric {
+		return rpcerr.Errf("precondition_failed", "web group unavailable or colliding")
+	}
+	webGID, err := strconv.ParseUint(groupFields[2], 10, 32)
+	if err != nil || webGID == 0 || webGID == uint64(uid) {
+		return rpcerr.Errf("precondition_failed", "web group unavailable or colliding")
+	}
 	if _, exists, e := get("passwd", numeric); e != nil {
 		return e
 	} else if exists && account == nil {

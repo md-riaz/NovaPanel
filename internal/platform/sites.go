@@ -40,6 +40,15 @@ func ensureDirectory(root *os.Root, path string) (*os.File, error) {
 
 // EnsureSite only touches validated directories through held, no-follow descriptors.
 func EnsureSite(ctx context.Context, r runner.Runner, sites, _ /* ACME is owned by ssl */, logs, name, siteID string) error {
+	return ensureSite(ctx, r, sites, logs, name, siteID, nil)
+}
+
+// EnsureFreshSite creates only the durable reserved identity after path checks.
+func EnsureFreshSite(ctx context.Context, r runner.Runner, sites, logs, name, siteID string, uid uint32) error {
+	return ensureSite(ctx, r, sites, logs, name, siteID, &uid)
+}
+
+func ensureSite(ctx context.Context, r runner.Runner, sites, logs, name, siteID string, reservedUID *uint32) error {
 	if e := (&validate.V{}).SiteName(name); e != nil {
 		return e
 	}
@@ -103,7 +112,13 @@ func EnsureSite(ctx context.Context, r runner.Runner, sites, _ /* ACME is owned 
 			}
 		}
 	}
-	if e := php.EnsureUser(ctx, r, sites, name, siteID); e != nil {
+	var accountErr error
+	if reservedUID != nil {
+		accountErr = php.EnsureReservedUser(ctx, r, sites, name, siteID, *reservedUID)
+	} else {
+		accountErr = php.EnsureUser(ctx, r, sites, name, siteID)
+	}
+	if e := accountErr; e != nil {
 		return e
 	}
 	home := filepath.Join(sites, name)

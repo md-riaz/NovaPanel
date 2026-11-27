@@ -19,15 +19,25 @@ type fake struct {
 }
 
 type reservedFake struct {
-	group    string
-	uidTaken bool
-	calls    []string
+	group        string
+	uidTaken     bool
+	webCollision bool
+	calls        []string
 }
 
 func (f *reservedFake) Run(_ context.Context, p string, a []string, _ runner.RunOpts) ([]byte, []byte, int, error) {
 	f.calls = append(f.calls, p+" "+strings.Join(a, " "))
 	if p != "/usr/bin/getent" {
 		return nil, nil, 0, nil
+	}
+	if a[0] == "passwd" && a[1] == "www-data" {
+		if f.webCollision {
+			return []byte("www-data:x:33:2000000::/var/www:/usr/sbin/nologin"), nil, 0, nil
+		}
+		return []byte("www-data:x:33:33::/var/www:/usr/sbin/nologin"), nil, 0, nil
+	}
+	if a[0] == "group" && a[1] == "www-data" {
+		return []byte("www-data:x:33:"), nil, 0, nil
 	}
 	if a[0] == "passwd" && a[1] == "2000000" && f.uidTaken {
 		return []byte("foreign:x:2000000:2000000::/:/bin/false"), nil, 0, nil
@@ -42,6 +52,10 @@ func (f *reservedFake) Run(_ context.Context, p string, a []string, _ runner.Run
 }
 
 func TestEnsureReservedUser(t *testing.T) {
+	collision := &reservedFake{webCollision: true}
+	if err := EnsureReservedUser(context.Background(), collision, "/srv/sites", "demo", testID, 2000000); err == nil || strings.Contains(strings.Join(collision.calls, "\n"), "groupadd") {
+		t.Fatal("web identity collision not rejected before creation")
+	}
 	for _, tc := range []struct {
 		name, group string
 		taken       bool

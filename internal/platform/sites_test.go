@@ -19,6 +19,28 @@ type accountRunner struct {
 	createHome                 bool
 }
 
+func TestEnsureFreshSiteRejectsUnownedContentBeforeAccount(t *testing.T) {
+	root := t.TempDir()
+	sites, logs := filepath.Join(root, "sites"), filepath.Join(root, "logs")
+	for _, dir := range []string{sites, logs, filepath.Join(sites, "demo")} {
+		if err := os.Mkdir(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(sites, "demo", "unowned"), []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r := &accountRunner{home: filepath.Join(sites, "demo")}
+	if err := EnsureFreshSite(context.Background(), r, sites, logs, "demo", siteID, 2000000); err == nil {
+		t.Fatal("accepted unowned content")
+	}
+	for _, call := range r.calls {
+		if call == "/usr/sbin/useradd" || call == "/usr/sbin/groupadd" {
+			t.Fatalf("created account: %v", r.calls)
+		}
+	}
+}
+
 func (r *accountRunner) Run(_ context.Context, p string, args []string, _ runner.RunOpts) ([]byte, []byte, int, error) {
 	r.calls = append(r.calls, p)
 	switch p {
