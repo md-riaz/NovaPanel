@@ -46,22 +46,31 @@ func (s *Server) prepareTLSRecovery(ctx context.Context) (*jobs.Job, error) {
 		}
 		return nil, nil
 	}
-	_, changed, err := s.Agent.Store.CheckCompositeTLSIntent(ctx, raw)
+	matched, changed, err := s.Agent.Store.CheckCompositeTLSIntent(ctx, raw)
 	if err != nil {
 		return nil, err
 	}
 	if changed {
+		if !matched {
+			return nil, Errf("precondition_failed", "Orphan TLS recovery intent")
+		}
 		return nil, nil
 	}
 	var binding struct {
 		JobID string `json:"job_id"`
 	}
 	if json.Unmarshal(raw, &binding) != nil || !id.Valid(binding.JobID) {
-		return nil, s.Agent.Store.RecordOrphanTLSIntent(ctx, raw)
+		if err = s.Agent.Store.RecordOrphanTLSIntent(ctx, raw); err != nil {
+			return nil, err
+		}
+		return nil, Errf("precondition_failed", "Orphan TLS recovery intent")
 	}
 	j, err := s.Agent.Store.GetJob(ctx, binding.JobID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, s.Agent.Store.RecordOrphanTLSIntent(ctx, raw)
+		if err = s.Agent.Store.RecordOrphanTLSIntent(ctx, raw); err != nil {
+			return nil, err
+		}
+		return nil, Errf("precondition_failed", "Orphan TLS recovery intent")
 	}
 	if err != nil {
 		return nil, err

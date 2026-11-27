@@ -543,6 +543,10 @@ func TestPrimaryTLSStartupRejectsChangedBinding(t *testing.T) {
 				if err = f.a.Jobs.PrepareStartup(ctx); err != nil && !errors.Is(err, jobs.ErrRecoveryBlocked) {
 					t.Fatal(err)
 				}
+				children, err := f.st.OperationChildren(ctx, f.job)
+				if err != nil || len(children) != 2 || children[0].Status != "pending" || children[1].Status != "pending" {
+					t.Fatalf("orphan changed children: %+v %v", children, err)
+				}
 				job, err := f.st.GetJob(ctx, f.job)
 				if err != nil || job.Code == "agent_error" || calls != 0 {
 					t.Fatalf("orphan affected composite: %+v calls=%d err=%v", job, calls, err)

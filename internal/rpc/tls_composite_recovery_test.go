@@ -57,7 +57,7 @@ func TestTLSRecoveryDefersComposite(t *testing.T) {
 	if err = s.BeginTLSIntent(ctx, orphan); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := server.prepareTLSRecovery(ctx); err != nil || got != nil {
+	if got, err := server.prepareTLSRecovery(ctx); err == nil || got != nil {
 		t.Fatalf("orphan intent dispatched: %+v %v", got, err)
 	}
 	job, err := s.GetJob(ctx, jid)
@@ -113,7 +113,7 @@ func TestTLSRecoveryRecordsOrphanWithoutOwner(t *testing.T) {
 				t.Fatal(err)
 			}
 			server := &Server{Agent: &agent.Agent{Store: s}}
-			if job, err := server.prepareTLSRecovery(ctx); err != nil || job != nil {
+			if job, err := server.prepareTLSRecovery(ctx); err == nil || job != nil {
 				t.Fatalf("orphan dispatched: %+v %v", job, err)
 			}
 			anomaly, err := s.Setting(ctx, "tls:publication:unreconciled:v1")
