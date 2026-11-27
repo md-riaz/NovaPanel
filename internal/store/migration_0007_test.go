@@ -75,7 +75,7 @@ func TestMigration0009RealOpen(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer s.Close()
-			if phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations") != 12 {
+			if phase4Count(t, s.db.raw, "SELECT count(*) FROM schema_migrations") != 13 {
 				t.Fatal("migration count")
 			}
 			var h string

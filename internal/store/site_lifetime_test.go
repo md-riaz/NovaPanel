@@ -31,6 +31,41 @@ func TestReserveSiteAccountTx(t *testing.T) {
 	phase4Refuse(t, s.db.raw, `DELETE FROM site_account_provenance WHERE site_id='first'`, "retained provenance")
 }
 
+func TestDeleteRetiresSiteAccount(t *testing.T) {
+	for _, kind := range []string{"php", "wordpress"} {
+		t.Run(kind, func(t *testing.T) {
+			s, err := Open(filepath.Join(t.TempDir(), "state.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			phase4Job(t, s.db.raw, "allocation", "queued")
+			phase4Exec(t, s.db.raw, `INSERT INTO sites(id,name,type,docroot,created,updated) VALUES('site','example',?,'/site',1,1)`, kind)
+			phase4Exec(t, s.db.raw, `INSERT INTO site_account_provenance(site_id,account_name,uid,gid,allocating_job,evidence) VALUES('site','example',2000000,2000000,'allocation','owned')`)
+			phase4Refuse(t, s.db.raw, `UPDATE site_account_provenance SET site_id=NULL WHERE site_id='site'`, "immutable provenance")
+			err = s.Tx(context.Background(), func(tx *sql.Tx) error { return completeSiteDelete(context.Background(), tx, Operation{SiteID: "site"}) })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if phase4Count(t, s.db.raw, `SELECT count(*) FROM site_account_provenance WHERE site_id IS NULL AND uid=2000000 AND gid=2000000`) != 1 {
+				t.Fatal("provenance not retained")
+			}
+			phase4Refuse(t, s.db.raw, `DELETE FROM site_account_provenance WHERE uid=2000000`, "retained provenance")
+			phase4Job(t, s.db.raw, "allocation2", "queued")
+			phase4Exec(t, s.db.raw, `INSERT INTO sites(id,name,type,docroot,created,updated) VALUES('site2','example2','wordpress','/site2',1,1)`)
+			var uid uint32
+			err = s.Tx(context.Background(), func(tx *sql.Tx) error {
+				var e error
+				uid, e = s.ReserveSiteAccountTx(context.Background(), tx, "site2", "example2", "allocation2")
+				return e
+			})
+			if err != nil || uid != 2000001 {
+				t.Fatalf("retired UID reused: %d, %v", uid, err)
+			}
+		})
+	}
+}
+
 func TestSiteLifetimeDisposition(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {

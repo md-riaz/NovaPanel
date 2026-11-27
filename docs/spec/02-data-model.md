@@ -326,7 +326,7 @@ disk under `tls_dir/<fqdn>/` (versioned dir + symlink swap, B-D9), not in the DB
 
 ## Phase 4 databases, PHP limits and bounded recovery
 
-The shipped migration map above assigns databases to `0006_databases`, session expiry indexes to `0007_session_expiry_indexes`, Phase 4 bindings and operations to `0008_phase4`, and PHP operation kinds and account provenance to `0009_php_first_create`. Shipped migrations remain unchanged.
+The shipped migration map above assigns databases to `0006_databases`, session expiry indexes to `0007_session_expiry_indexes`, Phase 4 bindings and operations to `0008_phase4`, and PHP operation kinds and account provenance to `0009_php_first_create`. A later migration detaches retained account provenance on site deletion: `site_id` becomes nullable with `ON DELETE SET NULL`, while all other identity fields remain immutable and provenance rows cannot be deleted. Retired rows remain in the UID allocation history. Shipped migrations remain unchanged.
 
 ```sql
 CREATE TABLE databases (
