@@ -70,6 +70,16 @@ func TestPrepareFreshWordPress(t *testing.T) {
 	if err != nil || !op.Identity.DownloadStarted {
 		t.Fatalf("marker missing after reload: %v", err)
 	}
+	identity, err := s.LoadSiteLifetime(ctx, r.SiteID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ActivateSiteLifetime(ctx, identity); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.MarkWordPressDownloadStarted(ctx, j.ID); !errors.Is(err, ErrSitePrecondition) {
+		t.Fatalf("accepted served lifetime: %v", err)
+	}
 }
 
 func TestWordPressReservationBeforeResourceRows(t *testing.T) {
