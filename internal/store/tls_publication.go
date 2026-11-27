@@ -22,6 +22,26 @@ func (s *Store) BeginTLSIntent(ctx context.Context, b json.RawMessage) error {
 	_, err := s.db.ExecContext(ctx, "INSERT INTO settings(key,value_json) VALUES(?,?)", tlsIntentKey, string(b))
 	return err
 }
+
+// BeginCompositeTLSIntent binds the publication intent to its durable child in the same transaction.
+func (s *Store) BeginCompositeTLSIntent(ctx context.Context, jobID string, b json.RawMessage) error {
+	if !json.Valid(b) {
+		return ErrSiteInvalid
+	}
+	identity, err := json.Marshal(OperationChildIdentity{TLS: b})
+	if err != nil {
+		return err
+	}
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		r, err := tx.ExecContext(ctx, `UPDATE phase4_operation_children SET identities_json=?,updated=? WHERE job_id=? AND child_kind='domain_tls' AND checkpoint='prepared' AND status='pending' AND EXISTS(SELECT 1 FROM phase4_operations o JOIN jobs j ON j.id=o.job_id WHERE o.job_id=? AND o.kind='site_update' AND o.checkpoint='prepared' AND j.state='running')`, string(identity), s.clock.Now(), jobID, jobID)
+		if err = affected(r, err); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, "INSERT INTO settings(key,value_json) VALUES(?,?)", tlsIntentKey, string(b))
+		return err
+	})
+}
+
 func (s *Store) ClearTLSIntent(ctx context.Context, b json.RawMessage) error {
 	r, err := s.db.ExecContext(ctx, "DELETE FROM settings WHERE key=? AND value_json=?", tlsIntentKey, string(b))
 	return affected(r, err)

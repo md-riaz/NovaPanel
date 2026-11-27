@@ -12,9 +12,10 @@ import (
 	php "novapanel/internal/render/php"
 )
 
-// OperationChildIdentity contains only the durable, nonsecret PHP snapshot.
+// OperationChildIdentity contains durable, nonsecret effect snapshots.
 type OperationChildIdentity struct {
 	PHP *PHPOperationIdentity `json:",omitempty"`
+	TLS json.RawMessage       `json:",omitempty"`
 }
 
 type OperationChild struct {
@@ -27,7 +28,10 @@ type OperationChild struct {
 
 func validChildIdentity(kind string, identity OperationChildIdentity) bool {
 	if kind != "php_change" {
-		return identity.PHP == nil
+		return identity.PHP == nil && (kind == "domain_tls" || len(identity.TLS) == 0) && (len(identity.TLS) == 0 || json.Valid(identity.TLS))
+	}
+	if len(identity.TLS) != 0 {
+		return false
 	}
 	p := identity.PHP
 	if p == nil || p.OriginalVersion != "8.3" || p.DesiredVersion != "8.3" || p.OriginalCap < 2 || p.OriginalCap > 32 || p.DesiredCap < 2 || p.DesiredCap > 32 || p.FailureEventID != "" {

@@ -3,6 +3,7 @@ package verbs
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -195,7 +196,15 @@ func (s sslPublication) publication(ctx context.Context, siteID string, j *jobs.
 			if err != nil {
 				return err
 			}
-			if err = a.Store.BeginTLSIntent(ctx, raw); err != nil {
+			op, loadErr := a.Store.LoadOperation(ctx, j.ID)
+			if loadErr == nil && op.Kind == store.SiteUpdate {
+				err = a.Store.BeginCompositeTLSIntent(ctx, j.ID, raw)
+			} else if loadErr == nil || errors.Is(loadErr, sql.ErrNoRows) {
+				err = a.Store.BeginTLSIntent(ctx, raw)
+			} else {
+				err = loadErr
+			}
+			if err != nil {
 				return err
 			}
 		}
