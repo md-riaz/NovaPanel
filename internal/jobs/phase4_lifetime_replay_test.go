@@ -190,7 +190,7 @@ func TestFreshLifetimeSQLiteActivationReplay(t *testing.T) {
 		}, func(*WordPressLifetime) error {
 			releases++
 			if releases == 1 {
-				return errors.New("injected serving failure")
+				return store.ErrSitePrecondition
 			}
 			return nil
 		}, verify, create)

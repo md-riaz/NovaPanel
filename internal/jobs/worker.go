@@ -348,11 +348,13 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 	// Caller identity is restored exclusively from durable trusted columns.
 	err = nil
 	isOperation := false
+	wordpressInstall := false
 	freshInstall := false
 	phpRecovery := false
 	if s, ok := q.store.(operationStore); ok {
 		if op, loadErr := s.LoadOperation(ctx, j.ID); loadErr == nil {
 			isOperation = true
+			wordpressInstall = op.Kind == store.WordPressInstall && j.Verb == "site.create"
 			if op.Kind == store.WordPressInstall && j.Verb == "site.create" {
 				if fresh, ok := q.store.(interface {
 					LoadSiteLifetime(context.Context, string) (store.SiteLifetime, error)
@@ -437,7 +439,7 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 		return q.latchPublication(errors.Join(ErrRecoveryBlocked, err))
 	}
 	if isOperation {
-		retryFresh := freshInstall && errors.Is(err, ErrRetry)
+		retryFresh := wordpressInstall && errors.Is(err, ErrRetry)
 		err = operationError(err)
 		if retryFresh && !errors.Is(err, ErrRetry) {
 			err = errors.Join(err, ErrRetry)
