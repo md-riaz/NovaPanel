@@ -63,6 +63,9 @@ func removeConfigRecord(ctx context.Context, custody string, b ConfigBinding, se
 	if unix.Fstat(int(dir.Fd()), &ds) != nil || ds.Mode&07777 != 0700 {
 		return errConfigCustody
 	}
+	if err = removeConfigTemp(dir, b, owner); err != nil {
+		return err
+	}
 	name := b.JobID + ".sealed"
 	fd, e := unix.Openat(int(dir.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if e != nil && !errors.Is(e, unix.ENOENT) {
