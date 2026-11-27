@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,6 +35,7 @@ type acmeWorkerFixture struct {
 	server *rpc.Server
 	ca     *fakeCA
 	sid    string
+	stop   func()
 }
 
 func newACMEWorkerFixture(t *testing.T) *acmeWorkerFixture {
@@ -98,13 +100,17 @@ func newACMEWorkerFixture(t *testing.T) *acmeWorkerFixture {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- a.Jobs.Run(ctx) }()
-	t.Cleanup(func() {
-		cancel()
-		if err := <-done; err != nil {
-			t.Error(err)
-		}
-	})
-	return &acmeWorkerFixture{a, server, ca, sid}
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			cancel()
+			if err := <-done; err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	t.Cleanup(stop)
+	return &acmeWorkerFixture{a, server, ca, sid, stop}
 }
 func (f *acmeWorkerFixture) run(t *testing.T, verb string) jobs.Job {
 	t.Helper()
