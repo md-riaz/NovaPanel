@@ -562,28 +562,54 @@ func TestPrimaryTLSStartupRejectsChangedBinding(t *testing.T) {
 func TestPrimaryTLSCommittedStartupFinishesOriginalJob(t *testing.T) {
 	root := t.TempDir()
 	f := newPrimaryRestart(t, root, false)
-	runPrimaryQueue(t, f.a, f.job)
-	ctx := context.Background()
-	j, err := f.st.GetJob(ctx, f.job)
-	if err != nil || j.Step != "tls_committed" {
-		t.Fatal("publication not committed")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	calls := 0
+	f.a.Nginx.Probe = func(context.Context, nginx.Desired) error {
+		calls++
+		if calls == 2 {
+			cancel()
+			return context.Canceled
+		}
+		return nil
 	}
-	j.State = "running"
-	j.Finished = nil
-	if err = f.st.UpdateJob(ctx, j); err != nil {
+	_ = f.a.Jobs.Run(ctx)
+	children, err := f.st.OperationChildren(context.Background(), f.job)
+	if err != nil || len(children) != 2 || children[0].Status != "committed" || children[1].Status != "pending" {
+		t.Fatalf("interrupted children: %+v %v", children, err)
+	}
+	published, err := certs.CurrentRecovery(f.a.Cfg.TLSDir, "alias.test")
+	if err != nil {
 		t.Fatal(err)
 	}
 	f.close(t)
 	f.reopen(t, root)
 	defer f.close(t)
-	f.a.Nginx.Probe = func(context.Context, nginx.Desired) error {
-		t.Error("committed publication repeated")
-		return errors.New("must not publish")
-	}
-	f.a.Jobs.SetRunner(func(context.Context, *jobs.Job) error {
-		t.Error("general executor called during recovery")
-		return errors.New("must not execute")
-	})
+	calls = 0
+	f.a.Nginx.Probe = func(context.Context, nginx.Desired) error { calls++; return nil }
 	runPrimaryQueue(t, f.a, f.job)
-	f.check(t, true)
+	current, err := certs.CurrentRecovery(f.a.Cfg.TLSDir, "alias.test")
+	if err != nil || current.Version != published.Version || calls != 1 {
+		t.Fatalf("committed TLS publication repeated: %+v probes=%d err=%v", current, calls, err)
+	}
+	j, err := f.st.GetJob(context.Background(), f.job)
+	if err != nil || j.State != "done" || j.Step != "phase4_committed" {
+		t.Fatalf("original composite not completed: %+v %v", j, err)
+	}
+	children, err = f.st.OperationChildren(context.Background(), f.job)
+	if err != nil || children[0].Status != "committed" || children[1].Status != "committed" {
+		t.Fatalf("recovered children: %+v %v", children, err)
+	}
+	op, err := f.st.LoadOperation(context.Background(), f.job)
+	if err != nil || op.Identity.PublicationAudit == nil || op.Identity.PublicationAudit.State != "acknowledged" {
+		t.Fatalf("publication audit: %+v %v", op, err)
+	}
+	intent, err := f.st.TLSIntent(context.Background())
+	if err != nil || len(intent) != 0 {
+		t.Fatalf("TLS intent remains: %s %v", intent, err)
+	}
+	site, err := f.st.SiteByID(context.Background(), f.site)
+	if err != nil || !site.Maintenance {
+		t.Fatalf("maintenance finalizer: %+v %v", site, err)
+	}
 }
