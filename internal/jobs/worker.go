@@ -364,6 +364,12 @@ func (q *Queue) executeOperation(ctx context.Context, j Job, restoreExpiredPHP b
 					freshInstall = e == nil && identity.AllocatingJob == j.ID && fresh.CheckFreshSiteLifetime(ctx, identity) == nil
 				}
 			}
+			if freshInstall && j.Step == store.FreshWordPressRollbackIntentStep {
+				if e := q.beginFreshRollback(ctx, j, j.Code); e != nil {
+					return e
+				}
+				return nil
+			}
 			if freshInstall && j.Step != store.FreshWordPressRollbackStep && j.Step != store.FreshWordPressRollbackCleanedStep && q.clock.Now() >= op.Expires {
 				if e := q.beginFreshRollback(ctx, j, "interrupted"); e != nil {
 					return e
@@ -648,12 +654,17 @@ func invoke(ctx context.Context, run func(context.Context, *Job) error, j *Job) 
 
 func (q *Queue) beginFreshRollback(ctx context.Context, j Job, code string) error {
 	s, ok := q.store.(interface {
+		PersistFreshWordPressRollbackIntent(context.Context, string, string) error
 		BeginFreshWordPressRollback(context.Context, string, string) error
 	})
-	if ok {
-		// A site-local refusal must not stop the shared worker or admit teardown.
-		_ = s.BeginFreshWordPressRollback(ctx, j.ID, code)
+	if !ok {
+		return ErrRetry
 	}
+	if err := s.PersistFreshWordPressRollbackIntent(ctx, j.ID, code); err != nil {
+		return errors.Join(ErrRetry, err)
+	}
+	// The durable fence prevents the install from running again on retry or restart.
+	_ = s.BeginFreshWordPressRollback(ctx, j.ID, code)
 	return q.requeueWordPress(ctx, j.ID)
 }
 

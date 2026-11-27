@@ -49,16 +49,16 @@ func TestFreshWordPressWorkerRollbackAndNameReuse(t *testing.T) {
 			return nil
 		}
 		attempts++
-		if attempts <= 2 {
+		if attempts == 1 {
 			return errors.New("checksum mismatch")
 		}
-		if attempts == 3 {
+		if attempts == 2 {
 			if j.Step != store.FreshWordPressRollbackStep {
 				t.Fatalf("missing rollback intent: %+v", j)
 			}
 			return errors.Join(ErrRetry, errors.New("injected teardown failure"))
 		}
-		if attempts == 4 {
+		if attempts == 3 {
 			if err := s.MarkFreshWordPressRollbackCleaned(run, j.ID); err != nil {
 				return err
 			}
@@ -74,7 +74,7 @@ func TestFreshWordPressWorkerRollbackAndNameReuse(t *testing.T) {
 		t.Fatal(err)
 	}
 	j, err := s.GetJob(ctx, en.Job.ID)
-	if err != nil || j.State != "queued" || j.Step != "" {
+	if err != nil || j.State != "queued" || j.Step != store.FreshWordPressRollbackIntentStep {
 		t.Fatalf("intent refusal stopped worker: %+v %v", j, err)
 	}
 	otherBefore, err := q.Enqueue(ctx, "reconcile", map[string]string{}, "other-system")

@@ -7,6 +7,34 @@ import (
 )
 
 const FreshWordPressRollbackStep = "wordpress_rollback"
+const FreshWordPressRollbackIntentStep = "wordpress_rollback_intent"
+
+// PersistFreshWordPressRollbackIntent fences installation before rollback is entered.
+func (s *Store) PersistFreshWordPressRollbackIntent(ctx context.Context, jid, code string) error {
+	if code == "" {
+		return ErrSiteInvalid
+	}
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		op, err := loadOperation(ctx, tx, jid)
+		if err != nil {
+			return err
+		}
+		if op.Kind != WordPressInstall || op.Identity.WordPress == nil || op.Checkpoint == "done" || op.Checkpoint == "expired" {
+			return ErrSitePrecondition
+		}
+		w := op.Identity.WordPress
+		var n int
+		err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sites s JOIN site_account_provenance p ON p.site_id=s.id WHERE s.id=? AND s.name=? AND s.docroot=? AND s.lifetime_state='provisioning' AND s.status IN ('creating','failed') AND p.allocating_job=? AND p.uid=? AND p.gid=?`, op.SiteID, w.Input.SiteName, filepath.Join(w.Input.SitesRoot, w.Input.SiteName, "public"), jid, w.Input.UID, w.Input.GID).Scan(&n)
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return ErrSitePrecondition
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE jobs SET step=?,code=coalesce(nullif(code,''),?),updated=? WHERE id=? AND verb='site.create' AND state IN ('running','queued') AND (step IS NULL OR step='' OR step=?)`, FreshWordPressRollbackIntentStep, code, s.clock.Now(), jid, FreshWordPressRollbackIntentStep)
+		return affected(result, err)
+	})
+}
 
 // BeginFreshWordPressRollback records the obligation before external teardown.
 // The caller holds the operation's full lock set, including the OS-user lock.
@@ -27,7 +55,7 @@ func (s *Store) BeginFreshWordPressRollback(ctx context.Context, jid, code strin
 		if err = affected(result, err); err != nil {
 			return err
 		}
-		result, err = tx.ExecContext(ctx, `UPDATE jobs SET step=?,code=coalesce(nullif(code,''),?),updated=? WHERE id=? AND verb='site.create' AND state IN ('running','queued') AND (step IS NULL OR step='' OR step=?)`, FreshWordPressRollbackStep, code, s.clock.Now(), jid, FreshWordPressRollbackStep)
+		result, err = tx.ExecContext(ctx, `UPDATE jobs SET step=?,code=coalesce(nullif(code,''),?),updated=? WHERE id=? AND verb='site.create' AND state IN ('running','queued') AND (step IS NULL OR step='' OR step=? OR step=?)`, FreshWordPressRollbackStep, code, s.clock.Now(), jid, FreshWordPressRollbackStep, FreshWordPressRollbackIntentStep)
 		return affected(result, err)
 	})
 }
