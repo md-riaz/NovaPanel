@@ -79,7 +79,7 @@ func (l *configWorkerLease) close() {
 // exclude trusted root relocation and unverified docroot entries, then invoke the
 // effect synchronously once while retaining that protection. Failure must keep
 // the site non-serving. A mere operation lock or chmod is not isolation.
-// There is deliberately no default implementation or production activation.
+// The held fresh-account implementation is operation-scoped; no default is wired.
 type ConfigIsolation func(context.Context, configcustody.ConfigBinding, func(context.Context) error) error
 
 // CreateWordPressConfig composes operation-owned data and publishes it through
