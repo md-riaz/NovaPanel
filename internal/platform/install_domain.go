@@ -112,6 +112,29 @@ func (d *InstallDomain) empty() error {
 	return nil
 }
 
+// WithEmpty holds this domain's admission gate around a synchronous trusted-root
+// effect. The caller must also hold account and trusted-root exclusion.
+func (d *InstallDomain) WithEmpty(ctx context.Context, effect func(context.Context) error) error {
+	if effect == nil {
+		return errDomain
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := d.empty(); err != nil {
+		return err
+	}
+	work, done, err := d.domain.admit(ctx)
+	if err != nil {
+		return err
+	}
+	defer done()
+	err = effect(work)
+	return errors.Join(err, work.Err(), d.empty())
+}
+
 // Run admits one reviewed child at birth and checks recursive emptiness around it.
 func (d *InstallDomain) Run(ctx context.Context, program string, args []string, opts runner.RunOpts) ([]byte, []byte, int, error) {
 	d.mu.Lock()

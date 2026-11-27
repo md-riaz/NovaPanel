@@ -79,6 +79,25 @@ func TestInstallDomainLab(t *testing.T) {
 	if err := d.Empty(); err != nil {
 		t.Fatal(err)
 	}
+	calls := 0
+	if err := d.WithEmpty(ctx, func(context.Context) error { calls++; return nil }); err != nil || calls != 1 {
+		t.Fatalf("synchronous empty effect: calls=%d err=%v", calls, err)
+	}
+	started, unblock, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(finished)
+		_ = d.WithEmpty(ctx, func(context.Context) error { close(started); <-unblock; return nil })
+	}()
+	<-started
+	short, shortCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	if err := d.Close(short); err == nil {
+		shortCancel()
+		close(unblock)
+		t.Fatal("closed while effect was active")
+	}
+	shortCancel()
+	close(unblock)
+	<-finished
 	if err := d.Close(ctx); err != nil {
 		t.Fatal(err)
 	}

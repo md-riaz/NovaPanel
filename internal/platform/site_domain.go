@@ -102,34 +102,48 @@ func OpenExecutionDomain(path string) (*ExecutionDomain, error) {
 // Run places children at birth and holds admission until the runner returns.
 // Callers must still supply validated numeric credentials and reviewed commands.
 func (d *ExecutionDomain) Run(ctx context.Context, prog string, args []string, o runner.RunOpts) ([]byte, []byte, int, error) {
-	d.mu.Lock()
-	if d.closed || o.Cgroup != nil || ctx.Err() != nil {
-		d.mu.Unlock()
+	if o.Cgroup != nil {
 		return nil, nil, -1, errDomain
+	}
+	work, done, err := d.admit(ctx)
+	if err != nil {
+		return nil, nil, -1, err
+	}
+	defer done()
+	o.Cgroup = d.capability
+	return d.runner.Run(work, prog, args, o)
+}
+
+// admit lets Drain cancel and wait for every operation holding the domain.
+func (d *ExecutionDomain) admit(ctx context.Context) (context.Context, func(), error) {
+	d.mu.Lock()
+	if d.closed || ctx.Err() != nil {
+		d.mu.Unlock()
+		return nil, nil, errDomain
 	}
 	if d.active == 0 {
 		d.idle = make(chan struct{})
 	}
 	d.active++
 	d.mu.Unlock()
-	defer func() {
+	work, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(d.ctx, cancel)
+	done := func() {
+		stop()
+		cancel()
 		d.mu.Lock()
 		d.active--
 		if d.active == 0 {
 			close(d.idle)
 		}
 		d.mu.Unlock()
-	}()
-	work, cancel := context.WithCancel(ctx)
-	stop := context.AfterFunc(d.ctx, cancel)
-	defer cancel()
-	defer stop()
+	}
 	// Check lifetime cancellation synchronously as well as through AfterFunc.
 	if d.ctx.Err() != nil {
-		return nil, nil, -1, errDomain
+		done()
+		return nil, nil, errDomain
 	}
-	o.Cgroup = d.capability
-	return d.runner.Run(work, prog, args, o)
+	return work, done, nil
 }
 
 // Drain permanently closes admission, cancels and drains admitted launches, then
