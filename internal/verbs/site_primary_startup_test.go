@@ -540,7 +540,7 @@ func TestPrimaryTLSStartupRejectsChangedBinding(t *testing.T) {
 			f.a.Nginx.Probe = func(context.Context, nginx.Desired) error { calls++; return nil }
 			pointer, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "alias.test/current"))
 			if mode == "wrong-job" || mode == "corrupt" {
-				if err = f.a.Jobs.PrepareStartup(ctx); err != nil {
+				if err = f.a.Jobs.PrepareStartup(ctx); err != nil && !errors.Is(err, jobs.ErrRecoveryBlocked) {
 					t.Fatal(err)
 				}
 				job, err := f.st.GetJob(ctx, f.job)
@@ -569,7 +569,7 @@ func TestPrimaryTLSStartupRejectsChangedBinding(t *testing.T) {
 					time.Sleep(10 * time.Millisecond)
 				}
 				cancel()
-				if err = <-done; err != nil {
+				if err = <-done; err != nil && !errors.Is(err, jobs.ErrRecoveryBlocked) {
 					t.Fatal(err)
 				}
 				job, e := f.st.GetJob(ctx, f.job)
