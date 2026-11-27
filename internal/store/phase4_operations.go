@@ -433,7 +433,7 @@ var ErrOperationExpired = errors.New("operation interrupted by expiry")
 func operationExpiryExempt(ctx context.Context, tx *sql.Tx, op Operation) (bool, error) {
 	if op.Kind == SiteUpdate {
 		var engaged bool
-		err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM phase4_operation_children c WHERE c.job_id=? AND c.child_kind='maintenance_on' AND c.bracket_engaged=1) AND NOT EXISTS(SELECT 1 FROM phase4_operation_children c WHERE c.job_id=? AND c.child_kind='maintenance_off' AND c.status='committed')`, op.JobID, op.JobID).Scan(&engaged)
+		err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM jobs j WHERE j.id=? AND j.code='agent_error' AND ?=0) OR (EXISTS(SELECT 1 FROM phase4_operation_children c WHERE c.job_id=? AND c.child_kind='maintenance_on' AND c.bracket_engaged=1) AND NOT EXISTS(SELECT 1 FROM phase4_operation_children c WHERE c.job_id=? AND c.child_kind='maintenance_off' AND c.status='committed'))`, op.JobID, op.Reconciled, op.JobID, op.JobID).Scan(&engaged)
 		return engaged, err
 	}
 	if op.Kind != WordPressInstall || op.Checkpoint == "done" || op.Checkpoint == "expired" {

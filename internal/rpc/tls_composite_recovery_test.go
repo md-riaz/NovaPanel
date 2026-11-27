@@ -50,12 +50,19 @@ func TestTLSRecoveryDefersComposite(t *testing.T) {
 	if err = s.BeginTLSIntent(ctx, changed); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = server.prepareTLSRecovery(ctx); err == nil {
-		t.Fatal("changed binding accepted")
+	if got, err := server.prepareTLSRecovery(ctx); err != nil || got != nil {
+		t.Fatalf("quarantined composite must reach its finalizer: %+v %v", got, err)
 	}
 	job, err := s.GetJob(ctx, jid)
 	if err != nil || job.State != "running" || job.Code != "agent_error" {
 		t.Fatalf("disposition: %+v %v", job, err)
+	}
+	if err = s.RecoverJobs(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	job, err = s.GetJob(ctx, jid)
+	if err != nil || job.State != "queued" || job.Code != "agent_error" {
+		t.Fatalf("recovery lost quarantine: %+v %v", job, err)
 	}
 	pending, err := s.TLSIntent(ctx)
 	if err != nil || string(pending) != string(changed) {
