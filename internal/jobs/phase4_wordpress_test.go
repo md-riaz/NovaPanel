@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"novapanel/internal/secret"
 	"novapanel/internal/store"
 	"novapanel/internal/wordpress"
@@ -10,6 +11,22 @@ import (
 	"testing"
 	"time"
 )
+
+func TestGeneratedWordPressPasswordsUse32Bytes(t *testing.T) {
+	c, err := GenerateWordPressCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, password := range []string{c.DatabasePassword, c.AdminPassword} {
+		decoded, err := base64.RawURLEncoding.DecodeString(password)
+		if err != nil || len(decoded) != 32 {
+			t.Fatal("incorrect generated password entropy")
+		}
+	}
+	if c.DatabasePassword == c.AdminPassword {
+		t.Fatal("passwords are not independent")
+	}
+}
 
 func TestEnqueueFreshWordPress(t *testing.T) {
 	ctx := WithMetadata(context.Background(), Metadata{CreatedBy: "session", Role: "owner", Actor: "label", Effectful: true})
