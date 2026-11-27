@@ -12,25 +12,33 @@ of effect children, not separate jobs. The job and its `site:<site_id>` lock sta
 held while children commit. Generalize the held-lifetime ordered-child precedent
 in `internal/jobs/phase4_fresh_install.go` into a reusable composite driver.
 
-Instantiate these children in order:
+A composite exists only when `php_version` and at least one of
+`primary_domain_id`, `force_https`, or `hsts_max_age` are supplied. PHP alone
+still delegates to `php.set`, and a single domain/TLS dimension follows the
+existing `site.update` path; neither gets a maintenance bracket. Maintenance
+alone keeps its existing metadata apply. The bracket is composite-only.
 
-1. `maintenance_on`, transient, when PHP or domain/TLS is supplied.
+Instantiate composite children in order:
+
+1. `maintenance_on`, transient.
 2. `php_change` when `php_version` is supplied.
 3. `domain_tls` when `primary_domain_id`, `force_https`, or `hsts_max_age` is supplied.
 4. `maintenance_off`/restore when the bracket ran: restore to true only when
    the caller explicitly supplied `maintenance:true`, otherwise false.
 
-Maintenance alone keeps the existing single metadata apply, without a bracket.
+Removing the composite refusal leaves the PHP-alone delegation unchanged.
 
 ## Durable state and reusable effects
 
 Add `phase4_operation_children(job_id, ordinal, child_kind, checkpoint, status,
 typed_error, identities_json, journal_ref, updated)`, keyed by `(job_id, ordinal)` and referencing
-the parent operation. Status is `pending`, `committed`, or `failed`; committed
-children cannot rewind to pending. Each child commits checkpoint, status and its
+the parent operation. Status is `pending`, `committed`, or `failed`; terminal
+children have immutable status, checkpoint and identity, enforced by a trigger.
+Each child commits checkpoint, status and its
 journal entry atomically while its parent stays non-terminal. Parent checkpoints
 are coarse: `prepared` → `verified` → `done`. Each PHP child keeps its validated,
-secret-free original and desired version and full limits snapshot; PHP metadata
+secret-free original and desired version and full limits snapshot written ahead
+at `prepared` before any effect; PHP metadata
 and its child journal completion commit atomically while the parent remains running.
 Standalone PHP terminal atomicity is unchanged. `CompleteOperation` performs
 the sole terminal commit after asserting all children are committed or failed and
@@ -47,13 +55,20 @@ checkpoints and recovery unchanged with regression tests.
 ## Recovery, failures and audit
 
 Recovery requeues a non-terminal parent. Its driver reloads children, skips
-committed children and resumes the first non-committed child. Effects are
+terminal (`committed` or `failed`) children and resumes the first pending child
+only if no child failed. Effects are
 idempotent on replay. TLS startup recovery must defer composite jobs to this
 driver, without changing standalone TLS recovery or recovering a TLS child twice.
 
-Transient child failure returns `ErrRetry`; replay skips completed children.
-On permanent failure, run the maintenance restore finalizer best-effort before
-terminalizing with a typed error and child aggregate. Earlier committed changes
+Transient child failure returns `ErrRetry`; replay skips terminal children.
+A permanent failure commits the child's `failed` status, typed error and journal
+durably in its own transaction before parent terminalization. Forward progress
+stops: no later pending effect child starts. On replay any failed child routes
+directly to failure finalization. Run the maintenance restore finalizer
+best-effort and idempotently; replay re-drives it while pending. Record the
+finalizer as committed or failed and each other pending child as failed with
+typed error `not_attempted` and its journal, so the aggregate identifies skipped
+work. Then terminalize with the typed error and child aggregate. Earlier committed changes
 remain applied: a later failure does not undo them. Terminal audit aggregates
 `{ordinal, child_kind, status, typed_error}` and per-child journal entries remain.
 No child produces credentials or changes the no-secrets invariant.
