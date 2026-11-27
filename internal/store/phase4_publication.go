@@ -67,7 +67,7 @@ func (s *Store) PreparePublicationAudit(ctx context.Context, jid, intent, final 
 		if op.Checkpoint == "done" {
 			return ErrPublicationPending
 		}
-		if s.clock.Now() >= op.Expires && !TeardownStarted(op) {
+		if s.clock.Now() >= op.Expires && !TeardownStarted(op) && !(op.Kind == SiteUpdate && op.Checkpoint == "verified") {
 			return ErrOperationExpired
 		}
 		if op.Checkpoint != "verified" && !((op.Kind == DatabaseDelete || op.Kind == DBUserDelete || op.Kind == SiteDelete) && op.Checkpoint == "db_applied") {

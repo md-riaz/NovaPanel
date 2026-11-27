@@ -43,14 +43,14 @@ func TestOperationChildrenAtomicJournalAndReplay(t *testing.T) {
 		t.Fatalf("commit: %+v %v", got, err)
 	}
 	phase4Exec(t, s.db.raw, `UPDATE phase4_operations SET checkpoint='verified' WHERE job_id='child-job'`)
-	if err = s.CompleteCompositeOperation(ctx, "child-job"); err == nil {
+	if err = s.CompleteCompositeOperation(ctx, "child-job", ""); err == nil {
 		t.Fatal("pending finalizer accepted")
 	}
 	if err = s.CommitOperationChild(ctx, "child-job", 1, "verified", "committed", ""); err != nil {
 		t.Fatal(err)
 	}
 	phase4Exec(t, s.db.raw, `CREATE TRIGGER reject_final_event BEFORE INSERT ON job_events BEGIN SELECT RAISE(ABORT,'injected'); END`)
-	if err = s.CompleteCompositeOperation(ctx, "child-job"); err == nil {
+	if err = s.CompleteCompositeOperation(ctx, "child-job", ""); err == nil {
 		t.Fatal("aggregate failure accepted")
 	}
 	job, err := s.GetJob(ctx, "child-job")
@@ -58,7 +58,10 @@ func TestOperationChildrenAtomicJournalAndReplay(t *testing.T) {
 		t.Fatalf("partial parent: %+v %v", job, err)
 	}
 	phase4Exec(t, s.db.raw, `DROP TRIGGER reject_final_event`)
-	if err = s.CompleteCompositeOperation(ctx, "child-job"); err != nil {
+	if err = s.CompleteCompositeOperation(ctx, "child-job", "agent_error"); err == nil {
+		t.Fatal("mismatched outcome accepted")
+	}
+	if err = s.CompleteCompositeOperation(ctx, "child-job", ""); err != nil {
 		t.Fatal(err)
 	}
 	job, err = s.GetJob(ctx, "child-job")

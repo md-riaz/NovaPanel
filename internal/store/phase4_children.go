@@ -194,7 +194,7 @@ func (s *Store) EngageOperationBracket(ctx context.Context, jobID string) error 
 }
 
 // CompleteCompositeOperation atomically publishes the aggregate and terminal parent.
-func (s *Store) CompleteCompositeOperation(ctx context.Context, jobID string) error {
+func (s *Store) CompleteCompositeOperation(ctx context.Context, jobID, outcomeCode string) error {
 	eventID, err := id.New()
 	if err != nil {
 		return err
@@ -243,15 +243,12 @@ func (s *Store) CompleteCompositeOperation(ctx context.Context, jobID string) er
 		if err != nil {
 			return err
 		}
-		if len(children) == 0 || !finalizer || children[len(children)-1].Kind != "maintenance_off" || (failed && code == "") {
+		if len(children) == 0 || !finalizer || children[len(children)-1].Kind != "maintenance_off" || (failed && code == "") || code != outcomeCode {
 			return ErrSitePrecondition
 		}
 		op, err := loadOperation(ctx, tx, jobID)
 		if err != nil {
 			return err
-		}
-		if code == "" && s.clock.Now() >= op.Expires {
-			code = "interrupted"
 		}
 		if p := op.Identity.PublicationAudit; p != nil {
 			if p.State != "intent" {
@@ -282,7 +279,16 @@ func (s *Store) CompleteCompositeOperation(ctx context.Context, jobID string) er
 		if err = affected(r, err); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO job_events(id,job_id,ts,msg) VALUES(?,?,?,?)`, eventID, jobID, now, string(raw))
+		if _, err = tx.ExecContext(ctx, `INSERT INTO job_events(id,job_id,ts,msg) VALUES(?,?,?,?)`, eventID, jobID, now, string(raw)); err != nil {
+			return err
+		}
+		if op.Identity.PublicationAudit != nil {
+			terminalID, err := id.New()
+			if err != nil {
+				return err
+			}
+			_, err = tx.ExecContext(ctx, `INSERT INTO job_events(id,job_id,ts,msg) VALUES(?,?,?,?)`, terminalID, jobID, now, state)
+		}
 		return err
 	})
 }

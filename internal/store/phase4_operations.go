@@ -465,7 +465,7 @@ func (s *Store) checkOperation(ctx context.Context, jid string, restoration bool
 				return ErrSitePrecondition
 			}
 		} else {
-			if op.Checkpoint == "done" {
+			if op.Checkpoint == "done" || (op.Kind == SiteUpdate && op.Checkpoint == "verified") {
 				return nil
 			}
 			jobDriven, err := operationExpiryExempt(ctx, tx, op)
