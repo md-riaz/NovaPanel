@@ -95,11 +95,48 @@ func validWordPressIdentity(op Operation) bool {
 	nested.Kind = DatabaseCreate
 	nested.Identity.WordPress = nil
 	nested.Identity.ConfigCleanup = ""
+	nested.Identity.DownloadStarted = false
 	if !validOperationIdentity(nested) {
 		return false
 	}
 	_, e := wordpress.BuildInstall(w.Input, w.Evidence)
 	return e == nil
+}
+
+// MarkWordPressDownloadStarted records the first empty-docroot check before download.
+// The caller must hold the original operation and lifetime locks throughout.
+func (s *Store) MarkWordPressDownloadStarted(ctx context.Context, jobID string) error {
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		op, err := loadOperation(ctx, tx, jobID)
+		if err != nil {
+			return err
+		}
+		if op.Kind != WordPressInstall || op.Checkpoint != "db_applied" || op.Identity.WordPress == nil {
+			return ErrSitePrecondition
+		}
+		if s.clock.Now() >= op.Expires {
+			return ErrOperationExpired
+		}
+		w := op.Identity.WordPress.Input
+		var found int
+		args := lifetimeArgs(SiteLifetime{SiteID: op.SiteID, Name: w.SiteName, Docroot: filepath.Join(w.SitesRoot, w.SiteName, "public"), AllocatingJob: jobID, UID: w.UID, GID: w.GID})
+		if err = tx.QueryRowContext(ctx, `SELECT 1 FROM sites WHERE status='creating' AND `+freshLifetimeWhere, args...).Scan(&found); err != nil {
+			if err == sql.ErrNoRows {
+				return ErrSitePrecondition
+			}
+			return err
+		}
+		if op.Identity.DownloadStarted {
+			return nil
+		}
+		op.Identity.DownloadStarted = true
+		raw, err := json.Marshal(op.Identity)
+		if err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE phase4_operations SET identities_json=?,updated=? WHERE job_id=? AND checkpoint='db_applied'`, string(raw), s.clock.Now(), jobID)
+		return affected(result, err)
+	})
 }
 
 func checkWordPress(ctx context.Context, tx *sql.Tx, op Operation) error {

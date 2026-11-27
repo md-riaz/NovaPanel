@@ -52,6 +52,7 @@ type OperationIdentity struct {
 	PurgeFiles, PurgeDatabases bool
 	PublicationAudit           *PublicationAudit     `json:",omitempty"`
 	ConfigCleanup              string                `json:",omitempty"`
+	DownloadStarted            bool                  `json:",omitempty"`
 	WordPress                  *WordPressReservation `json:",omitempty"`
 	PHP                        *PHPOperationIdentity `json:",omitempty"`
 }
@@ -136,6 +137,9 @@ func scanOperation(row scanner) (o Operation, err error) {
 }
 
 func validOperationIdentity(o Operation) bool {
+	if o.Identity.DownloadStarted && o.Kind != WordPressInstall {
+		return false
+	}
 	if !validPublication(o) {
 		return false
 	}

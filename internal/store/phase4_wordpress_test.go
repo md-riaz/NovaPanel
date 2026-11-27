@@ -12,11 +12,12 @@ import (
 
 func TestPrepareFreshWordPress(t *testing.T) {
 	ctx := context.Background()
-	s, err := Open(filepath.Join(t.TempDir(), "panel.db"))
+	path := filepath.Join(t.TempDir(), "panel.db")
+	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { s.Close() }()
 	m := wordpress.ApprovedArtifacts()
 	r := WordPressReservation{SiteID: "01K8WMXZF57CGNZKX1FZ38DZMA", DomainID: "01K8WMXZF57CGNZKX1FZ38DZMB", Input: wordpress.InstallInput{SitesRoot: "/scratch/sites", SiteName: "example", PrimaryDomain: "example.test", DatabaseID: "01K8WMXZF57CGNZKX1FZ38DZMQ", DatabaseUserID: "01K8WMXZF57CGNZKX1FZ38DZMR", Locale: "en_US", Administrator: wordpress.Administrator{Title: "Example", Username: "Admin", Email: "owner@example.test"}}, Evidence: wordpress.ArtifactEvidence{CLISHA256: m.CLI.SHA256, WordPressSHA256: m.WordPress.SHA256, ChecksumsSHA256: m.ChecksumsSHA256, SignatureVerified: true, SignerFingerprint: m.CLISignerFingerprint}}
 	version := "8.3"
@@ -45,6 +46,29 @@ func TestPrepareFreshWordPress(t *testing.T) {
 	}
 	if phase4Count(t, s.db.raw, `SELECT count(*) FROM sites s JOIN site_account_provenance p ON p.site_id=s.id JOIN jobs j ON j.id=p.allocating_job WHERE s.status='creating' AND s.lifetime_state='provisioning' AND j.verb='site.create'`) != 1 {
 		t.Fatal("reservation missing")
+	}
+	if err = s.MarkWordPressDownloadStarted(ctx, j.ID); !errors.Is(err, ErrSitePrecondition) {
+		t.Fatalf("early marker: %v", err)
+	}
+	if err = s.CheckpointOperation(ctx, j.ID, "prepared", "db_applied"); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.MarkWordPressDownloadStarted(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.MarkWordPressDownloadStarted(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	op, err = s.LoadOperation(ctx, j.ID)
+	if err != nil || !op.Identity.DownloadStarted {
+		t.Fatalf("marker missing after reload: %v", err)
 	}
 }
 
