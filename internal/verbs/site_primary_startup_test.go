@@ -431,7 +431,7 @@ func TestPrimaryTLSStartupRejectsChangedBinding(t *testing.T) {
 			root := t.TempDir()
 			f := newPrimaryRestart(t, root, true)
 			interrupt, stop := context.WithCancel(context.Background())
-			f.a.Nginx.Probe = func(context.Context, nginx.Desired) error { stop(); return context.Canceled }
+			f.a.Nginx.Probe = func(context.Context, nginx.Desired) error { stop(); panic("interruption") }
 			if err := f.a.Jobs.Run(interrupt); err != nil {
 				t.Fatal(err)
 			}
