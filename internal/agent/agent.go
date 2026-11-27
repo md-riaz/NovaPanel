@@ -6,6 +6,7 @@ import (
 	"novapanel/internal/audit"
 	"novapanel/internal/auth"
 	"novapanel/internal/config"
+	"novapanel/internal/dns/cloudflare"
 	"novapanel/internal/exec"
 	"novapanel/internal/jobs"
 	"novapanel/internal/php"
@@ -37,6 +38,7 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Agent struct {
+	ProbeDNS             func(context.Context, string, []string) error
 	UploadsMu            sync.Mutex
 	mutationsBlocked     atomic.Bool
 	DurablePHP           *PHPDependencies
@@ -78,7 +80,7 @@ func (a *Agent) TLSBlocksMutation(ctx context.Context) (bool, error) {
 
 func NewWithDependencies(cfg config.Config, runner exec.Runner, v *validate.V) *Agent {
 	c := realClock{}
-	a := &Agent{Cfg: cfg, Exec: runner, Validate: v, Clock: c, Started: c.Now(),
+	a := &Agent{Cfg: cfg, Exec: runner, Validate: v, Clock: c, Started: c.Now(), ProbeDNS: cloudflare.Probe,
 		ProvisionSite: func(ctx context.Context, name, siteID string) error {
 			return platform.EnsureSite(ctx, runner, cfg.SitesRoot, cfg.ACMEWebroot, cfg.LogDir, name, siteID)
 		},
