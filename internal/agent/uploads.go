@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"log"
 	"time"
 
 	"novapanel/internal/fileop"
@@ -24,7 +24,8 @@ func (a *Agent) SweepUploads(ctx context.Context, now time.Time) error {
 			UploadID string `json:"upload_id"`
 		}
 		if json.Unmarshal(arg, &v) != nil || !id.Valid(v.UploadID) {
-			return fmt.Errorf("invalid live upload job")
+			log.Print("skipping malformed live upload job")
+			continue
 		}
 		live[v.UploadID] = struct{}{}
 	}

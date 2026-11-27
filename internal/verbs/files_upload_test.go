@@ -81,11 +81,20 @@ func TestUploadAdmissionSweepOrdering(t *testing.T) {
 	if err := os.Chtimes(name, old, old); err != nil {
 		t.Fatal(err)
 	}
+	assertCount := func(want int) {
+		t.Helper()
+		rows, err := st.LiveJobArgs(ctx, "files.upload")
+		if err != nil || len(rows) != want {
+			t.Fatalf("live jobs: got %d, want %d: %v", len(rows), want, err)
+		}
+	}
+	assertCount(1)
 	if _, err := filesUpload(ctx, a, v); err == nil {
 		t.Fatal("admitted expired upload")
 	} else if e, ok := err.(*rpc.CodedError); !ok || e.Code != "not_found" {
 		t.Fatalf("expired admission: %v", err)
 	}
+	assertCount(1)
 	if err := a.SweepUploads(ctx, time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -109,6 +118,15 @@ func TestUploadAdmissionSweepOrdering(t *testing.T) {
 	} else if e, ok := err.(*rpc.CodedError); !ok || e.Code != "not_found" {
 		t.Fatalf("late admission: %v", err)
 	}
+	assertCount(1)
+	missing, _ := id.New()
+	v.UploadID = missing
+	if _, err := filesUpload(ctx, a, v); err == nil {
+		t.Fatal("admitted missing upload")
+	} else if e, ok := err.(*rpc.CodedError); !ok || e.Code != "not_found" {
+		t.Fatalf("missing admission: %v", err)
+	}
+	assertCount(1)
 }
 
 func TestUploadExec(t *testing.T) {
