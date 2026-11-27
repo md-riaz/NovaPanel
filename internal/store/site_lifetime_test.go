@@ -2,10 +2,34 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
 )
+
+func TestReserveSiteAccountTx(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	for i, name := range []string{"first", "second"} {
+		phase4Job(t, s.db.raw, name, "queued")
+		phase4Exec(t, s.db.raw, `INSERT INTO sites(id,name,type,docroot,created,updated) VALUES(?,?,'wordpress',?,1,1)`, name, name, "/"+name)
+		var uid uint32
+		err = s.Tx(ctx, func(tx *sql.Tx) error {
+			var e error
+			uid, e = s.ReserveSiteAccountTx(ctx, tx, name, name, name)
+			return e
+		})
+		if err != nil || uid != uint32(siteUIDMin+i) {
+			t.Fatalf("allocation %d: uid=%d err=%v", i, uid, err)
+		}
+	}
+	phase4Refuse(t, s.db.raw, `DELETE FROM site_account_provenance WHERE site_id='first'`, "retained provenance")
+}
 
 func TestSiteLifetimeDisposition(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "state.db"))

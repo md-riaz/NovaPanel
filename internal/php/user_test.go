@@ -18,6 +18,58 @@ type fake struct {
 	calls   []string
 }
 
+type reservedFake struct {
+	group    string
+	uidTaken bool
+	calls    []string
+}
+
+func (f *reservedFake) Run(_ context.Context, p string, a []string, _ runner.RunOpts) ([]byte, []byte, int, error) {
+	f.calls = append(f.calls, p+" "+strings.Join(a, " "))
+	if p != "/usr/bin/getent" {
+		return nil, nil, 0, nil
+	}
+	if a[0] == "passwd" && a[1] == "2000000" && f.uidTaken {
+		return []byte("foreign:x:2000000:2000000::/:/bin/false"), nil, 0, nil
+	}
+	if a[0] == "group" && a[1] == "2000000" && f.group != "" {
+		return []byte(f.group), nil, 0, nil
+	}
+	if a[0] == "gshadow" && f.group == "demo:x:2000000:" {
+		return []byte("demo:!" + marker + testID + "::"), nil, 0, nil
+	}
+	return nil, nil, 2, errors.New("missing")
+}
+
+func TestEnsureReservedUser(t *testing.T) {
+	for _, tc := range []struct {
+		name, group string
+		taken       bool
+		wantError   bool
+		groupadd    bool
+	}{
+		{"fresh", "", false, false, true},
+		{"replay group", "demo:x:2000000:", false, false, false},
+		{"foreign group", "other:x:2000000:", false, true, false},
+		{"foreign uid", "", true, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &reservedFake{group: tc.group, uidTaken: tc.taken}
+			err := EnsureReservedUser(context.Background(), f, "/srv/sites", "demo", testID, 2000000)
+			calls := strings.Join(f.calls, "\n")
+			if (err != nil) != tc.wantError || strings.Contains(calls, "groupadd") != tc.groupadd {
+				t.Fatalf("calls=%s err=%v", calls, err)
+			}
+			if !tc.wantError && !strings.Contains(calls, "useradd -u 2000000 -g 2000000") {
+				t.Fatal(calls)
+			}
+			if tc.wantError && strings.Contains(calls, "useradd") {
+				t.Fatal(calls)
+			}
+		})
+	}
+}
+
 func (f *fake) Run(_ context.Context, p string, a []string, _ runner.RunOpts) ([]byte, []byte, int, error) {
 	f.calls = append(f.calls, p+" "+strings.Join(a, " "))
 	if p == "/usr/bin/getent" {

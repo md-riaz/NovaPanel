@@ -100,6 +100,79 @@ func EnsureUser(ctx context.Context, r runner.Runner, root, name, id string) err
 	return run(ctx, r, "/usr/sbin/useradd", "-r", "-U", "-s", "/usr/sbin/nologin", "-m", "-d", filepath.Join(root, name), "-K", "UMASK=0027", "-c", marker+id, "--", name)
 }
 
+// EnsureReservedUser requires a durable reservation and the site and OS-user locks.
+// The locked group password field carries the ownership marker across crashes.
+func EnsureReservedUser(ctx context.Context, r runner.Runner, root, name, id string, uid uint32) error {
+	if err := inputs(root, name, id); err != nil {
+		return err
+	}
+	if uid < 2000000 || uid > 2999999 {
+		return rpcerr.Errf("precondition_failed", "site identity outside reserved range")
+	}
+	account, err := lookup(ctx, r, root, name)
+	if err != nil {
+		return err
+	}
+	if account != nil && (account.gecos != marker+id || account.uid != uid || account.gid != uid) {
+		return rpcerr.Errf("conflict", "site account is not owned")
+	}
+	numeric := strconv.FormatUint(uint64(uid), 10)
+	get := func(database, key string) ([]byte, bool, error) {
+		out, _, code, err := r.Run(ctx, "/usr/bin/getent", []string{database, key}, runner.RunOpts{})
+		if code == 2 && ctx.Err() == nil {
+			return nil, false, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		if code != 0 {
+			return nil, false, rpcerr.Errf("agent_error", "cannot resolve site identity")
+		}
+		return out, true, nil
+	}
+	if _, exists, e := get("passwd", numeric); e != nil {
+		return e
+	} else if exists && account == nil {
+		return rpcerr.Errf("conflict", "site UID already allocated")
+	} else if !exists && account != nil {
+		return rpcerr.Errf("conflict", "site UID changed")
+	}
+	out, exists, err := get("group", numeric)
+	if err != nil {
+		return err
+	}
+	if exists {
+		fields := strings.Split(strings.TrimSpace(string(out)), ":")
+		if len(fields) != 4 || fields[0] != name || fields[2] != numeric || fields[3] != "" {
+			return rpcerr.Errf("conflict", "site group is not owned")
+		}
+		shadow, found, err := get("gshadow", name)
+		if err != nil {
+			return err
+		}
+		parts := strings.Split(strings.TrimSpace(string(shadow)), ":")
+		if !found || len(parts) != 4 || parts[0] != name || parts[1] != "!"+marker+id || parts[2] != "" || parts[3] != "" {
+			return rpcerr.Errf("conflict", "site group is not owned")
+		}
+	} else {
+		if account != nil {
+			return rpcerr.Errf("conflict", "site group missing")
+		}
+		if _, taken, e := get("group", name); e != nil {
+			return e
+		} else if taken {
+			return rpcerr.Errf("conflict", "site group name already allocated")
+		}
+		if err = run(ctx, r, "/usr/sbin/groupadd", "-g", numeric, "-p", "!"+marker+id, "--", name); err != nil {
+			return err
+		}
+	}
+	if account != nil {
+		return nil
+	}
+	return run(ctx, r, "/usr/sbin/useradd", "-u", numeric, "-g", numeric, "-s", "/usr/sbin/nologin", "-m", "-d", filepath.Join(root, name), "-K", "UMASK=0027", "-c", marker+id, "--", name)
+}
+
 // MigrateUser is only for a bounded startup enumeration of live Phase-3 rows.
 // The caller must prove the frozen 1:1 mapping and hold the shared locks.
 func MigrateUser(ctx context.Context, r runner.Runner, root, name, id string) error {
