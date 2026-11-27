@@ -34,7 +34,7 @@ func VerifyStaged(ctx context.Context, p StagedPaths, r runner.Runner) (Artifact
 	if os.Geteuid() != 0 {
 		return ArtifactEvidence{}, errStaged
 	}
-	return verifyStaged(ctx, p, r, ApprovedArtifacts(), 0, false)
+	return verifyStaged(ctx, p, r, stagedZIPArtifacts(), 0, false)
 }
 
 func verifyStaged(ctx context.Context, p StagedPaths, r runner.Runner, m Manifest, owner uint32, fixture bool) (ArtifactEvidence, error) {

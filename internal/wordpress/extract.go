@@ -33,7 +33,7 @@ func ExtractStaged(ctx context.Context, p StagedPaths, r runner.Runner, root str
 	if os.Geteuid() != 0 {
 		return errStaged
 	}
-	return extractStaged(ctx, p, r, root, b, ApprovedArtifacts(), 0, false, (*os.File).Sync)
+	return extractStaged(ctx, p, r, root, b, stagedZIPArtifacts(), 0, false, (*os.File).Sync)
 }
 
 func extractStaged(ctx context.Context, p StagedPaths, r runner.Runner, root string, b StageBinding, m Manifest, owner uint32, fixture bool, syncFile func(*os.File) error) error {

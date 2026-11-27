@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 
 	runner "novapanel/internal/exec"
@@ -13,13 +14,18 @@ import (
 )
 
 // runFreshInstall admits only fixed reviewed children while config custody is held.
-func runFreshInstall(ctx context.Context, lifetime *WordPressLifetime, publish func() error, adminPassword string) error {
-	if lifetime == nil || publish == nil || adminPassword == "" {
+func runFreshInstall(ctx context.Context, lifetime *WordPressLifetime, verifyArchive, publish func() error, adminPassword string) error {
+	if lifetime == nil || verifyArchive == nil || publish == nil || adminPassword == "" {
 		return errors.New("jobs: WordPress install unavailable")
 	}
 	for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums} {
 		if _, _, code, err := lifetime.runReviewed(ctx, reviewedInstallChild{kind: kind}); err != nil || code != 0 {
 			return errors.New("jobs: WordPress artifact step failed")
+		}
+		if kind == wordpress.Download {
+			if err := verifyArchive(); err != nil {
+				return err
+			}
 		}
 	}
 	if err := publish(); err != nil {
@@ -63,7 +69,9 @@ func (q *Queue) InstallFreshWordPress(ctx context.Context, jobID string, identit
 		if err != nil {
 			return err
 		}
-		if err = runFreshInstall(ctx, l, func() error { return q.CreateWordPressConfig(ctx, jobID, q.configCustody, l.ConfigIsolation) }, credentials.AdminPassword); err != nil {
+		manifest := wordpress.ApprovedArtifacts()
+		archive := filepath.Join(filepath.Dir(l.plan.Dir), "cache", "core", "wordpress-"+manifest.WordPress.Version+"-"+manifest.Locale+".tar.gz")
+		if err = runFreshInstall(ctx, l, func() error { return wordpress.VerifyDownloadedArchive(archive, identity.UID) }, func() error { return q.CreateWordPressConfig(ctx, jobID, q.configCustody, l.ConfigIsolation) }, credentials.AdminPassword); err != nil {
 			return err
 		}
 		return s.CheckpointOperation(ctx, jobID, "config_published", "verified")

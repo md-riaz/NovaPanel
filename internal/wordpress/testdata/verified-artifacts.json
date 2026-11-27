@@ -1,6 +1,6 @@
 {
   "cli_sha256": "ce34ddd838f7351d6759068d09793f26755463b4a4610a5a5c0a97b68220d85c",
-  "wordpress_sha256": "a147146c159362778ecbbbfb07bb20ddf4e85b130f971c824e656a8f938c5f87",
+  "wordpress_sha256": "881e53a4681ff2cd911651b11cccdede5ae477ddf0765af5d6a1a8b219a1d835",
   "checksums_sha256": "bb718bddf197e0098f05395dd9b228fad70b394926ee9d70a8c6a67cf20781e7",
   "signature_verified": true,
   "signer_fingerprint": "63AF7AA15067C05616FDDD88A3A2E8F226F0BC06"
