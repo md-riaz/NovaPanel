@@ -104,6 +104,16 @@ func Check(root string) []string {
 				report(path, "privileged client import: "+p)
 			}
 		}
+		if path == "internal/wordpress/tar_extract.go" {
+			ast.Inspect(file, func(n ast.Node) bool {
+				if sel, ok := n.(*ast.SelectorExpr); ok {
+					if id, ok := sel.X.(*ast.Ident); ok && imports[id.Name] == "syscall" && sel.Sel.Name != "Stat_t" {
+						report(path, "process import outside internal/exec: syscall")
+					}
+				}
+				return true
+			})
+		}
 		registered := map[*ast.CompositeLit]bool{}
 		// Handler references are counted across the entire verbs package.
 		ast.Inspect(file, func(n ast.Node) bool {
