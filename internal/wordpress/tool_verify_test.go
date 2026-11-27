@@ -63,7 +63,8 @@ func TestPackagedCLIWithReviewedINI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, stderr, code, err := (runner.Real{}).Run(context.Background(), "/usr/bin/php8.3", []string{"-c", filepath.Join(root, "php.ini"), filepath.Join(root, "wp-cli-2.12.0.phar"), "--version"}, runner.RunOpts{Dir: root, Env: []string{"PATH=/usr/bin:/bin", "PHP_INI_SCAN_DIR=/dev/null"}})
+	iniFlag := "-c"
+	out, stderr, code, err := (runner.Real{}).Run(context.Background(), "/usr/bin/php8.3", []string{iniFlag, filepath.Join(root, "php.ini"), filepath.Join(root, "wp-cli-2.12.0.phar"), "--version"}, runner.RunOpts{Dir: root, Env: []string{"PATH=/usr/bin:/bin", "PHP_INI_SCAN_DIR=/dev/null"}})
 	if err != nil || code != 0 || !strings.Contains(string(out), "WP-CLI 2.12.0") {
 		t.Fatalf("packaged CLI failed: code=%d err=%v stderr=%s", code, err, stderr)
 	}

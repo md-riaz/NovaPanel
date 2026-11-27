@@ -40,10 +40,6 @@ func (v *wpInstallArgs) Validate() error {
 	return wordpress.ValidateAdministrator(wordpress.Administrator{Title: v.Title, Username: v.AdminUsername, Email: v.AdminEmail})
 }
 
-func init() {
-	rpc.Register(rpc.Verb{Name: "wp.install", MinRole: rpc.Admin, Scope: "sites:write", Slow: true, NewArgs: func() any { return &wpInstallArgs{} }, NewJobArgs: func() any { return &wpInstallJobArgs{} }, JobObjectKey: func(args any) string { return "site:" + args.(*wpInstallJobArgs).SiteID }, ObjectKey: func(args any) string { return "site:" + args.(*wpInstallArgs).SiteID }, Run: wpInstall, Exec: wpInstallExec})
-}
-
 func wpInstall(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	if !wpLifetimeAvailable() {
 		return nil, rpc.Errf("unsupported", "WordPress installation requires protected lifetime isolation")
