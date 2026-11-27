@@ -111,6 +111,17 @@ func TestFreshWordPressWorkerRollbackAndNameReuse(t *testing.T) {
 	if err != nil || otherBeforeJob.State != "done" {
 		t.Fatalf("intent refusal blocked unrelated work: %+v %v", otherBeforeJob, err)
 	}
+	// A crash after fencing retains the step even though RecoverJobs clears code.
+	if _, err = s.StartJob(ctx, j.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RecoverJobs(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	j, err = s.GetJob(ctx, en.Job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err = q.execute(ctx, j); err != nil {
 		t.Fatal(err)
 	}

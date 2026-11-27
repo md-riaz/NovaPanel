@@ -647,6 +647,9 @@ func invoke(ctx context.Context, run func(context.Context, *Job) error, j *Job) 
 }
 
 func (q *Queue) beginFreshRollback(ctx context.Context, j Job, code string) error {
+	if code == "" {
+		code = "agent_error"
+	}
 	s, ok := q.store.(interface {
 		PersistFreshWordPressRollbackIntent(context.Context, string, string) error
 		BeginFreshWordPressRollback(context.Context, string, string) error
