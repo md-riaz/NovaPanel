@@ -21,7 +21,7 @@ func compositeChildKinds(php, domainTLS bool) []string {
 }
 
 // nextCompositeChild selects only pending work; a failure routes to the finalizer.
-func nextCompositeChild(children []store.OperationChild) (int, error) {
+func NextCompositeChild(children []store.OperationChild) (int, error) {
 	failed, finalizer := false, -1
 	for i, child := range children {
 		if child.Ordinal != i || (child.Status != "pending" && child.Status != "committed" && child.Status != "failed") {

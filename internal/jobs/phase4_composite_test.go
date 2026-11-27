@@ -15,15 +15,15 @@ func TestNextCompositeChild(t *testing.T) {
 		t.Fatal(got)
 	}
 	children := []store.OperationChild{{Ordinal: 0, Kind: "maintenance_on", Status: "committed"}, {Ordinal: 1, Kind: "php_change", Status: "pending"}, {Ordinal: 2, Kind: "domain_tls", Status: "pending"}, {Ordinal: 3, Kind: "maintenance_off", Status: "pending"}}
-	if next, err := nextCompositeChild(children); err != nil || next != 1 {
+	if next, err := NextCompositeChild(children); err != nil || next != 1 {
 		t.Fatalf("resume: %d %v", next, err)
 	}
 	children[1].Status = "failed"
-	if next, err := nextCompositeChild(children); err != nil || next != 3 {
+	if next, err := NextCompositeChild(children); err != nil || next != 3 {
 		t.Fatalf("failure: %d %v", next, err)
 	}
 	children[3].Status = "committed"
-	if next, err := nextCompositeChild(children); err != nil || next != -1 {
+	if next, err := NextCompositeChild(children); err != nil || next != -1 {
 		t.Fatalf("terminal: %d %v", next, err)
 	}
 }
