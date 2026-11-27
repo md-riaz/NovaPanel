@@ -25,11 +25,14 @@ Maintenance alone keeps the existing single metadata apply, without a bracket.
 ## Durable state and reusable effects
 
 Add `phase4_operation_children(job_id, ordinal, child_kind, checkpoint, status,
-typed_error, journal_ref, updated_at)`, keyed by `(job_id, ordinal)` and referencing
+typed_error, identities_json, journal_ref, updated)`, keyed by `(job_id, ordinal)` and referencing
 the parent operation. Status is `pending`, `committed`, or `failed`; committed
 children cannot rewind to pending. Each child commits checkpoint, status and its
 journal entry atomically while its parent stays non-terminal. Parent checkpoints
-are coarse: `prepared` → `in_progress` → `verified`. `CompleteOperation` performs
+are coarse: `prepared` → `verified` → `done`. Each PHP child keeps its validated,
+secret-free original and desired version and full limits snapshot; PHP metadata
+and its child journal completion commit atomically while the parent remains running.
+Standalone PHP terminal atomicity is unchanged. `CompleteOperation` performs
 the sole terminal commit after asserting all children are committed or failed and
 records their aggregate. Existing standalone PHP and SSL operations do not use the
 child table and retain their semantics.
