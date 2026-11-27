@@ -143,3 +143,40 @@ func TestLifetimeReturnCancelsRetainedChild(t *testing.T) {
 		t.Fatalf("retained child: %v closed=%v activated=%v", err, d.closed, activated)
 	}
 }
+
+func TestLifetimeReplayKeepsSiteIdentity(t *testing.T) {
+	binding := configcustody.ConfigBinding{JobID: "original-job", SiteID: "original-site", UID: 123, GID: 456}
+	identity := store.SiteLifetime{SiteID: "original-site", Name: "example", Docroot: "/sites/example/public", AllocatingJob: "original-job", UID: 123, GID: 456}
+	activations := 0
+	for attempt := 0; attempt < 2; attempt++ {
+		d := &fakeInstallLifetime{held: true, empty: true}
+		l := &WordPressLifetime{domain: d, binding: binding, identity: identity, plan: fakeLifetimePlan(), check: func(context.Context) error { return nil }, activate: func(_ context.Context, got store.SiteLifetime) error {
+			if got != identity {
+				t.Fatal("replay changed account identity")
+			}
+			activations++
+			return nil
+		}}
+		err := withInstallLifetime(context.Background(), l, func(l *WordPressLifetime) error {
+			for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums, wordpress.CreateConfig} {
+				if _, _, _, err := l.runReviewed(context.Background(), reviewedInstallChild{kind: kind}); err != nil {
+					return err
+				}
+			}
+			if err := l.ConfigIsolation(context.Background(), binding, func(context.Context) error { return nil }); err != nil {
+				return err
+			}
+			if attempt == 0 {
+				return errors.New("simulated interruption")
+			}
+			_, _, _, err := l.runReviewed(context.Background(), reviewedInstallChild{kind: wordpress.InstallCore})
+			return err
+		}, func(l *WordPressLifetime) error { return l.ReleaseServing(context.Background()) })
+		if !d.closed || (attempt == 0 && err == nil) || (attempt == 1 && err != nil) {
+			t.Fatalf("attempt %d: %v", attempt, err)
+		}
+	}
+	if activations != 1 {
+		t.Fatalf("activation count %d", activations)
+	}
+}

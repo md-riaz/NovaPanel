@@ -77,7 +77,7 @@ func (l *WordPressLifetime) runReviewed(ctx context.Context, child reviewedInsta
 			break
 		}
 	}
-	if step == nil || step.Program == "" || (step.Stdin == "" && child.options.Stdin != nil) {
+	if step == nil || step.Program == "" || ((step.Stdin == "") != (child.options.Stdin == nil)) {
 		l.failed = true
 		return nil, nil, -1, errors.New("jobs: reviewed child unavailable")
 	}
@@ -259,6 +259,11 @@ func (q *Queue) WithFreshWordPressLifetime(ctx context.Context, jid string, iden
 		return err
 	}
 	binding := configcustody.ConfigBinding{JobID: jid, SiteID: identity.SiteID, DatabaseID: op.DatabaseID, AccountID: op.Identity.Database.PrimaryUserID, Docroot: identity.Docroot, UID: identity.UID, GID: identity.GID}
-	l := &WordPressLifetime{domain: domain, binding: binding, identity: identity, plan: plan, activate: s.ActivateSiteLifetime, check: func(checkCtx context.Context) error { return s.CheckOperation(checkCtx, jid) }}
+	l := &WordPressLifetime{domain: domain, binding: binding, identity: identity, plan: plan, activate: s.ActivateSiteLifetime, check: func(checkCtx context.Context) error {
+		if err := q.healthy(); err != nil {
+			return err
+		}
+		return s.CheckOperation(checkCtx, jid)
+	}}
 	return withInstallLifetime(ctx, l, operation, release)
 }
