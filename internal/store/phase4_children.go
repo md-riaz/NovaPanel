@@ -172,3 +172,70 @@ func (s *Store) EngageOperationBracket(ctx context.Context, jobID string) error 
 	r, err := s.db.ExecContext(ctx, `UPDATE phase4_operation_children SET bracket_engaged=1,updated=? WHERE job_id=? AND child_kind='maintenance_on' AND checkpoint='prepared' AND status='pending' AND EXISTS(SELECT 1 FROM phase4_operation_children c WHERE c.job_id=? AND c.child_kind='maintenance_off' AND c.status='pending')`, s.clock.Now(), jobID, jobID)
 	return affected(r, err)
 }
+
+// CompleteCompositeOperation atomically publishes the aggregate and terminal parent.
+func (s *Store) CompleteCompositeOperation(ctx context.Context, jobID string) error {
+	eventID, err := id.New()
+	if err != nil {
+		return err
+	}
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT ordinal,child_kind,status,coalesce(typed_error,'') FROM phase4_operation_children WHERE job_id=? ORDER BY ordinal`, jobID)
+		if err != nil {
+			return err
+		}
+		type result struct {
+			Ordinal int    `json:"ordinal"`
+			Kind    string `json:"child_kind"`
+			Status  string `json:"status"`
+			Error   string `json:"typed_error,omitempty"`
+		}
+		var children []result
+		code, finalizer := "", false
+		for rows.Next() {
+			var c result
+			if err = rows.Scan(&c.Ordinal, &c.Kind, &c.Status, &c.Error); err != nil {
+				rows.Close()
+				return err
+			}
+			if c.Ordinal != len(children) || (c.Status != "committed" && c.Status != "failed") {
+				rows.Close()
+				return ErrSitePrecondition
+			}
+			if c.Kind == "maintenance_off" {
+				finalizer = c.Status == "committed"
+			}
+			if c.Status == "failed" && c.Error != "not_attempted" && code == "" {
+				code = c.Error
+			}
+			children = append(children, c)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		if len(children) == 0 || !finalizer || children[len(children)-1].Kind != "maintenance_off" {
+			return ErrSitePrecondition
+		}
+		raw, err := json.Marshal(children)
+		if err != nil {
+			return err
+		}
+		state := "done"
+		if code != "" {
+			state = "failed"
+		}
+		now := s.clock.Now()
+		r, err := tx.ExecContext(ctx, `UPDATE jobs SET state=?,step='phase4_committed',progress=1,result_json='{}',code=?,updated=?,finished=? WHERE id=? AND state='running' AND EXISTS(SELECT 1 FROM phase4_operations WHERE job_id=? AND kind='site_update' AND checkpoint='verified')`, state, nullableString(code), now, now, jobID, jobID)
+		if err = affected(r, err); err != nil {
+			return err
+		}
+		r, err = tx.ExecContext(ctx, `UPDATE phase4_operations SET checkpoint='done',updated=? WHERE job_id=? AND kind='site_update' AND checkpoint='verified'`, now, jobID)
+		if err = affected(r, err); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO job_events(id,job_id,ts,msg) VALUES(?,?,?,?)`, eventID, jobID, now, string(raw))
+		return err
+	})
+}
