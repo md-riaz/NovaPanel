@@ -8,6 +8,7 @@ StartLimitBurst=20
 
 [Service]
 Type=simple
+Delegate=yes
 ExecStart=/usr/sbin/novapanel-agent
 Restart=on-failure
 RestartSec=2s
