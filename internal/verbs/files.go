@@ -252,11 +252,11 @@ func (s fileopService) run(ctx context.Context, siteID string, req fileop.Reques
 		return res, err
 	}
 	defer unlock()
-	return s.invoke(ctx, siteID, &req, content, "__fileop")
+	return s.invoke(ctx, siteID, &req, bytes.NewReader(content), "__fileop")
 }
 
 // invoke is called under the synchronous site lock or the worker's object lock.
-func (s fileopService) invoke(ctx context.Context, siteID string, request any, content []byte, helper string) (fileop.Response, error) {
+func (s fileopService) invoke(ctx context.Context, siteID string, request any, content io.Reader, helper string) (fileop.Response, error) {
 	a := s.a
 	var res fileop.Response
 	if a.Exec == nil || a.Store == nil {
@@ -292,7 +292,7 @@ func (s fileopService) invoke(ctx context.Context, siteID string, request any, c
 	if err = json.NewEncoder(&body).Encode(request); err != nil {
 		return res, err
 	}
-	out, _, code, err := a.Exec.Run(ctx, program, []string{helper}, runner.RunOpts{Uid: uid, Gid: gid, Groups: []uint32{}, Stdin: io.MultiReader(&body, bytes.NewReader(content)), MaxOutput: 2 << 20})
+	out, _, code, err := a.Exec.Run(ctx, program, []string{helper}, runner.RunOpts{Uid: uid, Gid: gid, Groups: []uint32{}, Stdin: io.MultiReader(&body, content), MaxOutput: 2 << 20})
 	if err != nil || code != 0 {
 		return res, rpc.Errf("agent_error", "File operation failed")
 	}
@@ -313,6 +313,6 @@ func (s fileopService) invoke(ctx context.Context, siteID string, request any, c
 }
 
 func (s fileopService) archive(ctx context.Context, siteID string, req fileop.ArchiveRequest) error {
-	_, err := s.invoke(ctx, siteID, &req, nil, "__archive")
+	_, err := s.invoke(ctx, siteID, &req, bytes.NewReader(nil), "__archive")
 	return err
 }

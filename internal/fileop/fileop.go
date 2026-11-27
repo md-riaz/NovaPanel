@@ -15,6 +15,7 @@ import (
 
 const MaxChunk = 512 << 10
 const MaxWrite = 512 << 10
+const MaxUpload = 100 << 20
 
 // MaxEntries bounds both directory memory and helper output.
 const MaxEntries = 512
@@ -98,7 +99,12 @@ func Helper(in io.Reader, out io.Writer) error {
 			return err
 		}
 	}
-	res, err := apply(req, content)
+	var res Response
+	if req.Operation == "upload" {
+		err = upload(req, reader)
+	} else {
+		res, err = apply(req, content)
+	}
 	if err != nil {
 		res = Response{Code: errorCode(err)}
 	}
@@ -206,4 +212,16 @@ func apply(req Request, content []byte) (Response, error) {
 		return res, unix.EINVAL
 	}
 	return res, nil
+}
+
+func upload(req Request, content io.Reader) error {
+	if req.Length < 0 || req.Length > MaxUpload || ValidatePath(req.Path) != nil || path.Clean(req.Path) == "." {
+		return unix.EINVAL
+	}
+	root, err := OpenDocroot(req.Base, req.Name)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return place(root, path.Clean(req.Path), content, int64(req.Length), true)
 }

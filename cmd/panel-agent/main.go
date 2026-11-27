@@ -170,9 +170,14 @@ func serve(ctx context.Context, a *agent.Agent) (err error) {
 	go func() { serving <- s.ServeContext(ctx, l) }()
 	served := false
 	consumed := 0
+	fileop.SweepUploads(a.Cfg.UploadsDir, time.Now())
+	uploadSweep := time.NewTicker(15 * time.Minute)
+	defer uploadSweep.Stop()
 running:
 	for {
 		select {
+		case now := <-uploadSweep.C:
+			fileop.SweepUploads(a.Cfg.UploadsDir, now)
 		case e := <-results:
 			consumed++
 			// A worker may stop on sticky audit failure; reads must remain available.

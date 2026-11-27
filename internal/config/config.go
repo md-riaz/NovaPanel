@@ -17,6 +17,7 @@ import (
 const DefaultPath = "/etc/novapanel/agent.toml"
 
 type Config struct {
+	UploadsDir           string `toml:"uploads_dir"`
 	SocketPath           string `toml:"socket_path"`
 	DBPath               string `toml:"db_path"`
 	SealKeyPath          string `toml:"seal_key_path"`
@@ -50,7 +51,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		SocketPath: "/run/novapanel/agent.sock", DBPath: "/var/lib/novapanel/panel.db", SealKeyPath: "/var/lib/novapanel/seal.key", LogDir: "/var/log/novapanel", WebUser: "novapanel", ACMEWebroot: "/var/www/acme", SitesRoot: "/srv/sites", TLSDir: "/etc/novapanel/tls",
+		UploadsDir: "/run/novapanel/uploads", SocketPath: "/run/novapanel/agent.sock", DBPath: "/var/lib/novapanel/panel.db", SealKeyPath: "/var/lib/novapanel/seal.key", LogDir: "/var/log/novapanel", WebUser: "novapanel", ACMEWebroot: "/var/www/acme", SitesRoot: "/srv/sites", TLSDir: "/etc/novapanel/tls",
 		ACMEDirectoryProd: "https://acme-v02.api.letsencrypt.org/directory", ACMEDirectoryStaging: "https://acme-staging-v02.api.letsencrypt.org/directory", SSHPort: 22, FirewallWindowMin: 15, UpdateManifestURL: "https://releases.example/novapanel/stable/manifest.json", RateLimitRPS: 5, RateLimitBurst: 20, AnonMintRPS: 20, AnonMintBurst: 100, LoginMaxAttempts: 5, LoginWindowSec: 900, TOTPMaxAttempts: 5, WebhookBodyMaxKB: 512, ReauthWindowSec: 300, IdleSec: 600, AbsSec: 43200, DeadlineDefaultMs: 120000,
 	}
 }
@@ -119,7 +120,7 @@ func set(v reflect.Value, s string) error {
 	return nil
 }
 func (c Config) Validate() error {
-	for _, p := range []string{c.SocketPath, c.DBPath, c.SealKeyPath, c.LogDir, c.ACMEWebroot, c.SitesRoot, c.TLSDir} {
+	for _, p := range []string{c.UploadsDir, c.SocketPath, c.DBPath, c.SealKeyPath, c.LogDir, c.ACMEWebroot, c.SitesRoot, c.TLSDir} {
 		if !filepath.IsAbs(p) || strings.ContainsAny(p, "\x00\r\n") {
 			return fmt.Errorf("configuration path must be absolute: %q", p)
 		}
