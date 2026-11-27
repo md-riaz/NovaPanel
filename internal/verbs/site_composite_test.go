@@ -25,6 +25,10 @@ func TestCompositeExecutorCommitsParent(t *testing.T) {
 	t.Run("productive_failure", func(t *testing.T) { testCompositeExecutor(t, false, true, false) })
 	t.Run("failure_replay", func(t *testing.T) { testCompositeExecutor(t, true, true, false) })
 	t.Run("restore_retry", func(t *testing.T) { testCompositeExecutor(t, false, false, true) })
+	t.Run("success_maintenance_off", func(t *testing.T) { testCompositeExecutorMaintenance(t, false, false, false, false) })
+	t.Run("failure_maintenance_off", func(t *testing.T) { testCompositeExecutorMaintenance(t, false, true, false, false) })
+	t.Run("failure_replay_maintenance_off", func(t *testing.T) { testCompositeExecutorMaintenance(t, true, true, false, false) })
+	t.Run("restore_retry_maintenance_off", func(t *testing.T) { testCompositeExecutorMaintenance(t, false, false, true, false) })
 }
 
 type compositeRetryRunner struct{ calls atomic.Int32 }
@@ -185,6 +189,10 @@ func testCompositeBracketCrash(t *testing.T, stop int) {
 }
 
 func testCompositeExecutor(t *testing.T, replay, failure, retry bool) {
+	testCompositeExecutorMaintenance(t, replay, failure, retry, true)
+}
+
+func testCompositeExecutorMaintenance(t *testing.T, replay, failure, retry, maintenance bool) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st, err := store.Open(filepath.Join(root, "panel.db"))
@@ -218,7 +226,6 @@ func testCompositeExecutor(t *testing.T, replay, failure, retry bool) {
 		a.Nginx.Runner = &compositeRetryRunner{}
 	}
 	a.Jobs = jobs.NewQueue(st, nil, log)
-	maintenance := true
 	request := &store.CompositeSiteUpdate{SiteID: sid, PrimaryDomainID: &did, Maintenance: &maintenance}
 	if failure {
 		force := true
@@ -269,7 +276,7 @@ func testCompositeExecutor(t *testing.T, replay, failure, retry bool) {
 				t.Fatalf("restore was not retried: %+v", j)
 			}
 			site, err := st.SiteByID(ctx, sid)
-			if err != nil || !site.Maintenance {
+			if err != nil || site.Maintenance != maintenance {
 				t.Fatalf("maintenance: %+v %v", site, err)
 			}
 			children, err := st.OperationChildren(ctx, j.ID)
