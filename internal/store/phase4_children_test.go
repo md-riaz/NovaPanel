@@ -178,3 +178,32 @@ func TestEngagedBracketPreventsExpiryBeforeEffectCommit(t *testing.T) {
 		t.Fatalf("restored: %d %v", n, err)
 	}
 }
+
+func TestCompositeTLSIntentSnapshotAtomic(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	phase4Job(t, s.db.raw, "tls-child", "running")
+	phase4Exec(t, s.db.raw, `INSERT INTO phase4_operations(job_id,kind,checkpoint,identities_json,expires,updated) VALUES('tls-child','site_update','prepared','{}',9999999999999,1)`)
+	if err = s.PrepareOperationChildren(ctx, "tls-child", []OperationChild{{Ordinal: 0, Kind: "domain_tls"}, {Ordinal: 1, Kind: "maintenance_off"}}); err != nil {
+		t.Fatal(err)
+	}
+	first := []byte(`{"job_id":"tls-child"}`)
+	if err = s.BeginCompositeTLSIntent(ctx, "tls-child", first); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.BeginCompositeTLSIntent(ctx, "tls-child", []byte(`{"job_id":"other"}`)); err == nil {
+		t.Fatal("overwrote pending TLS intent")
+	}
+	children, err := s.OperationChildren(ctx, "tls-child")
+	if err != nil || string(children[0].Identity.TLS) != string(first) {
+		t.Fatalf("snapshot changed on failed reservation: %+v %v", children, err)
+	}
+	intent, err := s.TLSIntent(ctx)
+	if err != nil || string(intent) != string(first) {
+		t.Fatalf("intent changed: %s %v", intent, err)
+	}
+}
