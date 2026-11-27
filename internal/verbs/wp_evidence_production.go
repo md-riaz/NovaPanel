@@ -9,8 +9,6 @@ import (
 	"novapanel/internal/wordpress"
 )
 
-func wpLifetimeAvailable() bool { return false }
-
 func wpEvidence() (wordpress.ArtifactEvidence, bool) {
 	evidence, err := wordpress.VerifyTool(context.Background(), runner.Real{})
 	return evidence, err == nil

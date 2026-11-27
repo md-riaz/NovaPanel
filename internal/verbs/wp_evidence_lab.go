@@ -7,8 +7,6 @@ import (
 	"novapanel/internal/wordpress/offline"
 )
 
-func wpLifetimeAvailable() bool { return true }
-
 func wpEvidence() (wordpress.ArtifactEvidence, bool) {
 	m := wordpress.ApprovedArtifacts()
 	for _, url := range []string{m.CLI.URL, "https://downloads.wordpress.org/release/wordpress-7.1.4.zip", m.ChecksumsURL} {
