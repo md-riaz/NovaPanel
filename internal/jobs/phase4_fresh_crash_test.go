@@ -81,8 +81,8 @@ func TestFreshInstallChildCrashReplay(t *testing.T) {
 			if stop == wordpress.VerifyChecksums && (d.runs[wordpress.Download] != 2 || d.runs[wordpress.VerifyChecksums] != 2) {
 				t.Fatalf("checksum replay: %#v", d.runs)
 			}
-			if stop == wordpress.InstallCore && d.runs[wordpress.InstallCore] != 1 {
-				t.Fatal("reinstalled")
+			if stop == wordpress.InstallCore && (d.runs[wordpress.InstallCore] != 1 || d.runs[wordpress.VerifyChecksums] != 2) {
+				t.Fatalf("replay must reverify and skip reinstall: %#v", d.runs)
 			}
 		})
 	}

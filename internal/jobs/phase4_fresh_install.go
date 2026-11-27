@@ -19,28 +19,34 @@ func runFreshInstall(ctx context.Context, lifetime *WordPressLifetime, artifacts
 		return errors.New("jobs: WordPress install unavailable")
 	}
 	if artifactsReady {
+		if err := verifyArchive(); err != nil {
+			return err
+		}
 		lifetime.mu.Lock()
 		if lifetime.closed || lifetime.failed || lifetime.stage != 0 {
 			lifetime.mu.Unlock()
 			return errors.New("jobs: WordPress artifact replay refused")
 		}
-		lifetime.stage = 2
+		lifetime.stage = 1
 		lifetime.mu.Unlock()
-	} else {
-		for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums} {
-			if out, stderr, code, err := lifetime.runReviewed(ctx, reviewedInstallChild{kind: kind}); err != nil || code != 0 {
-				if (kind == wordpress.Download && code == wordpress.ExtractRetryExit) || (kind == wordpress.VerifyChecksums && code == 1 && len(out) == 0 && strings.TrimSpace(string(stderr)) == "Error: Couldn't get checksums from WordPress.org.") {
-					return ErrRetry
-				}
-				return errors.New("jobs: WordPress artifact step failed")
+	}
+	for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums} {
+		if artifactsReady && kind == wordpress.Download {
+			continue
+		}
+		if out, stderr, code, err := lifetime.runReviewed(ctx, reviewedInstallChild{kind: kind}); err != nil || code != 0 {
+			if (kind == wordpress.Download && code == wordpress.ExtractRetryExit) || (kind == wordpress.VerifyChecksums && code == 1 && len(out) == 0 && strings.TrimSpace(string(stderr)) == "Error: Couldn't get checksums from WordPress.org.") {
+				return ErrRetry
 			}
-			if kind == wordpress.Download {
-				if err := verifyArchive(); err != nil {
-					return err
-				}
+			return errors.New("jobs: WordPress artifact step failed")
+		}
+		if kind == wordpress.Download {
+			if err := verifyArchive(); err != nil {
+				return err
 			}
 		}
 	}
+
 	if err := publish(); err != nil {
 		return err
 	}
