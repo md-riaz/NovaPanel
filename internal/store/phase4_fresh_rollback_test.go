@@ -62,6 +62,7 @@ func TestFreshWordPressRollbackIntentSurvivesRecovery(t *testing.T) {
 	if err = s.CompleteFreshWordPressRollback(ctx, j.ID); err == nil {
 		t.Fatal("finished before teardown")
 	}
+	phase4Exec(t, s.db.raw, `INSERT INTO idempotency(id,job_id,result_json,payload_hash,created) VALUES('rollback-key','rollback-job','sealed-token','payload',1)`)
 	if err = s.MarkFreshWordPressRollbackCleaned(ctx, j.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -73,6 +74,9 @@ func TestFreshWordPressRollbackIntentSurvivesRecovery(t *testing.T) {
 	}
 	if phase4Count(t, s.db.raw, `SELECT count(*) FROM site_account_provenance WHERE site_id IS NULL AND uid=2000000`) != 1 {
 		t.Fatal("UID history lost")
+	}
+	if phase4Count(t, s.db.raw, `SELECT count(*) FROM idempotency WHERE id='rollback-key' AND result_json IS NULL`) != 1 {
+		t.Fatal("failed claim token retained")
 	}
 	if phase4Count(t, s.db.raw, `SELECT count(*) FROM phase4_operations WHERE job_id='rollback-job' AND checkpoint='expired' AND reconciled=1 AND ciphertext IS NULL`) != 1 {
 		t.Fatal("journal not retired")

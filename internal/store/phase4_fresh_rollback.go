@@ -77,6 +77,9 @@ func (s *Store) CompleteFreshWordPressRollback(ctx context.Context, jid string) 
 			return ErrSitePrecondition
 		}
 		now := s.clock.Now()
+		if _, err = tx.ExecContext(ctx, `UPDATE idempotency SET result_json=NULL WHERE job_id=?`, jid); err != nil {
+			return err
+		}
 		if _, err = tx.ExecContext(ctx, `DELETE FROM job_claims WHERE job_id=?`, jid); err != nil {
 			return err
 		}
