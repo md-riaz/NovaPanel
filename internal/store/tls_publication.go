@@ -129,39 +129,15 @@ func (s *Store) CheckCompositeTLSIntent(ctx context.Context, raw json.RawMessage
 		if current != string(raw) {
 			return ErrSiteConflict
 		}
-		rows, e := tx.QueryContext(ctx, `SELECT o.job_id,c.identities_json FROM phase4_operations o JOIN jobs j ON j.id=o.job_id JOIN phase4_operation_children c ON c.job_id=o.job_id AND c.child_kind='domain_tls' WHERE o.kind='site_update' AND o.checkpoint NOT IN ('done','expired') AND (j.state IN ('queued','running') OR (j.state='failed' AND j.code='interrupted'))`)
-		if e != nil {
-			return e
-		}
 		var snapshot string
-		var pendingSnapshot bool
-		for rows.Next() {
-			var jid, identity string
-			if e = rows.Scan(&jid, &identity); e != nil {
-				rows.Close()
-				return e
-			}
-			var child OperationChildIdentity
-			if json.Unmarshal([]byte(identity), &child) == nil && len(child.TLS) != 0 {
-				pendingSnapshot = true
-			}
-			if jid == binding.JobID {
-				matched, snapshot = true, identity
-			}
-		}
-		e = rows.Err()
-		rows.Close()
-		if e != nil {
-			return e
-		}
-		if !matched && pendingSnapshot {
-			changed = true
-			_, e = tx.ExecContext(ctx, `INSERT INTO settings(key,value_json) VALUES('tls:publication:unreconciled:v1','true') ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json`)
-			return e
-		}
-		if !matched {
+		e := tx.QueryRowContext(ctx, `SELECT c.identities_json FROM phase4_operations o JOIN jobs j ON j.id=o.job_id JOIN phase4_operation_children c ON c.job_id=o.job_id AND c.child_kind='domain_tls' WHERE o.job_id=? AND o.kind='site_update' AND o.checkpoint NOT IN ('done','expired') AND (j.state IN ('queued','running') OR (j.state='failed' AND j.code='interrupted'))`, binding.JobID).Scan(&snapshot)
+		if errors.Is(e, sql.ErrNoRows) {
 			return nil
 		}
+		if e != nil {
+			return e
+		}
+		matched = true
 		var child OperationChildIdentity
 		requestMatches, e := compositeRequestMatches(ctx, tx, binding.JobID)
 		if e != nil {

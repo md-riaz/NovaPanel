@@ -62,6 +62,21 @@ func TestTLSPrimaryPublicationExecutor(t *testing.T) {
 					}
 					return nil
 				}
+				var restored bool
+				f.a.Jobs.SetRunner(func(ctx context.Context, j *jobs.Job) error {
+					err := f.server.ExecuteJob(ctx, j)
+					if err != nil && failure != "success" && failure != "crash" && failure != "binding" && failure != "cancel" {
+						pending, e := f.st.TLSIntent(context.Background())
+						if e == nil && len(pending) == 0 {
+							old, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "demo.test/current"))
+							target, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "alias.test/current"))
+							config, _ := os.ReadFile(filepath.Join(f.a.Nginx.Root, "sites-available/demo.conf"))
+							restored = old == f.oldPointer && target == f.targetPointer && string(config) == string(f.oldConfig)
+							cancel()
+						}
+					}
+					return err
+				})
 				done := make(chan error, 1)
 				go func() { done <- f.a.Jobs.Run(ctx) }()
 				deadline := time.Now().Add(4 * time.Second)
@@ -106,15 +121,15 @@ func TestTLSPrimaryPublicationExecutor(t *testing.T) {
 				if err != nil || strings.Contains(string(pending), "PRIVATE KEY") || strings.Contains(string(pending), "CERTIFICATE") {
 					t.Fatalf("invalid intent: %s %v", pending, err)
 				}
-				if failure != "success" && len(pending) == 0 {
-					job, e := f.st.GetJob(context.Background(), f.job)
-					if e == nil && job.State != "done" {
-						old, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "demo.test/current"))
-						target, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "alias.test/current"))
-						config, _ := os.ReadFile(filepath.Join(f.a.Nginx.Root, "sites-available/demo.conf"))
-						if old != f.oldPointer || target != f.targetPointer || string(config) != string(f.oldConfig) {
-							t.Fatal("failed publication did not restore previous state")
-						}
+				if (failure == "-t" || failure == "reload" || failure == "probe" || failure == "database") && !restored {
+					t.Fatal("failed publication did not restore previous state before retry")
+				}
+				if (failure == "crash" || failure == "binding" || failure == "cancel") && len(pending) == 0 {
+					old, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "demo.test/current"))
+					target, _ := os.Readlink(filepath.Join(f.a.Cfg.TLSDir, "alias.test/current"))
+					config, _ := os.ReadFile(filepath.Join(f.a.Nginx.Root, "sites-available/demo.conf"))
+					if old != f.oldPointer || target != f.targetPointer || string(config) != string(f.oldConfig) {
+						t.Fatal("failed publication did not restore previous state")
 					}
 				}
 				if failure == "crash" || failure == "binding" || failure == "cancel" {

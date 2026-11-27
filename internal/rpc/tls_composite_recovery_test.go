@@ -7,10 +7,11 @@ import (
 	"testing"
 
 	"novapanel/internal/agent"
+	"novapanel/internal/jobs"
 	"novapanel/internal/store"
 )
 
-func TestTLSRecoveryDefersComposite(t *testing.T) {
+func TestTLSRecoveryDefersCompositeAndRecoversUnrelatedIntent(t *testing.T) {
 	ctx := context.Background()
 	s, err := store.Open(":memory:")
 	if err != nil {
@@ -48,8 +49,14 @@ func TestTLSRecoveryDefersComposite(t *testing.T) {
 	if err = s.ClearTLSIntent(ctx, raw); err != nil {
 		t.Fatal(err)
 	}
+	if err = s.CommitOperationChild(ctx, jid, 0, "tls_committed", "committed", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RecoverJobs(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
 	otherID := "01K8WMXZF57CGNZKX1FZ38DZMD"
-	other := store.Job{ID: otherID, Verb: "ssl.upload", ObjectKey: "site:" + sid, CreatedBy: "local-root", Role: "owner", Args: []byte(`{}`), State: "running"}
+	other := store.Job{ID: otherID, Verb: "ssl.issue", ObjectKey: "site:" + sid, CreatedBy: "local-root", Role: "owner", Args: []byte(`{}`), State: "running"}
 	if err = s.CreateJob(ctx, other); err != nil {
 		t.Fatal(err)
 	}
@@ -57,23 +64,30 @@ func TestTLSRecoveryDefersComposite(t *testing.T) {
 	if err = s.BeginTLSIntent(ctx, orphan); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := server.prepareTLSRecovery(ctx); err == nil || got != nil {
-		t.Fatalf("orphan intent dispatched: %+v %v", got, err)
+	recovered := false
+	server.Registry = map[string]Verb{"ssl.issue": {
+		Slow: true, MinRole: Admin, NewArgs: func() any { return &struct{}{} },
+		Exec:             func(context.Context, *agent.Agent, *jobs.Job) error { t.Fatal("effect re-executed"); return nil },
+		ValidateRecovery: func(context.Context, *agent.Agent, *jobs.Job) error { return nil },
+		Recover: func(ctx context.Context, _ *agent.Agent, j *jobs.Job) error {
+			recovered = j.ID == otherID
+			return s.ClearTLSIntent(ctx, orphan)
+		},
+	}}
+	got, err := server.prepareTLSRecovery(ctx)
+	if err != nil || got == nil || got.ID != otherID {
+		t.Fatalf("unrelated intent not recovered: %+v %v", got, err)
+	}
+	if err = server.resumeTLSRecovery(ctx, got); err != nil || !recovered {
+		t.Fatalf("unrelated recovery failed: %v", err)
 	}
 	job, err := s.GetJob(ctx, jid)
-	if err != nil || job.Code != "" {
-		t.Fatalf("orphan altered composite: %+v %v", job, err)
+	children, childErr := s.OperationChildren(ctx, jid)
+	if err != nil || childErr != nil || job.State != "queued" || job.Code != "" || len(children) != 2 || children[0].Status != "committed" || children[1].Status != "pending" {
+		t.Fatalf("composite altered: %+v children=%+v errors=%v %v", job, children, err, childErr)
 	}
-	otherAfter, err := s.GetJob(ctx, otherID)
-	if err != nil || otherAfter.State != other.State || otherAfter.Code != other.Code || otherAfter.Attempts != other.Attempts {
-		t.Fatalf("orphan altered unrelated job: %+v %v", otherAfter, err)
-	}
-	anomaly, err := s.Setting(ctx, "tls:publication:unreconciled:v1")
-	if err != nil || string(anomaly) != "true" {
-		t.Fatalf("orphan anomaly missing: %s %v", anomaly, err)
-	}
-	if err = s.ClearTLSIntent(ctx, orphan); err != nil {
-		t.Fatal(err)
+	if anomaly, err := s.Setting(ctx, "tls:publication:unreconciled:v1"); err == nil {
+		t.Fatalf("unrelated intent orphaned: %s", anomaly)
 	}
 	changed := append(append([]byte(nil), raw...), []byte(` {}`)...)
 	if err = s.BeginTLSIntent(ctx, changed); err != nil {
@@ -83,7 +97,7 @@ func TestTLSRecoveryDefersComposite(t *testing.T) {
 		t.Fatalf("quarantined composite must reach its finalizer: %+v %v", got, err)
 	}
 	job, err = s.GetJob(ctx, jid)
-	if err != nil || job.State != "running" || job.Code != "agent_error" {
+	if err != nil || job.State != "queued" || job.Code != "agent_error" {
 		t.Fatalf("disposition: %+v %v", job, err)
 	}
 	if err = s.RecoverJobs(ctx, 1); err != nil {
