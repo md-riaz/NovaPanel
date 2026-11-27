@@ -377,6 +377,7 @@ CREATE TABLE phase4_operation_children (
   status TEXT NOT NULL CHECK(status IN ('pending','committed','failed')),
   typed_error TEXT,
   identities_json TEXT NOT NULL,
+  bracket_engaged INTEGER NOT NULL DEFAULT 0 CHECK(bracket_engaged IN (0,1)),
   journal_ref TEXT,
   updated INTEGER NOT NULL,
   PRIMARY KEY(job_id,ordinal)
@@ -386,6 +387,9 @@ CREATE TRIGGER phase4_child_no_rewind BEFORE UPDATE OF status, checkpoint, ident
        (NEW.status IS NOT OLD.status OR NEW.checkpoint IS NOT OLD.checkpoint OR
         NEW.identities_json IS NOT OLD.identities_json)
   BEGIN SELECT RAISE(ABORT,'child status cannot rewind'); END;
+CREATE TRIGGER phase4_bracket_no_rewind BEFORE UPDATE OF bracket_engaged ON phase4_operation_children
+  WHEN OLD.bracket_engaged = 1 AND NEW.bracket_engaged <> 1
+  BEGIN SELECT RAISE(ABORT,'bracket intent cannot rewind'); END;
 
 ```
 
@@ -399,7 +403,9 @@ For `php_set`, bind immutable `site_id`, original and desired PHP version and th
 
 For PHP as an ordered child of a composite `site.update`, commit the desired PHP metadata and that child's status, checkpoint and journal completion atomically in one SQLite transaction while the parent job remains running; do not commit the parent job result/state there. This preserves no-partial-publish: PHP metadata and the child journal-complete record become visible together, so recovery skips a committed child. A crash between the PHP effect and child commit reuses the same durable original/desired snapshot as standalone recovery. Child status, checkpoint and journal completion likewise commit atomically for every child.
 
-A child is terminal when committed or failed; recovery skips both and never re-runs either. A transient error retries the pending child. Before parent terminalization, a permanent productive child failure durably commits the child's `failed` status, typed error and journal in its own transaction. Forward progress stops at that child: no later pending productive child starts. On replay, any failed child deterministically routes straight to failure finalization. Record each other pending productive child as `failed` with typed error `not_attempted` and its journal before terminalization, so the aggregate explicitly identifies skipped work. The maintenance restore finalizer is mandatory and idempotent: after `maintenance_on` commits, neither a done nor failed disposition is permitted until maintenance is restored to the caller-desired value. A restore effect failure is transient: return `ErrRetry`, requeue, and re-drive the pending finalizer. An unfinished restore stays in the roll-forward set and is exempt from terminal expiry using the existing `teardown_started` expiry-exemption machinery. A genuinely unrecoverable restore leaves the operation unreconciled, blocks conflicting mutation, and is surfaced for authorized reconcile under the existing unreconciled-recovery disposition below; the maintenance state is known and recoverable, never silently abandoned. A permanent productive child failure terminalizes the parent as failed only after restore commits; if restore cannot complete, the parent remains unreconciled and in roll-forward instead of terminal. In the parent terminal transaction, `CompleteOperation` asserts every child is committed or failed and atomically commits parent job result/state, parent journal `done`, and the aggregate of child statuses. Earlier committed effects remain applied. Standalone `php_set`, `ssl.*`, `database.*`, and single-field `site.update` contracts remain unchanged.
+A child is terminal when committed or failed; recovery skips both and never re-runs either. A transient error retries the pending child. Before parent terminalization, a permanent productive child failure durably commits the child's `failed` status, typed error and journal in its own transaction. Forward progress stops at that child: no later pending productive child starts. On replay, any failed child deterministically routes straight to failure finalization. Record each other pending productive child as `failed` with typed error `not_attempted` and its journal before terminalization, so the aggregate explicitly identifies skipped work. The maintenance restore finalizer is the single terminal maintenance write and always runs on every terminal path, success or failure, to apply the caller-desired on/off value. It is not a productive effect and is never skipped after a productive-child failure; pending explicit maintenance is resolved by this finalizer. For an unbracketed composite with maintenance omitted, the desired value is the existing value; for a bracketed composite, omitted means false.
+
+Before the `maintenance_on` effect, durably set `bracket_engaged=1` on its prepared child, with its `maintenance_off` finalizer already present; this is the write-ahead expiry-exempt intent, analogous to `teardown_started`, and cannot rewind. From that commit until the restore child is committed, neither done nor failed is permitted and the composite remains in the roll-forward set, exempt from terminal expiry by the predicate below even if `maintenance_on` has not committed. Each resumed composite checks expiry using the injected clock before every external effect; an expired, non-exempt operation does not continue effects. The maintenance-on effect is idempotent, so replay after effect but before child commit re-drives it and converges. There is no window where the auto-maintenance effect has occurred but expiry can terminally fail the job. A restore failure is transient: return `ErrRetry`, requeue, and re-drive the pending idempotent finalizer. A genuinely unrecoverable restore is surfaced for authorized reconcile under the existing unreconciled-recovery disposition below, remains unreconciled and blocks conflicting mutation; exemption never replaces that resolution path. A permanent productive child failure terminalizes the parent as failed only after the finalizer commits. In the parent terminal transaction, `CompleteOperation` asserts every child is committed or failed and atomically commits parent job result/state, parent journal `done`, and the aggregate of child statuses. Earlier committed effects remain applied. Standalone `php_set`, `ssl.*`, `database.*`, and single-field `site.update` contracts remain unchanged.
 
 No plaintext password column is added. The operation payload is F12-sealed and contains generated credentials, salts, bound identities and desired protected-config bytes or equivalent typed fields. site_id/db_id are historical operation identifiers, deliberately not cascading FKs. The journal cannot disappear when its resource is removed. Nonsecret checkpoints are `prepared`, `db_applied`, `config_published`, `verified`, `done`, `expired`; delete uses `prepared`, `db_applied`, `done`. There is no separately committed claim_published state. Each mutation first ensures the recorded postcondition, then records its checkpoint, so a crash between effect and checkpoint reuses the same credential and identifiers. A DB transaction is not held during external IO. Except for the composite child transaction specified above, commit verified metadata, completed job state/result, F19 sealed claim, journal done and recovery nonce/ciphertext removal in one SQLite transaction. For deletes the same transaction omits the claim. Rollback exposes none of these changes. Integrate this typed terminal method with the existing completion-audit boundary and preserve its consumed-claim exception. A done operation never republishes a consumed/expired claim. This requires a typed atomic store method, not separate best-effort writes.
 
@@ -417,14 +423,14 @@ WHERE expires <= ? AND checkpoint NOT IN ('done','expired')
   AND NOT (kind = 'site_update' AND EXISTS (
     SELECT 1 FROM phase4_operation_children c
     WHERE c.job_id = phase4_operations.job_id AND c.child_kind = 'maintenance_on'
-      AND c.status = 'committed') AND EXISTS (
+      AND c.bracket_engaged = 1) AND NOT EXISTS (
     SELECT 1 FROM phase4_operation_children c
     WHERE c.job_id = phase4_operations.job_id AND c.child_kind = 'maintenance_off'
-      AND c.status = 'pending'))
+      AND c.status = 'committed'))
 ORDER BY expires,job_id LIMIT 100;
 ```
 
-Preparation expiry is exactly now + 86400000 ms. Claim delivery TTL starts at actual atomic publication per F19, not preparation. An expired operation cannot continue old external mutations; begun destructive teardown and a composite with committed maintenance-on and unfinished restore remain unexpired and roll forward. A fresh authorized operation may reconcile only after resolving the old blocker under the complete lock set.
+Preparation expiry is exactly now + 86400000 ms. Claim delivery TTL starts at actual atomic publication per F19, not preparation. An expired operation cannot continue old external mutations; begun destructive teardown and a composite with write-ahead bracket intent and unfinished restore remain unexpired and roll forward. A fresh authorized operation may reconcile only after resolving the old blocker under the complete lock set.
 
 ## Phase 5 — deploys, cron, ssh
 

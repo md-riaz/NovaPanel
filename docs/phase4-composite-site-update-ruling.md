@@ -28,9 +28,11 @@ Instantiate composite children in order:
 1. `maintenance_on`, transient, only for the auto-bracket.
 2. `php_change` when `php_version` is supplied.
 3. `domain_tls` when `primary_domain_id`, `force_https`, or `hsts_max_age` is supplied.
-4. `maintenance_off`/restore when the bracket ran: restore to true only when
-   the caller explicitly supplied `maintenance:true`, otherwise false.
-   Without a bracket, apply explicit maintenance as the terminal metadata step.
+4. `maintenance_off`/restore, the single terminal maintenance write on every
+   success or failure path, including after productive-child failure. With a
+   bracket restore to true only for explicit `maintenance:true`, otherwise false.
+   Without a bracket apply the explicit value, or preserve the existing value if
+   omitted. This finalizer is never a productive effect and is never skipped.
 
 At the R9 refusal-removal gate, update phase-4.md to describe this routing,
 removing the combination refusal and retaining the PHP-alone delegation verbatim;
@@ -39,7 +41,7 @@ do not edit that spec before the gate.
 ## Durable state and reusable effects
 
 Add `phase4_operation_children(job_id, ordinal, child_kind, checkpoint, status,
-typed_error, identities_json, journal_ref, updated)`, keyed by `(job_id, ordinal)` and referencing
+typed_error, identities_json, bracket_engaged, journal_ref, updated)`, keyed by `(job_id, ordinal)` and referencing
 the parent operation. Status is `pending`, `committed`, or `failed`; terminal
 children have immutable status, checkpoint and identity, enforced by a trigger.
 Each child commits checkpoint, status and its
@@ -74,9 +76,16 @@ durably in its own transaction before parent terminalization. Forward progress
 stops: no later pending effect child starts. On replay any failed child routes
 directly to failure finalization. Record each other pending productive child as
 failed with typed error `not_attempted` and its journal, so the aggregate identifies
-skipped work. The restore finalizer is mandatory and idempotent: after
-`maintenance_on` commits, neither success nor failure may terminalize until the
-caller-desired maintenance state has been restored. A restore effect failure is
+skipped work. Before the maintenance-on effect, durably set `bracket_engaged=1`
+on its prepared child, with the restore child already present. This non-rewinding
+write-ahead intent starts the expiry exemption before the effect; it ends only
+after the restore child commits. The idempotent maintenance-on effect re-drives
+after a crash before its child commit, so there is no effect-before-commit window
+in which expiry can terminally fail the job. Every resumed composite checks expiry
+using the injected clock before each external effect; a dead, non-exempt operation
+does not continue. The restore finalizer is mandatory and idempotent: neither
+success nor failure may terminalize until the caller-desired maintenance state has
+been applied. A restore effect failure is
 transient: return `ErrRetry` and re-drive the pending finalizer. An unfinished
 restore remains in the roll-forward set and is exempt from terminal expiry using
 the same machinery as `teardown_started` in 02. If restore cannot be recovered,
