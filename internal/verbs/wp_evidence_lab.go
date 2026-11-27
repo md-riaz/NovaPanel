@@ -11,7 +11,7 @@ func wpLifetimeAvailable() bool { return true }
 
 func wpEvidence() (wordpress.ArtifactEvidence, bool) {
 	m := wordpress.ApprovedArtifacts()
-	for _, url := range []string{m.CLI.URL, m.WordPress.URL, m.ChecksumsURL} {
+	for _, url := range []string{m.CLI.URL, "https://downloads.wordpress.org/release/wordpress-7.1.4.zip", m.ChecksumsURL} {
 		if _, err := offline.Resolve(url); err != nil {
 			return wordpress.ArtifactEvidence{}, false
 		}
