@@ -111,7 +111,7 @@ func (s *Store) MarkWordPressDownloadStarted(ctx context.Context, jobID string) 
 		if err != nil {
 			return err
 		}
-		if op.Kind != WordPressInstall || op.Checkpoint != "db_applied" || op.Identity.WordPress == nil {
+		if op.Kind != WordPressInstall || (op.Checkpoint != "db_applied" && op.Checkpoint != "verification_in_progress") || op.Identity.WordPress == nil {
 			return ErrSitePrecondition
 		}
 		jobDriven, err := freshInstallJobDriven(ctx, tx, op)
@@ -138,7 +138,7 @@ func (s *Store) MarkWordPressDownloadStarted(ctx context.Context, jobID string) 
 		if err != nil {
 			return err
 		}
-		result, err := tx.ExecContext(ctx, `UPDATE phase4_operations SET identities_json=?,updated=? WHERE job_id=? AND checkpoint='db_applied'`, string(raw), s.clock.Now(), jobID)
+		result, err := tx.ExecContext(ctx, `UPDATE phase4_operations SET identities_json=?,updated=? WHERE job_id=? AND checkpoint=?`, string(raw), s.clock.Now(), jobID, op.Checkpoint)
 		return affected(result, err)
 	})
 }

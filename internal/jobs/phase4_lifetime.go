@@ -29,6 +29,7 @@ type lifetimeStore interface {
 	CheckFreshSiteLifetime(context.Context, store.SiteLifetime) error
 	CheckActivatedSiteLifetime(context.Context, store.SiteLifetime, string) error
 	ActivateSiteLifetime(context.Context, store.SiteLifetime) error
+	CheckpointOperation(context.Context, string, string, string) error
 }
 
 // WordPressLifetime remains held until the operation and its serving decision finish.
@@ -363,7 +364,24 @@ func (q *Queue) withFreshWordPressLifetime(ctx context.Context, jid string, iden
 		if err := s.CheckOperation(checkCtx, jid); err != nil {
 			return err
 		}
-		return verify(checkCtx, in.SitesRoot, identity)
+		current, err := s.LoadOperation(checkCtx, jid)
+		if err != nil {
+			return err
+		}
+		checkpoint := current.Checkpoint
+		resumable := checkpoint == "verified_resumable" || checkpoint == "config_published" || checkpoint == "verified"
+		if resumable {
+			if err := s.CheckpointOperation(checkCtx, jid, checkpoint, "verification_in_progress"); err != nil {
+				return err
+			}
+		}
+		if err := verify(checkCtx, in.SitesRoot, identity); err != nil {
+			return err
+		}
+		if resumable {
+			return s.CheckpointOperation(checkCtx, jid, "verification_in_progress", checkpoint)
+		}
+		return nil
 	}}
 	return withInstallLifetime(ctx, l, operation, release)
 }

@@ -43,10 +43,10 @@ func runFreshInstall(ctx context.Context, lifetime *WordPressLifetime, artifacts
 				}
 			}
 		}
-		if lifetime.verified != nil {
-			if err := lifetime.verified(); err != nil {
-				return err
-			}
+	}
+	if lifetime.verified != nil {
+		if err := lifetime.verified(); err != nil {
+			return err
 		}
 	}
 
@@ -72,17 +72,28 @@ func (q *Queue) InstallFreshWordPress(ctx context.Context, jobID string, identit
 		operationStore
 		CheckpointOperation(context.Context, string, string, string) error
 		MarkWordPressDownloadStarted(context.Context, string) error
+		CheckActivatedSiteLifetime(context.Context, store.SiteLifetime, string) error
 	})
 	if !ok || release == nil {
 		return errors.New("jobs: WordPress install unavailable")
+	}
+	initial, err := s.LoadOperation(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	activated := s.CheckActivatedSiteLifetime(ctx, identity, jobID) == nil
+	if !activated {
+		if initial.Checkpoint != "db_applied" && initial.Checkpoint != "verified_resumable" && initial.Checkpoint != "config_published" && initial.Checkpoint != "verified" {
+			return rpcerr.Errf("precondition_failed", "WordPress install requires reconciliation")
+		}
+		if err := s.CheckpointOperation(ctx, jobID, initial.Checkpoint, "verification_in_progress"); err != nil {
+			return err
+		}
 	}
 	return q.WithFreshWordPressLifetime(ctx, jobID, identity, func(l *WordPressLifetime) error {
 		op, err := s.LoadOperation(ctx, jobID)
 		if err != nil {
 			return err
-		}
-		if op.Checkpoint != "db_applied" && op.Checkpoint != "verified_resumable" && op.Checkpoint != "config_published" && op.Checkpoint != "verified" {
-			return rpcerr.Errf("precondition_failed", "WordPress install requires reconciliation")
 		}
 		if !op.Identity.DownloadStarted {
 			entries, err := os.ReadDir(identity.Docroot)
@@ -96,13 +107,8 @@ func (q *Queue) InstallFreshWordPress(ctx context.Context, jobID string, identit
 				return err
 			}
 		}
-		if op.Checkpoint == "db_applied" {
-			if err := s.CheckpointOperation(ctx, jobID, "db_applied", "verification_in_progress"); err != nil {
-				return err
-			}
-			l.verified = func() error {
-				return s.CheckpointOperation(ctx, jobID, "verification_in_progress", "verified_resumable")
-			}
+		l.verified = func() error {
+			return s.CheckpointOperation(ctx, jobID, "verification_in_progress", "verified_resumable")
 		}
 		credentials, err := q.OpenWordPressCredentials(ctx, jobID)
 		if err != nil {
@@ -119,16 +125,16 @@ func (q *Queue) InstallFreshWordPress(ctx context.Context, jobID string, identit
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		artifactsReady := op.Checkpoint != "db_applied"
+		artifactsReady := initial.Checkpoint != "db_applied"
 		if artifactsReady && !archivePresent {
 			return errors.New("jobs: verified WordPress archive unavailable")
 		}
 		if err = runFreshInstall(ctx, l, artifactsReady, func() error { return wordpress.VerifyDownloadedArchive(archive, identity.UID) }, func() error { return q.CreateWordPressConfig(ctx, jobID, q.configCustody, l.ConfigIsolation) }, credentials.AdminPassword); err != nil {
-			if op.Checkpoint == "db_applied" && ctx.Err() == nil {
+			if ctx.Err() == nil {
 				current, loadErr := s.LoadOperation(ctx, jobID)
 				if loadErr == nil && current.Checkpoint == "verification_in_progress" {
 					next := "security_failed"
-					if errors.Is(err, ErrRetry) {
+					if errors.Is(err, ErrRetry) && initial.Checkpoint == "db_applied" {
 						next = "db_applied"
 					}
 					if checkpointErr := s.CheckpointOperation(ctx, jobID, "verification_in_progress", next); checkpointErr != nil {
@@ -138,9 +144,6 @@ func (q *Queue) InstallFreshWordPress(ctx context.Context, jobID string, identit
 			}
 			return err
 		}
-		if op.Checkpoint != "verified" {
-			return s.CheckpointOperation(ctx, jobID, "config_published", "verified")
-		}
-		return nil
+		return s.CheckpointOperation(ctx, jobID, "config_published", "verified")
 	}, func(*WordPressLifetime) error { return release() })
 }
