@@ -24,6 +24,7 @@ type installLifetimeDomain interface {
 
 type lifetimeStore interface {
 	operationStore
+	SiteByID(context.Context, string) (store.Site, error)
 	CheckFreshSiteLifetime(context.Context, store.SiteLifetime) error
 	ActivateSiteLifetime(context.Context, store.SiteLifetime) error
 }
@@ -233,13 +234,20 @@ func (q *Queue) WithFreshWordPressLifetime(ctx context.Context, jid string, iden
 		return err
 	}
 	defer unlock()
-	if _, err = q.OpenWordPressCredentials(ctx, jid); err != nil {
+	site, err := s.SiteByID(ctx, identity.SiteID)
+	if err != nil {
 		return err
+	}
+	if site.Status != "creating" {
+		return rpcerr.Errf("precondition_failed", "site account is not non-serving")
 	}
 	if err = s.CheckFreshSiteLifetime(ctx, identity); err != nil {
 		if errors.Is(err, store.ErrSitePrecondition) {
 			return rpcerr.Errf("precondition_failed", "site account is not fresh")
 		}
+		return err
+	}
+	if _, err = q.OpenWordPressCredentials(ctx, jid); err != nil {
 		return err
 	}
 	if err = php.VerifyUser(ctx, runner.Real{}, in.SitesRoot, identity.Name, identity.SiteID); err != nil {
