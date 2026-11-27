@@ -102,9 +102,18 @@ func TestFreshWordPressWorkerRollbackAndNameReuse(t *testing.T) {
 	if err != nil || j.State != "queued" || j.Step != store.FreshWordPressRollbackStep {
 		t.Fatalf("teardown failure lost intent: %+v %v", j, err)
 	}
+	// A crash after the next start leaves this running; startup must requeue it.
+	if _, err = s.StartJob(ctx, j.ID, 1); err != nil {
+		t.Fatal(err)
+	}
 	if err = q.PrepareOperations(ctx); err != nil {
 		t.Fatalf("stuck rollback blocked startup: %v", err)
 	}
+	j, err = s.GetJob(ctx, en.Job.ID)
+	if err != nil || j.State != "queued" || j.Step != store.FreshWordPressRollbackStep {
+		t.Fatalf("restart lost rollback: %+v %v", j, err)
+	}
+
 	other, err := q.Enqueue(ctx, "reconcile", map[string]string{}, "system")
 	if err != nil {
 		t.Fatal(err)
