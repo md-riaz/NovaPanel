@@ -306,6 +306,14 @@ func TestLifetimeReplayKeepsSiteIdentity(t *testing.T) {
 		if !d.closed || l.identity != reloaded {
 			t.Error("incorrect replay release")
 		}
+		for _, kind := range []wordpress.StepKind{wordpress.Download, wordpress.VerifyChecksums, wordpress.IsInstalled, wordpress.InstallCore} {
+			if _, _, _, err := l.runReviewed(ctx, reviewedInstallChild{kind: kind}); err == nil {
+				t.Errorf("activated replay admitted %s", kind)
+			}
+		}
+		if err := l.ConfigIsolation(ctx, configcustody.ConfigBinding{}, func(context.Context) error { t.Error("config effect ran"); return nil }); err == nil {
+			t.Error("activated replay admitted config effect")
+		}
 		released = true
 		return nil
 	})

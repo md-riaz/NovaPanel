@@ -174,3 +174,11 @@ container stays offline (`--network none`). The gate stands up a pinned local mi
 `downloads.wordpress.org` resolves to (hosts/DNS override inside the container), serving the pinned
 tar.gz by the exact URL wp-cli requests. This tests the online codepath against a controlled
 endpoint while keeping the gate offline and host-safe. No real egress to wp.org.
+
+## Activated replay and archive verification
+
+A provisioning replay at `verified_resumable` or `config_published` rechecks the
+pinned archive SHA-256 before any remaining installation effect. An activated
+replay is finalize-only: it may enable serving and complete the committed job,
+but cannot download, extract, verify or install core, so it does not recheck
+the archive.

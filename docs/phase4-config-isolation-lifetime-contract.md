@@ -52,3 +52,11 @@ Safe numeric-child probes use only internal/exec, injected account data and pre-
 Required end-to-end acceptance remains the handoff's complete failure matrix: pre-existing non-FPM writer, concurrent fork during acquisition, changed UID/GID/home, managed relocation exclusion, hostile-root limitation, retained asynchronous invocation on return/panic/cancel, blocked acquisition/drain cancellation, missing/unquiesceable dependency before effect, original-ID SQLite/audit reopen recovery and unchanged secret projections. Existing worker-drain tests cover only worker-owned admissions, not all-site-UID isolation. New mechanism tests must start RED at the agreed lifetime/operation seam before implementation; characterization of current limitations is not GREEN for the future mechanism.
 
 Sources: Linux cgroup v2 documentation, https://docs.kernel.org/admin-guide/cgroup-v2.html, sections Processes, Delegation, cgroup.freeze, cgroup.kill and cgroup.events; `clone(2)` CLONE_INTO_CGROUP, https://man7.org/linux/man-pages/man2/clone3.2.html; `io_uring_setup(2)`, https://man7.org/linux/man-pages/man2/io_uring_setup.2.html. These define process membership/control and asynchronous submission, not an all-filesystem drain guarantee.
+
+## Activated replay
+
+For `verified_resumable` and `config_published`, recheck the pinned archive
+SHA-256 before resuming an installation effect. Activated replay only releases
+serving and records completion; it cannot download, extract or install core and
+does not recheck the archive, as ruled in
+`docs/phase4-production-activation-ruling.md`.

@@ -40,6 +40,7 @@ type WordPressLifetime struct {
 	identity                                        store.SiteLifetime
 	activate                                        func(context.Context, store.SiteLifetime) error
 	closed, failed, published, successful, released bool
+	finalizeOnly                                    bool
 	stage                                           int
 	verified                                        func() error
 	plan                                            wordpress.Plan
@@ -59,7 +60,7 @@ type reviewedInstallChild struct {
 func (l *WordPressLifetime) runReviewed(ctx context.Context, child reviewedInstallChild) ([]byte, []byte, int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.closed || l.failed || l.successful || child.options.Cgroup != nil || child.options.Uid != 0 || child.options.Gid != 0 || len(child.options.Groups) != 0 {
+	if l.finalizeOnly || l.closed || l.failed || l.successful || child.options.Cgroup != nil || child.options.Uid != 0 || child.options.Gid != 0 || len(child.options.Groups) != 0 {
 		return nil, nil, -1, errors.New("jobs: reviewed child refused")
 	}
 	work, cancel := context.WithCancel(l.ctx)
@@ -111,7 +112,7 @@ func (l *WordPressLifetime) runReviewed(ctx context.Context, child reviewedInsta
 func (l *WordPressLifetime) ConfigIsolation(ctx context.Context, binding configcustody.ConfigBinding, effect func(context.Context) error) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.closed || l.failed || l.successful || l.published || l.stage != 2 || binding != l.binding || effect == nil {
+	if l.finalizeOnly || l.closed || l.failed || l.successful || l.published || l.stage != 2 || binding != l.binding || effect == nil {
 		l.failed = true
 		return errors.New("jobs: lifetime config isolation refused")
 	}
@@ -232,7 +233,7 @@ func replayActivatedLifetime(ctx context.Context, domain installLifetimeDomain, 
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	if err = callServingRelease(&WordPressLifetime{identity: identity, closed: true, released: true}, release); err != nil {
+	if err = callServingRelease(&WordPressLifetime{identity: identity, closed: true, released: true, finalizeOnly: true}, release); err != nil {
 		return errors.Join(ErrRetry, err)
 	}
 	return nil
@@ -346,6 +347,7 @@ func (q *Queue) withFreshWordPressLifetime(ctx context.Context, jid string, iden
 		return err
 	}
 	if replay {
+		// docs/phase4-production-activation-ruling.md: activated replay is finalize-only.
 		return replayActivatedLifetime(ctx, domain, identity, func(ctx context.Context) error {
 			if err := q.healthy(); err != nil {
 				return err
