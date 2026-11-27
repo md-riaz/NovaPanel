@@ -69,7 +69,12 @@ func TestExpireOperationsLeavesFreshWordPressForJobRecovery(t *testing.T) {
 	s.clock = &authClock{now: 1000}
 	phase4Job(t, s.db.raw, "fresh-job", "queued")
 	phase4Job(t, s.db.raw, "other-job", "queued")
+	phase4Job(t, s.db.raw, "served-job", "queued")
 	phase4Exec(t, s.db.raw, `INSERT INTO sites(id,name,type,docroot,created,updated,lifetime_state) VALUES('fresh','fresh','wordpress','/sites/fresh/public',1,1,'provisioning')`)
+	phase4Exec(t, s.db.raw, `INSERT INTO site_account_provenance(site_id,account_name,uid,gid,allocating_job,evidence) VALUES('fresh','fresh',2000000,2000000,'fresh-job','reserved')`)
+	phase4Exec(t, s.db.raw, `INSERT INTO sites(id,name,type,docroot,created,updated,lifetime_state) VALUES('served','served','wordpress','/sites/served/public',1,1,'served')`)
+	phase4Exec(t, s.db.raw, `INSERT INTO site_account_provenance(site_id,account_name,uid,gid,allocating_job,evidence) VALUES('served','served',2000001,2000001,'served-job','reserved')`)
+	phase4Exec(t, s.db.raw, `INSERT INTO phase4_operations(job_id,kind,site_id,checkpoint,identities_json,expires,updated) VALUES('served-job','wordpress_install','served','verified','{}',1,1)`)
 	phase4Exec(t, s.db.raw, `INSERT INTO phase4_operations(job_id,kind,site_id,checkpoint,identities_json,expires,updated) VALUES('fresh-job','wordpress_install','fresh','db_applied','{}',1,1)`)
 	phase4Exec(t, s.db.raw, `INSERT INTO phase4_operations(job_id,kind,checkpoint,identities_json,expires,updated) VALUES('other-job','database_create','prepared','{}',1,1)`)
 	if n, err := s.ExpireOperations(ctx); err != nil || n != 1 {
@@ -77,6 +82,9 @@ func TestExpireOperationsLeavesFreshWordPressForJobRecovery(t *testing.T) {
 	}
 	if phase4Count(t, s.db.raw, `SELECT count(*) FROM phase4_operations o JOIN jobs j ON j.id=o.job_id WHERE o.job_id='fresh-job' AND o.checkpoint='db_applied' AND j.state='queued'`) != 1 {
 		t.Fatal("fresh operation swept")
+	}
+	if phase4Count(t, s.db.raw, `SELECT count(*) FROM phase4_operations o JOIN jobs j ON j.id=o.job_id WHERE o.job_id='served-job' AND o.checkpoint='verified' AND j.state='queued'`) != 1 {
+		t.Fatal("activated install swept")
 	}
 	if phase4Count(t, s.db.raw, `SELECT count(*) FROM phase4_operations o JOIN jobs j ON j.id=o.job_id WHERE o.job_id='other-job' AND o.checkpoint='expired' AND j.state='failed'`) != 1 {
 		t.Fatal("unrelated expiry changed")
