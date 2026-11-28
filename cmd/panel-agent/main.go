@@ -135,6 +135,12 @@ func serve(ctx context.Context, a *agent.Agent) (err error) {
 	if err != nil {
 		return fmt.Errorf("startup PHP recovery: %w", err)
 	}
+	if err = verbs.AuditFirewallReverts(a); err != nil {
+		return fmt.Errorf("firewall revert audit: %w", err)
+	}
+	if err = verbs.RecoverFirewall(ctx, a); err != nil {
+		return fmt.Errorf("startup firewall recovery: %w", err)
+	}
 	startupErr := a.PrepareStartup(ctx)
 	if ctx.Err() != nil {
 		return nil
