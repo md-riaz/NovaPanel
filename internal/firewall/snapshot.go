@@ -214,6 +214,13 @@ func Restore(ctx context.Context, runner exec.Runner, rulesDir, snapshotDir stri
 	}
 	if err == nil {
 		dir := filepath.Join(filepath.Dir(rulesDir), "default")
+		info, e := os.Lstat(filepath.Join(dir, "ufw"))
+		if e != nil {
+			return e
+		}
+		if !info.Mode().IsRegular() {
+			return errors.New("unsafe firewall default file")
+		}
 		tmp, e := os.CreateTemp(dir, ".novapanel-fw-default-")
 		if e != nil {
 			return e
@@ -221,7 +228,7 @@ func Restore(ctx context.Context, runner exec.Runner, rulesDir, snapshotDir stri
 		path := tmp.Name()
 		_, e = tmp.Write(defaults)
 		if e == nil {
-			e = tmp.Chmod(0644)
+			e = tmp.Chmod(info.Mode().Perm())
 		}
 		if e == nil {
 			e = tmp.Sync()
