@@ -12,6 +12,15 @@ import (
 	"strings"
 )
 
+// lifecycleStarters names verbs-package functions shaped like RPC handlers (context, *agent.Agent, one
+// more argument) that are not handlers. They start daemon background work and cmd/panel-agent calls them
+// directly, so they are never registered. Each entry is exact file and function, so every other
+// handler-shaped function in internal/verbs still must be registered exactly once.
+var lifecycleStarters = map[string]bool{
+	"internal/verbs/firewall.go:StartFirewallRecovery": true,
+	"internal/verbs/firewall.go:StartFirewallSweep":    true,
+}
+
 // Check returns all architecture violations under root. Process and privilege
 // checks include tests; registration checks apply only to production sources.
 // Testdata is excluded; fixture modules are checked via their own root.
@@ -236,7 +245,7 @@ func Check(root string) []string {
 						}
 					}
 				}
-				if handler && len(fn.Type.Params.List) == 3 && references[filepath.Dir(path)+"/"+fn.Name.Name] != 1 {
+				if handler && len(fn.Type.Params.List) == 3 && !lifecycleStarters[path+":"+fn.Name.Name] && references[filepath.Dir(path)+"/"+fn.Name.Name] != 1 {
 					report(path, "unregistered handler or multiply registered handler: "+fn.Name.Name)
 				}
 			}
