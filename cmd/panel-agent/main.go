@@ -135,6 +135,20 @@ func serve(ctx context.Context, a *agent.Agent) (err error) {
 	if err != nil {
 		return fmt.Errorf("startup PHP recovery: %w", err)
 	}
+	if err = verbs.AuditFirewallReverts(a); err != nil {
+		return fmt.Errorf("firewall revert audit: %w", err)
+	}
+	// A failed restore must not exit the agent: the unreverted change stays pending and is retried
+	// in the background while the agent serves, so the operator can still reach the panel.
+	stopFirewallRecovery := verbs.StartFirewallRecovery(ctx, a, func(ferr error, wait time.Duration) {
+		fmt.Fprintf(os.Stderr, "startup firewall recovery failed, retrying in %s: %v\n", wait, ferr)
+	})
+	defer stopFirewallRecovery()
+	// The sweep retries a revert whose timer-run attempts were exhausted while the daemon keeps running.
+	stopFirewallSweep := verbs.StartFirewallSweep(ctx, a, func(ferr error, wait time.Duration) {
+		fmt.Fprintf(os.Stderr, "firewall recovery sweep failed, next attempt in %s: %v\n", wait, ferr)
+	})
+	defer stopFirewallSweep()
 	startupErr := a.PrepareStartup(ctx)
 	if ctx.Err() != nil {
 		return nil
@@ -223,6 +237,13 @@ running:
 	return err
 }
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "fw-revert" {
+		if err := runFirewallRevert(os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 3 && os.Args[1] == "__wordpress-extract" {
 		if err := wordpress.ExtractFreshCore(context.Background(), os.Args[2]); err != nil {
 			fmt.Fprintln(os.Stderr, "WordPress extraction failed")

@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"novapanel/internal/config"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,22 @@ func TestHTTPServerConfigured(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("HTTP server not started")
+	}
+}
+
+func TestWebListenIgnoresProcessEnvironment(t *testing.T) {
+	oldUID, oldServe := geteuid, serveHTTP
+	defer func() { geteuid, serveHTTP = oldUID, oldServe }()
+	geteuid = func() int { return 1001 }
+	t.Setenv("NOVAPANEL_WEB_LISTEN", "0.0.0.0:9443")
+	serveHTTP = func(s *http.Server) error {
+		if s.Addr != "127.0.0.1:8080" {
+			t.Fatalf("listen address %q", s.Addr)
+		}
+		return nil
+	}
+	if err := run(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -66,6 +83,18 @@ func TestTransportConfig(t *testing.T) {
 	t.Setenv("NOVAPANEL_RATE_LIMIT_RPS", "0")
 	if err := run(); err == nil || !strings.Contains(err.Error(), "rate_limit_rps") {
 		t.Fatalf("invalid config: %v", err)
+	}
+}
+
+// Only a malformed bind stops panel-web. Valid and absent binds serve their address.
+func TestWebBindReadyRefusesMalformed(t *testing.T) {
+	if err := webBindReady(config.Config{WebListenState: config.WebListenMalformed}); err == nil || !strings.Contains(err.Error(), "malformed") {
+		t.Fatalf("malformed bind served: %v", err)
+	}
+	for _, state := range []config.WebListenState{config.WebListenValid, config.WebListenAbsent} {
+		if err := webBindReady(config.Config{WebListenState: state}); err != nil {
+			t.Fatalf("%s refused: %v", state, err)
+		}
 	}
 }
 
