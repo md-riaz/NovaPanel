@@ -65,7 +65,9 @@ type Record struct {
 ```
 - **DNS F20 provenance.** The provider record carries `novapanel:obj_id=<obj_id>` in its comment,
   stamped atomically with create. `dns_records` carries the durable `obj_id` and `phase`
-  (`reserved`/`created`/`deleting`). Reconcile lists records and matches the obj_id comment before
+  (`reserved`/`created`/`updating`/`deleting`). `reconciled=1` means the provider matches the row;
+  updates write desired values with `phase=updating` and `reconciled=0` before the provider call.
+  Reconcile lists records and matches the obj_id comment before
   re-issue; an unmatched record is a conflict, never adopted. Update and delete verify obj_id ownership.
   A record operation queued against a deleted zone or integration re-validates at execution.
   - **Owed with it (F6 per-attempt deadline): effectful-timeout replay.** A `dns.record.create/update/

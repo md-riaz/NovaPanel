@@ -521,8 +521,9 @@ CREATE TABLE dns_records (
   priority           INTEGER NOT NULL DEFAULT 0,  -- MX only
   proxied            INTEGER NOT NULL DEFAULT 0,  -- A/AAAA/CNAME only (server-guarded)
   provider_record_id TEXT,                        -- provider id, recorded after create confirms
-  phase              TEXT NOT NULL,               -- reserved|created|deleting (F20 provenance phase)
+  phase              TEXT NOT NULL,               -- reserved|created|updating|deleting (F20 provenance phase)
   reconciled         INTEGER NOT NULL DEFAULT 0,
+  conflict_error     TEXT,
   created            INTEGER NOT NULL,
   updated            INTEGER NOT NULL
 );  -- F20 provider-side provenance = obj_id stamped in the record comment (novapanel:obj_id=<obj_id>)

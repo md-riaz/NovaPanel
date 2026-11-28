@@ -14,6 +14,7 @@ type DNSRecord struct {
 	TTL, Priority                    int
 	Proxied                          bool
 	ProviderRecordID                 sql.NullString
+	ConflictError                    sql.NullString
 	Phase                            string
 	Reconciled                       bool
 	Created, Updated                 int64
@@ -31,7 +32,7 @@ func (s *Store) ReserveDNSRecord(ctx context.Context, r DNSRecord) error {
 
 func (s *Store) DNSRecord(ctx context.Context, objID string) (DNSRecord, error) {
 	var r DNSRecord
-	err := s.db.QueryRowContext(ctx, `SELECT obj_id,zone_id,type,name,value,ttl,priority,proxied,provider_record_id,phase,reconciled,created,updated FROM dns_records WHERE obj_id=?`, objID).Scan(&r.ObjID, &r.ZoneID, &r.Type, &r.Name, &r.Value, &r.TTL, &r.Priority, &r.Proxied, &r.ProviderRecordID, &r.Phase, &r.Reconciled, &r.Created, &r.Updated)
+	err := s.db.QueryRowContext(ctx, `SELECT obj_id,zone_id,type,name,value,ttl,priority,proxied,provider_record_id,phase,reconciled,conflict_error,created,updated FROM dns_records WHERE obj_id=?`, objID).Scan(&r.ObjID, &r.ZoneID, &r.Type, &r.Name, &r.Value, &r.TTL, &r.Priority, &r.Proxied, &r.ProviderRecordID, &r.Phase, &r.Reconciled, &r.ConflictError, &r.Created, &r.Updated)
 	return r, err
 }
 
@@ -117,9 +118,6 @@ func (s *Store) DeleteManagedDNSRecord(ctx context.Context, p dns.Provider, zone
 			}
 		}
 		if v.Comment != dnsComment(r.ObjID) {
-			if err := s.RemoveDNSRecord(ctx, r.ObjID); err != nil {
-				return err
-			}
 			return ErrDNSOwnership
 		}
 		if err := p.Delete(ctx, zone, v); err != nil {
@@ -131,7 +129,7 @@ func (s *Store) DeleteManagedDNSRecord(ctx context.Context, p dns.Provider, zone
 
 // UpdateManagedDNSRecord verifies identity before applying the requested state.
 func (s *Store) UpdateManagedDNSRecord(ctx context.Context, p dns.Provider, zone string, r DNSRecord) error {
-	if r.Phase != "created" || !r.ProviderRecordID.Valid {
+	if r.Phase != "updating" || !r.ProviderRecordID.Valid {
 		return ErrDNSOwnership
 	}
 	records, err := p.List(ctx, zone)
@@ -151,12 +149,61 @@ func (s *Store) UpdateManagedDNSRecord(ctx context.Context, p dns.Provider, zone
 				return err
 			}
 		}
-		return s.UpdateDNSRecord(ctx, r)
+		return s.CompleteDNSUpdate(ctx, r.ObjID, r.ProviderRecordID.String)
 	}
 	return ErrDNSOwnership
 }
 
-func (s *Store) UpdateDNSRecord(ctx context.Context, r DNSRecord) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE dns_records SET type=?,name=?,value=?,ttl=?,priority=?,proxied=?,updated=? WHERE obj_id=? AND provider_record_id=? AND phase='created'`, r.Type, r.Name, r.Value, r.TTL, r.Priority, r.Proxied, s.clock.Now(), r.ObjID, r.ProviderRecordID)
+// ReconcileDNSRecord applies a pending desired state or preserves an ownership conflict.
+func (s *Store) ReconcileDNSRecord(ctx context.Context, p dns.Provider, zone string, r DNSRecord) error {
+	var err error
+	switch r.Phase {
+	case "reserved":
+		err = s.ReconcileDNSCreate(ctx, p, zone, r)
+	case "updating":
+		err = s.UpdateManagedDNSRecord(ctx, p, zone, r)
+	case "deleting":
+		err = s.DeleteManagedDNSRecord(ctx, p, zone, r)
+	default:
+		return errors.New("invalid pending DNS phase")
+	}
+	if errors.Is(err, ErrDNSOwnership) {
+		if e := s.MarkDNSConflict(ctx, r.ObjID); e != nil {
+			return e
+		}
+	}
+	return err
+}
+
+// BeginDNSUpdate persists the desired record before contacting the provider.
+func (s *Store) BeginDNSUpdate(ctx context.Context, r DNSRecord) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE dns_records SET type=?,name=?,value=?,ttl=?,priority=?,proxied=?,phase='updating',reconciled=0,updated=? WHERE obj_id=? AND provider_record_id=? AND phase='created' AND reconciled=1 AND conflict_error IS NULL`, r.Type, r.Name, r.Value, r.TTL, r.Priority, r.Proxied, s.clock.Now(), r.ObjID, r.ProviderRecordID)
+	return affected(result, err)
+}
+
+func (s *Store) CompleteDNSUpdate(ctx context.Context, objID, providerID string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE dns_records SET phase='created',reconciled=1,updated=? WHERE obj_id=? AND provider_record_id=? AND phase='updating' AND conflict_error IS NULL`, s.clock.Now(), objID, providerID)
+	return affected(result, err)
+}
+
+func (s *Store) DNSPendingRecords(ctx context.Context) ([]DNSRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT obj_id,zone_id,type,name,value,ttl,priority,proxied,provider_record_id,phase,reconciled,conflict_error,created,updated FROM dns_records WHERE reconciled=0 AND conflict_error IS NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DNSRecord
+	for rows.Next() {
+		var r DNSRecord
+		if err := rows.Scan(&r.ObjID, &r.ZoneID, &r.Type, &r.Name, &r.Value, &r.TTL, &r.Priority, &r.Proxied, &r.ProviderRecordID, &r.Phase, &r.Reconciled, &r.ConflictError, &r.Created, &r.Updated); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) MarkDNSConflict(ctx context.Context, objID string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE dns_records SET conflict_error='ownership conflict',updated=? WHERE obj_id=? AND reconciled=0`, s.clock.Now(), objID)
 	return affected(result, err)
 }

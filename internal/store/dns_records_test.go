@@ -47,8 +47,19 @@ func TestDNSRecordReplay(t *testing.T) {
 	if _, err := p.Create(ctx, "example.com", foreign); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ReconcileDNSCreate(ctx, p, "example.com", r); err != ErrDNSOwnership {
+	if err := s.ReconcileDNSRecord(ctx, p, "example.com", r); err != ErrDNSOwnership {
 		t.Fatalf("foreign record accepted: %v", err)
+	}
+	conflicted, err := s.DNSRecord(ctx, objID)
+	if err != nil || !conflicted.ConflictError.Valid {
+		t.Fatal("conflict was not surfaced")
+	}
+	pending, err := s.DNSPendingRecords(ctx)
+	if err != nil || len(pending) != 0 {
+		t.Fatal("conflicted record was not excluded from sweep")
+	}
+	if _, err := s.db.ExecContext(ctx, "UPDATE dns_records SET conflict_error=NULL WHERE obj_id=?", objID); err != nil {
+		t.Fatal(err)
 	}
 	if err := p.Delete(ctx, "example.com", foreign); err != nil {
 		t.Fatal(err)
@@ -72,10 +83,14 @@ func TestDNSRecordReplay(t *testing.T) {
 		t.Fatalf("duplicate records: %d", len(records))
 	}
 	r.Value = "192.0.2.2"
-	if err := p.Update(ctx, "example.com", dns.Record{ID: providerID, Type: r.Type, Name: r.Name, Value: r.Value, TTL: r.TTL, Comment: dnsComment(objID)}); err != nil {
+	if err := s.BeginDNSUpdate(ctx, r); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpdateManagedDNSRecord(ctx, p, "example.com", r); err != nil {
+	r, err = s.DNSRecord(ctx, objID)
+	if err != nil || r.Value != "192.0.2.2" || r.Phase != "updating" || r.Reconciled {
+		t.Fatalf("update intent: %+v %v", r, err)
+	}
+	if err := s.ReconcileDNSRecord(ctx, p, "example.com", r); err != nil {
 		t.Fatal(err)
 	}
 	saved, err := s.DNSRecord(ctx, objID)
