@@ -258,6 +258,94 @@ func TestStartFirewallRecoveryRetriesFailedRestore(t *testing.T) {
 	}
 }
 
+// probeRunner answers the deadman check with a fixed result and counts ufw calls, which are restores.
+type probeRunner struct {
+	code     int
+	err      error
+	ufwCalls int
+}
+
+func (r *probeRunner) Run(_ context.Context, path string, args []string, _ exec.RunOpts) ([]byte, []byte, int, error) {
+	if path == "/usr/bin/systemctl" && len(args) > 0 && args[0] == "is-active" {
+		return nil, nil, r.code, r.err
+	}
+	if path == "/usr/sbin/ufw" {
+		r.ufwCalls++
+	}
+	return nil, nil, 0, nil
+}
+
+// pendingFixture stores one firewall change in the given step with its deadline, and returns the agent.
+func pendingFixture(t *testing.T, step string, deadline int64, runner exec.Runner) (*agent.Agent, *store.Store, string) {
+	t.Helper()
+	root := t.TempDir()
+	snap := filepath.Join(root, "snapshot")
+	if err := os.MkdirAll(filepath.Join(snap, "ufw"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"after.rules", "after6.rules", "before.rules", "before6.rules", "user.rules", "user6.rules"} {
+		if err := os.WriteFile(filepath.Join(snap, "ufw", n), []byte(n), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(snap, "enabled"), []byte("0\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	ctx := context.Background()
+	job, _ := id.New()
+	pending, _ := id.New()
+	res, _ := json.Marshal(map[string]string{"pending_id": pending})
+	if err = s.CreateJob(ctx, store.Job{ID: job, Verb: "firewall.apply", ObjectKey: "firewall", Actor: "test", State: "running", Step: step, Effectful: true, Args: json.RawMessage(`{}`), Result: res}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ReserveFirewall(ctx, store.FirewallPending{ID: pending, SnapshotPath: snap, RevertUnit: "novapanel-fwrevert-" + pending + ".timer", Deadline: deadline}); err != nil {
+		t.Fatal(err)
+	}
+	a := agent.New()
+	a.Store = s
+	a.Exec = runner
+	a.Cfg.DBPath = filepath.Join(root, "panel.db")
+	return a, s, job
+}
+
+// A transient systemctl failure must not revert a live change inside its deadline. A definitive "inactive"
+// still counts as a lost timer, which is covered by TestStartFirewallRecoveryRetriesFailedRestore.
+func TestTransientTimerErrorKeepsLiveChange(t *testing.T) {
+	for _, probe := range []*probeRunner{{err: errors.New("exec: systemctl failed")}, {code: 1}} {
+		future := time.Now().Add(time.Hour).UnixMilli()
+		a, s, _ := pendingFixture(t, store.FirewallArmed, future, probe)
+		r := firewallRecovery{agent: a, rulesDir: t.TempDir()}
+		if err := r.run(context.Background()); err == nil {
+			t.Fatalf("transient timer state %+v reported as success", probe)
+		}
+		if _, err := s.FirewallPending(context.Background()); err != nil {
+			t.Fatalf("live change reverted on transient error %+v: %v", probe, err)
+		}
+		if probe.ufwCalls != 0 {
+			t.Fatalf("ufw ran %d times on transient error %+v", probe.ufwCalls, probe)
+		}
+	}
+}
+
+// Past its deadline, an expired change is reverted even when the timer check is unknown.
+func TestTransientTimerErrorRevertsExpiredChange(t *testing.T) {
+	probe := &probeRunner{err: errors.New("exec: systemctl failed")}
+	past := time.Now().Add(-time.Minute).UnixMilli()
+	a, s, _ := pendingFixture(t, store.FirewallArmed, past, probe)
+	r := firewallRecovery{agent: a, rulesDir: t.TempDir()}
+	if err := r.run(context.Background()); err != nil {
+		t.Fatalf("expired change not reverted: %v", err)
+	}
+	if _, err := s.FirewallPending(context.Background()); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expired change still pending: %v", err)
+	}
+}
+
 // A revert that failed its timer-run retries stays pending while the daemon runs; the sweep must retry it.
 func TestFirewallSweepRetriesPendingRevert(t *testing.T) {
 	root := t.TempDir()

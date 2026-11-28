@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -290,12 +291,41 @@ func (r firewallRecovery) run(ctx context.Context) error {
 		return err
 	}
 	if j.Step == store.FirewallArmed || j.Step == store.FirewallApplied || j.Step == store.FirewallSnapshotted || j.Step == store.FirewallConfirmed {
-		_, _, code, e := a.Exec.Run(ctx, "/usr/bin/systemctl", []string{"is-active", "--quiet", p.RevertUnit}, exec.RunOpts{})
-		if e != nil || code != 0 {
+		state, serr := timerState(ctx, a.Exec, p.RevertUnit)
+		if state == timerGone {
 			return a.Store.ReconcileFirewallLostTimer(ctx, job, a.Exec, r.rulesDir)
+		}
+		// An unknown timer state never forces a restore before the deadline. Past the deadline, the normal
+		// path below reverts the change, so a broken systemctl cannot keep an expired change applied.
+		if state == timerUnknown && a.Now() < p.Deadline {
+			return serr
 		}
 	}
 	return a.Store.ReconcileFirewall(ctx, job, a.Exec, r.rulesDir, false)
+}
+
+type timerStatus int
+
+const (
+	timerActive timerStatus = iota
+	timerGone
+	timerUnknown
+)
+
+// timerState classifies the deadman unit. Only a clean "inactive" answer (exit 3 with no exec or transport
+// error) means the unit is gone. Any other outcome, including exit 1 from a failed bus connection, is unknown.
+func timerState(ctx context.Context, runner exec.Runner, unit string) (timerStatus, error) {
+	_, _, code, err := runner.Run(ctx, "/usr/bin/systemctl", []string{"is-active", "--quiet", unit}, exec.RunOpts{})
+	switch {
+	case err != nil:
+		return timerUnknown, fmt.Errorf("firewall timer check: %w", err)
+	case code == 0:
+		return timerActive, nil
+	case code == 3:
+		return timerGone, nil
+	default:
+		return timerUnknown, fmt.Errorf("firewall timer check exited %d", code)
+	}
 }
 
 func firewallStatus(ctx context.Context, a *agent.Agent, _ any) (any, error) {
