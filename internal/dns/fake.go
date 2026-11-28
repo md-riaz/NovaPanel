@@ -8,8 +8,11 @@ import (
 
 // Fake is an in-memory provider for tests.
 type Fake struct {
-	mu      sync.Mutex
-	Records map[string][]Record
+	mu       sync.Mutex
+	Records  map[string][]Record
+	Verified map[string]bool
+	TXT      map[string]map[string]bool
+	Purges   map[string][][]string
 }
 
 func (f *Fake) List(_ context.Context, zone string) ([]Record, error) {
@@ -53,7 +56,38 @@ func (f *Fake) Delete(_ context.Context, zone string, record Record) error {
 	}
 	return nil
 }
-func (*Fake) Verify(context.Context, string) (bool, error)     { return false, nil }
-func (*Fake) Purge(context.Context, string, []string) error    { return nil }
-func (*Fake) PresentTXT(context.Context, string, string) error { return nil }
-func (*Fake) CleanupTXT(context.Context, string, string) error { return nil }
+func (f *Fake) Verify(_ context.Context, domain string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.Verified[domain], nil
+}
+func (f *Fake) Purge(_ context.Context, zone string, urls []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Purges == nil {
+		f.Purges = make(map[string][][]string)
+	}
+	f.Purges[zone] = append(f.Purges[zone], append([]string(nil), urls...))
+	return nil
+}
+func (f *Fake) PresentTXT(_ context.Context, fqdn, value string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.TXT == nil {
+		f.TXT = make(map[string]map[string]bool)
+	}
+	if f.TXT[fqdn] == nil {
+		f.TXT[fqdn] = make(map[string]bool)
+	}
+	f.TXT[fqdn][value] = true
+	return nil
+}
+func (f *Fake) CleanupTXT(_ context.Context, fqdn, value string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.TXT[fqdn], value)
+	if len(f.TXT[fqdn]) == 0 {
+		delete(f.TXT, fqdn)
+	}
+	return nil
+}
