@@ -8,12 +8,13 @@ import (
 	"fmt"
 	"net"
 	"novapanel/internal/agent"
+	"novapanel/internal/audit"
 	"novapanel/internal/config"
 	"novapanel/internal/exec"
 	"novapanel/internal/firewall"
 	"novapanel/internal/id"
+	"novapanel/internal/jobs"
 	"novapanel/internal/rpc"
-	"novapanel/internal/rpcerr"
 	"novapanel/internal/store"
 	"os"
 	"path/filepath"
@@ -40,16 +41,52 @@ func TestFirewallVerbContracts(t *testing.T) {
 	}
 }
 
-// Absent and malformed binds are uncertain, so apply proceeds and the default panel port is pinned. The
-// later failure is the missing store, which shows apply was not refused.
+// sshdRunner reports the SSH port that sshd -T prints and succeeds for everything else.
+type sshdRunner struct{}
+
+func (sshdRunner) Run(_ context.Context, path string, _ []string, _ exec.RunOpts) ([]byte, []byte, int, error) {
+	if path == "/usr/sbin/sshd" {
+		return []byte("port 22\n"), nil, 0, nil
+	}
+	return nil, nil, 0, nil
+}
+
+// Absent and malformed binds are uncertain, so apply must proceed past the bind check, the SSH probe, and
+// the plan, and queue the change with the default panel port pinned. The queue is a real store-backed job queue.
 func TestFirewallApplyProceedsWithUncertainWebListen(t *testing.T) {
 	for _, state := range []config.WebListenState{config.WebListenAbsent, config.WebListenMalformed} {
+		st, err := store.Open(filepath.Join(t.TempDir(), "panel.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { st.Close() })
+		log, err := audit.Open(st, filepath.Join(t.TempDir(), "audit.log"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { log.Close() })
 		a := agent.New()
+		a.Store = st
+		a.Audit = log
+		a.Jobs = jobs.NewQueue(st, nil, log)
+		a.Exec = sshdRunner{}
 		a.Cfg.WebListenState = state
-		_, err := firewallApply(context.Background(), a, &firewallApplyArgs{})
-		var ce *rpcerr.CodedError
-		if !errors.As(err, &ce) || ce.Msg != "firewall unavailable" {
-			t.Fatalf("%s: apply not proceeding: %v", state, err)
+		res, err := firewallApply(context.Background(), a, &firewallApplyArgs{})
+		if err != nil || res == nil {
+			t.Fatalf("%s: apply did not queue: res %v err %v", state, res, err)
+		}
+		plan, err := firewall.Plan(nil, 22, firewallWebListen(a))
+		if err != nil {
+			t.Fatal(err)
+		}
+		pinned := false
+		for _, args := range plan {
+			if args[len(args)-1] == "8080" {
+				pinned = true
+			}
+		}
+		if !pinned {
+			t.Fatalf("%s: default panel port 8080 not pinned: %v", state, plan)
 		}
 	}
 }
