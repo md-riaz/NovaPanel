@@ -47,6 +47,7 @@ func TestFirewallLab(t *testing.T) {
 		return out
 	}
 	run("--force", "reset")
+	run("default", "allow", "incoming")
 	run("allow", "22/tcp")
 	run("allow", "3306/tcp")
 	run("--force", "enable")
@@ -115,6 +116,9 @@ func TestFirewallLab(t *testing.T) {
 	if !bytes.Equal(before, restored) {
 		t.Fatalf("snapshot not restored\nbefore: %s\nafter: %s", before, restored)
 	}
+	if status, e := os.ReadFile("/etc/default/ufw"); e != nil || !bytes.Contains(status, []byte(`DEFAULT_INPUT_POLICY="ACCEPT"`)) {
+		t.Fatalf("default policy not restored: %s", status)
+	}
 	ruleset, _, code, err := (runner.Real{}).Run(ctx, "/usr/sbin/iptables-save", nil, runner.RunOpts{})
 	if err != nil || code != 0 || !bytes.Contains(ruleset, []byte("--dport 22 -j ACCEPT")) {
 		t.Fatalf("SSH accept missing: %v\n%s", err, ruleset)
@@ -150,6 +154,9 @@ func TestFirewallLab(t *testing.T) {
 	}
 	if err = s.ConfirmFirewall(ctx, jobID, nextID, &revertRunner{}); err != nil {
 		t.Fatal(err)
+	}
+	if status, e := os.ReadFile("/etc/default/ufw"); e != nil || !bytes.Contains(status, []byte(`DEFAULT_INPUT_POLICY="DROP"`)) {
+		t.Fatalf("default policy not closed: %s", status)
 	}
 	afterConfirm := run("status", "numbered")
 	if bytes.Contains(afterConfirm, []byte("3306/tcp")) || !bytes.Contains(afterConfirm, []byte("22/tcp")) || !bytes.Contains(afterConfirm, []byte("80/tcp")) || !bytes.Contains(afterConfirm, []byte("443/tcp")) {

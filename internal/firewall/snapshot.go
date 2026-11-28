@@ -38,6 +38,13 @@ func Snapshot(ctx context.Context, runner exec.Runner, rulesDir, snapshotDir str
 			return err
 		}
 	}
+	defaults, err := readRegular(filepath.Join(filepath.Dir(rulesDir), "default", "ufw"))
+	if err != nil {
+		return err
+	}
+	if err = writeSnapshot(filepath.Join(snapshotDir, "default-ufw"), defaults); err != nil {
+		return err
+	}
 	status, err := firewallCommand(ctx, runner, "/usr/sbin/ufw", "status", "numbered")
 	if err != nil {
 		return err
@@ -200,6 +207,41 @@ func Restore(ctx context.Context, runner exec.Runner, rulesDir, snapshotDir stri
 	d.Close()
 	if err != nil {
 		return err
+	}
+	defaults, err := readRegular(filepath.Join(snapshotDir, "default-ufw"))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil {
+		dir := filepath.Join(filepath.Dir(rulesDir), "default")
+		tmp, e := os.CreateTemp(dir, ".novapanel-fw-default-")
+		if e != nil {
+			return e
+		}
+		path := tmp.Name()
+		_, e = tmp.Write(defaults)
+		if e == nil {
+			e = tmp.Chmod(0644)
+		}
+		if e == nil {
+			e = tmp.Sync()
+		}
+		e = errors.Join(e, tmp.Close())
+		if e == nil {
+			e = os.Rename(path, filepath.Join(dir, "ufw"))
+		}
+		if e != nil {
+			os.Remove(path)
+			return e
+		}
+		d, e := os.Open(dir)
+		if e != nil {
+			return e
+		}
+		e = errors.Join(d.Sync(), d.Close())
+		if e != nil {
+			return e
+		}
 	}
 	if string(enabled) == "0\n" {
 		_, err = firewallCommand(ctx, runner, "/usr/sbin/ufw", "--force", "disable")

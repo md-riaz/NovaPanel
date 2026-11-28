@@ -80,6 +80,7 @@ func reconcilePlan(rules, old []Rule, sshPort int, webListen string) ([][]string
 		current[r] = true
 	}
 	full := append([][]string{}, pinned...)
+	full = append(full, []string{"default", "deny", "incoming"})
 	for i, r := range rules {
 		if !current[r] {
 			full = append(full, plan[len(pinned)+i])

@@ -34,6 +34,12 @@ func TestSnapshotRestore(t *testing.T) {
 		root := t.TempDir()
 		rules := filepath.Join(root, "rules")
 		snap := filepath.Join(root, "snapshot")
+		if err := os.Mkdir(filepath.Join(root, "default"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "default", "ufw"), []byte("DEFAULT_INPUT_POLICY=ACCEPT\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.Mkdir(rules, 0700); err != nil {
 			t.Fatal(err)
 		}
@@ -57,6 +63,9 @@ func TestSnapshotRestore(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(rules, "custom.rules"), []byte("changed"), 0600); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.WriteFile(filepath.Join(root, "default", "ufw"), []byte("changed"), 0644); err != nil {
+			t.Fatal(err)
+		}
 		if err := Restore(context.Background(), r, rules, snap); err != nil {
 			t.Fatal(err)
 		}
@@ -65,6 +74,9 @@ func TestSnapshotRestore(t *testing.T) {
 			if err != nil || string(b) != name {
 				t.Fatalf("%s: %q %v", name, b, err)
 			}
+		}
+		if b, err := os.ReadFile(filepath.Join(root, "default", "ufw")); err != nil || string(b) != "DEFAULT_INPUT_POLICY=ACCEPT\n" {
+			t.Fatalf("default policy: %q %v", b, err)
 		}
 		if b, err := os.ReadFile(filepath.Join(rules, "custom.rules")); err != nil || string(b) != "custom" {
 			t.Fatalf("custom: %q %v", b, err)
@@ -80,6 +92,12 @@ func TestSnapshotFailureDoesNotRestore(t *testing.T) {
 	root := t.TempDir()
 	rules := filepath.Join(root, "rules")
 	snap := filepath.Join(root, "snapshot")
+	if err := os.Mkdir(filepath.Join(root, "default"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "default", "ufw"), []byte("DEFAULT_INPUT_POLICY=ACCEPT\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Mkdir(rules, 0700); err != nil {
 		t.Fatal(err)
 	}

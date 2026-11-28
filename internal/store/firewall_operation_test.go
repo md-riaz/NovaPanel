@@ -33,7 +33,7 @@ func TestFirewallOperationAndRecovery(t *testing.T) {
 	for _, tc := range []struct {
 		fail int
 		step string
-	}{{0, FirewallApplied}, {5, FirewallPrepared}, {8, FirewallSnapshotted}, {10, FirewallArmed}} {
+	}{{0, FirewallApplied}, {6, FirewallPrepared}, {9, FirewallSnapshotted}, {11, FirewallArmed}} {
 		t.Run(fmt.Sprint(tc.fail), func(t *testing.T) {
 			c := &authClock{now: 1000}
 			s, e := OpenWithClock(":memory:", c)
@@ -45,6 +45,12 @@ func TestFirewallOperationAndRecovery(t *testing.T) {
 			jobID, _ := id.New()
 			pendingID, _ := id.New()
 			root := t.TempDir()
+			if e := os.Mkdir(filepath.Join(root, "default"), 0700); e != nil {
+				t.Fatal(e)
+			}
+			if e := os.WriteFile(filepath.Join(root, "default", "ufw"), []byte("DEFAULT_INPUT_POLICY=DROP\n"), 0644); e != nil {
+				t.Fatal(e)
+			}
 			rules := filepath.Join(root, "rules")
 			if e = os.Mkdir(rules, 0700); e != nil {
 				t.Fatal(e)
@@ -114,6 +120,12 @@ func TestFirewallConfirm(t *testing.T) {
 	jobID, _ := id.New()
 	pendingID, _ := id.New()
 	root := t.TempDir()
+	if e := os.Mkdir(filepath.Join(root, "default"), 0700); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.WriteFile(filepath.Join(root, "default", "ufw"), []byte("DEFAULT_INPUT_POLICY=DROP\n"), 0644); e != nil {
+		t.Fatal(e)
+	}
 	rules := filepath.Join(root, "rules")
 	if e = os.Mkdir(rules, 0700); e != nil {
 		t.Fatal(e)
@@ -190,6 +202,12 @@ func TestFirewallReconcileLostTimer(t *testing.T) {
 			}
 			defer s.Close()
 			root := t.TempDir()
+			if e := os.Mkdir(filepath.Join(root, "default"), 0700); e != nil {
+				t.Fatal(e)
+			}
+			if e := os.WriteFile(filepath.Join(root, "default", "ufw"), []byte("DEFAULT_INPUT_POLICY=DROP\n"), 0644); e != nil {
+				t.Fatal(e)
+			}
 			rules := filepath.Join(root, "rules")
 			snapshot := filepath.Join(root, "snapshot")
 			if err = os.MkdirAll(filepath.Join(snapshot, "ufw"), 0700); err != nil {

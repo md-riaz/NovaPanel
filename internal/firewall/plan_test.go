@@ -39,7 +39,7 @@ func TestDryRunOnly(t *testing.T) {
 	if err := DryRun(context.Background(), r, nil, 22, ":8443"); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.calls) != 5 || r.calls[1][0] != "/usr/sbin/ufw" || r.calls[1][1] != "--dry-run" {
+	if len(r.calls) != 6 || r.calls[1][0] != "/usr/sbin/ufw" || r.calls[1][1] != "--dry-run" {
 		t.Fatalf("unexpected calls: %v", r.calls)
 	}
 	r.exit = 1
@@ -76,7 +76,7 @@ func TestApplyUsesPlannedOrder(t *testing.T) {
 	if err := Apply(context.Background(), r, []Rule{{Action: "allow", Proto: "udp", Port: 53}}, 2222, ":8443"); err != nil {
 		t.Fatal(err)
 	}
-	plan, _ := Plan([]Rule{{Action: "allow", Proto: "udp", Port: 53}}, 2222, ":8443")
+	plan, _ := reconcilePlan([]Rule{{Action: "allow", Proto: "udp", Port: 53}}, nil, 2222, ":8443")
 	if len(r.calls) != len(plan)+2 {
 		t.Fatalf("calls: %v", r.calls)
 	}
