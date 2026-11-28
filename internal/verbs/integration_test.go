@@ -9,6 +9,7 @@ import (
 	"log"
 	"novapanel/internal/agent"
 	"novapanel/internal/audit"
+	"novapanel/internal/id"
 	"novapanel/internal/rpc"
 	"novapanel/internal/secret"
 	"novapanel/internal/store"
@@ -16,6 +17,98 @@ import (
 	"path/filepath"
 	"testing"
 )
+
+func TestIntegrationSetIsIdempotentAndRejectsForeignZone(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "panel.db")
+	s, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	sealer, err := secret.New(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &agent.Agent{Store: s, Secret: sealer, ProbeDNS: func(_ context.Context, _ string, zones []string) (map[string]string, error) {
+		ids := map[string]string{}
+		for _, z := range zones {
+			ids[z] = "provider-" + z
+		}
+		return ids, nil
+	}}
+	args := &integrationSetArgs{Kind: "cloudflare", Token: "first", Zones: []string{"example.com"}}
+	first, err := integrationSet(ctx, a, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args.Token = "second"
+	same, err := integrationSet(ctx, a, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, _ := json.Marshal(first)
+	repeated, _ := json.Marshal(same)
+	if !bytes.Equal(original, repeated) {
+		t.Fatal("same-zone integration identity changed")
+	}
+	args.Zones = append(args.Zones, "other.example")
+	second, err := integrationSet(ctx, a, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a1, _ := json.Marshal(first)
+	a2, _ := json.Marshal(second)
+	if !bytes.Equal(a1, a2) {
+		t.Fatal("integration identity changed")
+	}
+	if _, err = dnsList(ctx, a, &dnsZoneArgs{Zone: "example.com"}); err != nil {
+		t.Fatal("DNS zone unavailable after re-set")
+	}
+	zone, err := s.DNSZoneByName(ctx, "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := s.DNSCredential(ctx, zone.IntegrationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := sealer.Open(secret.Sealed{Nonce: sealed.Nonce, Ciphertext: sealed.Ciphertext})
+	if err != nil || string(plain) != "second" {
+		t.Fatal("token did not rotate")
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	foreign, _ := id.New()
+	zoneID, _ := id.New()
+	if _, err = db.Exec("INSERT INTO integrations(id,kind,name,config_json,created) VALUES(?,'other','other','{}',1)", foreign); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec("INSERT INTO dns_zones(id,integration_id,zone,provider_zone_id,created) VALUES(?,?,?,?,1)", zoneID, foreign, "foreign.example", "foreign"); err != nil {
+		t.Fatal(err)
+	}
+	args.Token = "third"
+	args.Zones = []string{"example.com", "foreign.example"}
+	if _, err = integrationSet(ctx, a, args); err == nil {
+		t.Fatal("foreign zone accepted")
+	} else {
+		var coded *rpc.CodedError
+		if !errors.As(err, &coded) || coded.Code != "precondition_failed" {
+			t.Fatalf("wrong error: %v", err)
+		}
+	}
+	sealed, err = s.DNSCredential(ctx, zone.IntegrationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err = sealer.Open(secret.Sealed{Nonce: sealed.Nonce, Ciphertext: sealed.Ciphertext})
+	if err != nil || string(plain) != "second" {
+		t.Fatal("conflict changed token")
+	}
+}
 
 func TestIntegrationSetProbeFailure(t *testing.T) {
 	s, err := store.Open(":memory:")

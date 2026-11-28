@@ -2,7 +2,7 @@ package verbs
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"novapanel/internal/agent"
 	"novapanel/internal/id"
 	"novapanel/internal/rpc"
@@ -50,14 +50,19 @@ func integrationSet(ctx context.Context, a *agent.Agent, args any) (any, error) 
 	if err != nil {
 		return nil, rpc.Errf("agent_error", "Integration unavailable")
 	}
-	config, err := json.Marshal(struct {
-		Kind  string   `json:"kind"`
-		Zones []string `json:"zones"`
-	}{v.Kind, v.Zones})
-	if err != nil {
-		return nil, rpc.Errf("agent_error", "Integration unavailable")
+	if len(zoneIDs) != len(v.Zones) {
+		return nil, rpc.Errf("precondition_failed", "Cloudflare zone access check failed")
 	}
-	if err = a.Store.CreateIntegration(ctx, integrationID, string(config), store.ACMESealed{Nonce: sealed.Nonce, Ciphertext: sealed.Ciphertext}, zoneIDs); err != nil {
+	for _, zone := range v.Zones {
+		if zoneIDs[zone] == "" {
+			return nil, rpc.Errf("precondition_failed", "Cloudflare zone access check failed")
+		}
+	}
+	integrationID, err = a.Store.SetCloudflareIntegration(ctx, integrationID, store.ACMESealed{Nonce: sealed.Nonce, Ciphertext: sealed.Ciphertext}, zoneIDs)
+	if errors.Is(err, store.ErrZoneManaged) {
+		return nil, rpc.Errf("precondition_failed", "zone managed by another integration")
+	}
+	if err != nil {
 		return nil, rpc.Errf("agent_error", "Integration unavailable")
 	}
 	return struct {

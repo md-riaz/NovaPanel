@@ -507,7 +507,7 @@ CREATE TABLE integrations (
 CREATE TABLE dns_zones (
   id            TEXT PRIMARY KEY,
   integration_id TEXT NOT NULL REFERENCES integrations(id) ON DELETE CASCADE,
-  zone          TEXT NOT NULL,
+  zone          TEXT NOT NULL UNIQUE,
   provider_zone_id TEXT NOT NULL,
   created       INTEGER NOT NULL
 );
