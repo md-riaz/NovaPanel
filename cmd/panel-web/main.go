@@ -21,12 +21,24 @@ func env(key, fallback string) string {
 	}
 	return fallback
 }
+// webBindReady stops panel-web when the bind file is malformed. The agent may pin a default port for the
+// firewall, but panel-web must serve its real address, so serving on a guessed port is a regression. An
+// absent file is the documented default and serves normally.
+func webBindReady(cfg config.Config) error {
+	if cfg.WebListenState == config.WebListenMalformed {
+		return fmt.Errorf("refusing to serve: %s is malformed, so the panel bind is unknown", config.WebListenPath)
+	}
+	return nil
+}
 func run() error {
 	if geteuid() == 0 {
 		return fmt.Errorf("panel-web refuses to run as root")
 	}
 	cfg, err := config.Load(os.Getenv("NOVAPANEL_CONFIG"), nil)
 	if err != nil {
+		return err
+	}
+	if err = webBindReady(cfg); err != nil {
 		return err
 	}
 	socket := cfg.SocketPath
