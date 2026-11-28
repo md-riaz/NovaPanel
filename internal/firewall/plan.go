@@ -116,3 +116,21 @@ func DryRun(ctx context.Context, runner exec.Runner, rules []Rule, sshPort int, 
 	}
 	return nil
 }
+
+// Apply executes the validated plan in order, then enables UFW.
+func Apply(ctx context.Context, runner exec.Runner, rules []Rule, sshPort int, webListen string) error {
+	plan, err := Plan(rules, sshPort, webListen)
+	if err != nil {
+		return err
+	}
+	if runner == nil {
+		return rpcerr.Errf("agent_error", "firewall runner missing")
+	}
+	for _, args := range plan {
+		if _, err = firewallCommand(ctx, runner, "/usr/sbin/ufw", args...); err != nil {
+			return err
+		}
+	}
+	_, err = firewallCommand(ctx, runner, "/usr/sbin/ufw", "--force", "enable")
+	return err
+}

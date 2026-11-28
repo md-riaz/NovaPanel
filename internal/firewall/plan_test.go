@@ -67,3 +67,22 @@ func TestWebListenPinsOnlyExternalPorts(t *testing.T) {
 		t.Fatal("accepted unknown SSH port")
 	}
 }
+
+func TestApplyUsesPlannedOrder(t *testing.T) {
+	r := &recorder{}
+	if err := Apply(context.Background(), r, []Rule{{Action: "allow", Proto: "udp", Port: 53}}, 2222, ":8443"); err != nil {
+		t.Fatal(err)
+	}
+	plan, _ := Plan([]Rule{{Action: "allow", Proto: "udp", Port: 53}}, 2222, ":8443")
+	if len(r.calls) != len(plan)+1 {
+		t.Fatalf("calls: %v", r.calls)
+	}
+	for i, args := range plan {
+		if !reflect.DeepEqual(r.calls[i], append([]string{"/usr/sbin/ufw"}, args...)) {
+			t.Fatalf("call %d: %v", i, r.calls[i])
+		}
+	}
+	if !reflect.DeepEqual(r.calls[len(plan)], []string{"/usr/sbin/ufw", "--force", "enable"}) {
+		t.Fatal(r.calls)
+	}
+}

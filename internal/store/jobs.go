@@ -206,7 +206,7 @@ func (s *Store) ListJobs(ctx context.Context, f JobFilter) ([]Job, error) {
 func (s *Store) UpdateJob(ctx context.Context, j Job) error {
 	terminal := j.State == "done" || (j.State == "failed" && j.Code != "interrupted")
 	return s.Tx(ctx, func(tx *sql.Tx) error {
-		r, e := tx.ExecContext(ctx, `UPDATE jobs SET args_json=CASE WHEN ? AND json_valid(args_json) THEN CASE WHEN json_extract(args_json,'$._sealed_job_input')=1 THEN '{}' ELSE args_json END ELSE args_json END,state=?,step=?,progress=?,result_json=?,error=?,code=?,updated=?,finished=? WHERE id=?`, terminal, j.State, j.Step, j.Progress, nullableJSON(j.Result), j.Error, j.Code, j.Updated, j.Finished, j.ID)
+		r, e := tx.ExecContext(ctx, `UPDATE jobs SET args_json=CASE WHEN ? AND json_valid(args_json) THEN CASE WHEN json_extract(args_json,'$._sealed_job_input')=1 THEN '{}' ELSE args_json END ELSE args_json END,state=?,step=CASE WHEN verb='firewall.apply' AND step IN ('prepared','snapshotted','armed','applied','confirmed','reverted') THEN step ELSE ? END,progress=?,result_json=CASE WHEN verb='firewall.apply' AND step IN ('prepared','snapshotted','armed','applied','confirmed','reverted') THEN result_json ELSE ? END,error=?,code=?,updated=?,finished=? WHERE id=?`, terminal, j.State, j.Step, j.Progress, nullableJSON(j.Result), j.Error, j.Code, j.Updated, j.Finished, j.ID)
 		if e = affected(r, e); e != nil {
 			return e
 		}
