@@ -1,0 +1,162 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"novapanel/internal/dns"
+	"novapanel/internal/id"
+)
+
+type DNSZone struct{ ID, IntegrationID, Zone, ProviderZoneID string }
+type DNSRecord struct {
+	ObjID, ZoneID, Type, Name, Value string
+	TTL, Priority                    int
+	Proxied                          bool
+	ProviderRecordID                 sql.NullString
+	Phase                            string
+	Reconciled                       bool
+	Created, Updated                 int64
+}
+
+// ReserveDNSRecord records intent before the provider is called.
+func (s *Store) ReserveDNSRecord(ctx context.Context, r DNSRecord) error {
+	if !id.Valid(r.ObjID) || !id.Valid(r.ZoneID) {
+		return errors.New("invalid DNS identity")
+	}
+	now := s.clock.Now()
+	_, err := s.db.ExecContext(ctx, `INSERT INTO dns_records(obj_id,zone_id,type,name,value,ttl,priority,proxied,phase,reconciled,created,updated) VALUES(?,?,?,?,?,?,?,?,'reserved',0,?,?)`, r.ObjID, r.ZoneID, r.Type, r.Name, r.Value, r.TTL, r.Priority, r.Proxied, now, now)
+	return err
+}
+
+func (s *Store) DNSRecord(ctx context.Context, objID string) (DNSRecord, error) {
+	var r DNSRecord
+	err := s.db.QueryRowContext(ctx, `SELECT obj_id,zone_id,type,name,value,ttl,priority,proxied,provider_record_id,phase,reconciled,created,updated FROM dns_records WHERE obj_id=?`, objID).Scan(&r.ObjID, &r.ZoneID, &r.Type, &r.Name, &r.Value, &r.TTL, &r.Priority, &r.Proxied, &r.ProviderRecordID, &r.Phase, &r.Reconciled, &r.Created, &r.Updated)
+	return r, err
+}
+
+func (s *Store) ConfirmDNSRecord(ctx context.Context, objID, providerID string) error {
+	if providerID == "" {
+		return errors.New("empty DNS provider identity")
+	}
+	r, err := s.db.ExecContext(ctx, `UPDATE dns_records SET provider_record_id=?,phase='created',reconciled=1,updated=? WHERE obj_id=? AND phase='reserved'`, providerID, s.clock.Now(), objID)
+	return affected(r, err)
+}
+
+func (s *Store) MarkDNSRecordDeleting(ctx context.Context, objID string) error {
+	r, err := s.db.ExecContext(ctx, `UPDATE dns_records SET phase='deleting',updated=? WHERE obj_id=? AND phase IN ('reserved','created','deleting')`, s.clock.Now(), objID)
+	return affected(r, err)
+}
+
+func (s *Store) RemoveDNSRecord(ctx context.Context, objID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM dns_records WHERE obj_id=? AND phase='deleting'`, objID)
+	return err
+}
+
+var ErrDNSOwnership = errors.New("DNS record ownership conflict")
+
+func dnsComment(objID string) string { return "novapanel:obj_id=" + objID }
+
+// ReconcileDNSCreate resolves a reserved create using the provider's ownership stamp.
+func (s *Store) ReconcileDNSCreate(ctx context.Context, p dns.Provider, zone string, r DNSRecord) error {
+	records, err := p.List(ctx, zone)
+	if err != nil {
+		return err
+	}
+	var own *dns.Record
+	for i := range records {
+		v := &records[i]
+		if v.Name != r.Name {
+			continue
+		}
+		if v.Comment != dnsComment(r.ObjID) || own != nil || v.ID == "" {
+			return ErrDNSOwnership
+		}
+		own = v
+	}
+	if r.Phase == "created" {
+		if own == nil || !r.ProviderRecordID.Valid || own.ID != r.ProviderRecordID.String {
+			return ErrDNSOwnership
+		}
+		return nil
+	}
+	if r.Phase != "reserved" {
+		return ErrDNSOwnership
+	}
+	providerID := ""
+	if own != nil {
+		providerID = own.ID
+	} else {
+		providerID, err = p.Create(ctx, zone, dns.Record{Type: r.Type, Name: r.Name, Value: r.Value, TTL: r.TTL, Priority: r.Priority, Proxied: r.Proxied, Comment: dnsComment(r.ObjID)})
+		if err != nil {
+			return err
+		}
+	}
+	return s.ConfirmDNSRecord(ctx, r.ObjID, providerID)
+}
+
+// DeleteManagedDNSRecord verifies the provider identity before removing it.
+func (s *Store) DeleteManagedDNSRecord(ctx context.Context, p dns.Provider, zone string, r DNSRecord) error {
+	if r.Phase != "deleting" {
+		if err := s.MarkDNSRecordDeleting(ctx, r.ObjID); err != nil {
+			return err
+		}
+	}
+	records, err := p.List(ctx, zone)
+	if err != nil {
+		return err
+	}
+	for _, v := range records {
+		if r.ProviderRecordID.Valid {
+			if v.ID != r.ProviderRecordID.String {
+				continue
+			}
+		} else {
+			if v.Name != r.Name || v.Comment != dnsComment(r.ObjID) {
+				continue
+			}
+		}
+		if v.Comment != dnsComment(r.ObjID) {
+			if err := s.RemoveDNSRecord(ctx, r.ObjID); err != nil {
+				return err
+			}
+			return ErrDNSOwnership
+		}
+		if err := p.Delete(ctx, zone, v); err != nil {
+			return err
+		}
+	}
+	return s.RemoveDNSRecord(ctx, r.ObjID)
+}
+
+// UpdateManagedDNSRecord verifies identity before applying the requested state.
+func (s *Store) UpdateManagedDNSRecord(ctx context.Context, p dns.Provider, zone string, r DNSRecord) error {
+	if r.Phase != "created" || !r.ProviderRecordID.Valid {
+		return ErrDNSOwnership
+	}
+	records, err := p.List(ctx, zone)
+	if err != nil {
+		return err
+	}
+	for _, v := range records {
+		if v.ID != r.ProviderRecordID.String {
+			continue
+		}
+		if v.Comment != dnsComment(r.ObjID) {
+			return ErrDNSOwnership
+		}
+		desired := dns.Record{ID: v.ID, Type: r.Type, Name: r.Name, Value: r.Value, TTL: r.TTL, Priority: r.Priority, Proxied: r.Proxied, Comment: dnsComment(r.ObjID)}
+		if v != desired {
+			if err := p.Update(ctx, zone, desired); err != nil {
+				return err
+			}
+		}
+		return s.UpdateDNSRecord(ctx, r)
+	}
+	return ErrDNSOwnership
+}
+
+func (s *Store) UpdateDNSRecord(ctx context.Context, r DNSRecord) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE dns_records SET type=?,name=?,value=?,ttl=?,priority=?,proxied=?,updated=? WHERE obj_id=? AND provider_record_id=? AND phase='created'`, r.Type, r.Name, r.Value, r.TTL, r.Priority, r.Proxied, s.clock.Now(), r.ObjID, r.ProviderRecordID)
+	return affected(result, err)
+}

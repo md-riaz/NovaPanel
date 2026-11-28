@@ -9,10 +9,10 @@ func TestFakeRecords(t *testing.T) {
 	var p Provider = &Fake{}
 	ctx := context.Background()
 	r := Record{ID: "one", Value: "first"}
-	if err := p.Create(ctx, "example.com", r); err != nil {
+	if _, err := p.Create(ctx, "example.com", r); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Create(ctx, "example.com", r); err == nil {
+	if _, err := p.Create(ctx, "example.com", r); err == nil {
 		t.Fatal("duplicate accepted")
 	}
 	r.Value = "second"

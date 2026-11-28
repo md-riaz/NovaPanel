@@ -42,7 +42,8 @@ func integrationSet(ctx context.Context, a *agent.Agent, args any) (any, error) 
 	if err != nil {
 		return nil, rpc.Errf("agent_error", "Integration unavailable")
 	}
-	if err = a.ProbeDNS(ctx, v.Token, v.Zones); err != nil {
+	zoneIDs, err := a.ProbeDNS(ctx, v.Token, v.Zones)
+	if err != nil {
 		return nil, rpc.Errf("precondition_failed", "Cloudflare zone access check failed")
 	}
 	integrationID, err := id.New()
@@ -56,7 +57,7 @@ func integrationSet(ctx context.Context, a *agent.Agent, args any) (any, error) 
 	if err != nil {
 		return nil, rpc.Errf("agent_error", "Integration unavailable")
 	}
-	if err = a.Store.CreateIntegration(ctx, integrationID, string(config), store.ACMESealed{Nonce: sealed.Nonce, Ciphertext: sealed.Ciphertext}); err != nil {
+	if err = a.Store.CreateIntegration(ctx, integrationID, string(config), store.ACMESealed{Nonce: sealed.Nonce, Ciphertext: sealed.Ciphertext}, zoneIDs); err != nil {
 		return nil, rpc.Errf("agent_error", "Integration unavailable")
 	}
 	return struct {

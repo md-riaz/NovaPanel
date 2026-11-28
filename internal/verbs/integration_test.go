@@ -27,7 +27,9 @@ func TestIntegrationSetProbeFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &agent.Agent{Store: s, Secret: sealer, ProbeDNS: func(context.Context, string, []string) error { return errors.New("token leaked by provider") }}
+	a := &agent.Agent{Store: s, Secret: sealer, ProbeDNS: func(context.Context, string, []string) (map[string]string, error) {
+		return nil, errors.New("token leaked by provider")
+	}}
 	args := &integrationSetArgs{Kind: "cloudflare", Token: "token leaked by provider", Zones: []string{"example.com"}}
 	if err := args.Validate(); err != nil {
 		t.Fatal(err)
@@ -36,7 +38,9 @@ func TestIntegrationSetProbeFailure(t *testing.T) {
 	if err == nil || err.Error() == "token leaked by provider" {
 		t.Fatal("probe error was not safely rejected")
 	}
-	a.ProbeDNS = func(context.Context, string, []string) error { return nil }
+	a.ProbeDNS = func(context.Context, string, []string) (map[string]string, error) {
+		return map[string]string{"example.com": "zone-id"}, nil
+	}
 	if _, err := integrationSet(context.Background(), a, args); err != nil {
 		t.Fatal(err)
 	}
@@ -61,11 +65,11 @@ func TestIntegrationSetSecretsStaySealed(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer auditLog.Close()
-	a := &agent.Agent{Store: s, Secret: sealer, Audit: auditLog, ProbeDNS: func(_ context.Context, got string, zones []string) error {
+	a := &agent.Agent{Store: s, Secret: sealer, Audit: auditLog, ProbeDNS: func(_ context.Context, got string, zones []string) (map[string]string, error) {
 		if got != token || len(zones) != 1 || zones[0] != "example.com" {
 			t.Fatal("incorrect probe inputs")
 		}
-		return nil
+		return map[string]string{"example.com": "zone-id"}, nil
 	}}
 	var logs bytes.Buffer
 	old := log.Writer()
@@ -86,7 +90,7 @@ func TestIntegrationSetSecretsStaySealed(t *testing.T) {
 	if err != nil || bytes.Contains(encoded, []byte(token)) {
 		t.Fatal("secret in reply")
 	}
-	a.ProbeDNS = func(context.Context, string, []string) error { return errors.New(token) }
+	a.ProbeDNS = func(context.Context, string, []string) (map[string]string, error) { return nil, errors.New(token) }
 	failure := srv.Dispatch(ctx, req)
 	if failure.OK || bytes.Contains([]byte(failure.Error), []byte(token)) {
 		t.Fatal("secret in error")

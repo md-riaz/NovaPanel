@@ -17,12 +17,12 @@ func TestProbeZoneVisibility(t *testing.T) {
 		if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer test-token" {
 			t.Fatal("unexpected request")
 		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"success":true,"result":[{"name":"example.com"}]}`)), Header: make(http.Header)}, nil
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"success":true,"result":[{"name":"example.com","id":"zone-id"}]}`)), Header: make(http.Header)}, nil
 	})}
-	if err := probe(context.Background(), client, "test-token", []string{"example.com"}); err != nil {
+	if _, err := probe(context.Background(), client, "test-token", []string{"example.com"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := probe(context.Background(), client, "test-token", []string{"other.example"}); err == nil {
+	if _, err := probe(context.Background(), client, "test-token", []string{"other.example"}); err == nil {
 		t.Fatal("unexpected zone accepted")
 	}
 }

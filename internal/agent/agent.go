@@ -38,7 +38,7 @@ type realClock struct{}
 func (realClock) Now() int64 { return time.Now().UnixMilli() }
 
 type Agent struct {
-	ProbeDNS             func(context.Context, string, []string) error
+	ProbeDNS             func(context.Context, string, []string) (map[string]string, error)
 	UploadsMu            sync.Mutex
 	mutationsBlocked     atomic.Bool
 	DurablePHP           *PHPDependencies
