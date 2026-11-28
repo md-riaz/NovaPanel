@@ -149,6 +149,14 @@ func serve(ctx context.Context, a *agent.Agent) (err error) {
 		fmt.Fprintf(os.Stderr, "firewall recovery sweep failed, next attempt in %s: %v\n", wait, ferr)
 	})
 	defer stopFirewallSweep()
+	stopDNSRecovery := verbs.StartDNSReconcile(ctx, a, func(_ error, wait time.Duration) {
+		fmt.Fprintf(os.Stderr, "DNS recovery failed, retrying in %s\n", wait)
+	})
+	defer stopDNSRecovery()
+	stopDNSSweep := verbs.StartDNSSweep(ctx, a, func(_ error, wait time.Duration) {
+		fmt.Fprintf(os.Stderr, "DNS recovery sweep failed, next attempt in %s\n", wait)
+	})
+	defer stopDNSSweep()
 	startupErr := a.PrepareStartup(ctx)
 	if ctx.Err() != nil {
 		return nil

@@ -19,6 +19,9 @@ import (
 var lifecycleStarters = map[string]bool{
 	"internal/verbs/firewall.go:StartFirewallRecovery": true,
 	"internal/verbs/firewall.go:StartFirewallSweep":    true,
+	// DNS starters run background reconciliation, not RPC handlers.
+	"internal/verbs/dns.go:StartDNSReconcile": true,
+	"internal/verbs/dns.go:StartDNSSweep":     true,
 }
 
 // Check returns all architecture violations under root. Process and privilege

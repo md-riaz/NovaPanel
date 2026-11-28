@@ -75,7 +75,7 @@ though its `Role` is higher — so `firewall.status` (Role A, R/O ✓) is callab
 | `firewall.status` | | A | ✓ | system:read | | | | |
 | `firewall.apply` | | A | | **firewall:write** | ✓ | ✓ | ✓ | `firewall` (excluded scope, armed revert) |
 | `firewall.confirm` / `firewall.revert` | | A | | firewall:write | | | ✓ | cancels/fires the deadman (automation can confirm) |
-| `dns.record.create`/`update`/`delete` | | A | | dns:write | ✓ | | | `zone:<zone>` |
+| `dns.record.create`/`update`/`delete` | | A | | dns:write | ✓ | ✓ | | `zone:<zone>` |
 | `dns.record.list` | | RO | ✓ | dns:read | | | | |
 | `dns.verify` | | A | | dns:read | | | | resolver + provider check |
 | `dns.purge` | | A | | dns:write | ✓ | | | `zone:<zone>` |

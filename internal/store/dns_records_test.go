@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"testing"
 
 	"novapanel/internal/dns"
@@ -41,6 +42,18 @@ func TestDNSRecordReplay(t *testing.T) {
 	r, err = s.DNSRecord(ctx, objID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	jobID, _ := id.New()
+	args, _ := json.Marshal(map[string]string{"record_id": objID})
+	if err := s.CreateJob(ctx, Job{ID: jobID, Verb: "dns.record.create", ObjectKey: "zone:example.com", State: "running", Effectful: true, Args: args}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecoverJobs(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	job, err := s.GetJob(ctx, jobID)
+	if err != nil || job.State != "failed" || job.Code != "interrupted" || r.Phase != "reserved" || r.Reconciled {
+		t.Fatal("interrupted create was requeued")
 	}
 	p := &dns.Fake{}
 	foreign := dns.Record{ID: "foreign", Type: r.Type, Name: r.Name, Value: r.Value, TTL: r.TTL}

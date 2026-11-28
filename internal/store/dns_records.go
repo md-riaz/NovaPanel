@@ -20,6 +20,55 @@ type DNSRecord struct {
 	Created, Updated                 int64
 }
 
+// DNSZoneByName fails closed if multiple integrations claim the same zone.
+func (s *Store) DNSZoneByName(ctx context.Context, name string) (DNSZone, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,integration_id,zone,provider_zone_id FROM dns_zones WHERE zone=? LIMIT 2`, name)
+	if err != nil {
+		return DNSZone{}, err
+	}
+	defer rows.Close()
+	var z DNSZone
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return z, err
+		}
+		return z, sql.ErrNoRows
+	}
+	if err := rows.Scan(&z.ID, &z.IntegrationID, &z.Zone, &z.ProviderZoneID); err != nil {
+		return z, err
+	}
+	if rows.Next() {
+		return DNSZone{}, ErrDNSOwnership
+	}
+	return z, rows.Err()
+}
+func (s *Store) DNSZoneByID(ctx context.Context, zoneID string) (DNSZone, error) {
+	var z DNSZone
+	err := s.db.QueryRowContext(ctx, `SELECT id,integration_id,zone,provider_zone_id FROM dns_zones WHERE id=?`, zoneID).Scan(&z.ID, &z.IntegrationID, &z.Zone, &z.ProviderZoneID)
+	return z, err
+}
+func (s *Store) DNSCredential(ctx context.Context, integrationID string) (ACMESealed, error) {
+	var sealed ACMESealed
+	err := s.db.QueryRowContext(ctx, `SELECT nonce,ciphertext FROM secrets WHERE name=?`, "integration:"+integrationID+":token").Scan(&sealed.Nonce, &sealed.Ciphertext)
+	return sealed, err
+}
+func (s *Store) DNSRecordsInZone(ctx context.Context, zoneID string) ([]DNSRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT obj_id,zone_id,type,name,value,ttl,priority,proxied,provider_record_id,phase,reconciled,conflict_error,created,updated FROM dns_records WHERE zone_id=?`, zoneID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DNSRecord
+	for rows.Next() {
+		var r DNSRecord
+		if err := rows.Scan(&r.ObjID, &r.ZoneID, &r.Type, &r.Name, &r.Value, &r.TTL, &r.Priority, &r.Proxied, &r.ProviderRecordID, &r.Phase, &r.Reconciled, &r.ConflictError, &r.Created, &r.Updated); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // ReserveDNSRecord records intent before the provider is called.
 func (s *Store) ReserveDNSRecord(ctx context.Context, r DNSRecord) error {
 	if !id.Valid(r.ObjID) || !id.Valid(r.ZoneID) {
