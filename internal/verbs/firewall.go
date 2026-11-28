@@ -222,6 +222,41 @@ func startFirewallRecovery(ctx context.Context, r firewallRecovery, first, max t
 	}
 }
 
+// firewallSweepInterval bounds how long an unreverted change waits when its timer-run revert exhausted
+// its retries and the daemon stayed up. Each pass is one lock and one row read when nothing is pending.
+const firewallSweepInterval = time.Minute
+
+// StartFirewallSweep reruns the recovery check every firewallSweepInterval until stop is called, so a
+// revert that failed its bounded timer-run retries is attempted again without a restart.
+func StartFirewallSweep(ctx context.Context, a *agent.Agent, failed func(error, time.Duration)) (stop func()) {
+	return startFirewallSweep(ctx, firewallRecovery{agent: a, rulesDir: "/etc/ufw"}, firewallSweepInterval, failed)
+}
+
+func startFirewallSweep(ctx context.Context, r firewallRecovery, interval time.Duration, failed func(error, time.Duration)) (stop func()) {
+	sweepCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-sweepCtx.Done():
+				return
+			case <-ticker.C:
+			}
+			// Errors caused by shutdown are not failures worth reporting.
+			if err := r.run(sweepCtx); err != nil && sweepCtx.Err() == nil && failed != nil {
+				failed(err, interval)
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
 type firewallRecovery struct {
 	agent    *agent.Agent
 	rulesDir string

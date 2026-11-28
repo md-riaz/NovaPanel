@@ -144,6 +144,11 @@ func serve(ctx context.Context, a *agent.Agent) (err error) {
 		fmt.Fprintf(os.Stderr, "startup firewall recovery failed, retrying in %s: %v\n", wait, ferr)
 	})
 	defer stopFirewallRecovery()
+	// The sweep retries a revert whose timer-run attempts were exhausted while the daemon keeps running.
+	stopFirewallSweep := verbs.StartFirewallSweep(ctx, a, func(ferr error, wait time.Duration) {
+		fmt.Fprintf(os.Stderr, "firewall recovery sweep failed, next attempt in %s: %v\n", wait, ferr)
+	})
+	defer stopFirewallSweep()
 	startupErr := a.PrepareStartup(ctx)
 	if ctx.Err() != nil {
 		return nil
