@@ -464,16 +464,16 @@ func reconcileDNS(ctx context.Context, a *agent.Agent) error {
 
 // StartDNSReconcile attempts outstanding DNS work and backs off on transient failure.
 func StartDNSReconcile(ctx context.Context, a *agent.Agent, failed func(error, time.Duration)) (stop func()) {
-	if err := reconcileDNS(ctx, a); err == nil {
-		return func() {}
-	} else if failed != nil {
-		failed(err, time.Second)
-	}
 	c, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		delay := time.Second
+		if err := reconcileDNS(c, a); err == nil {
+			return
+		} else if c.Err() == nil && failed != nil {
+			failed(err, delay)
+		}
 		for {
 			t := time.NewTimer(delay)
 			select {
