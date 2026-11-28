@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
-	osexec "os/exec"
+
 	"path/filepath"
 	"strings"
 	"testing"
@@ -38,9 +38,9 @@ func TestFirewallLab(t *testing.T) {
 	ctx := context.Background()
 	run := func(args ...string) []byte {
 		t.Helper()
-		out, e := osexec.CommandContext(ctx, "/usr/sbin/ufw", args...).CombinedOutput()
-		if e != nil {
-			t.Fatalf("ufw %v: %v: %s", args, e, out)
+		out, stderr, code, e := (runner.Real{}).Run(ctx, "/usr/sbin/ufw", args, runner.RunOpts{})
+		if e != nil || code != 0 {
+			t.Fatalf("ufw %v: %v: %s %s", args, e, out, stderr)
 		}
 		return out
 	}
@@ -101,16 +101,16 @@ func TestFirewallLab(t *testing.T) {
 	if !filepath.IsAbs(binary) {
 		t.Fatal("missing lab agent executable")
 	}
-	out, err := osexec.CommandContext(ctx, binary, "fw-revert", snap).CombinedOutput()
-	if err != nil {
-		t.Fatalf("fw-revert: %v: %s", err, out)
+	out, stderr, code, err := (runner.Real{}).Run(ctx, binary, []string{"fw-revert", snap}, runner.RunOpts{})
+	if err != nil || code != 0 {
+		t.Fatalf("fw-revert: %v: %s %s", err, out, stderr)
 	}
 	restored := run("status", "numbered")
 	if !bytes.Equal(before, restored) {
 		t.Fatalf("snapshot not restored\nbefore: %s\nafter: %s", before, restored)
 	}
-	ruleset, err := osexec.CommandContext(ctx, "/usr/sbin/iptables-save").Output()
-	if err != nil || !bytes.Contains(ruleset, []byte("--dport 22 -j ACCEPT")) {
+	ruleset, _, code, err := (runner.Real{}).Run(ctx, "/usr/sbin/iptables-save", nil, runner.RunOpts{})
+	if err != nil || code != 0 || !bytes.Contains(ruleset, []byte("--dport 22 -j ACCEPT")) {
 		t.Fatalf("SSH accept missing: %v\n%s", err, ruleset)
 	}
 	s, err = store.Open(dbPath)
