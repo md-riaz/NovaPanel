@@ -5,9 +5,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
+	"time"
 
 	"path/filepath"
 	"strings"
@@ -127,5 +129,30 @@ func TestFirewallLab(t *testing.T) {
 	}
 	if _, err = os.Stat(filepath.Join(root, "fw-reverted-"+pendingID)); err != nil {
 		t.Fatal(err)
+	}
+	jobID, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextID, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := json.Marshal(map[string]string{"pending_id": nextID})
+	if err = s.CreateJob(ctx, store.Job{ID: jobID, Verb: "firewall.apply", ObjectKey: "firewall", Actor: "lab", State: "running", Step: store.FirewallApplied, Effectful: true, Args: json.RawMessage(`{}`), Result: result}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ReserveFirewall(ctx, store.FirewallPending{ID: nextID, SnapshotPath: snap, RevertUnit: "novapanel-fwrevert-" + nextID + ".timer", Deadline: time.Now().Add(time.Minute).UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	if err = firewall.Apply(ctx, runner.Real{}, nil, 22, "127.0.0.1:8080"); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ConfirmFirewall(ctx, jobID, nextID, &revertRunner{}); err != nil {
+		t.Fatal(err)
+	}
+	afterConfirm := run("status", "numbered")
+	if bytes.Contains(afterConfirm, []byte("3306/tcp")) || !bytes.Contains(afterConfirm, []byte("22/tcp")) || !bytes.Contains(afterConfirm, []byte("80/tcp")) || !bytes.Contains(afterConfirm, []byte("443/tcp")) {
+		t.Fatalf("confirmed rules: %s", afterConfirm)
 	}
 }
