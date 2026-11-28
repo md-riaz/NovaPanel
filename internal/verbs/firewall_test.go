@@ -467,3 +467,59 @@ func TestFirewallSweepRetriesPendingRevert(t *testing.T) {
 		t.Fatalf("step %s", j.Step)
 	}
 }
+
+// An active timer past its deadline is not trusted to fire, so the sweep reverts it through the normal
+// reconcile path, which restores the snapshot and finishes the change.
+func TestFirewallSweepRevertsActiveTimerPastDeadline(t *testing.T) {
+	probe := &probeRunner{code: 0}
+	past := time.Now().Add(-time.Minute).UnixMilli()
+	a, s, job := pendingFixture(t, store.FirewallApplied, past, probe)
+	ctx := context.Background()
+	stop := startFirewallSweep(ctx, firewallRecovery{agent: a, rulesDir: t.TempDir()}, time.Millisecond, nil)
+	defer stop()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := s.FirewallPending(ctx); errors.Is(err, sql.ErrNoRows) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("sweep never reverted the expired change")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	stop()
+	if probe.ufwCalls == 0 {
+		t.Fatal("expired change finished without restoring the firewall")
+	}
+	j, err := s.GetJob(ctx, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.Step != store.FirewallReverted {
+		t.Fatalf("step %s", j.Step)
+	}
+}
+
+// An active timer before its deadline is left alone: the sweep runs many passes and changes nothing.
+func TestFirewallSweepLeavesActiveTimerBeforeDeadline(t *testing.T) {
+	probe := &probeRunner{code: 0}
+	future := time.Now().Add(time.Hour).UnixMilli()
+	a, s, job := pendingFixture(t, store.FirewallArmed, future, probe)
+	ctx := context.Background()
+	stop := startFirewallSweep(ctx, firewallRecovery{agent: a, rulesDir: t.TempDir()}, time.Millisecond, nil)
+	time.Sleep(50 * time.Millisecond)
+	stop()
+	if _, err := s.FirewallPending(ctx); err != nil {
+		t.Fatalf("live change no longer pending: %v", err)
+	}
+	if probe.ufwCalls != 0 {
+		t.Fatalf("firewall touched %d times before the deadline", probe.ufwCalls)
+	}
+	j, err := s.GetJob(ctx, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.Step != store.FirewallArmed {
+		t.Fatalf("step %s", j.Step)
+	}
+}
