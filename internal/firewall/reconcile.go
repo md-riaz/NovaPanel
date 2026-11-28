@@ -90,7 +90,8 @@ func reconcilePlan(rules, old []Rule, sshPort int, webListen string) ([][]string
 		}
 	}
 	for _, r := range old {
-		if desired[r] {
+		pinnedRule := Rule{Action: "allow", Proto: "tcp", Port: r.Port}
+		if desired[r] || (r.Action == "allow" && r.Proto == "tcp" && r.Source == "" && desired[pinnedRule]) {
 			continue
 		}
 		if r.Proto == "" && r.Source == "" {

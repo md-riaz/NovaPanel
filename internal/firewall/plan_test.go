@@ -91,7 +91,7 @@ func TestApplyUsesPlannedOrder(t *testing.T) {
 }
 
 func TestReconcileRemovesOmittedRules(t *testing.T) {
-	old := []Rule{{Action: "allow", Proto: "tcp", Port: 22}, {Action: "allow", Proto: "tcp", Port: 3306}, {Action: "deny", Proto: "tcp", Port: 1234}}
+	old := []Rule{{Action: "allow", Proto: "tcp", Port: 22, Comment: "existing ssh"}, {Action: "allow", Proto: "tcp", Port: 3306}, {Action: "deny", Proto: "tcp", Port: 1234}}
 	plan, err := reconcilePlan(nil, old, 22, "0.0.0.0:8443")
 	if err != nil {
 		t.Fatal(err)
