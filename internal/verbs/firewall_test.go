@@ -1,10 +1,19 @@
 package verbs
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"novapanel/internal/agent"
+	"novapanel/internal/exec"
 	"novapanel/internal/firewall"
+	"novapanel/internal/id"
 	"novapanel/internal/rpc"
+	"novapanel/internal/store"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestFirewallVerbContracts(t *testing.T) {
@@ -42,5 +51,78 @@ func TestUnknownWebListenPinsPanelPort(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("panel port not pinned: %v", plan)
+	}
+}
+
+type startupFirewallRunner struct {
+	active   bool
+	restores int
+}
+
+func (r *startupFirewallRunner) Run(_ context.Context, path string, args []string, _ exec.RunOpts) ([]byte, []byte, int, error) {
+	if path == "/usr/bin/systemctl" && len(args) > 0 && args[0] == "is-active" {
+		if r.active {
+			return nil, nil, 0, nil
+		}
+		return nil, nil, 3, nil
+	}
+	if path == "/usr/sbin/ufw" {
+		r.restores++
+	}
+	return nil, nil, 0, nil
+}
+func TestRecoverFirewallTimerPresence(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		for _, step := range []string{store.FirewallArmed, store.FirewallApplied} {
+			t.Run(fmt.Sprintf("active=%t/%s", active, step), func(t *testing.T) {
+				root := t.TempDir()
+				rules := filepath.Join(root, "rules")
+				snap := filepath.Join(root, "snapshot")
+				if err := os.MkdirAll(filepath.Join(snap, "ufw"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(rules, 0700); err != nil {
+					t.Fatal(err)
+				}
+				for _, n := range []string{"after.rules", "after6.rules", "before.rules", "before6.rules", "user.rules", "user6.rules"} {
+					if err := os.WriteFile(filepath.Join(snap, "ufw", n), []byte(n), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.WriteFile(filepath.Join(snap, "enabled"), []byte("0\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				s, err := store.Open(":memory:")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer s.Close()
+				ctx := context.Background()
+				job, _ := id.New()
+				pending, _ := id.New()
+				res, _ := json.Marshal(map[string]string{"pending_id": pending})
+				if err = s.CreateJob(ctx, store.Job{ID: job, Verb: "firewall.apply", ObjectKey: "firewall", Actor: "test", State: "running", Step: step, Effectful: true, Args: json.RawMessage(`{}`), Result: res}); err != nil {
+					t.Fatal(err)
+				}
+				if err = s.ReserveFirewall(ctx, store.FirewallPending{ID: pending, SnapshotPath: snap, RevertUnit: "novapanel-fwrevert-" + pending + ".timer", Deadline: time.Now().Add(time.Hour).UnixMilli()}); err != nil {
+					t.Fatal(err)
+				}
+				runner := &startupFirewallRunner{active: active}
+				a := agent.New()
+				a.Store = s
+				a.Exec = runner
+				a.Cfg.DBPath = filepath.Join(root, "panel.db")
+				if err = (firewallRecovery{agent: a, rulesDir: rules}).run(ctx); err != nil {
+					t.Fatal(err)
+				}
+				j, err := s.GetJob(ctx, job)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if active && (j.Step != step || runner.restores != 0) || !active && (j.Step != store.FirewallReverted || runner.restores != 1) {
+					t.Fatalf("job=%s restores=%d", j.Step, runner.restores)
+				}
+			})
+		}
 	}
 }

@@ -179,6 +179,16 @@ func firewallRevert(ctx context.Context, a *agent.Agent, args any) (any, error) 
 
 // RecoverFirewall resolves any interrupted pending change before admission opens.
 func RecoverFirewall(ctx context.Context, a *agent.Agent) error {
+	return (firewallRecovery{agent: a, rulesDir: "/etc/ufw"}).run(ctx)
+}
+
+type firewallRecovery struct {
+	agent    *agent.Agent
+	rulesDir string
+}
+
+func (r firewallRecovery) run(ctx context.Context) error {
+	a := r.agent
 	unlock, err := firewallLock(ctx, a)
 	if err != nil {
 		return err
@@ -202,10 +212,10 @@ func RecoverFirewall(ctx context.Context, a *agent.Agent) error {
 	if j.Step == store.FirewallArmed || j.Step == store.FirewallApplied || j.Step == store.FirewallSnapshotted || j.Step == store.FirewallConfirmed {
 		_, _, code, e := a.Exec.Run(ctx, "/usr/bin/systemctl", []string{"is-active", "--quiet", p.RevertUnit}, exec.RunOpts{})
 		if e != nil || code != 0 {
-			return a.Store.ReconcileFirewallLostTimer(ctx, job, a.Exec, "/etc/ufw")
+			return a.Store.ReconcileFirewallLostTimer(ctx, job, a.Exec, r.rulesDir)
 		}
 	}
-	return a.Store.ReconcileFirewall(ctx, job, a.Exec, "/etc/ufw", false)
+	return a.Store.ReconcileFirewall(ctx, job, a.Exec, r.rulesDir, false)
 }
 
 func firewallStatus(ctx context.Context, a *agent.Agent, _ any) (any, error) {
