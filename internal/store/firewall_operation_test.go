@@ -163,8 +163,12 @@ func TestConfirmArmedFirewall(t *testing.T) {
 	if err = s.ReserveFirewall(ctx, FirewallPending{ID: pendingID, SnapshotPath: "/snapshot", RevertUnit: "timer", Deadline: 2000}); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.ConfirmFirewall(ctx, jobID, pendingID, &fwRunner{}); err != nil {
+	r := &fwRunner{}
+	if err = s.ConfirmFirewall(ctx, jobID, pendingID, r); err != nil {
 		t.Fatal(err)
+	}
+	if len(r.calls) != 1 || len(r.calls[0]) != 3 || r.calls[0][0] != "/usr/bin/systemctl" || r.calls[0][1] != "stop" || r.calls[0][2] != "novapanel-fwrevert-"+pendingID+".timer" {
+		t.Fatalf("cancel calls: %v", r.calls)
 	}
 	j, err := s.GetJob(ctx, jobID)
 	if err != nil || j.Step != FirewallConfirmed {
