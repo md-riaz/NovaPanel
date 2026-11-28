@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"novapanel/internal/agent"
+	"novapanel/internal/config"
 	"novapanel/internal/exec"
 	"novapanel/internal/firewall"
 	"novapanel/internal/id"
@@ -125,4 +127,36 @@ func TestRecoverFirewallTimerPresence(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestSharedWebBindIsPinned(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "web-listen")
+	if err := os.WriteFile(path, []byte("0.0.0.0:9443\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	webBind, _, err := config.ReadWebListen(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentBind, known, err := config.ReadWebListen(path)
+	if err != nil || !known {
+		t.Fatalf("%v %v", known, err)
+	}
+	a := agent.New()
+	a.Cfg.WebListen = agentBind
+	a.Cfg.WebListenKnown = known
+	plan, err := firewall.Plan(nil, 22, firewallWebListen(a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, port, err := net.SplitHostPort(webBind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range plan {
+		if args[len(args)-1] == port {
+			return
+		}
+	}
+	t.Fatalf("web bind %s is not pinned: %v", webBind, plan)
 }
