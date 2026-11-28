@@ -66,7 +66,15 @@ func firewallRevert(ctx context.Context, dbPath, rulesDir, snapshot string, runn
 	if err != nil {
 		return err
 	}
-	res, err := db.ExecContext(ctx, "DELETE FROM fw_pending WHERE id=? AND snapshot_path=? AND confirmed=0", pendingID, snapshot)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE jobs SET step='reverted' WHERE verb='firewall.apply' AND json_extract(result_json,'$.pending_id')=? AND step IN ('armed','applied')`, pendingID); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, "DELETE FROM fw_pending WHERE id=? AND snapshot_path=? AND confirmed=0", pendingID, snapshot)
 	if err != nil {
 		return err
 	}
@@ -77,7 +85,7 @@ func firewallRevert(ctx context.Context, dbPath, rulesDir, snapshot string, runn
 	if n != 1 {
 		return errors.New("pending firewall change changed")
 	}
-	return nil
+	return tx.Commit()
 }
 
 func runFirewallRevert(snapshot string) error {

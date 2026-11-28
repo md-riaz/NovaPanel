@@ -35,3 +35,10 @@ func (s *Store) DeleteFirewallPending(ctx context.Context, id string) error {
 	r, err := s.db.ExecContext(ctx, "DELETE FROM fw_pending WHERE id=?", id)
 	return affected(r, err)
 }
+
+// FirewallJob resolves the owning apply job from the reserved pending nonce.
+func (s *Store) FirewallJob(ctx context.Context, pendingID string) (string, error) {
+	var jobID string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM jobs WHERE verb='firewall.apply' AND json_extract(result_json,'$.pending_id')=? AND step IN ('prepared','snapshotted','armed','applied','confirmed') ORDER BY created DESC LIMIT 1`, pendingID).Scan(&jobID)
+	return jobID, err
+}

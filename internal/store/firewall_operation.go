@@ -91,7 +91,7 @@ func (s *Store) ReconcileFirewall(ctx context.Context, jobID string, runner exec
 	if json.Unmarshal(j.Result, &ref) != nil || !id.Valid(ref.PendingID) {
 		return ErrSiteInvalid
 	}
-	if j.Step == FirewallConfirmed || j.Step == FirewallReverted {
+	if j.Step == FirewallReverted {
 		return nil
 	}
 	p, err := s.FirewallPending(ctx)
@@ -102,6 +102,14 @@ func (s *Store) ReconcileFirewall(ctx context.Context, jobID string, runner exec
 		return ErrSiteConflict
 	}
 	switch j.Step {
+	case FirewallConfirmed:
+		if !p.Confirmed {
+			return ErrSiteConflict
+		}
+		if err = firewall.Cancel(ctx, runner, p.ID); err != nil {
+			return err
+		}
+		return s.DeleteFirewallPending(ctx, p.ID)
 	case FirewallPrepared, FirewallSnapshotted:
 		// Arm may have succeeded before its checkpoint was persisted.
 		if j.Step == FirewallSnapshotted {
@@ -125,7 +133,7 @@ func (s *Store) ReconcileFirewall(ctx context.Context, jobID string, runner exec
 	return s.finishFirewall(ctx, jobID, p.ID, j.Step, FirewallReverted)
 }
 
-// ConfirmFirewall consumes the pending change only after its timer is stopped.
+// ConfirmFirewall records confirmation before stopping the timer, so recovery can finish cancellation.
 func (s *Store) ConfirmFirewall(ctx context.Context, jobID, pendingID string, runner exec.Runner) error {
 	j, err := s.GetJob(ctx, jobID)
 	if err != nil {
@@ -147,10 +155,20 @@ func (s *Store) ConfirmFirewall(ctx context.Context, jobID, pendingID string, ru
 	if json.Unmarshal(j.Result, &ref) != nil || ref.PendingID != p.ID {
 		return ErrSiteConflict
 	}
+	if err = s.Tx(ctx, func(tx *sql.Tx) error {
+		r, e := tx.ExecContext(ctx, "UPDATE fw_pending SET confirmed=1 WHERE id=? AND confirmed=0 AND deadline>?", p.ID, s.clock.Now())
+		if e = affected(r, e); e != nil {
+			return e
+		}
+		r, e = tx.ExecContext(ctx, "UPDATE jobs SET step=?,updated=? WHERE id=? AND step=?", FirewallConfirmed, s.clock.Now(), jobID, FirewallApplied)
+		return affected(r, e)
+	}); err != nil {
+		return err
+	}
 	if err = firewall.Cancel(ctx, runner, p.ID); err != nil {
 		return err
 	}
-	return s.finishFirewall(ctx, jobID, p.ID, FirewallApplied, FirewallConfirmed)
+	return s.DeleteFirewallPending(ctx, p.ID)
 }
 
 func (s *Store) finishFirewall(ctx context.Context, jobID, pendingID, from, to string) error {

@@ -25,7 +25,7 @@ func TestFirewallRevert(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err = db.Exec(`CREATE TABLE fw_pending(id TEXT PRIMARY KEY,snapshot_path TEXT,revert_unit TEXT,deadline INTEGER,confirmed INTEGER)`); err != nil {
+	if _, err = db.Exec(`CREATE TABLE fw_pending(id TEXT PRIMARY KEY,snapshot_path TEXT,revert_unit TEXT,deadline INTEGER,confirmed INTEGER); CREATE TABLE jobs(verb TEXT,result_json TEXT,step TEXT)`); err != nil {
 		t.Fatal(err)
 	}
 	snapshot := filepath.Join(root, "snapshot")

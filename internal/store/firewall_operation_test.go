@@ -129,7 +129,12 @@ func TestFirewallConfirm(t *testing.T) {
 	if e = s.FirewallApply(ctx, jobID, p, r, rules, nil, 22, "127.0.0.1:8080", 1); e != nil {
 		t.Fatal(e)
 	}
-	if e = s.ConfirmFirewall(ctx, jobID, pendingID, r); e != nil {
+	r.failAt = len(r.calls) + 1
+	if e = s.ConfirmFirewall(ctx, jobID, pendingID, r); e == nil {
+		t.Fatal("expected cancel failure")
+	}
+	r.failAt = 0
+	if e = s.ReconcileFirewall(ctx, jobID, r, rules, false); e != nil {
 		t.Fatal(e)
 	}
 	got, e := s.GetJob(ctx, jobID)
