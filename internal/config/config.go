@@ -65,10 +65,17 @@ func Defaults() Config {
 // Load overlays defaults, an optional TOML file, NOVAPANEL_KEY environment,
 // then explicitly supplied snake_case flag values. It does not resolve accounts.
 func Load(path string, flags map[string]string) (Config, error) {
+	return load(path, WebListenPath, flags)
+}
+
+func load(path, webListenPath string, flags map[string]string) (Config, error) {
 	c := Defaults()
-	listen, listenKnown, err := ReadWebListen(WebListenPath)
+	listen, listenKnown, err := ReadWebListen(webListenPath)
 	if err != nil {
-		return c, err
+		// The bind file only informs firewall port pinning. A malformed or unreadable file degrades to
+		// the fail-safe unknown bind, so the panel port stays pinned and recovery or revert still runs.
+		fmt.Fprintf(os.Stderr, "ignoring %s, pinning the default panel port: %v\n", webListenPath, err)
+		listen, listenKnown = DefaultWebListen, false
 	}
 	c.WebListen, c.WebListenKnown = listen, listenKnown
 	if path == "" {

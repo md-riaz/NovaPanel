@@ -55,6 +55,33 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
+// A malformed or unreadable bind file must never fail Load: recovery and revert load the same config.
+func TestMalformedWebListenDegradesToUnknown(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent.toml")
+	if err := os.WriteFile(cfgPath, []byte("db_path = '/var/lib/novapanel/custom.db'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	webPath := filepath.Join(dir, "web-listen")
+	for _, content := range []string{"not-a-bind\n", "127.0.0.1:0\n", "127.0.0.1:70000\n", "\x00junk"} {
+		if err := os.WriteFile(webPath, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		c, err := load(cfgPath, webPath, nil)
+		if err != nil || c.WebListenKnown || c.WebListen != DefaultWebListen {
+			t.Fatalf("%q: listen %q known %v err %v", content, c.WebListen, c.WebListenKnown, err)
+		}
+		if c.DBPath != "/var/lib/novapanel/custom.db" {
+			t.Fatalf("%q: db path %q", content, c.DBPath)
+		}
+	}
+	// A directory is unreadable as a file, so it takes the same fail-safe path.
+	c, err := load(cfgPath, dir, nil)
+	if err != nil || c.WebListenKnown || c.WebListen != DefaultWebListen {
+		t.Fatalf("unreadable: listen %q known %v err %v", c.WebListen, c.WebListenKnown, err)
+	}
+}
+
 func TestSharedWebListen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "web-listen")
 	if err := os.WriteFile(path, []byte("0.0.0.0:9443\n"), 0600); err != nil {
