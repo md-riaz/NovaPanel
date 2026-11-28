@@ -223,6 +223,13 @@ running:
 	return err
 }
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "fw-revert" {
+		if err := runFirewallRevert(os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 3 && os.Args[1] == "__wordpress-extract" {
 		if err := wordpress.ExtractFreshCore(context.Background(), os.Args[2]); err != nil {
 			fmt.Fprintln(os.Stderr, "WordPress extraction failed")
