@@ -96,6 +96,17 @@ func TestReconcileRemovesOmittedRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	seen := map[string]bool{}
+	for _, args := range plan {
+		if len(args) > 0 {
+			seen[args[len(args)-1]] = true
+		}
+	}
+	for _, port := range []string{"22", "80", "443", "8443"} {
+		if !seen[port] {
+			t.Fatalf("missing pinned port %s: %v", port, plan)
+		}
+	}
 	var deletes [][]string
 	for _, args := range plan {
 		if len(args) > 1 && args[1] == "delete" {
