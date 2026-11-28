@@ -130,15 +130,15 @@ func firewallApplyExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	p := store.FirewallPending{ID: pendingID, SnapshotPath: filepath.Join(root, pendingID), RevertUnit: "novapanel-fwrevert-" + pendingID + ".timer", Deadline: a.Now() + int64(window)*int64(time.Minute/time.Millisecond)}
 	return a.Store.FirewallApply(ctx, j.ID, p, a.Exec, "/etc/ufw", v.Rules, port, a.Cfg.WebListen, window)
 }
-func firewallResolve(ctx context.Context, a *agent.Agent, pendingID string) (string, error) {
-	p, err := a.Store.FirewallPending(ctx)
+func resolveFirewallJob(ctx context.Context, s *store.Store, pendingID string) (string, error) {
+	p, err := s.FirewallPending(ctx)
 	if errors.Is(err, sql.ErrNoRows) || err == nil && p.ID != pendingID {
 		return "", rpc.Errf("not_found", "firewall change not found")
 	}
 	if err != nil {
 		return "", err
 	}
-	job, err := a.Store.FirewallJob(ctx, pendingID)
+	job, err := s.FirewallJob(ctx, pendingID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", rpc.Errf("not_found", "firewall change not found")
 	}
@@ -151,7 +151,7 @@ func firewallConfirm(ctx context.Context, a *agent.Agent, args any) (any, error)
 	}
 	defer unlock()
 	pending := args.(*firewallPendingArgs).PendingID
-	job, err := firewallResolve(ctx, a, pending)
+	job, err := resolveFirewallJob(ctx, a.Store, pending)
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +166,7 @@ func firewallRevert(ctx context.Context, a *agent.Agent, args any) (any, error) 
 		return nil, err
 	}
 	defer unlock()
-	job, err := firewallResolve(ctx, a, args.(*firewallPendingArgs).PendingID)
+	job, err := resolveFirewallJob(ctx, a.Store, args.(*firewallPendingArgs).PendingID)
 	if err != nil {
 		return nil, err
 	}
