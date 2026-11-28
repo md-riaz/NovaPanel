@@ -68,6 +68,12 @@ func admitsPinnedTCP(r Rule) bool {
 	return (r.Action == "allow" || r.Action == "limit") && (r.Proto == "tcp" || r.Proto == "")
 }
 
+// keepsPinned reports whether an existing rule on a pinned port must survive reconcile. A source-restricted
+// rule of any action is an explicit admin choice, so it is never deleted and never widened to the world.
+func keepsPinned(r Rule, pinned map[int]bool) bool {
+	return pinned[r.Port] && (admitsPinnedTCP(r) || r.Source != "")
+}
+
 func reconcilePlan(rules, old []Rule, sshPort int, webListen string) ([][]string, error) {
 	plan, err := Plan(rules, sshPort, webListen)
 	if err != nil {
@@ -83,9 +89,15 @@ func reconcilePlan(rules, old []Rule, sshPort int, webListen string) ([][]string
 		pinnedPorts[port] = true
 	}
 	covered := make(map[int]bool)
+	// A kept deny or reject on a pinned port must match before the world-open pinned allow, so that
+	// allow is appended after existing rules rather than inserted first.
+	blocked := make(map[int]bool)
 	for _, r := range old {
 		if pinnedPorts[r.Port] && admitsPinnedTCP(r) {
 			covered[r.Port] = true
+		}
+		if pinnedPorts[r.Port] && r.Source != "" && (r.Action == "deny" || r.Action == "reject") {
+			blocked[r.Port] = true
 		}
 	}
 	desired := make(map[Rule]bool)
@@ -99,9 +111,13 @@ func reconcilePlan(rules, old []Rule, sshPort int, webListen string) ([][]string
 	full := make([][]string, 0, len(pinned)+len(rules)+len(old)+1)
 	for _, args := range pinned {
 		port, _ := strconv.Atoi(args[len(args)-1])
-		if !covered[port] {
-			full = append(full, args)
+		if covered[port] {
+			continue
 		}
+		if blocked[port] && len(args) > 2 && args[0] == "insert" {
+			args = args[2:]
+		}
+		full = append(full, args)
 	}
 	full = append(full, []string{"default", "deny", "incoming"})
 	for i, r := range rules {
@@ -110,7 +126,7 @@ func reconcilePlan(rules, old []Rule, sshPort int, webListen string) ([][]string
 		}
 	}
 	for _, r := range old {
-		if desired[r] || (pinnedPorts[r.Port] && admitsPinnedTCP(r)) {
+		if desired[r] || keepsPinned(r, pinnedPorts) {
 			continue
 		}
 		if r.Proto == "" && r.Source == "" {

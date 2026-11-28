@@ -2,9 +2,11 @@ package firewall
 
 import (
 	"context"
+	"net"
 	"novapanel/internal/exec"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -207,5 +209,136 @@ func TestReconcileRemovesProtocolAgnosticPort(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("missing deletion: %v", plan)
+	}
+}
+
+// simRule is one rule in the order ufw would hold it.
+type simRule struct {
+	action, source, proto string
+	port                  int
+}
+
+// simApply applies one ruleArgs-form command the way ufw does: insert N places the rule at position N,
+// a plain rule appends, and --force delete removes the first identical rule. Other commands are ignored.
+func simApply(rules []simRule, args []string) []simRule {
+	pos := -1
+	if len(args) > 2 && args[0] == "insert" {
+		pos, _ = strconv.Atoi(args[1])
+		args = args[2:]
+	}
+	del := false
+	if len(args) > 2 && args[0] == "--force" && args[1] == "delete" {
+		del = true
+		args = args[2:]
+	}
+	if len(args) < 10 || args[1] != "in" || args[6] != "to" {
+		return rules
+	}
+	port, _ := strconv.Atoi(args[9])
+	r := simRule{action: args[0], proto: args[3], source: args[5], port: port}
+	if del {
+		for i, x := range rules {
+			if x == r {
+				return append(rules[:i:i], rules[i+1:]...)
+			}
+		}
+		return rules
+	}
+	if pos >= 1 && pos <= len(rules) {
+		out := append([]simRule{}, rules[:pos-1]...)
+		out = append(out, r)
+		return append(out, rules[pos-1:]...)
+	}
+	return append(rules, r)
+}
+
+// simVerdict returns the action of the first rule matching a TCP connection, as ufw would decide.
+func simVerdict(rules []simRule, src string, port int) string {
+	ip := net.ParseIP(src)
+	for _, r := range rules {
+		if r.port != port || r.proto != "tcp" {
+			continue
+		}
+		if r.source != "any" {
+			if strings.Contains(r.source, "/") {
+				_, n, _ := net.ParseCIDR(r.source)
+				if n == nil || !n.Contains(ip) {
+					continue
+				}
+			} else if net.ParseIP(r.source).String() != ip.String() {
+				continue
+			}
+		}
+		return r.action
+	}
+	return "default"
+}
+
+// simState converts existing rules into the order ufw would hold them.
+func simState(old []Rule) []simRule {
+	var out []simRule
+	for _, r := range old {
+		src := r.Source
+		if src == "" {
+			src = "any"
+		}
+		out = append(out, simRule{action: r.Action, source: src, proto: r.Proto, port: r.Port})
+	}
+	return out
+}
+
+// Source-restricted deny and reject rules on a pinned port are explicit admin choices: they must survive
+// reconcile, and the world-open pinned allow must sit after them so the blocked source stays blocked.
+func TestReconcileKeepsSourceDenyOnPinnedPort(t *testing.T) {
+	for _, action := range []string{"deny", "reject"} {
+		for _, port := range []int{22, 80, 443} {
+			old := []Rule{{Action: action, Proto: "tcp", Port: port, Source: "1.2.3.4"}}
+			plan, err := reconcilePlan(nil, old, 22, "127.0.0.1:8080")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, args := range plan {
+				if len(args) > 2 && args[0] == "--force" && strings.Contains(strings.Join(args, " "), "from 1.2.3.4") {
+					t.Fatalf("%s from 1.2.3.4 on %d deleted: %v", action, port, plan)
+				}
+				if args[0] == "insert" && args[len(args)-1] == strconv.Itoa(port) {
+					t.Fatalf("world allow inserted ahead of %s on %d: %v", action, port, plan)
+				}
+			}
+			final := simState(old)
+			for _, args := range plan {
+				final = simApply(final, args)
+			}
+			if got := simVerdict(final, "1.2.3.4", port); got != action {
+				t.Fatalf("blocked source got %q after apply on %d: %v", got, port, plan)
+			}
+			if got := simVerdict(final, "9.9.9.9", port); got != "allow" {
+				t.Fatalf("other source got %q on %d: %v", got, port, plan)
+			}
+		}
+	}
+}
+
+// A source-restricted limit is kept as well, and it covers the pinned port so no world allow is added.
+func TestReconcileKeepsSourceLimitOnPinnedPort(t *testing.T) {
+	old := []Rule{{Action: "limit", Proto: "tcp", Port: 22, Source: "10.0.0.0/8"}}
+	plan, err := reconcilePlan(nil, old, 22, "127.0.0.1:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range plan {
+		if len(args) > 0 && args[0] == "--force" {
+			t.Fatalf("limit deleted: %v", plan)
+		}
+		if args[len(args)-1] == "22" {
+			t.Fatalf("pinned SSH widened beside limit: %v", plan)
+		}
+	}
+	final := simState(old)
+	for _, args := range plan {
+		final = simApply(final, args)
+	}
+	if len(final) != 1 || final[0].action != "limit" {
+		t.Fatalf("limit not preserved: %+v", final)
 	}
 }
