@@ -175,3 +175,58 @@ func TestConfirmArmedFirewall(t *testing.T) {
 		t.Fatalf("job: %+v %v", j, err)
 	}
 }
+
+func TestFirewallReconcileLostTimer(t *testing.T) {
+	for _, step := range []string{FirewallArmed, FirewallApplied} {
+		t.Run(step, func(t *testing.T) {
+			ctx := context.Background()
+			c := &authClock{now: 1000}
+			s, err := OpenWithClock(":memory:", c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			root := t.TempDir()
+			rules := filepath.Join(root, "rules")
+			snapshot := filepath.Join(root, "snapshot")
+			if err = os.MkdirAll(filepath.Join(snapshot, "ufw"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err = os.Mkdir(rules, 0700); err != nil {
+				t.Fatal(err)
+			}
+			for _, n := range []string{"after.rules", "after6.rules", "before.rules", "before6.rules", "user.rules", "user6.rules"} {
+				if err = os.WriteFile(filepath.Join(snapshot, "ufw", n), []byte(n), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err = os.WriteFile(filepath.Join(snapshot, "enabled"), []byte("0\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			jobID, _ := id.New()
+			pendingID, _ := id.New()
+			result, _ := json.Marshal(map[string]string{"pending_id": pendingID})
+			if err = s.CreateJob(ctx, Job{ID: jobID, Verb: "firewall.apply", ObjectKey: "firewall", Actor: "test", State: "running", Step: step, Effectful: true, Args: json.RawMessage(`{}`), Result: result}); err != nil {
+				t.Fatal(err)
+			}
+			if err = s.ReserveFirewall(ctx, FirewallPending{ID: pendingID, SnapshotPath: snapshot, RevertUnit: "timer", Deadline: 2000}); err != nil {
+				t.Fatal(err)
+			}
+			r := &fwRunner{}
+			if err = s.ReconcileFirewall(ctx, jobID, r, rules, false); err != nil {
+				t.Fatal(err)
+			}
+			j, err := s.GetJob(ctx, jobID)
+			if err != nil || j.Step != step || len(r.calls) != 0 {
+				t.Fatalf("live timer: %+v %v", j, err)
+			}
+			if err = s.ReconcileFirewallLostTimer(ctx, jobID, r, rules); err != nil {
+				t.Fatal(err)
+			}
+			j, err = s.GetJob(ctx, jobID)
+			if err != nil || j.Step != FirewallReverted || len(r.calls) != 1 {
+				t.Fatalf("lost timer: %+v %v calls=%v", j, err, r.calls)
+			}
+		})
+	}
+}

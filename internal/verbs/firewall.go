@@ -194,6 +194,16 @@ func RecoverFirewall(ctx context.Context, a *agent.Agent) error {
 	if err != nil {
 		return err
 	}
+	j, err := a.Store.GetJob(ctx, job)
+	if err != nil {
+		return err
+	}
+	if j.Step == store.FirewallArmed || j.Step == store.FirewallApplied || j.Step == store.FirewallSnapshotted || j.Step == store.FirewallConfirmed {
+		_, _, code, e := a.Exec.Run(ctx, "/usr/bin/systemctl", []string{"is-active", "--quiet", p.RevertUnit}, exec.RunOpts{})
+		if e != nil || code != 0 {
+			return a.Store.ReconcileFirewallLostTimer(ctx, job, a.Exec, "/etc/ufw")
+		}
+	}
 	return a.Store.ReconcileFirewall(ctx, job, a.Exec, "/etc/ufw", false)
 }
 

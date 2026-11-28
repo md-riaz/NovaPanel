@@ -81,6 +81,15 @@ func (s *Store) firewallStep(ctx context.Context, jobID, from, to string) error 
 // ReconcileFirewall is called under the same firewall lock as apply and confirm.
 // Early interruptions have no firewall effect; armed changes wait for the deadline.
 func (s *Store) ReconcileFirewall(ctx context.Context, jobID string, runner exec.Runner, rulesDir string, force bool) error {
+	return s.reconcileFirewall(ctx, jobID, runner, rulesDir, force, false)
+}
+
+// ReconcileFirewallLostTimer restores immediately when the independent timer is gone.
+func (s *Store) ReconcileFirewallLostTimer(ctx context.Context, jobID string, runner exec.Runner, rulesDir string) error {
+	return s.reconcileFirewall(ctx, jobID, runner, rulesDir, true, true)
+}
+
+func (s *Store) reconcileFirewall(ctx context.Context, jobID string, runner exec.Runner, rulesDir string, force, timerMissing bool) error {
 	j, err := s.GetJob(ctx, jobID)
 	if err != nil {
 		return err
@@ -106,13 +115,15 @@ func (s *Store) ReconcileFirewall(ctx context.Context, jobID string, runner exec
 		if !p.Confirmed {
 			return ErrSiteConflict
 		}
-		if err = firewall.Cancel(ctx, runner, p.ID); err != nil {
-			return err
+		if !timerMissing {
+			if err = firewall.Cancel(ctx, runner, p.ID); err != nil {
+				return err
+			}
 		}
 		return s.DeleteFirewallPending(ctx, p.ID)
 	case FirewallPrepared, FirewallSnapshotted:
 		// Arm may have succeeded before its checkpoint was persisted.
-		if j.Step == FirewallSnapshotted {
+		if j.Step == FirewallSnapshotted && !timerMissing {
 			if err = firewall.Cancel(ctx, runner, p.ID); err != nil {
 				return err
 			}
@@ -124,8 +135,10 @@ func (s *Store) ReconcileFirewall(ctx context.Context, jobID string, runner exec
 		if err = firewall.Restore(ctx, runner, rulesDir, p.SnapshotPath); err != nil {
 			return err
 		}
-		if err = firewall.Cancel(ctx, runner, p.ID); err != nil {
-			return err
+		if !timerMissing {
+			if err = firewall.Cancel(ctx, runner, p.ID); err != nil {
+				return err
+			}
 		}
 	default:
 		return ErrSitePrecondition
