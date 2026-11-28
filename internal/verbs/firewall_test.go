@@ -2,7 +2,9 @@ package verbs
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"novapanel/internal/agent"
@@ -159,4 +161,87 @@ func TestSharedWebBindIsPinned(t *testing.T) {
 		}
 	}
 	t.Fatalf("web bind %s is not pinned: %v", webBind, plan)
+}
+
+// flakyDisableRunner fails the first failDisables ufw disables, which is the lost-timer restore step.
+type flakyDisableRunner struct {
+	failDisables int
+	disables     int
+}
+
+func (r *flakyDisableRunner) Run(_ context.Context, path string, args []string, _ exec.RunOpts) ([]byte, []byte, int, error) {
+	if path == "/usr/bin/systemctl" && len(args) > 0 && args[0] == "is-active" {
+		return nil, nil, 3, nil
+	}
+	if path == "/usr/sbin/ufw" && len(args) == 2 && args[0] == "--force" && args[1] == "disable" {
+		r.disables++
+		if r.disables <= r.failDisables {
+			return nil, nil, 1, nil
+		}
+	}
+	return nil, nil, 0, nil
+}
+
+func TestStartFirewallRecoveryRetriesFailedRestore(t *testing.T) {
+	root := t.TempDir()
+	rules := filepath.Join(root, "rules")
+	snap := filepath.Join(root, "snapshot")
+	if err := os.MkdirAll(filepath.Join(snap, "ufw"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(rules, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"after.rules", "after6.rules", "before.rules", "before6.rules", "user.rules", "user6.rules"} {
+		if err := os.WriteFile(filepath.Join(snap, "ufw", n), []byte(n), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(snap, "enabled"), []byte("0\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	job, _ := id.New()
+	pending, _ := id.New()
+	res, _ := json.Marshal(map[string]string{"pending_id": pending})
+	if err = s.CreateJob(ctx, store.Job{ID: job, Verb: "firewall.apply", ObjectKey: "firewall", Actor: "test", State: "running", Step: store.FirewallApplied, Effectful: true, Args: json.RawMessage(`{}`), Result: res}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ReserveFirewall(ctx, store.FirewallPending{ID: pending, SnapshotPath: snap, RevertUnit: "novapanel-fwrevert-" + pending + ".timer", Deadline: time.Now().Add(time.Hour).UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &flakyDisableRunner{failDisables: 1}
+	a := agent.New()
+	a.Store = s
+	a.Exec = runner
+	a.Cfg.DBPath = filepath.Join(root, "panel.db")
+	notices := 0
+	stop := startFirewallRecovery(ctx, firewallRecovery{agent: a, rulesDir: rules}, time.Millisecond, time.Millisecond, func(error, time.Duration) { notices++ })
+	defer stop()
+	if notices != 1 {
+		t.Fatalf("first failed attempt not reported: %d", notices)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err = s.FirewallPending(ctx); errors.Is(err, sql.ErrNoRows) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("change never reverted: %v", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	stop()
+	j, err := s.GetJob(ctx, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.Step != store.FirewallReverted || runner.disables != 2 {
+		t.Fatalf("step %s disables %d", j.Step, runner.disables)
+	}
 }

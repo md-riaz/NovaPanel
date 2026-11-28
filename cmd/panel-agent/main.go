@@ -138,9 +138,12 @@ func serve(ctx context.Context, a *agent.Agent) (err error) {
 	if err = verbs.AuditFirewallReverts(a); err != nil {
 		return fmt.Errorf("firewall revert audit: %w", err)
 	}
-	if err = verbs.RecoverFirewall(ctx, a); err != nil {
-		return fmt.Errorf("startup firewall recovery: %w", err)
-	}
+	// A failed restore must not exit the agent: the unreverted change stays pending and is retried
+	// in the background while the agent serves, so the operator can still reach the panel.
+	stopFirewallRecovery := verbs.StartFirewallRecovery(ctx, a, func(ferr error, wait time.Duration) {
+		fmt.Fprintf(os.Stderr, "startup firewall recovery failed, retrying in %s: %v\n", wait, ferr)
+	})
+	defer stopFirewallRecovery()
 	startupErr := a.PrepareStartup(ctx)
 	if ctx.Err() != nil {
 		return nil

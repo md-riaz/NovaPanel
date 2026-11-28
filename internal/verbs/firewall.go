@@ -177,9 +177,49 @@ func firewallRevert(ctx context.Context, a *agent.Agent, args any) (any, error) 
 	return struct{}{}, nil
 }
 
+const (
+	firewallRetryFirst = time.Second
+	firewallRetryMax   = time.Minute
+)
+
 // RecoverFirewall resolves any interrupted pending change before admission opens.
 func RecoverFirewall(ctx context.Context, a *agent.Agent) error {
 	return (firewallRecovery{agent: a, rulesDir: "/etc/ufw"}).run(ctx)
+}
+
+// StartFirewallRecovery runs startup recovery once and never fails startup. If that attempt fails,
+// the unreverted change stays pending and recovery retries in the background with backoff until it
+// succeeds or stop is called. The agent then serves the panel, so an operator can still confirm or
+// revert the change. failed receives each error with the wait before the next attempt.
+func StartFirewallRecovery(ctx context.Context, a *agent.Agent, failed func(error, time.Duration)) (stop func()) {
+	return startFirewallRecovery(ctx, firewallRecovery{agent: a, rulesDir: "/etc/ufw"}, firewallRetryFirst, firewallRetryMax, failed)
+}
+
+func startFirewallRecovery(ctx context.Context, r firewallRecovery, first, max time.Duration, failed func(error, time.Duration)) (stop func()) {
+	err := r.run(ctx)
+	if err == nil {
+		return func() {}
+	}
+	if failed != nil {
+		failed(err, first)
+	}
+	retryCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		timer := time.NewTimer(first)
+		select {
+		case <-retryCtx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		_ = firewall.Retry(retryCtx, 0, first, max, func() error { return r.run(retryCtx) }, failed)
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 type firewallRecovery struct {
