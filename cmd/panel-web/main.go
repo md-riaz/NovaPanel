@@ -21,6 +21,7 @@ func env(key, fallback string) string {
 	}
 	return fallback
 }
+
 // webBindReady stops panel-web when the bind file is malformed. The agent may pin a default port for the
 // firewall, but panel-web must serve its real address, so serving on a guessed port is a regression. An
 // absent file is the documented default and serves normally.
