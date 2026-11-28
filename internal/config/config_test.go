@@ -54,3 +54,25 @@ func TestDefaults(t *testing.T) {
 		t.Fatalf("%+v %v", c, e)
 	}
 }
+
+func TestSharedWebListen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "web-listen")
+	if err := os.WriteFile(path, []byte("0.0.0.0:9443\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a, known, err := ReadWebListen(path)
+	if err != nil || !known || a != "0.0.0.0:9443" {
+		t.Fatalf("%q %v %v", a, known, err)
+	}
+	b, known, err := ReadWebListen(path)
+	if err != nil || !known || b != a {
+		t.Fatalf("web and agent differ: %q %q %v", a, b, err)
+	}
+	if err = os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	a, known, err = ReadWebListen(path)
+	if err != nil || known || a != DefaultWebListen {
+		t.Fatalf("missing: %q %v %v", a, known, err)
+	}
+}

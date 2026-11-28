@@ -257,3 +257,10 @@ plan; v1 ships single-manifest verify + anti-rollback.)
 - **Never restore over a live DB without a pre-restore snapshot** (scratch-DB-then-swap).
 - **Repo passwords live out-of-band**, never only inside the repo they unlock.
 - **Verify by reading back**, not by trusting a structural `check`.
+
+**Panel listen deployment contract.** Both `panel-web` and `panel-agent` read the
+single root-managed, web-readable `/etc/novapanel/web-listen` file (one
+`host:port` line); `NOVAPANEL_WEB_LISTEN` is not a per-service override. When
+changing that file, stop both services, update it, and start the agent followed
+by the web service so their loaded values agree. If the file is absent both
+processes use `127.0.0.1:8080`, and the agent conservatively pins port 8080.

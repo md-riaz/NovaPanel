@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -79,7 +80,7 @@ func firewallApply(ctx context.Context, a *agent.Agent, args any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err = firewall.Plan(v.Rules, port, a.Cfg.WebListen); err != nil {
+	if _, err = firewall.Plan(v.Rules, port, firewallWebListen(a)); err != nil {
 		return nil, err
 	}
 	if _, err = a.Store.FirewallPending(ctx); err == nil {
@@ -128,7 +129,7 @@ func firewallApplyExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 		return err
 	}
 	p := store.FirewallPending{ID: pendingID, SnapshotPath: filepath.Join(root, pendingID), RevertUnit: "novapanel-fwrevert-" + pendingID + ".timer", Deadline: a.Now() + int64(window)*int64(time.Minute/time.Millisecond)}
-	return a.Store.FirewallApply(ctx, j.ID, p, a.Exec, "/etc/ufw", v.Rules, port, a.Cfg.WebListen, window)
+	return a.Store.FirewallApply(ctx, j.ID, p, a.Exec, "/etc/ufw", v.Rules, port, firewallWebListen(a), window)
 }
 func resolveFirewallJob(ctx context.Context, s *store.Store, pendingID string) (string, error) {
 	p, err := s.FirewallPending(ctx)
@@ -228,4 +229,16 @@ func firewallStatus(ctx context.Context, a *agent.Agent, _ any) (any, error) {
 		Rules   []firewall.StatusRule `json:"rules"`
 		Pending *pending              `json:"pending,omitempty"`
 	}{enabled, rules, p}, nil
+}
+
+// Unknown bind provenance keeps the configured panel port open.
+func firewallWebListen(a *agent.Agent) string {
+	if a.Cfg.WebListenKnown {
+		return a.Cfg.WebListen
+	}
+	_, port, err := net.SplitHostPort(a.Cfg.WebListen)
+	if err != nil {
+		return ""
+	}
+	return net.JoinHostPort("", port)
 }

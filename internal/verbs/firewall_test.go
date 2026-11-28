@@ -1,6 +1,7 @@
 package verbs
 
 import (
+	"novapanel/internal/agent"
 	"novapanel/internal/firewall"
 	"novapanel/internal/rpc"
 	"testing"
@@ -22,5 +23,24 @@ func TestFirewallVerbContracts(t *testing.T) {
 	}
 	if (&firewallPendingArgs{PendingID: "bad"}).Validate() == nil {
 		t.Fatal("accepted invalid pending id")
+	}
+}
+
+func TestUnknownWebListenPinsPanelPort(t *testing.T) {
+	a := agent.New()
+	a.Cfg.WebListen = "127.0.0.1:8080"
+	a.Cfg.WebListenKnown = false
+	plan, err := firewall.Plan(nil, 22, firewallWebListen(a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, args := range plan {
+		if args[len(args)-1] == "8080" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("panel port not pinned: %v", plan)
 	}
 }

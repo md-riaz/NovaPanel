@@ -4,6 +4,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -16,9 +17,11 @@ import (
 
 const DefaultPath = "/etc/novapanel/agent.toml"
 const DefaultWebListen = "127.0.0.1:8080"
+const WebListenPath = "/etc/novapanel/web-listen"
 
 type Config struct {
 	WebListen            string `toml:"-"`
+	WebListenKnown       bool   `toml:"-"`
 	UploadsDir           string `toml:"uploads_dir"`
 	SocketPath           string `toml:"socket_path"`
 	DBPath               string `toml:"db_path"`
@@ -63,9 +66,11 @@ func Defaults() Config {
 // then explicitly supplied snake_case flag values. It does not resolve accounts.
 func Load(path string, flags map[string]string) (Config, error) {
 	c := Defaults()
-	if listen := os.Getenv("NOVAPANEL_WEB_LISTEN"); listen != "" {
-		c.WebListen = listen
+	listen, listenKnown, err := ReadWebListen(WebListenPath)
+	if err != nil {
+		return c, err
 	}
+	c.WebListen, c.WebListenKnown = listen, listenKnown
 	if path == "" {
 		path = DefaultPath
 	}
@@ -164,4 +169,25 @@ func (c *Config) ResolveWebUser() error {
 	c.WebUID = uint32(uid)
 	c.WebGID = uint32(gid)
 	return nil
+}
+
+// ReadWebListen reads the shared panel bind; an absent file uses the default conservatively.
+func ReadWebListen(path string) (string, bool, error) {
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return DefaultWebListen, false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	listen := strings.TrimSpace(string(b))
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil || strings.ContainsAny(host, "\x00\r\n") {
+		return "", false, fmt.Errorf("invalid web listen address")
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return "", false, fmt.Errorf("invalid web listen port")
+	}
+	return listen, true, nil
 }

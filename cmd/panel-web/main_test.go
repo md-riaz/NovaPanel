@@ -29,13 +29,13 @@ func TestHTTPServerConfigured(t *testing.T) {
 	}
 }
 
-func TestWebListenUsesSharedEnvironment(t *testing.T) {
+func TestWebListenIgnoresProcessEnvironment(t *testing.T) {
 	oldUID, oldServe := geteuid, serveHTTP
 	defer func() { geteuid, serveHTTP = oldUID, oldServe }()
 	geteuid = func() int { return 1001 }
 	t.Setenv("NOVAPANEL_WEB_LISTEN", "0.0.0.0:9443")
 	serveHTTP = func(s *http.Server) error {
-		if s.Addr != "0.0.0.0:9443" {
+		if s.Addr != "127.0.0.1:8080" {
 			t.Fatalf("listen address %q", s.Addr)
 		}
 		return nil
