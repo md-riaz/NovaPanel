@@ -101,8 +101,7 @@ func ruleArgs(r Rule) []string {
 }
 
 func DryRun(ctx context.Context, runner exec.Runner, rules []Rule, sshPort int, webListen string) error {
-	plan, err := Plan(rules, sshPort, webListen)
-	if err != nil {
+	if _, err := Plan(rules, sshPort, webListen); err != nil {
 		return err
 	}
 	if runner == nil {
@@ -112,7 +111,7 @@ func DryRun(ctx context.Context, runner exec.Runner, rules []Rule, sshPort int, 
 	if err != nil {
 		return err
 	}
-	plan, err = reconcilePlan(rules, old, sshPort, webListen)
+	plan, err := reconcilePlan(rules, old, sshPort, webListen)
 	if err != nil {
 		return err
 	}
@@ -127,8 +126,7 @@ func DryRun(ctx context.Context, runner exec.Runner, rules []Rule, sshPort int, 
 
 // Apply executes the validated plan in order, then enables UFW.
 func Apply(ctx context.Context, runner exec.Runner, rules []Rule, sshPort int, webListen string) error {
-	plan, err := Plan(rules, sshPort, webListen)
-	if err != nil {
+	if _, err := Plan(rules, sshPort, webListen); err != nil {
 		return err
 	}
 	if runner == nil {
@@ -138,7 +136,7 @@ func Apply(ctx context.Context, runner exec.Runner, rules []Rule, sshPort int, w
 	if err != nil {
 		return err
 	}
-	plan, err = reconcilePlan(rules, old, sshPort, webListen)
+	plan, err := reconcilePlan(rules, old, sshPort, webListen)
 	if err != nil {
 		return err
 	}
