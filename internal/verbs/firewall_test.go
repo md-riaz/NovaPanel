@@ -71,8 +71,16 @@ func TestFirewallApplyProceedsWithUncertainWebListen(t *testing.T) {
 		a.Jobs = jobs.NewQueue(st, nil, log)
 		a.Exec = sshdRunner{}
 		a.Cfg.WebListenState = state
-		res, err := firewallApply(context.Background(), a, &firewallApplyArgs{})
-		if err != nil || res == nil {
+		// Enqueue needs trusted dispatch metadata and open admission, the same setup as the cron
+		// create test. Without them the apply is refused before the uncertain bind is ever read.
+		ctx := context.Background()
+		if err = a.Jobs.PrepareOperations(ctx); err != nil {
+			t.Fatal(err)
+		}
+		meta := jobs.WithMetadata(ctx, jobs.Metadata{CreatedBy: "owner", Role: "admin"})
+		res, err := firewallApply(meta, a, &firewallApplyArgs{})
+		queued, ok := res.(jobs.EnqueueResult)
+		if err != nil || !ok || queued.Job.Verb != "firewall.apply" {
 			t.Fatalf("%s: apply did not queue: res %v err %v", state, res, err)
 		}
 		plan, err := firewall.Plan(nil, 22, firewallWebListen(a))
