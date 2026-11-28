@@ -120,3 +120,28 @@ func TestReconcileRemovesOmittedRules(t *testing.T) {
 		t.Fatalf("SSH not first: %v", plan)
 	}
 }
+
+type addedRunner struct{}
+
+func (addedRunner) Run(context.Context, string, []string, exec.RunOpts) ([]byte, []byte, int, error) {
+	return []byte("Added user rules (see 'ufw status' for running firewall):\nufw allow 3306\nufw allow 22/tcp\n"), nil, 0, nil
+}
+func TestReconcileRemovesProtocolAgnosticPort(t *testing.T) {
+	old, err := existingRules(context.Background(), addedRunner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := reconcilePlan(nil, old, 22, "127.0.0.1:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, args := range plan {
+		if reflect.DeepEqual(args, []string{"--force", "delete", "allow", "3306"}) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing deletion: %v", plan)
+	}
+}

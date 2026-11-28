@@ -49,7 +49,7 @@ func TestFirewallLab(t *testing.T) {
 	run("--force", "reset")
 	run("default", "allow", "incoming")
 	run("allow", "22/tcp")
-	run("allow", "3306/tcp")
+	run("allow", "3306")
 	run("--force", "enable")
 	before := run("status", "numbered")
 	if !bytes.Contains(before, []byte("22/tcp")) {
@@ -90,7 +90,7 @@ func TestFirewallLab(t *testing.T) {
 		t.Fatalf("SSH is not first: enabled=%v rules=%+v err=%v", enabled, rules, err)
 	}
 	after := run("status", "numbered")
-	if bytes.Contains(after, []byte("3306/tcp")) {
+	if bytes.Contains(after, []byte("3306")) {
 		t.Fatalf("omitted rule still present: %s", after)
 	}
 	if !bytes.Contains(after, []byte("34567/tcp")) {
@@ -159,7 +159,7 @@ func TestFirewallLab(t *testing.T) {
 		t.Fatalf("default policy not closed: %s", status)
 	}
 	afterConfirm := run("status", "numbered")
-	if bytes.Contains(afterConfirm, []byte("3306/tcp")) || !bytes.Contains(afterConfirm, []byte("22/tcp")) || !bytes.Contains(afterConfirm, []byte("80/tcp")) || !bytes.Contains(afterConfirm, []byte("443/tcp")) {
+	if bytes.Contains(afterConfirm, []byte("3306")) || !bytes.Contains(afterConfirm, []byte("22/tcp")) || !bytes.Contains(afterConfirm, []byte("80/tcp")) || !bytes.Contains(afterConfirm, []byte("443/tcp")) {
 		t.Fatalf("confirmed rules: %s", afterConfirm)
 	}
 }

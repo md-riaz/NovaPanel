@@ -10,7 +10,7 @@ import (
 	"novapanel/internal/exec"
 )
 
-var shortAdded = regexp.MustCompile(`^(allow|deny|reject|limit) ([0-9]+)/(tcp|udp)(?: comment '([A-Za-z0-9 ._-]*)')?$`)
+var shortAdded = regexp.MustCompile(`^(allow|deny|reject|limit) ([0-9]+)(?:/(tcp|udp))?(?: comment '([A-Za-z0-9 ._-]*)')?$`)
 var sourceAdded = regexp.MustCompile(`^(allow|deny|reject|limit) from ([0-9A-Fa-f:./]+) to any port ([0-9]+) proto (tcp|udp)(?: comment '([A-Za-z0-9 ._-]*)')?$`)
 
 // existingRules only accepts the subset of UFW rules expressible by the API.
@@ -50,6 +50,9 @@ func existingRules(ctx context.Context, runner exec.Runner) ([]Rule, error) {
 		}
 		validationRule := rule
 		validationRule.Action = "allow"
+		if validationRule.Proto == "" {
+			validationRule.Proto = "tcp"
+		}
 		if _, err = Plan([]Rule{validationRule}, 1, "127.0.0.1:8080"); err != nil {
 			return nil, err
 		}
@@ -90,7 +93,15 @@ func reconcilePlan(rules, old []Rule, sshPort int, webListen string) ([][]string
 		if desired[r] {
 			continue
 		}
-		full = append(full, append([]string{"--force", "delete"}, ruleArgs(r)...))
+		if r.Proto == "" && r.Source == "" {
+			args := []string{"--force", "delete", r.Action, strconv.Itoa(r.Port)}
+			if r.Comment != "" {
+				args = append(args, "comment", r.Comment)
+			}
+			full = append(full, args)
+		} else {
+			full = append(full, append([]string{"--force", "delete"}, ruleArgs(r)...))
+		}
 	}
 	return full, nil
 }
