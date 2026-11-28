@@ -139,7 +139,7 @@ func (s *Store) ConfirmFirewall(ctx context.Context, jobID, pendingID string, ru
 	if err != nil {
 		return err
 	}
-	if j.Step != FirewallApplied {
+	if j.Step != FirewallApplied && j.Step != FirewallArmed {
 		return ErrSitePrecondition
 	}
 	p, err := s.FirewallPending(ctx)
@@ -160,7 +160,7 @@ func (s *Store) ConfirmFirewall(ctx context.Context, jobID, pendingID string, ru
 		if e = affected(r, e); e != nil {
 			return e
 		}
-		r, e = tx.ExecContext(ctx, "UPDATE jobs SET step=?,updated=? WHERE id=? AND step=?", FirewallConfirmed, s.clock.Now(), jobID, FirewallApplied)
+		r, e = tx.ExecContext(ctx, "UPDATE jobs SET step=?,updated=? WHERE id=? AND step=?", FirewallConfirmed, s.clock.Now(), jobID, j.Step)
 		return affected(r, e)
 	}); err != nil {
 		return err

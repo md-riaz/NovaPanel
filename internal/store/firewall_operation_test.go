@@ -145,3 +145,29 @@ func TestFirewallConfirm(t *testing.T) {
 		t.Fatal("pending remains")
 	}
 }
+
+func TestConfirmArmedFirewall(t *testing.T) {
+	ctx := context.Background()
+	c := &authClock{now: 1000}
+	s, err := OpenWithClock(":memory:", c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	jobID, _ := id.New()
+	pendingID, _ := id.New()
+	result, _ := json.Marshal(map[string]string{"pending_id": pendingID})
+	if err = s.CreateJob(ctx, Job{ID: jobID, Verb: "firewall.apply", ObjectKey: "firewall", Actor: "test", State: "running", Step: FirewallArmed, Effectful: true, Args: json.RawMessage(`{}`), Result: result}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ReserveFirewall(ctx, FirewallPending{ID: pendingID, SnapshotPath: "/snapshot", RevertUnit: "timer", Deadline: 2000}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ConfirmFirewall(ctx, jobID, pendingID, &fwRunner{}); err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.GetJob(ctx, jobID)
+	if err != nil || j.Step != FirewallConfirmed {
+		t.Fatalf("job: %+v %v", j, err)
+	}
+}
