@@ -55,7 +55,7 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
-// The three bind states: valid and absent are known binds, malformed is unknown. Load never fails on the bind.
+// The three bind states: only valid is parsed. Absent and malformed are uncertain. Load never fails on the bind.
 func TestWebListenStates(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "agent.toml")
@@ -69,7 +69,7 @@ func TestWebListenStates(t *testing.T) {
 	}{
 		{name: "valid non-loopback", content: "0.0.0.0:9443\n", listen: "0.0.0.0:9443", state: WebListenValid, known: true},
 		{name: "valid loopback", content: "127.0.0.1:9443\n", listen: "127.0.0.1:9443", state: WebListenValid, known: true},
-		{name: "absent", absent: true, listen: DefaultWebListen, state: WebListenAbsent, known: true},
+		{name: "absent", absent: true, listen: DefaultWebListen, state: WebListenAbsent, known: false},
 		{name: "malformed", content: "not-a-bind\n", listen: DefaultWebListen, state: WebListenMalformed, known: false},
 	}
 	for _, tc := range cases {

@@ -17,7 +17,6 @@ import (
 	"novapanel/internal/store"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -41,35 +40,22 @@ func TestFirewallVerbContracts(t *testing.T) {
 	}
 }
 
-// A malformed bind must refuse apply with precondition_failed, before any store or command is touched.
-func TestFirewallApplyRefusesMalformedWebListen(t *testing.T) {
-	a := agent.New()
-	a.Cfg.WebListenState = config.WebListenMalformed
-	_, err := firewallApply(context.Background(), a, &firewallApplyArgs{})
-	var ce *rpcerr.CodedError
-	if !errors.As(err, &ce) || ce.Code != "precondition_failed" || !strings.Contains(ce.Msg, "malformed") {
-		t.Fatalf("apply not refused for malformed bind: %v", err)
-	}
-}
-
-// Valid and absent binds are known, so apply proceeds past the bind gate. The later failure is the
-// missing store, which proves the gate let the request through.
-func TestFirewallApplyProceedsWithKnownWebListen(t *testing.T) {
-	for _, state := range []config.WebListenState{config.WebListenValid, config.WebListenAbsent} {
+// Absent and malformed binds are uncertain, so apply proceeds and the default panel port is pinned. The
+// later failure is the missing store, which shows apply was not refused.
+func TestFirewallApplyProceedsWithUncertainWebListen(t *testing.T) {
+	for _, state := range []config.WebListenState{config.WebListenAbsent, config.WebListenMalformed} {
 		a := agent.New()
 		a.Cfg.WebListenState = state
-		if err := checkWebListen(a); err != nil {
-			t.Fatalf("%s refused: %v", state, err)
-		}
 		_, err := firewallApply(context.Background(), a, &firewallApplyArgs{})
-		if err == nil || strings.Contains(err.Error(), "malformed") {
-			t.Fatalf("%s: unexpected result %v", state, err)
+		var ce *rpcerr.CodedError
+		if !errors.As(err, &ce) || ce.Msg != "firewall unavailable" {
+			t.Fatalf("%s: apply not proceeding: %v", state, err)
 		}
 	}
 }
 
-// Pinned ports follow the bind: the absent loopback default pins no panel port, a loopback valid bind
-// pins none either, and a non-loopback bind pins its port.
+// Pinned ports follow the bind. A valid loopback bind pins no panel port, a valid non-loopback bind pins its
+// own port, and absent or malformed binds pin the default 8080 conservatively.
 func TestWebListenPinSet(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -78,7 +64,8 @@ func TestWebListenPinSet(t *testing.T) {
 		panel  string
 		pinned bool
 	}{
-		{name: "absent default", listen: config.DefaultWebListen, state: config.WebListenAbsent, panel: "8080"},
+		{name: "absent pins default", listen: config.DefaultWebListen, state: config.WebListenAbsent, panel: "8080", pinned: true},
+		{name: "malformed pins default", listen: config.DefaultWebListen, state: config.WebListenMalformed, panel: "8080", pinned: true},
 		{name: "valid loopback", listen: "127.0.0.1:9443", state: config.WebListenValid, panel: "9443"},
 		{name: "valid non-loopback", listen: "0.0.0.0:9443", state: config.WebListenValid, panel: "9443", pinned: true},
 	}

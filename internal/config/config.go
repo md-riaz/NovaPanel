@@ -19,8 +19,8 @@ const DefaultPath = "/etc/novapanel/agent.toml"
 const DefaultWebListen = "127.0.0.1:8080"
 const WebListenPath = "/etc/novapanel/web-listen"
 
-// WebListenState is the trust level of the shared panel bind. Only valid and absent are known binds, so
-// firewall changes may compute their pinned set. The zero value is not a known state and fails closed.
+// WebListenState records how the shared panel bind was obtained, for logging and firewall pinning.
+// Only valid is parsed. Absent and malformed both pin the default panel port conservatively.
 type WebListenState string
 
 const (
@@ -192,9 +192,10 @@ func (c *Config) ResolveWebUser() error {
 	return nil
 }
 
-// WebListenKnown reports whether the panel bind is known, which holds for a valid or an absent file.
+// WebListenKnown reports whether the panel bind was parsed from a file. Absent and malformed binds are
+// uncertain, so firewall changes pin the default panel port for them.
 func (c Config) WebListenKnown() bool {
-	return c.WebListenState == WebListenValid || c.WebListenState == WebListenAbsent
+	return c.WebListenState == WebListenValid
 }
 
 // ReadWebListen returns the bind from a valid file (present true), the loopback default for an absent
