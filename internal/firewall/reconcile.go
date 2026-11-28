@@ -61,6 +61,13 @@ func existingRules(ctx context.Context, runner exec.Runner) ([]Rule, error) {
 	return rules, nil
 }
 
+// admitsPinnedTCP reports whether an existing rule already lets TCP reach its port, whatever its source.
+// Such a rule satisfies the pinned requirement, so reconcile keeps it and never adds a world-open
+// pinned allow beside it. A limit rule counts because the pinned allow would drop its rate limit.
+func admitsPinnedTCP(r Rule) bool {
+	return (r.Action == "allow" || r.Action == "limit") && (r.Proto == "tcp" || r.Proto == "")
+}
+
 func reconcilePlan(rules, old []Rule, sshPort int, webListen string) ([][]string, error) {
 	plan, err := Plan(rules, sshPort, webListen)
 	if err != nil {
@@ -70,19 +77,32 @@ func reconcilePlan(rules, old []Rule, sshPort int, webListen string) ([][]string
 	if err != nil {
 		return nil, err
 	}
+	pinnedPorts := make(map[int]bool)
+	for _, args := range pinned {
+		port, _ := strconv.Atoi(args[len(args)-1])
+		pinnedPorts[port] = true
+	}
+	covered := make(map[int]bool)
+	for _, r := range old {
+		if pinnedPorts[r.Port] && admitsPinnedTCP(r) {
+			covered[r.Port] = true
+		}
+	}
 	desired := make(map[Rule]bool)
 	for _, r := range rules {
 		desired[r] = true
-	}
-	for _, args := range pinned {
-		port, _ := strconv.Atoi(args[len(args)-1])
-		desired[Rule{Action: "allow", Proto: "tcp", Port: port}] = true
 	}
 	current := make(map[Rule]bool)
 	for _, r := range old {
 		current[r] = true
 	}
-	full := append([][]string{}, pinned...)
+	full := make([][]string, 0, len(pinned)+len(rules)+len(old)+1)
+	for _, args := range pinned {
+		port, _ := strconv.Atoi(args[len(args)-1])
+		if !covered[port] {
+			full = append(full, args)
+		}
+	}
 	full = append(full, []string{"default", "deny", "incoming"})
 	for i, r := range rules {
 		if !current[r] {
@@ -90,8 +110,7 @@ func reconcilePlan(rules, old []Rule, sshPort int, webListen string) ([][]string
 		}
 	}
 	for _, r := range old {
-		pinnedRule := Rule{Action: "allow", Proto: "tcp", Port: r.Port}
-		if desired[r] || (r.Action == "allow" && r.Proto == "tcp" && r.Source == "" && desired[pinnedRule]) {
+		if desired[r] || (pinnedPorts[r.Port] && admitsPinnedTCP(r)) {
 			continue
 		}
 		if r.Proto == "" && r.Source == "" {

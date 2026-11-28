@@ -4,6 +4,7 @@ import (
 	"context"
 	"novapanel/internal/exec"
 	"reflect"
+	"strconv"
 	"testing"
 )
 
@@ -102,10 +103,14 @@ func TestReconcileRemovesOmittedRules(t *testing.T) {
 			seen[args[len(args)-1]] = true
 		}
 	}
-	for _, port := range []string{"22", "80", "443", "8443"} {
+	// The existing unrestricted SSH allow is kept, so no pinned SSH allow is added beside it.
+	for _, port := range []string{"80", "443", "8443"} {
 		if !seen[port] {
 			t.Fatalf("missing pinned port %s: %v", port, plan)
 		}
+	}
+	if seen["22"] {
+		t.Fatalf("existing SSH allow was touched: %v", plan)
 	}
 	var deletes [][]string
 	for _, args := range plan {
@@ -116,8 +121,67 @@ func TestReconcileRemovesOmittedRules(t *testing.T) {
 	if len(deletes) != 2 || deletes[0][len(deletes[0])-1] != "3306" || deletes[1][len(deletes[1])-1] != "1234" {
 		t.Fatalf("deletions: %v", deletes)
 	}
-	if !reflect.DeepEqual(plan[0][:2], []string{"insert", "1"}) {
-		t.Fatalf("SSH not first: %v", plan)
+}
+
+func TestReconcileKeepsSourceRestrictedPinnedRules(t *testing.T) {
+	for _, port := range []int{22, 80, 443, 8443} {
+		restricted := Rule{Action: "allow", Proto: "tcp", Port: port, Source: "192.0.2.0/24"}
+		plan, err := reconcilePlan(nil, []Rule{restricted}, 22, "0.0.0.0:8443")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := strconv.Itoa(port)
+		for _, args := range plan {
+			if args[len(args)-1] == want {
+				t.Fatalf("restricted port %d was touched or widened: %v", port, args)
+			}
+		}
+	}
+}
+
+type restrictedSSHRunner struct{}
+
+func (restrictedSSHRunner) Run(context.Context, string, []string, exec.RunOpts) ([]byte, []byte, int, error) {
+	return []byte("Added user rules (see 'ufw status' for running firewall):\nufw allow from 192.0.2.0/24 to any port 22 proto tcp\n"), nil, 0, nil
+}
+
+func TestReconcileKeepsExistingSourceRestrictedSSH(t *testing.T) {
+	old, err := existingRules(context.Background(), restrictedSSHRunner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(old) != 1 || old[0].Source != "192.0.2.0/24" || old[0].Port != 22 {
+		t.Fatalf("parsed rules: %+v", old)
+	}
+	plan, err := reconcilePlan(nil, old, 22, "127.0.0.1:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range plan {
+		if args[len(args)-1] == "22" {
+			t.Fatalf("restricted SSH rule deleted or replaced: %v", plan)
+		}
+		if len(args) > 0 && args[0] == "insert" {
+			t.Fatalf("unrestricted SSH allow inserted beside restricted rule: %v", plan)
+		}
+	}
+	seen := map[string]bool{}
+	for _, args := range plan {
+		seen[args[len(args)-1]] = true
+	}
+	if !seen["80"] || !seen["443"] {
+		t.Fatalf("unrelated pinned ports missing: %v", plan)
+	}
+}
+
+func TestReconcileInsertsPinnedSSHWhenAbsent(t *testing.T) {
+	plan, err := reconcilePlan(nil, nil, 22, "127.0.0.1:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"insert", "1", "allow", "in", "proto", "tcp", "from", "any", "to", "any", "port", "22"}
+	if len(plan) == 0 || !reflect.DeepEqual(plan[0], want) {
+		t.Fatalf("SSH not inserted first: %v", plan)
 	}
 }
 
