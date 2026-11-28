@@ -13,6 +13,7 @@ import (
 	"novapanel/internal/firewall"
 	"novapanel/internal/id"
 	"novapanel/internal/rpc"
+	"novapanel/internal/rpcerr"
 	"novapanel/internal/store"
 	"os"
 	"path/filepath"
@@ -40,33 +41,64 @@ func TestFirewallVerbContracts(t *testing.T) {
 	}
 }
 
-// Apply must refuse while the panel bind is unknown, before it reads any store or runs any command.
-func TestFirewallApplyRefusesUnknownPanelPort(t *testing.T) {
+// A malformed bind must refuse apply with precondition_failed, before any store or command is touched.
+func TestFirewallApplyRefusesMalformedWebListen(t *testing.T) {
 	a := agent.New()
-	a.Cfg.WebListen = "127.0.0.1:8080"
-	a.Cfg.WebListenKnown = false
+	a.Cfg.WebListenState = config.WebListenMalformed
 	_, err := firewallApply(context.Background(), a, &firewallApplyArgs{})
-	if err == nil || !strings.Contains(err.Error(), "panel port unknown") {
-		t.Fatalf("apply not refused with unknown bind: %v", err)
+	var ce *rpcerr.CodedError
+	if !errors.As(err, &ce) || ce.Code != "precondition_failed" || !strings.Contains(ce.Msg, "malformed") {
+		t.Fatalf("apply not refused for malformed bind: %v", err)
 	}
 }
 
-func TestUnknownWebListenPinsPanelPort(t *testing.T) {
-	a := agent.New()
-	a.Cfg.WebListen = "127.0.0.1:8080"
-	a.Cfg.WebListenKnown = false
-	plan, err := firewall.Plan(nil, 22, firewallWebListen(a))
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, args := range plan {
-		if args[len(args)-1] == "8080" {
-			found = true
+// Valid and absent binds are known, so apply proceeds past the bind gate. The later failure is the
+// missing store, which proves the gate let the request through.
+func TestFirewallApplyProceedsWithKnownWebListen(t *testing.T) {
+	for _, state := range []config.WebListenState{config.WebListenValid, config.WebListenAbsent} {
+		a := agent.New()
+		a.Cfg.WebListenState = state
+		if err := checkWebListen(a); err != nil {
+			t.Fatalf("%s refused: %v", state, err)
+		}
+		_, err := firewallApply(context.Background(), a, &firewallApplyArgs{})
+		if err == nil || strings.Contains(err.Error(), "malformed") {
+			t.Fatalf("%s: unexpected result %v", state, err)
 		}
 	}
-	if !found {
-		t.Fatalf("panel port not pinned: %v", plan)
+}
+
+// Pinned ports follow the bind: the absent loopback default pins no panel port, a loopback valid bind
+// pins none either, and a non-loopback bind pins its port.
+func TestWebListenPinSet(t *testing.T) {
+	cases := []struct {
+		name   string
+		listen string
+		state  config.WebListenState
+		panel  string
+		pinned bool
+	}{
+		{name: "absent default", listen: config.DefaultWebListen, state: config.WebListenAbsent, panel: "8080"},
+		{name: "valid loopback", listen: "127.0.0.1:9443", state: config.WebListenValid, panel: "9443"},
+		{name: "valid non-loopback", listen: "0.0.0.0:9443", state: config.WebListenValid, panel: "9443", pinned: true},
+	}
+	for _, tc := range cases {
+		a := agent.New()
+		a.Cfg.WebListen = tc.listen
+		a.Cfg.WebListenState = tc.state
+		plan, err := firewall.Plan(nil, 22, firewallWebListen(a))
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, args := range plan {
+			if args[len(args)-1] == tc.panel {
+				found = true
+			}
+		}
+		if found != tc.pinned {
+			t.Fatalf("%s: panel port %s pinned %v, want %v: %v", tc.name, tc.panel, found, tc.pinned, plan)
+		}
 	}
 }
 
@@ -158,7 +190,7 @@ func TestSharedWebBindIsPinned(t *testing.T) {
 	}
 	a := agent.New()
 	a.Cfg.WebListen = agentBind
-	a.Cfg.WebListenKnown = known
+	a.Cfg.WebListenState = config.WebListenValid
 	plan, err := firewall.Plan(nil, 22, firewallWebListen(a))
 	if err != nil {
 		t.Fatal(err)

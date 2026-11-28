@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -74,9 +73,8 @@ func firewallSSHPort(ctx context.Context, a *agent.Agent) (int, error) {
 	return port, nil
 }
 func firewallApply(ctx context.Context, a *agent.Agent, args any) (any, error) {
-	// With an unknown bind, apply would pin a guessed port and could cut off the real panel.
-	if !a.Cfg.WebListenKnown {
-		return nil, rpc.Errf("precondition_failed", "panel port unknown: fix %s before applying firewall changes", config.WebListenPath)
+	if err := checkWebListen(a); err != nil {
+		return nil, err
 	}
 	if a.Store == nil || a.Jobs == nil || a.Exec == nil {
 		return nil, rpc.Errf("precondition_failed", "firewall unavailable")
@@ -99,6 +97,9 @@ func firewallApply(ctx context.Context, a *agent.Agent, args any) (any, error) {
 func firewallApplyExec(ctx context.Context, a *agent.Agent, j *jobs.Job) error {
 	if j == nil || j.ObjectKey != "firewall" || a.Store == nil || a.Exec == nil {
 		return rpc.Errf("precondition_failed", "firewall unavailable")
+	}
+	if err := checkWebListen(a); err != nil {
+		return err
 	}
 	var v firewallApplyArgs
 	if err := json.Unmarshal(j.Args, &v); err != nil {
@@ -351,14 +352,17 @@ func firewallStatus(ctx context.Context, a *agent.Agent, _ any) (any, error) {
 	}{enabled, rules, p}, nil
 }
 
-// Unknown bind provenance keeps the configured panel port open.
+// checkWebListen refuses firewall changes when the panel bind is malformed or unreadable, because the pinned
+// set cannot be computed safely. A valid file or the absent loopback default is a known bind.
+func checkWebListen(a *agent.Agent) error {
+	if a.Cfg.WebListenKnown() {
+		return nil
+	}
+	return rpc.Errf("precondition_failed", "panel bind unreadable or malformed: fix %s before applying firewall changes", config.WebListenPath)
+}
+
+// firewallWebListen returns the configured panel bind. Plan pins the panel port only for a non-loopback
+// bind, so the absent loopback default pins nothing. Callers refuse a malformed bind before they get here.
 func firewallWebListen(a *agent.Agent) string {
-	if a.Cfg.WebListenKnown {
-		return a.Cfg.WebListen
-	}
-	_, port, err := net.SplitHostPort(a.Cfg.WebListen)
-	if err != nil {
-		return ""
-	}
-	return net.JoinHostPort("", port)
+	return a.Cfg.WebListen
 }

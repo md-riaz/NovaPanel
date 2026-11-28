@@ -19,9 +19,19 @@ const DefaultPath = "/etc/novapanel/agent.toml"
 const DefaultWebListen = "127.0.0.1:8080"
 const WebListenPath = "/etc/novapanel/web-listen"
 
+// WebListenState is the trust level of the shared panel bind. Only valid and absent are known binds, so
+// firewall changes may compute their pinned set. The zero value is not a known state and fails closed.
+type WebListenState string
+
+const (
+	WebListenValid     WebListenState = "valid"     // the file parses: WebListen is the configured bind
+	WebListenAbsent    WebListenState = "absent"    // no file: WebListen is the loopback default
+	WebListenMalformed WebListenState = "malformed" // unreadable or invalid: the panel bind is unknown
+)
+
 type Config struct {
-	WebListen            string `toml:"-"`
-	WebListenKnown       bool   `toml:"-"`
+	WebListen            string         `toml:"-"`
+	WebListenState       WebListenState `toml:"-"`
 	UploadsDir           string `toml:"uploads_dir"`
 	SocketPath           string `toml:"socket_path"`
 	DBPath               string `toml:"db_path"`
@@ -56,7 +66,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		WebListen:  DefaultWebListen,
+		WebListen: DefaultWebListen, WebListenState: WebListenAbsent,
 		UploadsDir: "/var/spool/novapanel/uploads", SocketPath: "/run/novapanel/agent.sock", DBPath: "/var/lib/novapanel/panel.db", SealKeyPath: "/var/lib/novapanel/seal.key", LogDir: "/var/log/novapanel", WebUser: "novapanel", ACMEWebroot: "/var/www/acme", SitesRoot: "/srv/sites", TLSDir: "/etc/novapanel/tls",
 		ACMEDirectoryProd: "https://acme-v02.api.letsencrypt.org/directory", ACMEDirectoryStaging: "https://acme-staging-v02.api.letsencrypt.org/directory", SSHPort: 22, FirewallWindowMin: 15, UpdateManifestURL: "https://releases.example/novapanel/stable/manifest.json", RateLimitRPS: 5, RateLimitBurst: 20, AnonMintRPS: 20, AnonMintBurst: 100, LoginMaxAttempts: 5, LoginWindowSec: 900, TOTPMaxAttempts: 5, WebhookBodyMaxKB: 512, ReauthWindowSec: 300, IdleSec: 600, AbsSec: 43200, DeadlineDefaultMs: 120000,
 	}
@@ -70,14 +80,18 @@ func Load(path string, flags map[string]string) (Config, error) {
 
 func load(path, webListenPath string, flags map[string]string) (Config, error) {
 	c := Defaults()
-	listen, listenKnown, err := ReadWebListen(webListenPath)
-	if err != nil {
-		// The bind file only informs firewall port pinning. A malformed or unreadable file degrades to
-		// the fail-safe unknown bind, so the panel port stays pinned and recovery or revert still runs.
-		fmt.Fprintf(os.Stderr, "ignoring %s, pinning the default panel port: %v\n", webListenPath, err)
-		listen, listenKnown = DefaultWebListen, false
+	listen, present, err := ReadWebListen(webListenPath)
+	switch {
+	case err != nil:
+		// The bind file only informs firewall pinning. A malformed or unreadable file must not block recovery
+		// or revert, so Load succeeds with an unknown bind. firewall.apply refuses until the file is fixed.
+		fmt.Fprintf(os.Stderr, "ignoring %s, firewall changes are refused until it is fixed: %v\n", webListenPath, err)
+		c.WebListen, c.WebListenState = DefaultWebListen, WebListenMalformed
+	case !present:
+		c.WebListen, c.WebListenState = listen, WebListenAbsent
+	default:
+		c.WebListen, c.WebListenState = listen, WebListenValid
 	}
-	c.WebListen, c.WebListenKnown = listen, listenKnown
 	if path == "" {
 		path = DefaultPath
 	}
@@ -178,7 +192,13 @@ func (c *Config) ResolveWebUser() error {
 	return nil
 }
 
-// ReadWebListen reads the shared panel bind; an absent file uses the default conservatively.
+// WebListenKnown reports whether the panel bind is known, which holds for a valid or an absent file.
+func (c Config) WebListenKnown() bool {
+	return c.WebListenState == WebListenValid || c.WebListenState == WebListenAbsent
+}
+
+// ReadWebListen returns the bind from a valid file (present true), the loopback default for an absent
+// file (present false), or an error when the file is malformed or unreadable.
 func ReadWebListen(path string) (string, bool, error) {
 	b, err := os.ReadFile(path)
 	if os.IsNotExist(err) {

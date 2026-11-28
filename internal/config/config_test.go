@@ -55,8 +55,42 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
+// The three bind states: valid and absent are known binds, malformed is unknown. Load never fails on the bind.
+func TestWebListenStates(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent.toml")
+	webPath := filepath.Join(dir, "web-listen")
+	cases := []struct {
+		name, content string
+		absent        bool
+		listen        string
+		state         WebListenState
+		known         bool
+	}{
+		{name: "valid non-loopback", content: "0.0.0.0:9443\n", listen: "0.0.0.0:9443", state: WebListenValid, known: true},
+		{name: "valid loopback", content: "127.0.0.1:9443\n", listen: "127.0.0.1:9443", state: WebListenValid, known: true},
+		{name: "absent", absent: true, listen: DefaultWebListen, state: WebListenAbsent, known: true},
+		{name: "malformed", content: "not-a-bind\n", listen: DefaultWebListen, state: WebListenMalformed, known: false},
+	}
+	for _, tc := range cases {
+		if tc.absent {
+			_ = os.Remove(webPath)
+		} else if err := os.WriteFile(webPath, []byte(tc.content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		c, err := load(cfgPath, webPath, nil)
+		if err != nil || c.WebListen != tc.listen || c.WebListenState != tc.state || c.WebListenKnown() != tc.known {
+			t.Fatalf("%s: listen %q state %q known %v err %v", tc.name, c.WebListen, c.WebListenState, c.WebListenKnown(), err)
+		}
+	}
+	var zero Config
+	if zero.WebListenKnown() {
+		t.Fatal("zero config reported a known bind")
+	}
+}
+
 // A malformed or unreadable bind file must never fail Load: recovery and revert load the same config.
-func TestMalformedWebListenDegradesToUnknown(t *testing.T) {
+func TestMalformedWebListenDegradesWithoutError(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "agent.toml")
 	if err := os.WriteFile(cfgPath, []byte("db_path = '/var/lib/novapanel/custom.db'\n"), 0600); err != nil {
@@ -68,8 +102,8 @@ func TestMalformedWebListenDegradesToUnknown(t *testing.T) {
 			t.Fatal(err)
 		}
 		c, err := load(cfgPath, webPath, nil)
-		if err != nil || c.WebListenKnown || c.WebListen != DefaultWebListen {
-			t.Fatalf("%q: listen %q known %v err %v", content, c.WebListen, c.WebListenKnown, err)
+		if err != nil || c.WebListenState != WebListenMalformed || c.WebListen != DefaultWebListen {
+			t.Fatalf("%q: listen %q state %q err %v", content, c.WebListen, c.WebListenState, err)
 		}
 		if c.DBPath != "/var/lib/novapanel/custom.db" {
 			t.Fatalf("%q: db path %q", content, c.DBPath)
@@ -77,8 +111,8 @@ func TestMalformedWebListenDegradesToUnknown(t *testing.T) {
 	}
 	// A directory is unreadable as a file, so it takes the same fail-safe path.
 	c, err := load(cfgPath, dir, nil)
-	if err != nil || c.WebListenKnown || c.WebListen != DefaultWebListen {
-		t.Fatalf("unreadable: listen %q known %v err %v", c.WebListen, c.WebListenKnown, err)
+	if err != nil || c.WebListenState != WebListenMalformed || c.WebListen != DefaultWebListen {
+		t.Fatalf("unreadable: listen %q state %q err %v", c.WebListen, c.WebListenState, err)
 	}
 }
 
