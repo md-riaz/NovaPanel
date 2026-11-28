@@ -21,6 +21,9 @@ func (r *fwRunner) Run(_ context.Context, path string, args []string, _ exec.Run
 	if len(r.calls) == r.failAt {
 		return nil, nil, 1, nil
 	}
+	if len(args) == 2 && args[0] == "show" && args[1] == "added" {
+		return []byte("Added user rules (see UFW):\n"), nil, 0, nil
+	}
 	if len(args) > 0 && args[0] == "status" {
 		return []byte("Status: inactive\n"), nil, 0, nil
 	}
@@ -30,7 +33,7 @@ func TestFirewallOperationAndRecovery(t *testing.T) {
 	for _, tc := range []struct {
 		fail int
 		step string
-	}{{0, FirewallApplied}, {4, FirewallPrepared}, {7, FirewallSnapshotted}, {8, FirewallArmed}} {
+	}{{0, FirewallApplied}, {5, FirewallPrepared}, {8, FirewallSnapshotted}, {10, FirewallArmed}} {
 		t.Run(fmt.Sprint(tc.fail), func(t *testing.T) {
 			c := &authClock{now: 1000}
 			s, e := OpenWithClock(":memory:", c)

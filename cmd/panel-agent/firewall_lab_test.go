@@ -46,6 +46,7 @@ func TestFirewallLab(t *testing.T) {
 	}
 	run("--force", "reset")
 	run("allow", "22/tcp")
+	run("allow", "3306/tcp")
 	run("--force", "enable")
 	before := run("status", "numbered")
 	if !bytes.Contains(before, []byte("22/tcp")) {
@@ -86,6 +87,9 @@ func TestFirewallLab(t *testing.T) {
 		t.Fatalf("SSH is not first: enabled=%v rules=%+v err=%v", enabled, rules, err)
 	}
 	after := run("status", "numbered")
+	if bytes.Contains(after, []byte("3306/tcp")) {
+		t.Fatalf("omitted rule still present: %s", after)
+	}
 	if !bytes.Contains(after, []byte("34567/tcp")) {
 		t.Fatalf("requested rule missing: %s", after)
 	}

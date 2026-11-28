@@ -108,6 +108,14 @@ func DryRun(ctx context.Context, runner exec.Runner, rules []Rule, sshPort int, 
 	if runner == nil {
 		return rpcerr.Errf("agent_error", "firewall runner missing")
 	}
+	old, err := existingRules(ctx, runner)
+	if err != nil {
+		return err
+	}
+	plan, err = reconcilePlan(rules, old, sshPort, webListen)
+	if err != nil {
+		return err
+	}
 	for _, args := range plan {
 		_, _, code, err := runner.Run(ctx, "/usr/sbin/ufw", append([]string{"--dry-run"}, args...), exec.RunOpts{})
 		if err != nil || code != 0 {
@@ -125,6 +133,14 @@ func Apply(ctx context.Context, runner exec.Runner, rules []Rule, sshPort int, w
 	}
 	if runner == nil {
 		return rpcerr.Errf("agent_error", "firewall runner missing")
+	}
+	old, err := existingRules(ctx, runner)
+	if err != nil {
+		return err
+	}
+	plan, err = reconcilePlan(rules, old, sshPort, webListen)
+	if err != nil {
+		return err
 	}
 	for _, args := range plan {
 		if _, err = firewallCommand(ctx, runner, "/usr/sbin/ufw", args...); err != nil {
