@@ -63,16 +63,11 @@ type Record struct {
 // Every method takes ctx. dns.record.* are SLOW (run on the worker), so that ctx is the F6
 // per-attempt worker deadline (Verb.MaxDeadlineMs), NOT the caller's F2 deadline_ms (gone at enqueue).
 ```
-- **Provenance is OWED before build (F20, head marker).** A provider DNS record is a **two-store**
-  resource (provider vs SQLite) and F20 names it explicitly (`00-foundations.md` F20 intro + "Phase 7
-  with the provider's own record keyed by the resource `obj_id`"). Today there is **no persisted record
-  identity** — `02` has only `dns_zones`, and `Record.ID` lives only in the provider. Before Phase 7 is
-  built this must get the **full MariaDB-style F20 instantiation**: a durable SQLite record row carrying
-  an `obj_id`, provenance keyed by that `obj_id` (not name/existence), **`obj_id`-matched delete** (never
-  name-only), reserve→create roll-forward across the crash window, and admission-vs-execution handling
-  when a `dns.record.create` is queued against a zone/integration being deleted (`dns_zones` is
-  `ON DELETE CASCADE`). F6 already requires idempotent **compensation** for provider DNS; F20 is **how**.
-  This marker is the ruling that it is owed; the mechanism is designed at Phase-7 build, not here.
+- **DNS F20 provenance.** The provider record carries `novapanel:obj_id=<obj_id>` in its comment,
+  stamped atomically with create. `dns_records` carries the durable `obj_id` and `phase`
+  (`reserved`/`created`/`deleting`). Reconcile lists records and matches the obj_id comment before
+  re-issue; an unmatched record is a conflict, never adopted. Update and delete verify obj_id ownership.
+  A record operation queued against a deleted zone or integration re-validates at execution.
   - **Owed with it (F6 per-attempt deadline): effectful-timeout replay.** A `dns.record.create/update/
     delete` is an external/billed provider call. Today it is **not** flagged Effectful (`01`), yet a
     per-attempt `deadline_exceeded` (or crash) mid-call leaves the provider's state uncertain — a naive
