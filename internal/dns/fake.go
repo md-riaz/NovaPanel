@@ -3,6 +3,7 @@ package dns
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 )
 
@@ -13,6 +14,7 @@ type Fake struct {
 	Verified map[string]bool
 	TXT      map[string]map[string]bool
 	Purges   map[string][][]string
+	nextID   uint64
 }
 
 func (f *Fake) List(_ context.Context, zone string) ([]Record, error) {
@@ -20,19 +22,23 @@ func (f *Fake) List(_ context.Context, zone string) ([]Record, error) {
 	defer f.mu.Unlock()
 	return append([]Record(nil), f.Records[zone]...), nil
 }
-func (f *Fake) Create(_ context.Context, zone string, record Record) error {
+func (f *Fake) Create(_ context.Context, zone string, record Record) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.Records == nil {
 		f.Records = make(map[string][]Record)
 	}
+	if record.ID == "" {
+		f.nextID++
+		record.ID = fmt.Sprintf("fake-%d", f.nextID)
+	}
 	for _, r := range f.Records[zone] {
 		if r.ID == record.ID {
-			return errors.New("record already exists")
+			return "", errors.New("record already exists")
 		}
 	}
 	f.Records[zone] = append(f.Records[zone], record)
-	return nil
+	return record.ID, nil
 }
 func (f *Fake) Update(_ context.Context, zone string, record Record) error {
 	f.mu.Lock()

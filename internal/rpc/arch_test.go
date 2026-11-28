@@ -35,7 +35,7 @@ func TestRegisteredVerbs(t *testing.T) {
 		t.Fatal("empty built registry: seed verbs were not imported")
 	}
 	expected := []string{"ping", "agent.info", "service.status", "service.restart", "job.status", "job.list", "job.claim", "reconcile", "schedule.list", "schedule.set", "schedule.enable", "schedule.disable", "session.start", "session.login", "session.logout", "session.whoami", "session.reauth", "mfa.enroll", "mfa.confirm", "mfa.disable", "user.create", "user.update", "user.delete", "user.set_password", "user.list", "tokens.create", "tokens.list", "tokens.revoke", "site.list", "site.get", "site.create", "site.update", "site.delete", "domain.add", "domain.remove", "redirect.add", "redirect.remove", "ssl.status", "ssl.auto_set", "ssl.upload", "ssl.issue", "ssl.renew", "database.list", "database.create", "database.rotate_password", "database.delete", "dbuser.create", "dbuser.delete", "dbuser.list", "php.list", "php.set", "wp.update", "wp.clone", "wp.staging", "log.tail", "sshkey.add", "sshkey.remove", "sshkey.list", "files.list", "files.read", "files.write", "files.mkdir", "files.move", "files.delete", "files.chmod", "files.archive", "files.extract", "files.upload"}
-	expected = append(expected, "deploy.configure", "deploy.status", "deploy.history", "deploy.run", "deploy.rollback", "cron.create", "cron.delete", "cron.enable", "cron.disable", "cron.list", "sshkey.sftp_only", "integration.set", "firewall.status", "firewall.apply", "firewall.confirm", "firewall.revert")
+	expected = append(expected, "deploy.configure", "deploy.status", "deploy.history", "deploy.run", "deploy.rollback", "cron.create", "cron.delete", "cron.enable", "cron.disable", "cron.list", "sshkey.sftp_only", "integration.set", "firewall.status", "firewall.apply", "firewall.confirm", "firewall.revert", "dns.record.create", "dns.record.update", "dns.record.delete", "dns.record.list")
 	if len(rpc.Registry) != len(expected) {
 		t.Fatalf("Implemented verb allowlist mismatch: %d", len(rpc.Registry))
 	}
@@ -104,5 +104,18 @@ func TestArchitectureNegativeFixtures(t *testing.T) {
 				t.Fatalf("fixture failed for wrong reason (exit=%d err=%v): %s", exit, err, text)
 			}
 		})
+	}
+}
+
+func TestDNSRegistryContract(t *testing.T) {
+	for _, name := range []string{"dns.record.create", "dns.record.update", "dns.record.delete"} {
+		v := rpc.Registry[name]
+		if v.MinRole != rpc.Admin || v.Scope != "dns:write" || !v.Slow || !v.Effectful || v.Exec == nil || v.ObjectKey == nil {
+			t.Fatalf("invalid DNS registry contract for %s", name)
+		}
+	}
+	v := rpc.Registry["dns.record.list"]
+	if !v.ReadOnly || v.Slow || v.Scope != "dns:read" {
+		t.Fatal("invalid DNS list contract")
 	}
 }

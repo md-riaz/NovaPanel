@@ -1101,6 +1101,14 @@ ownership is provable on the far side of the transaction boundary.
          the window is unresolvable. Stamping the object with its `obj_id` at creation (so an
          ambiguous-exit replay can prove ownership and advance to `created`) is the **owed** optimization
          to shrink the window — out of current scope; the `conflict`-to-operator path is the contract.
+
+         DNS (Phase 7) realizes that optimization: a provider record carries a comment field set atomically
+         with the record, so the obj_id is stamped into the comment (novapanel:obj_id=<obj_id>) at create. The
+         record and its provenance are one provider write, so the reserve->create window resolves by LIST + obj_id
+         comment match rather than conflict-to-operator: our stamp present means our create landed (adopt the
+         provider id), absent means clean resume. A record present under a different or missing obj_id comment is
+         an unmanaged collision -> conflict, never adopt. Delete and update verify ownership by the obj_id comment,
+         never by name.
      - `phase='deleting'` → complete the delete idempotently (F20.5), then remove the row. For a
        **delete verb** this finalizes `done`; for a **create** that finds its *own* `obj_id` here (an
        F20.8 abort) it finalizes **`failed`** (never re-creates, even if the collision cleared) — and the
