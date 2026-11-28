@@ -162,20 +162,23 @@ func (s *Store) DeleteManagedDNSRecord(ctx context.Context, p dns.Provider, zone
 	if err != nil {
 		return err
 	}
-	for _, v := range records {
+	var owned *dns.Record
+	for i := range records {
+		v := &records[i]
 		if r.ProviderRecordID.Valid {
 			if v.ID != r.ProviderRecordID.String {
 				continue
 			}
-		} else {
-			if v.Name != r.Name || v.Comment != dnsComment(r.ObjID) {
-				continue
-			}
+		} else if v.Name != r.Name {
+			continue
 		}
-		if v.Comment != dnsComment(r.ObjID) {
+		if v.Comment != dnsComment(r.ObjID) || owned != nil || v.ID == "" {
 			return ErrDNSOwnership
 		}
-		if err := p.Delete(ctx, zone, v); err != nil {
+		owned = v
+	}
+	if owned != nil {
+		if err := p.Delete(ctx, zone, *owned); err != nil {
 			return err
 		}
 	}

@@ -203,6 +203,52 @@ func TestDNSCreateReplayRestoresDesiredRecord(t *testing.T) {
 	}
 }
 
+func TestDNSDeleteReservedCollision(t *testing.T) {
+	for _, stamp := range []string{"", "novapanel:obj_id=foreign"} {
+		t.Run(stamp, func(t *testing.T) {
+			ctx, s, p, r := dnsMatrixSetup(t)
+			if err := s.MarkDNSRecordDeleting(ctx, r.ObjID); err != nil {
+				t.Fatal(err)
+			}
+			r, err := s.DNSRecord(ctx, r.ObjID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			foreign := dns.Record{ID: "foreign", Name: r.Name, Type: r.Type, Value: r.Value, TTL: r.TTL, Comment: stamp}
+			if _, err = p.Create(ctx, "example.com", foreign); err != nil {
+				t.Fatal(err)
+			}
+			if err = s.ReconcileDNSRecord(ctx, p, "example.com", r); !errors.Is(err, ErrDNSOwnership) {
+				t.Fatalf("collision: %v", err)
+			}
+			saved, err := s.DNSRecord(ctx, r.ObjID)
+			if err != nil || !saved.ConflictError.Valid {
+				t.Fatal("missing retained conflict")
+			}
+			records, err := p.List(ctx, "example.com")
+			if err != nil || len(records) != 1 || records[0] != foreign {
+				t.Fatal("foreign record changed")
+			}
+		})
+	}
+	t.Run("absent", func(t *testing.T) {
+		ctx, s, p, r := dnsMatrixSetup(t)
+		if err := s.MarkDNSRecordDeleting(ctx, r.ObjID); err != nil {
+			t.Fatal(err)
+		}
+		r, err := s.DNSRecord(ctx, r.ObjID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = s.ReconcileDNSRecord(ctx, p, "example.com", r); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.DNSRecord(ctx, r.ObjID); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatal("absent record retained")
+		}
+	})
+}
+
 func TestDNSForeignStampStopsSweep(t *testing.T) {
 	for _, phase := range []string{"reserved", "updating", "deleting"} {
 		t.Run(phase, func(t *testing.T) {
