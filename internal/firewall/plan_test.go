@@ -338,7 +338,16 @@ func TestReconcileKeepsSourceLimitOnPinnedPort(t *testing.T) {
 	for _, args := range plan {
 		final = simApply(final, args)
 	}
-	if len(final) != 1 || final[0].action != "limit" {
-		t.Fatalf("limit not preserved: %+v", final)
+	// Pinned 80 and 443 allows are added by design, so the check is scoped to port 22: exactly the
+	// source-restricted limit must remain there, with no world allow beside it.
+	var onSSH []simRule
+	for _, r := range final {
+		if r.port == 22 {
+			onSSH = append(onSSH, r)
+		}
+	}
+	want := simRule{action: "limit", source: "10.0.0.0/8", proto: "tcp", port: 22}
+	if len(onSSH) != 1 || onSSH[0] != want {
+		t.Fatalf("limit not preserved on 22: %+v", final)
 	}
 }
