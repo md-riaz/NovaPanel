@@ -84,8 +84,8 @@ func load(path, webListenPath string, flags map[string]string) (Config, error) {
 	switch {
 	case err != nil:
 		// The bind file only informs firewall pinning. A malformed or unreadable file must not block recovery
-		// or revert, so Load succeeds with an unknown bind. firewall.apply refuses until the file is fixed.
-		fmt.Fprintf(os.Stderr, "ignoring %s, firewall changes are refused until it is fixed: %v\n", webListenPath, err)
+		// or revert, so Load succeeds with an uncertain bind, and the agent pins the default panel port.
+		fmt.Fprintf(os.Stderr, "web-listen %s is malformed, the agent conservatively pins the default panel port %s: %v\n", webListenPath, DefaultWebListen, err)
 		c.WebListen, c.WebListenState = DefaultWebListen, WebListenMalformed
 	case !present:
 		c.WebListen, c.WebListenState = listen, WebListenAbsent
