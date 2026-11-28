@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"novapanel/internal/agent"
+	"novapanel/internal/config"
 	"novapanel/internal/exec"
 	"novapanel/internal/firewall"
 	"novapanel/internal/id"
@@ -72,6 +73,10 @@ func firewallSSHPort(ctx context.Context, a *agent.Agent) (int, error) {
 	return port, nil
 }
 func firewallApply(ctx context.Context, a *agent.Agent, args any) (any, error) {
+	// With an unknown bind, apply would pin a guessed port and could cut off the real panel.
+	if !a.Cfg.WebListenKnown {
+		return nil, rpc.Errf("precondition_failed", "panel port unknown: fix %s before applying firewall changes", config.WebListenPath)
+	}
 	if a.Store == nil || a.Jobs == nil || a.Exec == nil {
 		return nil, rpc.Errf("precondition_failed", "firewall unavailable")
 	}

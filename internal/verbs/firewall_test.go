@@ -16,6 +16,7 @@ import (
 	"novapanel/internal/store"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -36,6 +37,17 @@ func TestFirewallVerbContracts(t *testing.T) {
 	}
 	if (&firewallPendingArgs{PendingID: "bad"}).Validate() == nil {
 		t.Fatal("accepted invalid pending id")
+	}
+}
+
+// Apply must refuse while the panel bind is unknown, before it reads any store or runs any command.
+func TestFirewallApplyRefusesUnknownPanelPort(t *testing.T) {
+	a := agent.New()
+	a.Cfg.WebListen = "127.0.0.1:8080"
+	a.Cfg.WebListenKnown = false
+	_, err := firewallApply(context.Background(), a, &firewallApplyArgs{})
+	if err == nil || !strings.Contains(err.Error(), "panel port unknown") {
+		t.Fatalf("apply not refused with unknown bind: %v", err)
 	}
 }
 
