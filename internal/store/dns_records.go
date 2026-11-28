@@ -136,6 +136,12 @@ func (s *Store) ReconcileDNSCreate(ctx context.Context, p dns.Provider, zone str
 	providerID := ""
 	if own != nil {
 		providerID = own.ID
+		desired := dns.Record{ID: own.ID, Type: r.Type, Name: r.Name, Value: r.Value, TTL: r.TTL, Priority: r.Priority, Proxied: r.Proxied, Comment: dnsComment(r.ObjID)}
+		if *own != desired {
+			if err = p.Update(ctx, zone, desired); err != nil {
+				return err
+			}
+		}
 	} else {
 		providerID, err = p.Create(ctx, zone, dns.Record{Type: r.Type, Name: r.Name, Value: r.Value, TTL: r.TTL, Priority: r.Priority, Proxied: r.Proxied, Comment: dnsComment(r.ObjID)})
 		if err != nil {

@@ -179,6 +179,30 @@ func TestDNSCrashReplayMatrix(t *testing.T) {
 		})
 	}
 }
+func TestDNSCreateReplayRestoresDesiredRecord(t *testing.T) {
+	ctx, s, p, r := dnsMatrixSetup(t)
+	drift := matrixRecord(r)
+	drift.Value = "192.0.2.99"
+	drift.TTL = 300
+	providerID, err := p.Create(ctx, "example.com", drift)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ReconcileDNSRecord(ctx, p, "example.com", r); err != nil {
+		t.Fatal(err)
+	}
+	records, err := p.List(ctx, "example.com")
+	want := matrixRecord(r)
+	want.ID = providerID
+	if err != nil || len(records) != 1 || records[0] != want {
+		t.Fatal("replay did not restore desired record")
+	}
+	saved, err := s.DNSRecord(ctx, r.ObjID)
+	if err != nil || !saved.Reconciled || saved.ProviderRecordID.String != providerID {
+		t.Fatal("record not confirmed")
+	}
+}
+
 func TestDNSForeignStampStopsSweep(t *testing.T) {
 	for _, phase := range []string{"reserved", "updating", "deleting"} {
 		t.Run(phase, func(t *testing.T) {
