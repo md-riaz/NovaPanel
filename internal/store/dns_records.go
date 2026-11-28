@@ -44,7 +44,7 @@ func (s *Store) ConfirmDNSRecord(ctx context.Context, objID, providerID string) 
 }
 
 func (s *Store) MarkDNSRecordDeleting(ctx context.Context, objID string) error {
-	r, err := s.db.ExecContext(ctx, `UPDATE dns_records SET phase='deleting',updated=? WHERE obj_id=? AND phase IN ('reserved','created','deleting')`, s.clock.Now(), objID)
+	r, err := s.db.ExecContext(ctx, `UPDATE dns_records SET phase='deleting',reconciled=0,updated=? WHERE obj_id=? AND phase IN ('reserved','created','deleting')`, s.clock.Now(), objID)
 	return affected(r, err)
 }
 

@@ -92,6 +92,9 @@ func TestDNSRecordReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if saved.Reconciled || saved.Phase != "deleting" {
+		t.Fatal("delete intent was not marked for reconciliation")
+	}
 	if err := s.DeleteManagedDNSRecord(ctx, p, "example.com", saved); err != nil {
 		t.Fatal(err)
 	}
